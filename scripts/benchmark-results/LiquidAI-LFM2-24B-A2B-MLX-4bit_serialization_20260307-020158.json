@@ -1,0 +1,209 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "LiquidAI\/LFM2-24B-A2B-MLX-4bit",
+      "model_short" : "LFM2-24B-A2B-MLX-4bit",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+        {
+          "actual_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 295.2,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "```json\n{\n  \"name\": \"Iona\",\n  \"city\": \"Edinburgh\",\n  \"role\": \"engineer\"\n}\n```",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 1.34
+        },
+        {
+          "actual_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 305.6,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "```json\n{\n  \"status\": \"active\",\n  \"owner\": \"Fae\",\n  \"priority\": \"high\"\n}\n```",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 1.33
+        },
+        {
+          "actual_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 305.6,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "```json\n{\n  \"topic\": \"benchmark review\",\n  \"day\": \"Tuesday\",\n  \"action\": \"share results\"\n}\n```",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 1.43
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 333.7,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "```xml\n<record>\n <name>Iona<\/name>\n <city>Edinburgh<\/city>\n <role>engineer<\/role>\n<\/record>\n```",
+          "task" : "contact-card",
+          "valid" : false,
+          "wall_time_s" : 1.74
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 310.1,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "```xml\n<record>\n   <status>active<\/status>\n   <owner>Fae<\/owner>\n   <priority>high<\/priority>\n<\/record>\n```",
+          "task" : "task-status",
+          "valid" : false,
+          "wall_time_s" : 1.71
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 326.1,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "```xml\n<record>\n <topic>benchmark review<\/topic>\n <day>Tuesday<\/day>\n <action>share results<\/action>\n<\/record>\n```",
+          "task" : "meeting-note",
+          "valid" : false,
+          "wall_time_s" : 1.8
+        },
+        {
+          "actual_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 308.2,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "```yaml\nname: Iona\ncity: Edinburgh\nrole: engineer\n```",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 1.01
+        },
+        {
+          "actual_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 306.8,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "```yaml\nstatus: active\nowner: Fae\npriority: high\n```",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 1.06
+        },
+        {
+          "actual_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 305.1,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "```yaml\naction: share results\nday: Tuesday\ntopic: benchmark review\n```",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 1.06
+        }
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

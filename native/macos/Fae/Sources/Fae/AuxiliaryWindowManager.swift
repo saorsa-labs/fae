@@ -68,16 +68,24 @@ final class AuxiliaryWindowManager: ObservableObject {
     weak var windowState: WindowStateController?
     weak var subtitleState: SubtitleStateController?
     var approvalController: ApprovalOverlayController?
+    var coworkWindowProvider: (() -> NSWindow?)?
 
     private var modeCancellable: AnyCancellable?
     private var approvalCancellable: AnyCancellable?
     private var thoughtBubbleCancellable: AnyCancellable?
+    private var coworkRoutingCancellable: AnyCancellable?
     private var canvasPanelDelegate: PanelCloseDelegate?
+    private var isCoworkConversationActive: Bool = false
 
     // MARK: - Init
 
     init() {
         autoHideOnCollapse = UserDefaults.standard.bool(forKey: Self.autoHideKey)
+        coworkRoutingCancellable = NotificationCenter.default.publisher(for: .faeCoworkConversationRoutingChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                self?.isCoworkConversationActive = notification.userInfo?["active"] as? Bool ?? false
+            }
     }
 
     // MARK: - Configuration
@@ -197,16 +205,23 @@ final class AuxiliaryWindowManager: ObservableObject {
     func showApproval() {
         guard let controller = approvalController else { return }
         if approvalPanel == nil { approvalPanel = makeApprovalPanel(controller: controller) }
-        guard let panel = approvalPanel, let orbWindow = windowState?.window else { return }
+        guard let panel = approvalPanel else { return }
 
-        // Expand to compact so the approval card and conversation are both visible.
-        windowState?.transitionToCompact()
+        let anchorWindow: NSWindow?
+        if isCoworkConversationActive, let coworkWindow = coworkWindowProvider?() {
+            anchorWindow = coworkWindow
+        } else {
+            anchorWindow = windowState?.window
+            // Expand to compact so the approval card and conversation are both visible.
+            windowState?.transitionToCompact()
+        }
+        guard let anchorWindow else { return }
 
-        let orbFrame = orbWindow.frame
+        let anchorFrame = anchorWindow.frame
         let panelSize = NSSize(width: 340, height: 300)
-        // Position ABOVE the orb — always on screen, never below the dock.
-        let y = orbFrame.maxY + 8
-        let x = orbFrame.midX - panelSize.width / 2
+        // Position ABOVE the active surface — orb window for main Fae, cowork window for Work with Fae.
+        let y = anchorFrame.maxY + 8
+        let x = anchorFrame.midX - panelSize.width / 2
         let frame = clampToScreen(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height))
 
         panel.setFrame(frame, display: false)
@@ -581,6 +596,8 @@ final class AuxiliaryWindowManager: ObservableObject {
         hosting.layer?.backgroundColor = .clear
 
         guard let contentView = panel.contentView else { return panel }
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = CGColor.clear
         contentView.addSubview(hosting)
         NSLayoutConstraint.activate([
             hosting.topAnchor.constraint(equalTo: contentView.topAnchor),

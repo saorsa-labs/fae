@@ -26,6 +26,10 @@ let models: [ModelEntry] = [
     ModelEntry(shortName: "qwen3-1.7b", modelID: "mlx-community/Qwen3-1.7B-4bit"),
     ModelEntry(shortName: "qwen3-4b", modelID: "mlx-community/Qwen3-4B-4bit"),
     ModelEntry(shortName: "qwen3-8b", modelID: "mlx-community/Qwen3-8B-4bit"),
+    ModelEntry(shortName: "qwen3.5-0.8b", modelID: "mlx-community/Qwen3.5-0.8B-4bit"),
+    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-4bit"),
+    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-4bit"),
+    ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
     // NexVeridian text-only conversions (vision tower stripped).
     // mlx-community versions are VL — incompatible with text-only loading.
     ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "NexVeridian/Qwen3.5-35B-A3B-4bit"),
@@ -41,6 +45,7 @@ struct ThroughputResult: Codable {
     let visibleChars: Int
     let thinkingChars: Int
     let wallTimeS: Double
+    let firstTokenLatencyMS: Double
     let tokensPerSecond: Double      // Pure generation speed (MLX internal, excludes prefill)
     let promptTokensPerSecond: Double // Prompt processing speed (MLX internal)
     let ramMB: Double
@@ -52,6 +57,7 @@ struct ThroughputResult: Codable {
         case visibleChars = "visible_chars"
         case thinkingChars = "thinking_chars"
         case wallTimeS = "wall_time_s"
+        case firstTokenLatencyMS = "first_token_latency_ms"
         case tokensPerSecond = "tokens_per_second"
         case promptTokensPerSecond = "prompt_tokens_per_second"
         case ramMB = "ram_mb"
@@ -96,6 +102,52 @@ struct ToolCallResult: Codable {
     }
 }
 
+struct IntelligenceEvalResult: Codable {
+    let category: String
+    let prompt: String
+    let expectedAnswer: String
+    let actualAnswer: String
+    let correct: Bool
+    let firstTokenLatencyMS: Double
+    let wallTimeS: Double
+
+    enum CodingKeys: String, CodingKey {
+        case category
+        case prompt
+        case expectedAnswer = "expected_answer"
+        case actualAnswer = "actual_answer"
+        case correct
+        case firstTokenLatencyMS = "first_token_latency_ms"
+        case wallTimeS = "wall_time_s"
+    }
+}
+
+struct SerializationEvalResult: Codable {
+    let format: String
+    let task: String
+    let prompt: String
+    let expectedFields: [String: String]
+    let actualFields: [String: String]
+    let rawOutput: String
+    let valid: Bool
+    let correct: Bool
+    let firstTokenLatencyMS: Double
+    let wallTimeS: Double
+
+    enum CodingKeys: String, CodingKey {
+        case format
+        case task
+        case prompt
+        case expectedFields = "expected_fields"
+        case actualFields = "actual_fields"
+        case rawOutput = "raw_output"
+        case valid
+        case correct
+        case firstTokenLatencyMS = "first_token_latency_ms"
+        case wallTimeS = "wall_time_s"
+    }
+}
+
 struct ModelBenchmarkResult: Codable {
     let modelID: String
     let modelShort: String
@@ -104,6 +156,10 @@ struct ModelBenchmarkResult: Codable {
     var throughputThinkOn: [ThroughputResult]
     var noThinkCompliance: [NoThinkResult]
     var toolCalling: [ToolCallResult]
+    var intelligenceEval: [IntelligenceEvalResult]
+    var faeCapabilityEval: [IntelligenceEvalResult]
+    var assistantFitEval: [IntelligenceEvalResult]
+    var serializationEval: [SerializationEvalResult]
 
     enum CodingKeys: String, CodingKey {
         case modelID = "model_id"
@@ -113,6 +169,10 @@ struct ModelBenchmarkResult: Codable {
         case throughputThinkOn = "throughput_think_on"
         case noThinkCompliance = "no_think_compliance"
         case toolCalling = "tool_calling"
+        case intelligenceEval = "intelligence_eval"
+        case faeCapabilityEval = "fae_capability_eval"
+        case assistantFitEval = "assistant_fit_eval"
+        case serializationEval = "serialization_eval"
     }
 }
 
@@ -289,16 +349,24 @@ let noThinkTestPrompts = [
     "What year did World War II end?",
 ]
 
+// Additional MCQ eval suites live in EvalSuites.swift.
+
 // MARK: - Benchmark Engine
 
 actor BenchmarkEngine {
     private var container: ModelContainer?
     private let modelID: String
     private let shortName: String
+    private let qwenCalibrated: Bool
 
-    init(modelID: String, shortName: String) {
+    init(modelID: String, shortName: String, qwenCalibrated: Bool = false) {
         self.modelID = modelID
         self.shortName = shortName
+        self.qwenCalibrated = qwenCalibrated
+    }
+
+    private var useQwenCalibratedPrompts: Bool {
+        qwenCalibrated && (shortName.lowercased().contains("qwen") || modelID.lowercased().contains("qwen"))
     }
 
     func load() async throws {
@@ -330,6 +398,7 @@ actor BenchmarkEngine {
         let promptTokens: Int
         let genTokens: Int
         let wallTime: Double
+        let firstTokenLatencyMS: Double
         let genTPS: Double      // MLX-internal generation tokens/sec (excludes prefill)
         let promptTPS: Double   // MLX-internal prompt processing tokens/sec
         let toolCalls: [ToolCall] // Tool calls parsed by the library
@@ -366,6 +435,7 @@ actor BenchmarkEngine {
         var fullText = ""
         var promptTokens = 0
         var genTokens = 0
+        var firstTokenLatencyMS: Double?
         var genTPS: Double = 0
         var promptTPS: Double = 0
         var capturedToolCalls: [ToolCall] = []
@@ -373,6 +443,9 @@ actor BenchmarkEngine {
         for await generation in stream {
             switch generation {
             case .chunk(let text):
+                if firstTokenLatencyMS == nil, !text.isEmpty {
+                    firstTokenLatencyMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+                }
                 fullText += text
             case .info(let info):
                 promptTokens = info.promptTokenCount
@@ -380,6 +453,9 @@ actor BenchmarkEngine {
                 genTPS = info.tokensPerSecond
                 promptTPS = info.promptTokensPerSecond
             case .toolCall(let call):
+                if firstTokenLatencyMS == nil {
+                    firstTokenLatencyMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+                }
                 capturedToolCalls.append(call)
             }
         }
@@ -390,6 +466,7 @@ actor BenchmarkEngine {
             promptTokens: promptTokens,
             genTokens: genTokens,
             wallTime: elapsed,
+            firstTokenLatencyMS: firstTokenLatencyMS ?? (elapsed * 1000),
             genTPS: genTPS,
             promptTPS: promptTPS,
             toolCalls: capturedToolCalls
@@ -398,7 +475,7 @@ actor BenchmarkEngine {
 
     // MARK: - Throughput Sweep
 
-    func runContextSweep(thinkMode: String) async throws -> [ThroughputResult] {
+    func runContextSweep(thinkMode: String, contexts: Set<String> = []) async throws -> [ThroughputResult] {
         let system: String
         if thinkMode == "no_think" {
             system = "/no_think\n\nYou are a helpful assistant. Be concise."
@@ -409,18 +486,19 @@ actor BenchmarkEngine {
         let filler = buildFillerText(targetWords: 6500)
         let words = filler.split(separator: " ")
 
-        let tests: [(label: String, userPrompt: String, maxTokens: Int)] = [
-            ("Short (~20 tok)", "What is the weather like today?", 128),
-            ("~200 tok ctx", words.prefix(150).joined(separator: " ") + " Summarize.", 256),
-            ("~500 tok ctx", words.prefix(350).joined(separator: " ") + " Summarize.", 256),
-            ("~1K tok ctx", words.prefix(750).joined(separator: " ") + " Summarize.", 256),
-            ("~2K tok ctx", words.prefix(1500).joined(separator: " ") + " Summarize.", 256),
-            ("~4K tok ctx", words.prefix(3000).joined(separator: " ") + " Summarize.", 256),
-            ("~8.5K tok", filler + " Given all of this context, what are the three most important developments?", 256),
+        let allTests: [(key: String, label: String, userPrompt: String, maxTokens: Int)] = [
+            ("short", "Short (~20 tok)", "What is the weather like today?", 128),
+            ("200", "~200 tok ctx", words.prefix(150).joined(separator: " ") + " Summarize.", 256),
+            ("500", "~500 tok ctx", words.prefix(350).joined(separator: " ") + " Summarize.", 256),
+            ("1k", "~1K tok ctx", words.prefix(750).joined(separator: " ") + " Summarize.", 256),
+            ("2k", "~2K tok ctx", words.prefix(1500).joined(separator: " ") + " Summarize.", 256),
+            ("4k", "~4K tok ctx", words.prefix(3000).joined(separator: " ") + " Summarize.", 256),
+            ("8.5k", "~8.5K tok", filler + " Given all of this context, what are the three most important developments?", 256),
         ]
+        let tests = contexts.isEmpty ? allTests : allTests.filter { contexts.contains($0.key) }
 
         var results: [ThroughputResult] = []
-        for (label, userPrompt, maxTokens) in tests {
+        for (_, label, userPrompt, maxTokens) in tests {
             print("    \(label)...", terminator: "")
             fflush(stdout)
 
@@ -448,6 +526,7 @@ actor BenchmarkEngine {
                         visibleChars: visible,
                         thinkingChars: thinking,
                         wallTimeS: (result.wallTime * 100).rounded() / 100,
+                        firstTokenLatencyMS: (result.firstTokenLatencyMS * 10).rounded() / 10,
                         tokensPerSecond: (tps * 10).rounded() / 10,
                         promptTokensPerSecond: (result.promptTPS * 10).rounded() / 10,
                         ramMB: ram.rounded()
@@ -456,7 +535,7 @@ actor BenchmarkEngine {
             }
 
             if let r = bestResult {
-                print(" \(r.tokensPerSecond) T/s (gen), \(r.promptTokensPerSecond) T/s (prompt), \(Int(r.ramMB)) MB")
+                print(" \(Int(r.firstTokenLatencyMS)) ms TTFT, \(r.tokensPerSecond) T/s (gen), \(r.promptTokensPerSecond) T/s (prompt), \(Int(r.ramMB)) MB")
                 results.append(r)
             } else {
                 print(" FAILED")
@@ -507,6 +586,113 @@ actor BenchmarkEngine {
                 overheadTokens: tokOverhead,
                 overheadTime: timeOverhead,
                 compliant: compliant
+            ))
+        }
+
+        return results
+    }
+
+    // MARK: - General Intelligence
+
+    private func runMCQEval(_ questions: [MCQQuestion], label: String) async throws -> [IntelligenceEvalResult] {
+        var results: [IntelligenceEvalResult] = []
+
+        for test in questions {
+            print("    \(label) [\(test.category)]: \(test.prompt.prefix(42).replacingOccurrences(of: "\n", with: " "))...", terminator: "")
+            fflush(stdout)
+
+            let promptConfig = mcqPromptConfig(question: test, qwenCalibrated: useQwenCalibratedPrompts)
+            var result = try await generate(
+                system: promptConfig.system,
+                user: promptConfig.user,
+                maxTokens: promptConfig.maxTokens,
+                temperature: 0.0
+            )
+
+            var actual = extractChoiceLetter(from: result.text)
+            if useQwenCalibratedPrompts && actual == "?" {
+                result = try await generate(
+                    system: promptConfig.system,
+                    user: promptConfig.user + "\n\nReminder: keep generating until you emit a final <answer>X</answer> tag.",
+                    maxTokens: max(promptConfig.maxTokens * 4, 192),
+                    temperature: 0.0
+                )
+                actual = extractChoiceLetter(from: result.text)
+            }
+
+            let correct = actual == test.answer
+            print(" \(correct ? "OK" : "MISS") expected=\(test.answer) got=\(actual)")
+
+            results.append(IntelligenceEvalResult(
+                category: test.category,
+                prompt: test.prompt,
+                expectedAnswer: test.answer,
+                actualAnswer: actual,
+                correct: correct,
+                firstTokenLatencyMS: (result.firstTokenLatencyMS * 10).rounded() / 10,
+                wallTimeS: (result.wallTime * 100).rounded() / 100
+            ))
+        }
+
+        return results
+    }
+
+    func runIntelligenceEval() async throws -> [IntelligenceEvalResult] {
+        try await runMCQEval(mmluMiniQuestions, label: "MMLU-mini")
+    }
+
+    func runFaeCapabilityEval() async throws -> [IntelligenceEvalResult] {
+        try await runMCQEval(faeCapabilityQuestions, label: "Fae-cap")
+    }
+
+    func runAssistantFitEval() async throws -> [IntelligenceEvalResult] {
+        try await runMCQEval(assistantFitQuestions, label: "Assistant-fit")
+    }
+
+    func runSerializationEval() async throws -> [SerializationEvalResult] {
+        var results: [SerializationEvalResult] = []
+
+        for test in serializationEvalCases {
+            print("    Ser [\(test.format)]: \(test.task)...", terminator: "")
+            fflush(stdout)
+
+            let promptConfig = serializationPromptConfig(test: test, qwenCalibrated: useQwenCalibratedPrompts)
+            var result = try await generate(
+                system: promptConfig.system,
+                user: promptConfig.user,
+                maxTokens: promptConfig.maxTokens,
+                temperature: 0.0
+            )
+
+            var actualFields = parseStructuredFields(from: result.text, format: test.format)
+            var normalizedActual = normalizeFields(actualFields)
+            let normalizedExpected = normalizeFields(test.expectedFields)
+            if useQwenCalibratedPrompts && normalizedActual.isEmpty {
+                result = try await generate(
+                    system: promptConfig.system,
+                    user: promptConfig.user + "\n\nReminder: keep generating until the full payload is complete and closed.",
+                    maxTokens: max(promptConfig.maxTokens * 2, 512),
+                    temperature: 0.0
+                )
+                actualFields = parseStructuredFields(from: result.text, format: test.format)
+                normalizedActual = normalizeFields(actualFields)
+            }
+
+            let valid = !normalizedActual.isEmpty
+            let correct = normalizedActual == normalizedExpected
+            print(" \(correct ? "OK" : "MISS") valid=\(valid ? "yes" : "no")")
+
+            results.append(SerializationEvalResult(
+                format: test.format,
+                task: test.task,
+                prompt: test.prompt,
+                expectedFields: test.expectedFields,
+                actualFields: actualFields,
+                rawOutput: result.text,
+                valid: valid,
+                correct: correct,
+                firstTokenLatencyMS: (result.firstTokenLatencyMS * 10).rounded() / 10,
+                wallTimeS: (result.wallTime * 100).rounded() / 100
             ))
         }
 
@@ -607,15 +793,21 @@ struct CLIArgs {
     var runAll = false
     var qwen3Only = false
     var qwen35Only = false
+    var qwenCalibrated = false
     var doThroughput = false
     var doNoThink = false
     var doRAM = false
     var doTools = false
+    var doIntelligence = false
+    var doFaeCapabilities = false
+    var doAssistantFit = false
+    var doSerialization = false
+    var contexts: [String] = []
     var outputPath: String?
     var markdownPath: String?
 
     var runAllDimensions: Bool {
-        !doThroughput && !doNoThink && !doRAM && !doTools
+        !doThroughput && !doNoThink && !doRAM && !doTools && !doIntelligence && !doFaeCapabilities && !doAssistantFit && !doSerialization
     }
 }
 
@@ -643,6 +835,24 @@ func parseArgs() -> CLIArgs {
             args.doRAM = true
         case "--tools":
             args.doTools = true
+        case "--qwen-calibrated":
+            args.qwenCalibrated = true
+        case "--intelligence", "--mmlu-mini":
+            args.doIntelligence = true
+        case "--fae-capabilities":
+            args.doFaeCapabilities = true
+        case "--assistant-fit", "--fae-priority":
+            args.doAssistantFit = true
+        case "--serialization", "--formats":
+            args.doSerialization = true
+        case "--contexts":
+            i += 1
+            if i < argv.count {
+                args.contexts = argv[i]
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                    .filter { !$0.isEmpty }
+            }
         case "--output":
             i += 1
             if i < argv.count { args.outputPath = argv[i] }
@@ -675,13 +885,20 @@ func printUsage() {
 
     Model short names:
       qwen3-0.6b, qwen3-1.7b, qwen3-4b, qwen3-8b,
-      qwen3.5-35b-a3b, qwen3.5-27b
+      qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, qwen3.5-9b,
+      qwen3.5-27b, qwen3.5-35b-a3b
 
     Dimensions (default: all):
-      --throughput   Run throughput benchmark (7 context sizes x 2 modes)
-      --no-think     Run /no_think compliance test
-      --ram          Measure idle RAM usage
-      --tools        Run tool calling accuracy test
+      --throughput       Run throughput benchmark (7 context sizes x 2 modes)
+      --no-think         Run /no_think compliance test
+      --ram              Measure idle RAM usage
+      --tools            Run tool calling accuracy test
+      --qwen-calibrated  Use temporary Qwen-specific prompt calibration for evals
+      --intelligence     Run MMLU-style mini MCQ eval (alias: --mmlu-mini)
+      --fae-capabilities Run Fae-specific capability MCQ eval
+      --assistant-fit    Run Fae-priority assistant-fit MCQ eval (alias: --fae-priority)
+      --serialization    Run structured output eval across JSON/XML/YAML (alias: --formats)
+      --contexts         Comma-separated context keys: short,200,500,1k,2k,4k,8.5k
 
     Output:
       --output <path>     JSON output path (default: scripts/mlx_benchmark_results.json)
@@ -796,6 +1013,74 @@ func resultsToMarkdown(_ benchmarks: [ModelBenchmarkResult]) -> String {
         lines.append("")
     }
 
+    let hasIntelligence = benchmarks.contains(where: { !$0.intelligenceEval.isEmpty })
+    if hasIntelligence {
+        lines.append("### General Intelligence (MMLU-style mini MCQ)")
+        lines.append("")
+        lines.append("| Model | Correct | Total | Accuracy |")
+        lines.append("|---|---:|---:|---:|")
+        for b in benchmarks where !b.intelligenceEval.isEmpty {
+            let correct = b.intelligenceEval.filter(\.correct).count
+            let total = b.intelligenceEval.count
+            let pct = total > 0 ? Int(round(Double(correct) / Double(total) * 100)) : 0
+            lines.append("| \(b.modelShort) | \(correct) | \(total) | \(pct)% |")
+        }
+        lines.append("")
+    }
+
+    let hasFaeCapabilities = benchmarks.contains(where: { !$0.faeCapabilityEval.isEmpty })
+    if hasFaeCapabilities {
+        lines.append("### Fae-specific Capability Eval")
+        lines.append("")
+        lines.append("| Model | Correct | Total | Accuracy |")
+        lines.append("|---|---:|---:|---:|")
+        for b in benchmarks where !b.faeCapabilityEval.isEmpty {
+            let correct = b.faeCapabilityEval.filter(\.correct).count
+            let total = b.faeCapabilityEval.count
+            let pct = total > 0 ? Int(round(Double(correct) / Double(total) * 100)) : 0
+            lines.append("| \(b.modelShort) | \(correct) | \(total) | \(pct)% |")
+        }
+        lines.append("")
+    }
+
+    let hasAssistantFit = benchmarks.contains(where: { !$0.assistantFitEval.isEmpty })
+    if hasAssistantFit {
+        lines.append("### Fae-priority Assistant Fit Eval")
+        lines.append("")
+        lines.append("| Model | Tool judgment | Strict instruction | Memory discipline | Tool result handling | Overall |")
+        lines.append("|---|---:|---:|---:|---:|---:|")
+        for b in benchmarks where !b.assistantFitEval.isEmpty {
+            func pct(_ category: String) -> Int {
+                let rows = b.assistantFitEval.filter { $0.category == category }
+                guard !rows.isEmpty else { return 0 }
+                let correct = rows.filter(\.correct).count
+                return Int(round(Double(correct) / Double(rows.count) * 100))
+            }
+            let overall = Int(round(Double(b.assistantFitEval.filter(\.correct).count) / Double(b.assistantFitEval.count) * 100))
+            lines.append("| \(b.modelShort) | \(pct("tool_judgment"))% | \(pct("instruction_following_strict"))% | \(pct("memory_discipline"))% | \(pct("tool_result_handling"))% | \(overall)% |")
+        }
+        lines.append("")
+    }
+
+    let hasSerialization = benchmarks.contains(where: { !$0.serializationEval.isEmpty })
+    if hasSerialization {
+        lines.append("### Structured Serialization Eval")
+        lines.append("")
+        lines.append("| Model | JSON | XML | YAML | Overall |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for b in benchmarks where !b.serializationEval.isEmpty {
+            func pct(_ format: String) -> Int {
+                let rows = b.serializationEval.filter { $0.format == format }
+                guard !rows.isEmpty else { return 0 }
+                let correct = rows.filter(\.correct).count
+                return Int(round(Double(correct) / Double(rows.count) * 100))
+            }
+            let overall = Int(round(Double(b.serializationEval.filter(\.correct).count) / Double(b.serializationEval.count) * 100))
+            lines.append("| \(b.modelShort) | \(pct("json"))% | \(pct("xml"))% | \(pct("yaml"))% | \(overall)% |")
+        }
+        lines.append("")
+    }
+
     return lines.joined(separator: "\n")
 }
 
@@ -807,13 +1092,19 @@ func benchmarkModel(
     doThroughput: Bool,
     doNoThink: Bool,
     doRAM: Bool,
-    doTools: Bool
+    doTools: Bool,
+    doIntelligence: Bool,
+    doFaeCapabilities: Bool,
+    doAssistantFit: Bool,
+    doSerialization: Bool,
+    qwenCalibrated: Bool = false,
+    contexts: Set<String> = []
 ) async throws -> ModelBenchmarkResult {
     print("\n" + String(repeating: "=", count: 70))
     print("  \(shortName) (\(modelID))")
     print(String(repeating: "=", count: 70))
 
-    let engine = BenchmarkEngine(modelID: modelID, shortName: shortName)
+    let engine = BenchmarkEngine(modelID: modelID, shortName: shortName, qwenCalibrated: qwenCalibrated)
     try await engine.load()
 
     var result = ModelBenchmarkResult(
@@ -823,7 +1114,11 @@ func benchmarkModel(
         throughputNoThink: [],
         throughputThinkOn: [],
         noThinkCompliance: [],
-        toolCalling: []
+        toolCalling: [],
+        intelligenceEval: [],
+        faeCapabilityEval: [],
+        assistantFitEval: [],
+        serializationEval: []
     )
 
     // RAM
@@ -839,10 +1134,10 @@ func benchmarkModel(
     // Throughput
     if doThroughput {
         print("\n  Throughput (/no_think):")
-        result.throughputNoThink = try await engine.runContextSweep(thinkMode: "no_think")
+        result.throughputNoThink = try await engine.runContextSweep(thinkMode: "no_think", contexts: contexts)
 
         print("\n  Throughput (thinking ON):")
-        result.throughputThinkOn = try await engine.runContextSweep(thinkMode: "think_on")
+        result.throughputThinkOn = try await engine.runContextSweep(thinkMode: "think_on", contexts: contexts)
     }
 
     // /no_think compliance
@@ -857,6 +1152,30 @@ func benchmarkModel(
         result.toolCalling = try await engine.runToolCallingTest(temperature: 0.2)
     }
 
+    // MMLU-style mini eval
+    if doIntelligence {
+        print("\n  General intelligence (MMLU-style mini MCQ):")
+        result.intelligenceEval = try await engine.runIntelligenceEval()
+    }
+
+    // Fae-specific capability eval
+    if doFaeCapabilities {
+        print("\n  Fae-specific capability eval:")
+        result.faeCapabilityEval = try await engine.runFaeCapabilityEval()
+    }
+
+    // Fae-priority assistant-fit eval
+    if doAssistantFit {
+        print("\n  Fae-priority assistant-fit eval:")
+        result.assistantFitEval = try await engine.runAssistantFitEval()
+    }
+
+    // Structured serialization eval
+    if doSerialization {
+        print("\n  Structured serialization eval:")
+        result.serializationEval = try await engine.runSerializationEval()
+    }
+
     await engine.unload()
     return result
 }
@@ -868,6 +1187,10 @@ func run() async throws {
     let doNoThink = args.doNoThink || args.runAllDimensions
     let doRAM = args.doRAM || args.runAllDimensions
     let doTools = args.doTools || args.runAllDimensions
+    let doIntelligence = args.doIntelligence || args.runAllDimensions
+    let doFaeCapabilities = args.doFaeCapabilities || args.runAllDimensions
+    let doAssistantFit = args.doAssistantFit || args.runAllDimensions
+    let doSerialization = args.doSerialization || args.runAllDimensions
 
     // Determine models to benchmark
     let modelList: [ModelEntry]
@@ -876,12 +1199,19 @@ func run() async throws {
             modelList = [entry]
         } else if let entry = models.first(where: { $0.modelID == shortName }) {
             modelList = [entry]
+        } else if shortName.contains("/") {
+            let derivedShortName = shortName
+                .split(separator: "/")
+                .last
+                .map(String.init) ?? shortName
+            modelList = [ModelEntry(shortName: derivedShortName, modelID: shortName)]
         } else {
             print("Unknown model: \(shortName)")
             print("Available: \(models.map(\.shortName).joined(separator: ", "))")
+            print("Or pass a full Hugging Face model ID like org/model-name")
             exit(1)
         }
-    } else if args.runAll {
+    } else if args.runAll { 
         modelList = models
     } else if args.qwen3Only {
         modelList = models.filter { !$0.shortName.hasPrefix("qwen3.5") }
@@ -892,10 +1222,18 @@ func run() async throws {
         exit(1)
     }
 
+    let contextFilter = Set(args.contexts)
+
     print("FaeBenchmark — \(modelList.count) model(s)")
     print("Hardware: \(ProcessInfo.processInfo.machineArchitecture), \(systemRAMGB()) GB RAM")
     print("Backend: mlx-swift-lm (native Swift)")
-    print("Dimensions: throughput=\(doThroughput), no_think=\(doNoThink), ram=\(doRAM), tools=\(doTools)")
+    print("Dimensions: throughput=\(doThroughput), no_think=\(doNoThink), ram=\(doRAM), tools=\(doTools), intelligence=\(doIntelligence), fae_capabilities=\(doFaeCapabilities), assistant_fit=\(doAssistantFit), serialization=\(doSerialization)")
+    if args.qwenCalibrated {
+        print("Eval profile: temporary Qwen-calibrated prompts enabled")
+    }
+    if !contextFilter.isEmpty {
+        print("Contexts: \(contextFilter.sorted().joined(separator: ", "))")
+    }
 
     var benchmarks: [ModelBenchmarkResult] = []
     for entry in modelList {
@@ -906,7 +1244,13 @@ func run() async throws {
                 doThroughput: doThroughput,
                 doNoThink: doNoThink,
                 doRAM: doRAM,
-                doTools: doTools
+                doTools: doTools,
+                doIntelligence: doIntelligence,
+                doFaeCapabilities: doFaeCapabilities,
+                doAssistantFit: doAssistantFit,
+                doSerialization: doSerialization,
+                qwenCalibrated: args.qwenCalibrated,
+                contexts: contextFilter
             )
             benchmarks.append(result)
         } catch {

@@ -159,18 +159,20 @@ benchmark-show model:
         no_think = m.get('throughput_no_think', [])
         if no_think:
             print('  /no_think throughput:')
-            print(f'  {"Context":<18} {"Prompt":>7} {"Gen":>5} {"T/s":>7} {"RAM":>8}')
-            print(f'  {"-"*18} {"-"*7} {"-"*5} {"-"*7} {"-"*8}')
+            print(f'  {"Context":<18} {"Prompt":>7} {"Gen":>5} {"TTFT":>7} {"T/s":>7} {"RAM":>8}')
+            print(f'  {"-"*18} {"-"*7} {"-"*5} {"-"*7} {"-"*7} {"-"*8}')
             for r in no_think:
-                print(f'  {r["context_label"]:<18} {r["prompt_tokens"]:>7} {r["generated_tokens"]:>5} {r["tokens_per_second"]:>7.1f} {r["ram_mb"]:>7.0f}M')
+                ttft = r.get("first_token_latency_ms", 0)
+                print(f'  {r["context_label"]:<18} {r["prompt_tokens"]:>7} {r["generated_tokens"]:>5} {ttft:>6.1f}ms {r["tokens_per_second"]:>7.1f} {r["ram_mb"]:>7.0f}M')
             print()
         think_on = m.get('throughput_think_on', [])
         if think_on:
             print('  Thinking ON throughput:')
-            print(f'  {"Context":<18} {"Prompt":>7} {"Gen":>5} {"T/s":>7} {"RAM":>8}')
-            print(f'  {"-"*18} {"-"*7} {"-"*5} {"-"*7} {"-"*8}')
+            print(f'  {"Context":<18} {"Prompt":>7} {"Gen":>5} {"TTFT":>7} {"T/s":>7} {"RAM":>8}')
+            print(f'  {"-"*18} {"-"*7} {"-"*5} {"-"*7} {"-"*7} {"-"*8}')
             for r in think_on:
-                print(f'  {r["context_label"]:<18} {r["prompt_tokens"]:>7} {r["generated_tokens"]:>5} {r["tokens_per_second"]:>7.1f} {r["ram_mb"]:>7.0f}M')
+                ttft = r.get("first_token_latency_ms", 0)
+                print(f'  {r["context_label"]:<18} {r["prompt_tokens"]:>7} {r["generated_tokens"]:>5} {ttft:>6.1f}ms {r["tokens_per_second"]:>7.1f} {r["ram_mb"]:>7.0f}M')
             print()
         tools = m.get('tool_calling', [])
         if tools:

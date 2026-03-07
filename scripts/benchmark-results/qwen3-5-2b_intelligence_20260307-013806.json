@@ -1,0 +1,137 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+        {
+          "actual_answer" : "D",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 99.9,
+          "prompt" : "What is 17 × 23?\nA. 371\nB. 381\nC. 391\nD. 361",
+          "wall_time_s" : 0.12
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 122.1,
+          "prompt" : "A shop gives a 25% discount on a $120 item. What is the sale price?\nA. $80\nB. $90\nC. $95\nD. $100",
+          "wall_time_s" : 0.17
+        },
+        {
+          "actual_answer" : "C",
+          "category" : "science",
+          "correct" : true,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 97.4,
+          "prompt" : "Which planet is known as the Red Planet?\nA. Venus\nB. Jupiter\nC. Mars\nD. Mercury",
+          "wall_time_s" : 0.12
+        },
+        {
+          "actual_answer" : "C",
+          "category" : "science",
+          "correct" : true,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 98.5,
+          "prompt" : "Water boils at what temperature at sea level?\nA. 90°C\nB. 95°C\nC. 100°C\nD. 110°C",
+          "wall_time_s" : 0.12
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "history",
+          "correct" : true,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 98.3,
+          "prompt" : "Which city is the capital of Australia?\nA. Sydney\nB. Melbourne\nC. Perth\nD. Canberra",
+          "wall_time_s" : 0.12
+        },
+        {
+          "actual_answer" : "C",
+          "category" : "history",
+          "correct" : true,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 98.6,
+          "prompt" : "World War II ended in which year?\nA. 1943\nB. 1944\nC. 1945\nD. 1946",
+          "wall_time_s" : 0.12
+        },
+        {
+          "actual_answer" : "B",
+          "category" : "language",
+          "correct" : true,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 99.3,
+          "prompt" : "Choose the closest synonym for 'brief'.\nA. endless\nB. short\nC. noisy\nD. hidden",
+          "wall_time_s" : 0.12
+        },
+        {
+          "actual_answer" : "C",
+          "category" : "language",
+          "correct" : true,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 99.8,
+          "prompt" : "Which sentence is grammatically correct?\nA. She don't like apples.\nB. She doesn't likes apples.\nC. She doesn't like apples.\nD. She not like apples.",
+          "wall_time_s" : 0.13
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 125.1,
+          "prompt" : "All bloops are razzies. All razzies are green. Which statement must be true?\nA. All green things are bloops.\nB. All bloops are green.\nC. No bloops are green.\nD. Some razzies are not green.",
+          "wall_time_s" : 0.15
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "logic",
+          "correct" : true,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 123.6,
+          "prompt" : "What number comes next in the sequence 2, 4, 8, 16, ?\nA. 18\nB. 24\nC. 30\nD. 32",
+          "wall_time_s" : 0.15
+        },
+        {
+          "actual_answer" : "B",
+          "category" : "commonsense",
+          "correct" : true,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 124.3,
+          "prompt" : "If you put an ice cube in a warm room, what will most likely happen?\nA. It will freeze harder.\nB. It will melt.\nC. It will turn into metal.\nD. It will disappear instantly.",
+          "wall_time_s" : 0.15
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 99.5,
+          "prompt" : "Sam is taller than Mia. Mia is taller than Leo. Who is the shortest?\nA. Sam\nB. Mia\nC. Leo\nD. Cannot tell",
+          "wall_time_s" : 0.13
+        }
+      ],
+      "model_id" : "mlx-community\/Qwen3.5-2B-4bit",
+      "model_short" : "qwen3.5-2b",
+      "no_think_compliance" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

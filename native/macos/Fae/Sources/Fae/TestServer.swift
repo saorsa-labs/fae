@@ -212,6 +212,7 @@ final class TestServer {
         let toolMode = faeCore?.toolMode ?? "unknown"
         let modelLabel = conversation?.loadedModelLabel ?? ""
         let thinkingEnabled = faeCore?.thinkingEnabled ?? false
+        let thinkingLevel = faeCore?.thinkingLevel.rawValue ?? FaeThinkingLevel.fast.rawValue
         let hasOwnerSetUp = faeCore?.hasOwnerSetUp ?? false
 
         // Derive policy profile from tool mode (matches PolicyProfile enum rawValues)
@@ -230,6 +231,7 @@ final class TestServer {
             "toolMode": toolMode,
             "modelLabel": modelLabel,
             "thinkingEnabled": thinkingEnabled,
+            "thinkingLevel": thinkingLevel,
             "hasOwnerSetUp": hasOwnerSetUp,
             "policyProfile": policyProfile,
         ])

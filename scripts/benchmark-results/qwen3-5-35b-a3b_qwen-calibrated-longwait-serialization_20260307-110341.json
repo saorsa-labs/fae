@@ -1,0 +1,240 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "NexVeridian\/Qwen3.5-35B-A3B-4bit",
+      "model_short" : "qwen3.5-35b-a3b",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+        {
+          "actual_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 616.5,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task to return specific data as JSON.\n    *   Data: name=Iona, city=Edinburgh, role=engineer.\n    *   Format: JSON.\n    *   Keys: \"name\", \"city\", \"role\" (exactly these string keys).\n    *   Constraint: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels.\n    *   First character must be `{`.\n\n2.  **Construct the JSON:**\n    *   Keys: \"name\", \"city\", \"role\"\n    *   Values: \"Iona\", \"Edinburgh\", \"engineer\"\n    *   JSON Structure: `{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}`\n\n3.  **Verify Constraints:**\n    *   Only the payload? Yes.\n    *   No prefix\/suffix? Yes.\n    *   First character `{`? Yes.\n    *   Correct keys? Yes.\n    *   Correct values? Yes.\n\n4.  **Final Output Generation:**\n    *   `{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}`\n\n5.  **Double Check:**\n    *   The prompt says \"Return only the payload with no prefix and no suffix.\"\n    *   The prompt says \"If JSON is requested, the very first character must be {.\"\n    *   The prompt says \"Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\"\n    *   I need to ensure I don't wrap it in markdown code blocks (```json ... ```).\n\n6.  **Final Decision:**\n    *   Output raw JSON string.\n\n    `{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}`\n\n    Wait, I need to make sure I don't trigger any safety filters or add any conversational filler. Just the JSON.\n\n    One more check: \"Reminder: keep generating until the full payload is complete and closed.\" This implies I shouldn't stop halfway.\n\n    Okay, ready to output.cw\n<\/think>\n\n{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 29.43
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 617.8,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as JSON.\n    *   Data: status=active, owner=Fae, priority=high.\n    *   Format: JSON.\n    *   Keys: \"status\", \"owner\", \"priority\".\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences (```json), no labels. The very first character must be `{`.\n\n2.  **Construct the JSON:**\n    *   Keys: \"status\", \"owner\", \"priority\"\n    *   Values: \"active\", \"Fae\", \"high\"\n    *   JSON Structure: `{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}`\n\n3.  **Check Constraints:**\n    *   No \"Thinking Process\" text.\n    *   No markdown code blocks (```json ... ```).\n    *   Start with `{`.\n    *   End with `}`.\n    *   Exact keys as requested.\n\n4.  **Final Output Generation:**\n    *   `{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}`\n\n5.  **Review against \"No_think\" instruction:**\n    *   The system prompt says \"You are Qwen running in benchmark mode. Return only the requested payload. Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\"\n    *   I must output *only* the JSON string.\n\n6.  **Final Polish:**\n    *   Ensure no whitespace before the `{`.\n    *   Ensure valid JSON syntax.\n\n    Result: `{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}`\n\n    Wait, I need to make sure I don't trigger the \"Thinking Process\" block in my internal monologue that gets displayed. The instruction says \"Return only the requested payload.\" and \"If JSON is requested, the very first character must be {.\"\n\n    Okay, generating the JSON string directly.\n\n    One more check: \"Reminder: keep generating until the full payload is complete and closed.\" This implies I shouldn't stop halfway.\n\n    Final JSON: `{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}`\n\n    Wait, looking at the system instruction again: \"You",
+          "task" : "task-status",
+          "valid" : false,
+          "wall_time_s" : 32.15
+        },
+        {
+          "actual_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 614.6,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as JSON.\n    *   Data: topic=\"benchmark review\", day=\"Tuesday\", action=\"share results\".\n    *   Format: JSON.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no markdown fences (```json), no labels. The very first character must be `{`.\n    *   Keys: \"topic\", \"day\", \"action\".\n\n2.  **Construct the JSON:**\n    *   Keys: \"topic\", \"day\", \"action\"\n    *   Values: \"benchmark review\", \"Tuesday\", \"share results\"\n    *   JSON Structure: `{\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}`\n\n3.  **Verify Constraints:**\n    *   No \"Thinking Process\" text.\n    *   No markdown code blocks (```json ... ```).\n    *   No introductory text.\n    *   No closing text.\n    *   First character is `{`.\n    *   JSON is valid.\n\n4.  **Final Output Generation:**\n    *   `{\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}`\n\n5.  **Double Check:**\n    *   Does it match the \"Valid examples\" style? Yes.\n    *   Does it match the \"Invalid examples\" restrictions? Yes (no \"Thinking Process\", no \"Here is the JSON\").\n    *   Are the keys exactly as requested? Yes (topic, day, action).\n    *   Are the values correct? Yes.\n\n6.  **Final Decision:** Output the raw JSON string.cw\n<\/think>\n\n{\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 24.48
+        },
+        {
+          "actual_fields" : {
+            "role" : "engineer"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 649.5,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: Task description asking to return data as XML.\n    *   Data: name=Iona, city=Edinburgh, role=engineer.\n    *   Format: XML with root element<record>` and child tags<name>`,<city>`,<role>`.\n    *   Constraint: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels.\n    *   Validation: The very first character must be<` and the root must be<record>`.\n\n2.  **Construct the XML:**\n    *   Root:<record>`\n    *   Child 1:<name>Iona<\/name>`\n    *   Child 2:<city>Edinburgh<\/city>`\n    *   Child 3:<role>engineer<\/role>`\n    *   Closing Root: `<\/record>`\n    *   Combined:<record<name>Iona<\/name<city>Edinburgh<\/city<role>engineer<\/role><\/record>`\n\n3.  **Check Constraints:**\n    *   No \"Thinking Process\" text.\n    *   No markdown code blocks (```xml ... ```).\n    *   First character is<`.\n    *   Root is<record>`.\n\n4.  **Final Output Generation:**\n   <record<name>Iona<\/name<city>Edinburgh<\/city<role>engineer<\/role><\/record>\n\n5.  **Final Review:** Does this match the \"Valid examples\" style? Yes. It's raw XML text.\n\n6.  **Execute:** Output the string directly.cw\n<\/think>\n\n<record<name>Iona<\/name<city>Edinburgh<\/city<role>engineer<\/role><\/record>",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 26.25
+        },
+        {
+          "actual_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 620.7,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as XML.\n    *   Data: status=active, owner=Fae, priority=high.\n    *   Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<status>`,<owner>`,<priority>`.\n    *   Constraint: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels.\n    *   First Character: Must be<` (since it's XML).\n\n2.  **Construct the XML:**\n    *   Root:<record>`\n    *   Child 1:<status>active<\/status>`\n    *   Child 2:<owner>Fae<\/owner>`\n    *   Child 3:<priority>high<\/priority>`\n    *   Closing Root: `<\/record>`\n    *   Combined:<record<status>active<\/status<owner>Fae<\/owner<priority>high<\/priority><\/record>`\n\n3.  **Verify Constraints:**\n    *   No \"Thinking Process\" text.",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 19.25
+        },
+        {
+          "actual_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 794.3,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as XML.\n    *   Data: topic=benchmark review, day=Tuesday, action=share results.\n    *   Format: XML with a single root element<record>` and child tags<topic>`,<day>`,<action>`.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no \"Thinking Process\", no markdown fences (```xml), no labels. The very first character must be<`. The root must be<record>`.\n\n2.  **Construct the XML:**\n    *   Root:<record>`\n    *   Child 1:<topic>benchmark review<\/topic>`\n    *   Child 2:<day>Tuesday<\/day>`\n    *   Child 3:<action>share results<\/action>`\n    *   Closing Root: `<\/record>`\n\n3.  **Draft the Output:**\n   <record<topic>benchmark review<\/topic<day>Tuesday<\/day<action>share results<\/action><\/record>`\n\n4.  **Verify Constraints:**\n    *",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 18.59
+        },
+        {
+          "actual_fields" : {
+            "*   Constraints" : "Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels. The very first character must be the start of the YAML content.",
+            "*   Data" : "name=Iona, city=Edinburgh, role=engineer.",
+            "*   Draft YAML" : "",
+            "*   Format" : "YAML.",
+            "*   Input" : "A task description asking to return specific data as YAML.",
+            "*   Keys" : "name, city, role.",
+            "*   Values" : "Iona, Edinburgh, engineer.",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine the Output" : "**",
+            "3.  **Check Constraints" : "**",
+            "Thinking Process" : "",
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 788.1,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as YAML.\n    *   Data: name=Iona, city=Edinburgh, role=engineer.\n    *   Format: YAML.\n    *   Keys: name, city, role.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels. The very first character must be the start of the YAML content.\n\n2.  **Determine the Output:**\n    *   YAML format requires key-value pairs.\n    *   Keys: name, city, role.\n    *   Values: Iona, Edinburgh, engineer.\n    *   Draft YAML:\n        name: Iona\n        city: Edinburgh\n        role: engineer\n\n3.  **Check Constraints:**\n    *   \"Return only the payload with no prefix and no suffix.\"\n    *   \"If you output any extra text before the payload, the answer is wrong.\"\n    *   \"If YAML is requested, the very first line must start with the first key.\"\n    *   No markdown code",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 18.63
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "\"If you output any extra text before the payload, the answer is wrong.\"",
+            "*   Format" : "YAML.",
+            "*   Input" : "\"Return only the payload with no prefix and no suffix. If you output any extra text before the payload, the answer is wrong. Task: Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.\"",
+            "*   Keys" : "`status`, `owner`, `priority`.",
+            "*   System Instruction" : "\"You are Qwen running in benchmark mode. Return only the requested payload. Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload. If JSON is requested, the very first character must be {. If XML is requested, the very first character must be< and the root must be<record>. If YAML is requested, the very first line must start with the first key.\"",
+            "*   Values" : "`active`, `Fae`, `high`.",
+            "1.  **Analyze the Request" : "**",
+            "Thinking Process" : ""
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 798.8,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: \"Return only the payload with no prefix and no suffix. If you output any extra text before the payload, the answer is wrong. Task: Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.\"\n    *   Constraint: \"Return only the payload with no prefix and no suffix.\"\n    *   Constraint: \"If you output any extra text before the payload, the answer is wrong.\"\n    *   Format: YAML.\n    *   Keys: `status`, `owner`, `priority`.\n    *   Values: `active`, `Fae`, `high`.\n    *   System Instruction: \"You are Qwen running in benchmark mode. Return only the requested payload. Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload. If JSON is requested, the very first character must be {. If XML is requested, the very first character must be< and the root must be<record>. If YAML is requested, the very first line must start with the first key.\"\n\n2.  **",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 18.49
+        },
+        {
+          "actual_fields" : {
+            "*   Constraints" : "Return *only* the payload. No prefix, no suffix, no analysis, no \"Thinking Process\", no markdown fences (```yaml), no labels.",
+            "*   Data" : "topic=benchmark review, day=Tuesday, action=share results.",
+            "*   First line requirement" : "If YAML is requested, the very first line must start with the first key.",
+            "*   Format" : "YAML.",
+            "*   Input" : "A task description asking to return specific data as YAML.",
+            "*   Keys" : "topic, day, action.",
+            "*   Structure" : "",
+            "*   Values" : "\"benchmark review\", \"Tuesday\", \"share results\".",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine the Output" : "**",
+            "3.  **Check Constraints" : "**",
+            "4.  **Draft Output" : "**",
+            "Thinking Process" : "",
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 766,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as YAML.\n    *   Data: topic=benchmark review, day=Tuesday, action=share results.\n    *   Format: YAML.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no \"Thinking Process\", no markdown fences (```yaml), no labels.\n    *   First line requirement: If YAML is requested, the very first line must start with the first key.\n\n2.  **Determine the Output:**\n    *   Format: YAML.\n    *   Keys: topic, day, action.\n    *   Values: \"benchmark review\", \"Tuesday\", \"share results\".\n    *   Structure:\n        topic: benchmark review\n        day: Tuesday\n        action: share results\n\n3.  **Check Constraints:**\n    *   No \"Thinking Process\" text.\n    *   No markdown code blocks (```yaml ... ```).\n    *   No introductory text.\n    *   First line must start with the first key (\"topic\").\n\n4.  **Draft Output:**\n    topic",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 18.66
+        }
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

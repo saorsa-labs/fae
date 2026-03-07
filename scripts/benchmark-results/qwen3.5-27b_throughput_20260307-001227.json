@@ -1,0 +1,193 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "idle_ram_mb" : 14642,
+      "model_id" : "NexVeridian\/Qwen3.5-27B-4bit",
+      "model_short" : "qwen3.5-27b",
+      "no_think_compliance" : [
+
+      ],
+      "throughput_no_think" : [
+        {
+          "context_label" : "Short (~20 tok)",
+          "first_token_latency_ms" : 751.4,
+          "generated_tokens" : 128,
+          "prompt_tokens" : 35,
+          "prompt_tokens_per_second" : 46.6,
+          "ram_mb" : 14659,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 16.1,
+          "visible_chars" : 565,
+          "wall_time_s" : 8.73
+        },
+        {
+          "context_label" : "~200 tok ctx",
+          "first_token_latency_ms" : 2223.9,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 196,
+          "prompt_tokens_per_second" : 88.1,
+          "ram_mb" : 14659,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 14.5,
+          "visible_chars" : 1103,
+          "wall_time_s" : 19.92
+        },
+        {
+          "context_label" : "~500 tok ctx",
+          "first_token_latency_ms" : 4905,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 413,
+          "prompt_tokens_per_second" : 84.2,
+          "ram_mb" : 14659,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 13.6,
+          "visible_chars" : 1142,
+          "wall_time_s" : 23.72
+        },
+        {
+          "context_label" : "~1K tok ctx",
+          "first_token_latency_ms" : 8813.5,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 852,
+          "prompt_tokens_per_second" : 96.7,
+          "ram_mb" : 14660,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 14.3,
+          "visible_chars" : 1145,
+          "wall_time_s" : 26.69
+        },
+        {
+          "context_label" : "~2K tok ctx",
+          "first_token_latency_ms" : 15086.9,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 1670,
+          "prompt_tokens_per_second" : 110.7,
+          "ram_mb" : 14660,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 13.1,
+          "visible_chars" : 1072,
+          "wall_time_s" : 34.58
+        },
+        {
+          "context_label" : "~4K tok ctx",
+          "first_token_latency_ms" : 29680.9,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 3311,
+          "prompt_tokens_per_second" : 111.6,
+          "ram_mb" : 14661,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 12,
+          "visible_chars" : 1123,
+          "wall_time_s" : 51.07
+        },
+        {
+          "context_label" : "~8.5K tok",
+          "first_token_latency_ms" : 100976.8,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 7156,
+          "prompt_tokens_per_second" : 70.9,
+          "ram_mb" : 118,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 9.7,
+          "visible_chars" : 1186,
+          "wall_time_s" : 127.48
+        }
+      ],
+      "throughput_think_on" : [
+        {
+          "context_label" : "Short (~20 tok)",
+          "first_token_latency_ms" : 631.7,
+          "generated_tokens" : 128,
+          "prompt_tokens" : 31,
+          "prompt_tokens_per_second" : 49.1,
+          "ram_mb" : 119,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 10.5,
+          "visible_chars" : 516,
+          "wall_time_s" : 12.87
+        },
+        {
+          "context_label" : "~200 tok ctx",
+          "first_token_latency_ms" : 2658.2,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 192,
+          "prompt_tokens_per_second" : 72.2,
+          "ram_mb" : 120,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 11.5,
+          "visible_chars" : 1070,
+          "wall_time_s" : 24.84
+        },
+        {
+          "context_label" : "~500 tok ctx",
+          "first_token_latency_ms" : 4089.2,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 409,
+          "prompt_tokens_per_second" : 100,
+          "ram_mb" : 121,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 11.5,
+          "visible_chars" : 1119,
+          "wall_time_s" : 26.39
+        },
+        {
+          "context_label" : "~1K tok ctx",
+          "first_token_latency_ms" : 7927.5,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 848,
+          "prompt_tokens_per_second" : 107,
+          "ram_mb" : 122,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 11.2,
+          "visible_chars" : 1126,
+          "wall_time_s" : 30.86
+        },
+        {
+          "context_label" : "~2K tok ctx",
+          "first_token_latency_ms" : 15267.9,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 1666,
+          "prompt_tokens_per_second" : 109.1,
+          "ram_mb" : 122,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 10.8,
+          "visible_chars" : 1105,
+          "wall_time_s" : 38.99
+        },
+        {
+          "context_label" : "~4K tok ctx",
+          "first_token_latency_ms" : 29997.9,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 3307,
+          "prompt_tokens_per_second" : 110.2,
+          "ram_mb" : 123,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 10.6,
+          "visible_chars" : 1165,
+          "wall_time_s" : 54.21
+        },
+        {
+          "context_label" : "~8.5K tok",
+          "first_token_latency_ms" : 64617.6,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 7152,
+          "prompt_tokens_per_second" : 110.7,
+          "ram_mb" : 123,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 10.4,
+          "visible_chars" : 1147,
+          "wall_time_s" : 89.21
+        }
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

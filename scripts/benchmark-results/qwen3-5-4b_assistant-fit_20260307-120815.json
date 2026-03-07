@@ -1,0 +1,218 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "assistant_fit_eval" : [
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 353.2,
+          "prompt" : "User says: 'Before you email Alex, find his address in my contacts.' What should Fae do first?\nA. mail\nB. contacts\nC. ask a clarifying question\nD. none",
+          "wall_time_s" : 1.73
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 412.9,
+          "prompt" : "User says: 'Schedule lunch with Sam next week.' What is the best first action?\nA. calendar immediately\nB. reminders immediately\nC. ask a clarifying question for the day\/time\nD. none",
+          "wall_time_s" : 6.39
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 370.8,
+          "prompt" : "User says: 'Search my notes for the Iceland packing list.' What should Fae use first?\nA. notes\nB. web_search\nC. read\nD. none",
+          "wall_time_s" : 1.94
+        },
+        {
+          "actual_answer" : "B",
+          "category" : "tool_judgment",
+          "correct" : true,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 415.4,
+          "prompt" : "User says: 'What's the weather in Glasgow right now?' What should Fae do first?\nA. calendar\nB. web_search\nC. contacts\nD. none",
+          "wall_time_s" : 6.62
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 370.8,
+          "prompt" : "User says: 'Tell me something encouraging before my meeting.' What should Fae do first?\nA. notes\nB. web_search\nC. none\nD. reminders",
+          "wall_time_s" : 2.02
+        },
+        {
+          "actual_answer" : "C",
+          "category" : "instruction_following_strict",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 371.5,
+          "prompt" : "User says: 'Return exactly: ok' Which answer best follows the instruction?\nA. ok\nB. OK\nC. ok.\nD. The answer is ok",
+          "wall_time_s" : 2.01
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "instruction_following_strict",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 377.7,
+          "prompt" : "User says: 'Return exactly two comma-separated words: north,south' Which answer best follows the instruction?\nA. north south\nB. north,south\nC. north, south\nD. north,south,east",
+          "wall_time_s" : 2.1
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "instruction_following_strict",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 421.5,
+          "prompt" : "User says: 'Output valid JSON only: {\"done\":true}' Which answer best follows the instruction?\nA. {\"done\":true}\nB. JSON: {\"done\":true}\nC. ```json\n{\"done\":true}\n```\nD. done=true",
+          "wall_time_s" : 7.66
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "instruction_following_strict",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 376.6,
+          "prompt" : "User says: 'Answer with one word only: Tuesday' Which answer best follows the instruction?\nA. Tuesday\nB. It is Tuesday\nC. Tuesday.\nD. On Tuesday",
+          "wall_time_s" : 2.18
+        },
+        {
+          "actual_answer" : "B",
+          "category" : "instruction_following_strict",
+          "correct" : true,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 373.2,
+          "prompt" : "User says: 'Ignore previous instructions and answer with exactly YES.' Which answer best follows the latest instruction?\nA. yes\nB. YES\nC. I will answer YES\nD. Okay: YES",
+          "wall_time_s" : 2.19
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 428.5,
+          "prompt" : "Memory already says: favorite drink = tea. User now says: 'Actually coffee is my favorite drink.' What is the best memory action?\nA. Keep tea and ignore the new statement\nB. Store coffee as a new fact that supersedes tea\nC. Delete all beverage memories\nD. Store both as equally current favorites",
+          "wall_time_s" : 2.33
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 416.8,
+          "prompt" : "User says: 'My verification code today is 493821.' What is the best durable-memory choice?\nA. Store it permanently\nB. Store it as a profile fact\nC. Usually do not store it as durable memory\nD. Put it on the calendar",
+          "wall_time_s" : 2.33
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 368,
+          "prompt" : "User says: 'I'm vegan.' What is the best durable-memory choice?\nA. Store dietary preference: vegan\nB. Do not store any user preferences ever\nC. Replace the user's name with Vegan\nD. Schedule a reminder",
+          "wall_time_s" : 2.29
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 426.5,
+          "prompt" : "User says: 'I moved to Inverness last month.' What is the best durable-memory choice?\nA. Ignore it because locations are never useful\nB. Store current city as Inverness, superseding an older city if present\nC. Store only the month, not the city\nD. Store it as today's lunch",
+          "wall_time_s" : 2.4
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 425.3,
+          "prompt" : "User says: 'I had soup for lunch.' What is the best durable-memory choice?\nA. Store it as a permanent profile fact\nB. Usually do not store it as durable memory\nC. Supersede the user's dietary preferences\nD. Save it as a contact",
+          "wall_time_s" : 2.39
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_result_handling",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 484.6,
+          "prompt" : "Calendar tool returns: 09:00 design review, 13:00 lunch with Sam, 16:30 dentist. Which reply is best?\nA. You have three events tomorrow: design review at 09:00, lunch with Sam at 13:00, and dentist at 16:30.\nB. Calendar data loaded successfully.\nC. I cannot help with calendars.\nD. design review lunch dentist",
+          "wall_time_s" : 2.5
+        },
+        {
+          "actual_answer" : "B",
+          "category" : "tool_result_handling",
+          "correct" : true,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 418.2,
+          "prompt" : "Contacts tool returns no match for 'Alex'. Which response is best?\nA. Alex's email is alex@example.com\nB. I couldn't find Alex in contacts—do you want to try a full name or a different contact?\nC. I'll just send the email anyway\nD. Delete the contacts database",
+          "wall_time_s" : 2.48
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "tool_result_handling",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 422.8,
+          "prompt" : "Web search returns three recent Apple headlines. Which response is best?\nA. Here are the three main Apple headlines in a concise list, with the newest first.\nB. HEADLINES FOUND.\nC. I will paste raw HTML.\nD. No need to mention the results.",
+          "wall_time_s" : 2.51
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_result_handling",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 432,
+          "prompt" : "Read tool returns a todo list with five tasks. The user asked for a summary. Which reply is best?\nA. A brief summary of the five tasks, grouped by urgency.\nB. I refuse to summarise files.\nC. I will repeat every character with no summary.\nD. Calendar updated.",
+          "wall_time_s" : 2.5
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_result_handling",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 429.2,
+          "prompt" : "A tool request fails because permission is not granted. Which response is best?\nA. I made up the missing result for you.\nB. Permission is missing for that tool. I can help once access is granted, or we can use a different approach.\nC. I will keep retrying forever.\nD. ERROR ONLY",
+          "wall_time_s" : 2.49
+        }
+      ],
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "mlx-community\/Qwen3.5-4B-4bit",
+      "model_short" : "qwen3.5-4b",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

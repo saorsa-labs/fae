@@ -169,7 +169,6 @@ final class FaeLocalRuntimeServer {
             return
         }
 
-        let visiblePrompt = request.visiblePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let injectedPrompt = request.injectedPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !injectedPrompt.isEmpty else {
             sendResponse(connection: connection, status: 400, body: ["error": "missing user prompt"])
@@ -181,7 +180,7 @@ final class FaeLocalRuntimeServer {
         let baselineApprovalID = approvalOverlay?.activeApproval?.id
 
         conversation.lastInteractionTimestamp = Date()
-        conversation.appendMessage(role: .user, content: visiblePrompt.isEmpty ? injectedPrompt : visiblePrompt)
+        setCoworkConversationRouting(active: true)
         faeCore.injectDesktopText(injectedPrompt)
 
         Task { @MainActor [weak self] in
@@ -218,6 +217,9 @@ final class FaeLocalRuntimeServer {
                 )
             }
             self.sendResponse(connection: connection, status: 200, body: body)
+            Task { @MainActor [weak self] in
+                await self?.clearCoworkConversationRoutingWhenIdle(since: startedAt)
+            }
         }
     }
 
@@ -253,6 +255,34 @@ final class FaeLocalRuntimeServer {
         }
 
         return .timedOut(conversation?.streamingText.nilIfEmpty)
+    }
+
+    private func clearCoworkConversationRoutingWhenIdle(since: Date) async {
+        let deadline = Date().addingTimeInterval(60)
+
+        while Date() < deadline {
+            let approvalPending = approvalOverlay?.activeApproval != nil
+            let hasFreshAssistantReply = conversation?.messages.contains(where: { message in
+                message.role == .assistant && message.timestamp >= since.addingTimeInterval(-0.25)
+            }) == true
+            let isIdle = conversation?.isGenerating == false && conversation?.isStreaming == false
+
+            if !approvalPending && (hasFreshAssistantReply || isIdle) {
+                break
+            }
+
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+
+        setCoworkConversationRouting(active: false)
+    }
+
+    private func setCoworkConversationRouting(active: Bool) {
+        NotificationCenter.default.post(
+            name: .faeCoworkConversationRoutingChanged,
+            object: nil,
+            userInfo: ["active": active]
+        )
     }
 
     private func authorize(_ request: ParsedRequest) -> Bool {

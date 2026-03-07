@@ -11,6 +11,65 @@ pipeline architecture.
 
 ---
 
+## Update — MLX local model scoreboard (2026-03-07)
+
+A newer benchmark pass was run with the native Swift MLX stack used by current Fae benchmarking. This section is the current model-selection view for Fae.
+
+**Important caveat:** the sections below this update are older `mistral.rs` Qwen3 measurements on a different backend. They are still useful historical context, but the scoreboard below should drive current local-model decisions.
+
+### Generic apples-to-apples scoreboard
+
+| Model | RAM | TTFT | 500 T/s | Tools | MMLU | Fae | JSON | XML | YAML |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| qwen3.5-0.8b | 654 MB | 51 ms | 41.3 | 50% | 46% | 65% | 100% | 0% | 33% |
+| qwen3.5-2b | 1264 MB | 85 ms | 41.6 | 100% | 52% | 40% | 100% | 33% | 100% |
+| qwen3.5-4b | 2527 MB | 165 ms | 31.0 | 100% | 0% | 0% | 100% | 0% | 0% |
+| qwen3.5-9b | 5084 MB | 249 ms | 31.6 | 90% | 0% | 0% | 0% | 0% | 0% |
+| qwen3.5-27b | 14632 MB | 748 ms | 14.2 | 100% | 0% | 0% | 0% | 0% | 0% |
+| qwen3.5-35b-a3b | 18819 MB | 219 ms | 15.9 | 100% | 0% | 0% | 0% | 0% | 0% |
+| LFM2.5-1.2B-Instruct-MLX-4bit | 770 MB | 43 ms | 136.8 | 20% | 46% | 50% | 100% | 33% | 100% |
+| LFM2-24B-A2B-MLX-4bit | 12945 MB | 147 ms | 26.0 | 80% | 52% | 80% | 67% | 67% | 67% |
+
+### Qwen-calibrated diagnostic scoreboard
+
+Use this only as a diagnostic view for larger Qwen models. It adds longer answer budgets, Qwen-specific answer prompts, and post-`</think>` payload extraction. Throughput, RAM, and tool-calling are unchanged.
+
+| Model | RAM | TTFT | 500 T/s | Tools | MMLU | Fae | JSON | XML | YAML |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| qwen3.5-0.8b | 654 MB | 51 ms | 41.3 | 50% | 46% | 65% | 100% | 0% | 33% |
+| qwen3.5-2b | 1264 MB | 85 ms | 41.6 | 100% | 52% | 40% | 100% | 33% | 100% |
+| qwen3.5-4b | 2527 MB | 165 ms | 31.0 | 100% | 14% | 30% | 100% | 33% | 100% |
+| qwen3.5-9b | 5084 MB | 249 ms | 31.6 | 90% | 20% | 20% | 100% | 100% | 0% |
+| qwen3.5-27b | 14632 MB | 748 ms | 14.2 | 100% | 20% | 35% | 0% | 67% | 0% |
+| qwen3.5-35b-a3b | 18819 MB | 219 ms | 15.9 | 100% | 10% | 30% | 67% | 67% | 0% |
+| LFM2.5-1.2B-Instruct-MLX-4bit | 770 MB | 43 ms | 136.8 | 20% | 46% | 50% | 100% | 33% | 100% |
+| LFM2-24B-A2B-MLX-4bit | 12945 MB | 147 ms | 26.0 | 80% | 52% | 80% | 67% | 67% | 67% |
+
+### Winner badges
+
+- 🏆 **Best overall Fae default:** `LFM2-24B-A2B-MLX-4bit`
+- 🛠️ **Best tool user:** `qwen3.5-2b` for small/fast, `qwen3.5-27b` and `qwen3.5-35b-a3b` for large-tool-routing strength
+- 📏 **Best strict structured output:** `qwen3.5-2b` and `LFM2.5-1.2B-Instruct-MLX-4bit`
+- ⚡ **Fastest model:** `LFM2.5-1.2B-Instruct-MLX-4bit`
+- 🧠 **Best Fae-specific capability score:** `LFM2-24B-A2B-MLX-4bit`
+- 🪶 **Best small Qwen balance:** `qwen3.5-2b`
+
+### Recommended defaults by use case
+
+| Use case | Recommended model | Why |
+|---|---|---|
+| General local Fae default | `LFM2-24B-A2B-MLX-4bit` | Best combined Fae-capability score with solid tools and acceptable speed |
+| Tool-heavy assistant on tighter RAM | `qwen3.5-2b` | 100% tool score, low RAM, good TTFT, clean JSON/YAML |
+| Ultra-fast fallback | `LFM2.5-1.2B-Instruct-MLX-4bit` | Best TTFT and throughput, but weak tool use |
+| Qwen diagnostic / larger-model experiments | `qwen3.5-9b` or `qwen3.5-35b-a3b` with calibrated evals | Generic benchmark undercounts them due to long reasoning / delayed finalization |
+
+### Caveats
+
+- The generic scoreboard is the fair apples-to-apples comparison.
+- The Qwen-calibrated scoreboard is not the default benchmark; it is a diagnostic best-effort path for long-thinking Qwen variants.
+- Larger Qwen models were previously undercounted because answers and structured payloads sometimes appeared only after long reasoning blocks.
+- Qwen does **not** appear to inherently dislike JSON; larger-model failures were mostly compliance / finalization issues.
+
 ## Model Summary
 
 | Model | GGUF Size | Idle RAM | Peak T/s (raw) | Peak T/s (/no_think) | 8.5K ctx T/s |

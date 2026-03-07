@@ -80,12 +80,54 @@ struct WorkWithFaeAttachment: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+struct WorkWithFaeConversationMessage: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
+    let role: String
+    let content: String
+    let timestamp: Date
+
+    init(id: UUID = UUID(), role: String, content: String, timestamp: Date = Date()) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.timestamp = timestamp
+    }
+}
+
 struct WorkWithFaeWorkspaceState: Codable, Hashable, Sendable {
     var selectedDirectoryPath: String?
     var indexedFiles: [WorkWithFaeFileEntry]
     var attachments: [WorkWithFaeAttachment]
+    var conversationMessages: [WorkWithFaeConversationMessage]
 
-    static let empty = WorkWithFaeWorkspaceState(selectedDirectoryPath: nil, indexedFiles: [], attachments: [])
+    static let empty = WorkWithFaeWorkspaceState(selectedDirectoryPath: nil, indexedFiles: [], attachments: [], conversationMessages: [])
+
+    enum CodingKeys: String, CodingKey {
+        case selectedDirectoryPath
+        case indexedFiles
+        case attachments
+        case conversationMessages
+    }
+
+    init(
+        selectedDirectoryPath: String?,
+        indexedFiles: [WorkWithFaeFileEntry],
+        attachments: [WorkWithFaeAttachment],
+        conversationMessages: [WorkWithFaeConversationMessage] = []
+    ) {
+        self.selectedDirectoryPath = selectedDirectoryPath
+        self.indexedFiles = indexedFiles
+        self.attachments = attachments
+        self.conversationMessages = conversationMessages
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedDirectoryPath = try container.decodeIfPresent(String.self, forKey: .selectedDirectoryPath)
+        indexedFiles = try container.decodeIfPresent([WorkWithFaeFileEntry].self, forKey: .indexedFiles) ?? []
+        attachments = try container.decodeIfPresent([WorkWithFaeAttachment].self, forKey: .attachments) ?? []
+        conversationMessages = try container.decodeIfPresent([WorkWithFaeConversationMessage].self, forKey: .conversationMessages) ?? []
+    }
 }
 
 struct WorkWithFaePreview: Sendable, Equatable {
@@ -250,6 +292,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var name: String
     var agentID: String
+    var parentWorkspaceID: UUID?
     var sortOrder: Int
     var policy: WorkWithFaeWorkspacePolicy
     var state: WorkWithFaeWorkspaceState
@@ -260,6 +303,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         id: UUID = UUID(),
         name: String,
         agentID: String,
+        parentWorkspaceID: UUID? = nil,
         sortOrder: Int = 0,
         policy: WorkWithFaeWorkspacePolicy = .default,
         state: WorkWithFaeWorkspaceState = .empty,
@@ -269,6 +313,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.agentID = agentID
+        self.parentWorkspaceID = parentWorkspaceID
         self.sortOrder = sortOrder
         self.policy = policy
         self.state = state
@@ -280,6 +325,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         case id
         case name
         case agentID
+        case parentWorkspaceID
         case sortOrder
         case policy
         case state
@@ -292,6 +338,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         agentID = try container.decode(String.self, forKey: .agentID)
+        parentWorkspaceID = try container.decodeIfPresent(UUID.self, forKey: .parentWorkspaceID)
         sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
         policy = try container.decodeIfPresent(WorkWithFaeWorkspacePolicy.self, forKey: .policy) ?? .default
         state = try container.decode(WorkWithFaeWorkspaceState.self, forKey: .state)
@@ -304,6 +351,7 @@ struct WorkWithFaeWorkspaceRecord: Identifiable, Codable, Hashable, Sendable {
         try container.encode(id, forKey: .id)
         try container.encode(name, forKey: .name)
         try container.encode(agentID, forKey: .agentID)
+        try container.encodeIfPresent(parentWorkspaceID, forKey: .parentWorkspaceID)
         try container.encode(sortOrder, forKey: .sortOrder)
         try container.encode(policy, forKey: .policy)
         try container.encode(state, forKey: .state)
@@ -377,11 +425,16 @@ struct WorkWithFaeConsensusResult: Identifiable, Equatable, Sendable {
 
 enum WorkWithFaeWorkspaceStore {
     private static let maxIndexedFiles = 800
+    private static let maxPersistedConversationMessages = 120
     private static let ignoredDirectoryNames: Set<String> = [
         ".git", ".build", "build", "dist", "node_modules", ".next", ".idea", ".swiftpm", "DerivedData"
     ]
+    static var storageURLOverride: URL?
 
     static var storageURL: URL {
+        if let storageURLOverride {
+            return storageURLOverride
+        }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return appSupport.appendingPathComponent("fae/work_with_fae_workspace.json")
@@ -428,17 +481,18 @@ enum WorkWithFaeWorkspaceStore {
 
     static func save(_ state: WorkWithFaeWorkspaceState) {
         var registry = loadRegistry()
+        let sanitizedState = sanitizedConversationState(state)
         if let selectedID = registry.selectedWorkspaceID,
            let index = registry.workspaces.firstIndex(where: { $0.id == selectedID })
         {
-            registry.workspaces[index].state = state
+            registry.workspaces[index].state = sanitizedState
             registry.workspaces[index].updatedAt = Date()
             saveRegistry(registry)
             return
         }
 
         if registry.workspaces.isEmpty {
-            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: normalized(registry).agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 0, state: state)
+            let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: normalized(registry).agents.first?.id ?? WorkWithFaeAgentProfile.faeLocal.id, sortOrder: 0, state: sanitizedState)
             registry.workspaces = [workspace]
             registry.selectedWorkspaceID = workspace.id
         }
@@ -542,19 +596,22 @@ enum WorkWithFaeWorkspaceStore {
         var copy = normalized(registry)
         let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
         guard let targetWorkspaceID,
-              let workspace = copy.workspaces.first(where: { $0.id == targetWorkspaceID })
+              let sourceIndex = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
         else {
             return copy
         }
 
+        let workspace = copy.workspaces[sourceIndex]
         let duplicate = WorkWithFaeWorkspaceRecord(
             name: duplicatedWorkspaceName(from: workspace.name, existingNames: copy.workspaces.map(\.name)),
             agentID: workspace.agentID,
-            sortOrder: copy.workspaces.count,
+            parentWorkspaceID: workspace.id,
+            sortOrder: sourceIndex + 1,
             policy: workspace.policy,
-            state: workspace.state
+            state: sanitizedConversationState(workspace.state)
         )
-        copy.workspaces.append(duplicate)
+        copy.workspaces.insert(duplicate, at: min(sourceIndex + 1, copy.workspaces.count))
+        copy.workspaces = reindexed(copy.workspaces)
         copy.selectedWorkspaceID = duplicate.id
         return normalized(copy)
     }
@@ -776,17 +833,32 @@ enum WorkWithFaeWorkspaceStore {
         if copy.selectedWorkspaceID == nil || !copy.workspaces.contains(where: { $0.id == copy.selectedWorkspaceID }) {
             copy.selectedWorkspaceID = copy.workspaces.first?.id
         }
+        let validWorkspaceIDs = Set(copy.workspaces.map(\.id))
         copy.workspaces = copy.workspaces.map { workspace in
             var mutable = workspace
             if !copy.agents.contains(where: { $0.id == workspace.agentID }) {
                 mutable.agentID = WorkWithFaeAgentProfile.faeLocal.id
+            }
+            if let parentWorkspaceID = mutable.parentWorkspaceID,
+               !validWorkspaceIDs.contains(parentWorkspaceID)
+            {
+                mutable.parentWorkspaceID = nil
             }
             let validAgentIDs = Set(copy.agents.map(\.id))
             mutable.policy.consensusAgentIDs = mutable.policy.consensusAgentIDs.filter { validAgentIDs.contains($0) }
             if mutable.policy.remoteExecution == .strictLocalOnly {
                 mutable.policy.consensusAgentIDs = mutable.policy.consensusAgentIDs.filter { $0 == WorkWithFaeAgentProfile.faeLocal.id }
             }
+            mutable.state = sanitizedConversationState(mutable.state)
             return mutable
+        }
+        return copy
+    }
+
+    private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
+        var copy = state
+        if copy.conversationMessages.count > maxPersistedConversationMessages {
+            copy.conversationMessages = Array(copy.conversationMessages.suffix(maxPersistedConversationMessages))
         }
         return copy
     }
@@ -801,14 +873,14 @@ enum WorkWithFaeWorkspaceStore {
 
     private static func duplicatedWorkspaceName(from baseName: String, existingNames: [String]) -> String {
         let normalizedExisting = Set(existingNames.map { $0.lowercased() })
-        let firstCandidate = "\(baseName) Copy"
+        let firstCandidate = "\(baseName) Fork"
         if !normalizedExisting.contains(firstCandidate.lowercased()) {
             return firstCandidate
         }
 
         var index = 2
         while true {
-            let candidate = "\(baseName) Copy \(index)"
+            let candidate = "\(baseName) Fork \(index)"
             if !normalizedExisting.contains(candidate.lowercased()) {
                 return candidate
             }
@@ -983,7 +1055,9 @@ enum WorkWithFaeWorkspaceStore {
         focusedPreview: WorkWithFaePreview? = nil
     ) -> WorkWithFaePreparedPrompt {
         let trimmedPrompt = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard state.selectedDirectoryPath != nil || !state.attachments.isEmpty || focusedPreview != nil else {
+        let priorConversation = formattedConversationHistory(from: state.conversationMessages)
+        let hasExtraContext = state.selectedDirectoryPath != nil || !state.attachments.isEmpty || focusedPreview != nil
+        guard hasExtraContext || priorConversation != nil else {
             return WorkWithFaePreparedPrompt(
                 userVisiblePrompt: trimmedPrompt,
                 faeLocalPrompt: trimmedPrompt,
@@ -1001,6 +1075,15 @@ enum WorkWithFaeWorkspaceStore {
             "Use explicitly attached items as grounding. Do not assume access to the full local workspace unless the user pasted or attached it here.",
         ]
         var containsLocalOnlyContext = false
+
+        if let priorConversation {
+            localLines.append("Recent conversation:")
+            localLines.append(priorConversation)
+            shareableLines.append("Recent conversation:")
+            shareableLines.append(priorConversation)
+            localLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
+            shareableLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
+        }
 
         if let selectedDirectoryPath = state.selectedDirectoryPath {
             containsLocalOnlyContext = true
@@ -1083,6 +1166,19 @@ enum WorkWithFaeWorkspaceStore {
             shareablePrompt: shareableLines.joined(separator: "\n"),
             containsLocalOnlyContext: containsLocalOnlyContext
         )
+    }
+
+    private static func formattedConversationHistory(from messages: [WorkWithFaeConversationMessage], limit: Int = 12) -> String? {
+        let relevant = messages.suffix(limit)
+        guard !relevant.isEmpty else { return nil }
+        let lines = relevant.compactMap { message -> String? in
+            let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let role = message.role.capitalized
+            return "- \(role): \(String(trimmed.prefix(1200)))"
+        }
+        guard !lines.isEmpty else { return nil }
+        return lines.joined(separator: "\n")
     }
 
     static func contextualPrompt(

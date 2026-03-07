@@ -33,6 +33,7 @@ struct SettingsModelsPerformanceTab: View {
     // MARK: - Model Settings
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
+    @AppStorage("thinkingLevel") private var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
     @AppStorage("visionModelPreset") private var visionModelPreset: String = "auto"
 
@@ -168,15 +169,28 @@ struct SettingsModelsPerformanceTab: View {
                         showRestartNotice = true
                     }
 
-                    Toggle("Enable Thinking Mode", isOn: $thinkingEnabled)
-                        .onChange(of: thinkingEnabled) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("llm.thinking_enabled", value: thinkingEnabled)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Thinking level")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+
+                        Picker("Thinking level", selection: $thinkingLevel) {
+                            ForEach(FaeThinkingLevel.allCases) { level in
+                                Text(level.displayName).tag(level.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: thinkingLevel) {
+                            guard !hydratingFromConfig,
+                                  let level = FaeThinkingLevel(rawValue: thinkingLevel)
+                            else { return }
+                            thinkingEnabled = level.enablesThinking
+                            patchConfig("llm.thinking_level", value: level.rawValue)
                         }
 
-                    Text("Thinking mode enables step-by-step reasoning for complex questions.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Text((FaeThinkingLevel(rawValue: thinkingLevel) ?? .fast).shortDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -589,8 +603,14 @@ struct SettingsModelsPerformanceTab: View {
                 if let preset = llm["voice_model_preset"] as? String {
                     voiceModelPreset = preset
                 }
-                if let thinking = llm["thinking_enabled"] as? Bool {
+                if let levelRaw = llm["thinking_level"] as? String,
+                   let level = FaeThinkingLevel(rawValue: levelRaw)
+                {
+                    thinkingLevel = level.rawValue
+                    thinkingEnabled = level.enablesThinking
+                } else if let thinking = llm["thinking_enabled"] as? Bool {
                     thinkingEnabled = thinking
+                    thinkingLevel = thinking ? FaeThinkingLevel.balanced.rawValue : FaeThinkingLevel.fast.rawValue
                 }
                 if let kvBits = llm["kv_quant_bits"] as? Int {
                     kvQuantBits = kvBits

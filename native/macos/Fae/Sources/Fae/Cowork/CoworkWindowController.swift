@@ -6,9 +6,13 @@ final class CoworkWindowController {
     private var window: NSWindow?
     private var controller: CoworkWorkspaceController?
 
+    var currentWindow: NSWindow? { window }
+
     var faeCore: FaeCore?
     var conversation: ConversationController?
     var runtimeDescriptor: FaeLocalRuntimeDescriptor?
+    var orbAnimation: OrbAnimationState?
+    var pipelineAux: PipelineAuxBridgeController?
 
     func show() {
         if let window {
@@ -18,7 +22,7 @@ final class CoworkWindowController {
             return
         }
 
-        guard let faeCore, let conversation else {
+        guard let faeCore, let conversation, let orbAnimation, let pipelineAux else {
             NSLog("CoworkWindowController: dependencies not wired")
             return
         }
@@ -31,7 +35,9 @@ final class CoworkWindowController {
         let rootView = CoworkWorkspaceView(
             controller: controller,
             faeCore: faeCore,
-            conversation: conversation
+            conversation: conversation,
+            orbAnimation: orbAnimation,
+            pipelineAux: pipelineAux
         )
 
         let hostingController = NSHostingController(rootView: rootView)

@@ -82,6 +82,10 @@ enum SensitiveContentPolicy {
         return output
     }
 
+    static func shouldBlockRemoteEgress(_ text: String) -> Bool {
+        scan(text).level.rawValue >= SensitivityLevel.likelyCredential.rawValue
+    }
+
     static func shouldPersistProactiveObservation(taskId: String, text: String) -> Bool {
         let lower = text.lowercased()
         let observationTasks: Set<String> = ["camera_presence_check", "screen_activity_check"]

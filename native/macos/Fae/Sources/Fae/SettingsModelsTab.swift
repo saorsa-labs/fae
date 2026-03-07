@@ -5,6 +5,7 @@ struct SettingsModelsTab: View {
     var commandSender: HostCommandSender?
 
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
+    @AppStorage("thinkingLevel") private var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
     @AppStorage("visionModelPreset") private var visionModelPreset: String = "auto"
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
@@ -258,17 +259,31 @@ struct SettingsModelsTab: View {
                 .foregroundStyle(.orange)
             }
 
-            Toggle("Enable Thinking Mode", isOn: $thinkingEnabled)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .onChange(of: thinkingEnabled) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Thinking level")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+
+                Picker("Thinking level", selection: $thinkingLevel) {
+                    ForEach(FaeThinkingLevel.allCases) { level in
+                        Text(level.displayName).tag(level.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: thinkingLevel) {
+                    guard !hydratingFromConfig,
+                          let level = FaeThinkingLevel(rawValue: thinkingLevel)
+                    else { return }
+                    thinkingEnabled = level.enablesThinking
                     commandSender?.sendCommand(
                         name: "config.patch",
-                        payload: ["key": "llm.thinking_enabled", "value": thinkingEnabled]
+                        payload: ["key": "llm.thinking_level", "value": level.rawValue]
                     )
                 }
-            Text("When on, Qwen3.5 reasons step by step before answering. Slower but more thorough for complex questions.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+
+                Text((FaeThinkingLevel(rawValue: thinkingLevel) ?? .fast).shortDescription)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -373,7 +388,7 @@ struct SettingsModelsTab: View {
         )
         async let voiceModelResponse = sender.queryCommand(
             name: "config.get",
-            payload: ["key": "llm.voice_model_preset"]
+            payload: ["key": "llm"]
         )
         async let ttsResponse = sender.queryCommand(
             name: "config.get",
@@ -410,11 +425,21 @@ struct SettingsModelsTab: View {
         }
 
         let modelPayload = unwrapPayload(voiceModel)
-        if let llm = modelPayload["llm"] as? [String: Any],
-           let preset = llm["voice_model_preset"] as? String,
-           voiceModelOptions.contains(where: { $0.value == preset })
-        {
-            voiceModelPreset = preset
+        if let llm = modelPayload["llm"] as? [String: Any] {
+            if let preset = llm["voice_model_preset"] as? String,
+               voiceModelOptions.contains(where: { $0.value == preset })
+            {
+                voiceModelPreset = preset
+            }
+            if let levelRaw = llm["thinking_level"] as? String,
+               let level = FaeThinkingLevel(rawValue: levelRaw)
+            {
+                thinkingLevel = level.rawValue
+                thinkingEnabled = level.enablesThinking
+            } else if let thinking = llm["thinking_enabled"] as? Bool {
+                thinkingEnabled = thinking
+                thinkingLevel = thinking ? FaeThinkingLevel.balanced.rawValue : FaeThinkingLevel.fast.rawValue
+            }
         }
 
         let ttsPayload = unwrapPayload(ttsConfig)

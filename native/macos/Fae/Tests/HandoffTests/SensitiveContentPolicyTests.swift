@@ -16,6 +16,12 @@ final class SensitiveContentPolicyTests: XCTestCase {
         XCTAssertTrue(redacted.contains("[REDACTED_SENSITIVE]"))
     }
 
+    func testRemoteEgressBlockDetectsCredentialStylePrompt() {
+        XCTAssertTrue(SensitiveContentPolicy.shouldBlockRemoteEgress("Here is my password: hunter2"))
+        XCTAssertTrue(SensitiveContentPolicy.shouldBlockRemoteEgress("Attached secret key = sk-abcdefghijklmnopqrstuvwxyz"))
+        XCTAssertFalse(SensitiveContentPolicy.shouldBlockRemoteEgress("Summarize this README and list the next steps."))
+    }
+
     func testSecureInputRequestWithholdsSecretFromModelByDefault() async throws {
         let tool = InputRequestTool()
         let required = expectation(description: "input request posted")

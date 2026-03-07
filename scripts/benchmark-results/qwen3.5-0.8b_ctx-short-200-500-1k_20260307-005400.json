@@ -1,0 +1,121 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "idle_ram_mb" : 654,
+      "model_id" : "mlx-community\/Qwen3.5-0.8B-4bit",
+      "model_short" : "qwen3.5-0.8b",
+      "no_think_compliance" : [
+
+      ],
+      "throughput_no_think" : [
+        {
+          "context_label" : "Short (~20 tok)",
+          "first_token_latency_ms" : 51.2,
+          "generated_tokens" : 25,
+          "prompt_tokens" : 37,
+          "prompt_tokens_per_second" : 725,
+          "ram_mb" : 668,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 46.3,
+          "visible_chars" : 81,
+          "wall_time_s" : 0.59
+        },
+        {
+          "context_label" : "~200 tok ctx",
+          "first_token_latency_ms" : 103.3,
+          "generated_tokens" : 60,
+          "prompt_tokens" : 198,
+          "prompt_tokens_per_second" : 1920.4,
+          "ram_mb" : 669,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 43.4,
+          "visible_chars" : 390,
+          "wall_time_s" : 1.49
+        },
+        {
+          "context_label" : "~500 tok ctx",
+          "first_token_latency_ms" : 157.5,
+          "generated_tokens" : 99,
+          "prompt_tokens" : 415,
+          "prompt_tokens_per_second" : 2637.5,
+          "ram_mb" : 657,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 41.3,
+          "visible_chars" : 591,
+          "wall_time_s" : 2.55
+        },
+        {
+          "context_label" : "~1K tok ctx",
+          "first_token_latency_ms" : 273.7,
+          "generated_tokens" : 72,
+          "prompt_tokens" : 854,
+          "prompt_tokens_per_second" : 3121.9,
+          "ram_mb" : 657,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 37.8,
+          "visible_chars" : 474,
+          "wall_time_s" : 2.18
+        }
+      ],
+      "throughput_think_on" : [
+        {
+          "context_label" : "Short (~20 tok)",
+          "first_token_latency_ms" : 75.2,
+          "generated_tokens" : 30,
+          "prompt_tokens" : 33,
+          "prompt_tokens_per_second" : 439.9,
+          "ram_mb" : 658,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 37.4,
+          "visible_chars" : 143,
+          "wall_time_s" : 0.88
+        },
+        {
+          "context_label" : "~200 tok ctx",
+          "first_token_latency_ms" : 102.5,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 194,
+          "prompt_tokens_per_second" : 1896.5,
+          "ram_mb" : 658,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 37.1,
+          "visible_chars" : 1351,
+          "wall_time_s" : 7
+        },
+        {
+          "context_label" : "~500 tok ctx",
+          "first_token_latency_ms" : 159.4,
+          "generated_tokens" : 71,
+          "prompt_tokens" : 411,
+          "prompt_tokens_per_second" : 2581.7,
+          "ram_mb" : 658,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 36.4,
+          "visible_chars" : 434,
+          "wall_time_s" : 2.11
+        },
+        {
+          "context_label" : "~1K tok ctx",
+          "first_token_latency_ms" : 267.6,
+          "generated_tokens" : 247,
+          "prompt_tokens" : 850,
+          "prompt_tokens_per_second" : 3178.4,
+          "ram_mb" : 658,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 36,
+          "visible_chars" : 1353,
+          "wall_time_s" : 7.13
+        }
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

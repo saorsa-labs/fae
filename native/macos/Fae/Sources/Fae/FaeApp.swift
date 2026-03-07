@@ -101,6 +101,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let orbAnimation = OrbAnimationState()
     let orbBridge = OrbStateBridgeController()
     let conversation = ConversationController()
+    let coworkConversation = ConversationController()
     let conversationBridge = ConversationBridgeController()
     let pipelineAux = PipelineAuxBridgeController()
     let subtitles = SubtitleStateController()
@@ -197,6 +198,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         orbAnimation.bind(to: orbState)
         conversationBridge.subtitleState = subtitles
         conversationBridge.conversationController = conversation
+        conversationBridge.coworkConversationController = coworkConversation
         pipelineAux.canvasController = canvasController
         pipelineAux.auxiliaryWindows = auxiliaryWindows
         pipelineAux.subtitleState = subtitles
@@ -204,6 +206,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.windowState = windowState
         auxiliaryWindows.canvasController = canvasController
         auxiliaryWindows.subtitleState = subtitles
+        auxiliaryWindows.coworkWindowProvider = { [weak coworkWindow] in
+            coworkWindow?.currentWindow
+        }
         auxiliaryWindows.observeWindowState()
         auxiliaryWindows.approvalController = approvalOverlay
         auxiliaryWindows.observeApprovalController()
@@ -261,10 +266,12 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         memoryImport.conversation = conversation
         memoryImport.auxiliaryWindows = auxiliaryWindows
         coworkWindow.faeCore = faeCore
-        coworkWindow.conversation = conversation
+        coworkWindow.conversation = coworkConversation
+        coworkWindow.orbAnimation = orbAnimation
+        coworkWindow.pipelineAux = pipelineAux
         let localRuntimeServer = FaeLocalRuntimeServer(
             faeCore: faeCore,
-            conversation: conversation,
+            conversation: coworkConversation,
             approvalOverlay: approvalOverlay
         )
         self.localRuntimeServer = localRuntimeServer

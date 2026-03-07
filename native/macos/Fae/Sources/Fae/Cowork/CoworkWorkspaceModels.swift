@@ -99,6 +99,7 @@ struct CoworkWorkspaceSnapshot: Sendable {
     let pipelineStateLabel: String
     let toolMode: String
     let thinkingEnabled: Bool
+    let thinkingLevel: String
     let hasOwnerSetUp: Bool
     let userName: String?
     let tools: [CoworkToolSummary]
@@ -109,6 +110,7 @@ struct CoworkWorkspaceSnapshot: Sendable {
         pipelineStateLabel: "Stopped",
         toolMode: "off",
         thinkingEnabled: false,
+        thinkingLevel: FaeThinkingLevel.fast.rawValue,
         hasOwnerSetUp: false,
         userName: nil,
         tools: [],

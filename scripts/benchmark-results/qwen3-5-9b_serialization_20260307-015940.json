@@ -1,0 +1,221 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "mlx-community\/Qwen3.5-9B-4bit",
+      "model_short" : "qwen3.5-9b",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 329.4,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `name=Iona`, `city=Edinburgh`, `role=engineer`.\n    *   Output format: JSON.\n    *   Constraint: Exactly these string keys: `name`, `city`, `role`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML (no markdown fences, no extra text).\n\n2.  **Construct the JSON:**\n    *   Key `name`: Value `Iona`.\n    *   Key `city`: Value `Edinburgh`.\n",
+          "task" : "contact-card",
+          "valid" : false,
+          "wall_time_s" : 3.91
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 330.4,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `status=active`, `owner=Fae`, `priority=high`.\n    *   Output format: JSON.\n    *   Constraint: Exactly these string keys: `status`, `owner`, `priority`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML (no code fences, no extra prose).\n    *   Specific instruction: \"Return this data as JSON\".\n\n2.  **Construct the JSON:**\n    *   Key `status`: Value `active`.\n    *  ",
+          "task" : "task-status",
+          "valid" : false,
+          "wall_time_s" : 4.01
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 331.1,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `topic=benchmark review`, `day=Tuesday`, `action=share results`.\n    *   Output format: JSON.\n    *   Constraint: Exactly these string keys: `topic`, `day`, `action`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML (no explanations, code fences, or extra prose).\n    *   Specific instruction: \"Return this data as JSON\".\n\n2.  **Construct the JSON:**\n    *   Key `topic`: Value \"benchmark review",
+          "task" : "meeting-note",
+          "valid" : false,
+          "wall_time_s" : 4.03
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 336.8,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `name=Iona`, `city=Edinburgh`, `role=engineer`.\n    *   Output format: XML.\n    *   Root element:<record>`.\n    *   Child tags:<name>`,<city>`,<role>`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML. No explanations, code fences, or extra prose.\n\n2.  **Determine the Output Structure:**\n    *   Root:<record>`\n    *  ",
+          "task" : "contact-card",
+          "valid" : false,
+          "wall_time_s" : 4.17
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 334.2,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input Data: `status=active`, `owner=Fae`, `priority=high`.\n    *   Output Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<status>`,<owner>`,<priority>`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML. No explanations, code fences, or extra prose.\n\n2.  **Determine the Output Structure:**\n    *   Root:<record>`\n    *   Child 1",
+          "task" : "task-status",
+          "valid" : false,
+          "wall_time_s" : 4.27
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 338.6,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input Data: `topic=benchmark review`, `day=Tuesday`, `action=share results`.\n    *   Output Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<topic>`,<day>`,<action>`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML. No explanations, code fences, or extra prose.\n\n2.  **Determine the Output Structure:**\n    *   Root:<record>`\n    *   Child",
+          "task" : "meeting-note",
+          "valid" : false,
+          "wall_time_s" : 4.27
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "Return ONLY the requested JSON, XML, or YAML (in this case, YAML). No explanations, code fences, or extra prose.",
+            "*   Input data" : "`name=Iona`, `city=Edinburgh`, `role=engineer`.",
+            "*   Key `city`" : "Value `",
+            "*   Key `name`" : "Value `Iona`",
+            "*   Output format" : "YAML.",
+            "*   Required keys" : "`name`, `city`, `role`.",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Format the Data" : "**",
+            "Thinking Process" : ""
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 332.1,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `name=Iona`, `city=Edinburgh`, `role=engineer`.\n    *   Output format: YAML.\n    *   Required keys: `name`, `city`, `role`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML (in this case, YAML). No explanations, code fences, or extra prose.\n\n2.  **Format the Data:**\n    *   Key `name`: Value `Iona`\n    *   Key `city`: Value `",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 4.25
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "Return ONLY the requested JSON, XML, or YAML (in this case, YAML). No explanations, code fences, or extra prose.",
+            "*   Input data" : "`status=active`, `owner=Fae`, `priority=high`.",
+            "*   Key `owner`" : "Value `Fae`.",
+            "*   Key `status`" : "Value `active`.",
+            "*   Output format" : "YAML.",
+            "*   Required keys" : "`status`, `owner`, `priority`.",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Construct the YAML" : "**",
+            "Thinking Process" : ""
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 337.1,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `status=active`, `owner=Fae`, `priority=high`.\n    *   Output format: YAML.\n    *   Required keys: `status`, `owner`, `priority`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML (in this case, YAML). No explanations, code fences, or extra prose.\n\n2.  **Construct the YAML:**\n    *   Key `status`: Value `active`.\n    *   Key `owner`: Value `Fae`.\n",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 4.44
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "Return ONLY the requested JSON, XML, or YAML (in this case, YAML). No explanations, code fences, or extra prose.",
+            "*   Input data" : "`topic=benchmark review`, `day=Tuesday`, `action=share results`.",
+            "*   Key `day`" : "Value `Tuesday",
+            "*   Key `topic`" : "Value `benchmark review`",
+            "*   Output format" : "YAML.",
+            "*   Required keys" : "`topic`, `day`, `action`.",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Format the Data" : "**",
+            "Thinking Process" : ""
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 334.1,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input data: `topic=benchmark review`, `day=Tuesday`, `action=share results`.\n    *   Output format: YAML.\n    *   Required keys: `topic`, `day`, `action`.\n    *   Constraint: Return ONLY the requested JSON, XML, or YAML (in this case, YAML). No explanations, code fences, or extra prose.\n\n2.  **Format the Data:**\n    *   Key `topic`: Value `benchmark review`\n    *   Key `day`: Value `Tuesday",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 4.5
+        }
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

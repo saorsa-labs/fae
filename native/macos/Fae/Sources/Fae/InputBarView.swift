@@ -200,19 +200,29 @@ struct InputBarView: View {
         .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
-    // MARK: - Thinking Toggle Pill
+    // MARK: - Thinking Level Pill
 
     private var thinkingTogglePill: some View {
-        Button(action: {
-            faeCore.setThinkingEnabled(!faeCore.thinkingEnabled)
-        }) {
+        Menu {
+            ForEach(FaeThinkingLevel.allCases) { level in
+                Button {
+                    faeCore.setThinkingLevel(level)
+                } label: {
+                    if faeCore.thinkingLevel == level {
+                        Label(level.displayName, systemImage: "checkmark")
+                    } else {
+                        Label(level.displayName, systemImage: level.systemImage)
+                    }
+                }
+            }
+        } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(faeCore.thinkingEnabled ? Color.green : Color.red)
+                    .fill(thinkingLevelColor)
                     .frame(width: 6, height: 6)
-                Text("Thinking")
+                Text(faeCore.thinkingLevel.displayName)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.45))
+                    .foregroundColor(Color.white.opacity(0.6))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -225,8 +235,19 @@ struct InputBarView: View {
                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.2), value: faeCore.thinkingEnabled)
+        .menuStyle(.borderlessButton)
+        .animation(.easeInOut(duration: 0.2), value: faeCore.thinkingLevel)
+    }
+
+    private var thinkingLevelColor: Color {
+        switch faeCore.thinkingLevel {
+        case .fast:
+            return .red
+        case .balanced:
+            return .green
+        case .deep:
+            return .orange
+        }
     }
 
     // MARK: - Co-Work Pill

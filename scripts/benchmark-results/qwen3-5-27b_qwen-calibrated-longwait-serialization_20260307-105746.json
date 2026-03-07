@@ -1,0 +1,251 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "NexVeridian\/Qwen3.5-27B-4bit",
+      "model_short" : "qwen3.5-27b",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 4401.7,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint 1: Return only the requested payload.\n    *   Constraint 2: Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\n    *   Constraint 3: If JSON is requested, the very first character must be `{`.\n    *   Task: Return data as JSON with keys `name`, `city`, `role`.\n    *   Data: `name=Iona`, `city=Edinburgh`, `role=engineer`.\n    *   Constraint 4: Keep generating until the full payload is complete and closed.\n    *   Constraint 5: No prefix, no suffix.\n\n2.  **Determine the Output Format:**\n    *   The task explicitly asks for JSON.\n    *   The keys must be `name`, `city`, `role`.\n    *   The values must be `Iona`, `Edinburgh`, `engineer`.\n    *   The output must start with `{` and end with `}`.\n    *   No markdown code blocks (```json ... ```).\n    *   No introductory text.\n\n3.  **Construct the JSON:**\n    *   `{`\n    *   `\"name\": \"Iona\",`\n    *   `\"city\": \"Edinburgh\",`\n    *   `\"role\": \"engineer\"`\n    *   `}`\n\n4.  **Final Verification:**\n    *   Does it start with `{`? Yes.\n    *   Are there any extra characters before `{`? No.\n    *   Are there any extra characters after `}`? No.\n    *   Are the keys correct? Yes (`name`, `city`, `role`).\n    *   Are the values correct? Yes (`Iona`, `Edinburgh`, `engineer`).\n\n5.  **Generate Output:**\n    {\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}\n\n    *Self-Correction on whitespace:* Standard JSON usually allows whitespace, but compact JSON is safer for strict benchmarking unless specified otherwise. I will use compact JSON to ensure no trailing newlines or spaces violate the \"no suffix\" rule.\n\n    *Final check:* The prompt says \"Return only the payload with no prefix and no suffix",
+          "task" : "contact-card",
+          "valid" : false,
+          "wall_time_s" : 51.43
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 4374.7,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload.\n    *   Constraint: No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\n    *   Constraint: If JSON is requested, the very first character must be `{`.\n    *   Task: Return specific data as JSON with keys `status`, `owner`, `priority`.\n    *   Data: `status=active`, `owner=Fae`, `priority=high`.\n    *   Constraint: Keep generating until the full payload is complete and closed.\n\n2.  **Determine the Output Format:**\n    *   The user explicitly asks for JSON.\n    *   The keys must be exactly `status`, `owner`, `priority`.\n    *   The values must correspond to the provided data (`active`, `Fae`, `high`).\n    *   The output must start with `{` and end with `}`.\n    *   No markdown code blocks (```json ... ```).\n    *   No introductory text.\n\n3.  **Construct the JSON:**\n    *   `{`\n    *   `\"status\": \"active\",`\n    *   `\"owner\": \"Fae\",`\n    *   `\"priority\": \"high\"`\n    *   `}`\n\n4.  **Final Verification:**\n    *   Does it start with `{`? Yes.\n    *   Are there any extra characters before `{`? No.\n    *   Are the keys correct? Yes (`status`, `owner`, `priority`).\n    *   Are the values correct? Yes (`active`, `Fae`, `high`).\n    *   Is it valid JSON? Yes.\n    *   Is there any trailing text? No.\n\n5.  **Generate Output:**\n    {\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}\n\n    *Self-Correction on whitespace:* Standard JSON usually allows whitespace, but compact JSON is safer for strict benchmarking. I will use compact JSON to ensure no accidental whitespace issues, though standard pretty-printed JSON is also valid. The prompt examples show compact JSON (`{\"name\":\"Ada\",\"city\":\"London\"}`). I will follow that style.\n\n    *Final check:* Ensure no markdown fences.\n\n    Output: `{\"status",
+          "task" : "task-status",
+          "valid" : false,
+          "wall_time_s" : 47.05
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 3779.6,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload.\n    *   Constraint: No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\n    *   Constraint: If JSON is requested, the very first character must be `{`.\n    *   Task: Return specific data as JSON with keys `topic`, `day`, `action`.\n    *   Data: `topic=benchmark review`, `day=Tuesday`, `action=share results`.\n    *   Constraint: Keep generating until the full payload is complete and closed.\n    *   Constraint: No prefix, no suffix.\n\n2.  **Determine the Output Format:**\n    *   The user explicitly asks for JSON.\n    *   The keys must be `topic`, `day`, `action`.\n    *   The values correspond to the provided data.\n    *   The output must start with `{` and end with `}`.\n    *   No markdown code blocks (```json ... ```).\n    *   No introductory text.\n\n3.  **Construct the JSON:**\n    *   `{`\n    *   `\"topic\": \"benchmark review\",`\n    *   `\"day\": \"Tuesday\",`\n    *   `\"action\": \"share results\"`\n    *   `}`\n\n4.  **Final Verification:**\n    *   Does it start with `{`? Yes.\n    *   Are there any extra characters before `{`? No.\n    *   Are there any extra characters after `}`? No.\n    *   Are the keys correct? Yes (`topic`, `day`, `action`).\n    *   Are the values correct? Yes (`benchmark review`, `Tuesday`, `share results`).\n\n5.  **Generate Output:**\n    {\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}\n\n    *Self-Correction on whitespace:* Standard JSON usually allows whitespace, but to be safe and compact, I will minimize unnecessary whitespace while ensuring validity. The prompt examples show compact JSON.\n\n    *Final check on constraints:* \"Return only the payload with no prefix and no suffix.\" \"If JSON is requested, the very first character must be {.\"\n\n    *Draft:* {\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share",
+          "task" : "meeting-note",
+          "valid" : false,
+          "wall_time_s" : 42.42
+        },
+        {
+          "actual_fields" : {
+            "role" : "engineer"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 2919.7,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload.\n    *   Constraint: No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\n    *   Constraint: If XML is requested, the very first character must be<` and the root must be<record>`.\n    *   Task: Return specific data (name=Iona, city=Edinburgh, role=engineer) as XML with root<record>` and children<name>`,<city>`,<role>`.\n\n2.  **Determine the Output Format:**\n    *   Format: XML.\n    *   Root Element:<record>`.\n    *   Child Elements:<name>`,<city>`,<role>`.\n    *   Content: Iona, Edinburgh, engineer.\n\n3.  **Construct the XML:**\n    *  <record<name>Iona<\/name<city>Edinburgh<\/city<role>engineer<\/role><\/record>`\n\n4.  **Verify Constraints:**\n    *   First character must",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 20.41
+        },
+        {
+          "actual_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 3439.2,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload. No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before\/after the payload.\n    *   Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<status>`,<owner>`,<priority>`.\n    *   Data: `status=active`, `owner=Fae`, `priority=high`.\n    *   Specific Constraint: The very first character must be<` (for XML).\n\n2.  **Construct the Payload:**\n    *   Root:<record>`\n    *   Child 1:<status>active<\/status>`\n    *   Child 2:<owner>Fae<\/owner>`\n    *   Child 3:<priority>high<\/priority>`\n    *   Closing Root: `<\/record>`\n\n3.  **Verify Constraints:**\n    *   No markdown fences (```xml ... ```).\n    *   No introductory text (\"Here is the XML...\").\n    *   No trailing",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 21.09
+        },
+        {
+          "actual_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 3358.5,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload. No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before\/after the payload.\n    *   Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<topic>`,<day>`,<action>`.\n    *   Data: `topic=benchmark review`, `day=Tuesday`, `action=share results`.\n    *   Specific Constraint: The very first character must be<` (for XML).\n\n2.  **Construct the XML:**\n    *   Root:<record>`\n    *   Child 1:<topic>benchmark review<\/topic>`\n    *   Child 2:<day>Tuesday<\/day>`\n    *   Child 3:<action>share results<\/action>`\n    *   Closing Root: `<\/record>`\n\n3.  **Verify Constraints:**\n    *   No markdown fences (```xml ... ```).\n    *   No introductory text (\"Here is the XML...\").\n   ",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 22.06
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "If YAML is requested, the very first line must start with the first key.",
+            "*   Data" : "`name=Iona`, `city=Edinburgh`, `role=engineer`.",
+            "*   Format" : "YAML.",
+            "*   Keys" : "`name`, `city`, `role`.",
+            "*   No prefix text (e.g., \"Here is the YAML" : "\", \"Thinking Process:\").",
+            "*   Role" : "Qwen running in benchmark mode.",
+            "*   Task" : "Return data as YAML with keys: `name`, `city`, `role`.",
+            "*   Values" : "`Iona`, `Edinburgh`, `engineer`.",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine Output Format" : "**",
+            "3.  **Construct YAML" : "**",
+            "4.  **Verify Constraints" : "**",
+            "Thinking Process" : "",
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 3276.1,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload.\n    *   Constraint: No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload.\n    *   Constraint: If YAML is requested, the very first line must start with the first key.\n    *   Task: Return data as YAML with keys: `name`, `city`, `role`.\n    *   Data: `name=Iona`, `city=Edinburgh`, `role=engineer`.\n\n2.  **Determine Output Format:**\n    *   Format: YAML.\n    *   Keys: `name`, `city`, `role`.\n    *   Values: `Iona`, `Edinburgh`, `engineer`.\n\n3.  **Construct YAML:**\n    ```yaml\n    name: Iona\n    city: Edinburgh\n    role: engineer\n    ```\n\n4.  **Verify Constraints:**\n    *   No prefix text (e.g., \"Here is the YAML:\", \"Thinking Process:\").\n    *   No markdown fences (e",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 21.42
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "Return *only* the requested payload. No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before\/after the payload.",
+            "*   Constraint Check" : "No markdown fences (```yaml ... ```), no introductory text, no trailing text.",
+            "*   Content" : "",
+            "*   Data" : "`status=active`, `owner=Fae`, `priority=high`.",
+            "*   Format" : "YAML.",
+            "*   Line 1" : "`status: active`",
+            "*   Line 2" : "`owner: Fae`",
+            "*   Line 3" : "`priority: high`",
+            "*   Role" : "Qwen running in benchmark mode.",
+            "*   Specific Keys" : "`status`, `owner`, `priority`.",
+            "*   Validation" : "The very first line must start with the first key (for YAML).",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine the Output" : "**",
+            "3.  **Construct the Payload" : "**",
+            "4.  **Final Review" : "**",
+            "Thinking Process" : "",
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 3277.9,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload. No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before\/after the payload.\n    *   Format: YAML.\n    *   Specific Keys: `status`, `owner`, `priority`.\n    *   Data: `status=active`, `owner=Fae`, `priority=high`.\n    *   Validation: The very first line must start with the first key (for YAML).\n\n2.  **Determine the Output:**\n    *   Format: YAML.\n    *   Content:\n        ```yaml\n        status: active\n        owner: Fae\n        priority: high\n        ```\n    *   Constraint Check: No markdown fences (```yaml ... ```), no introductory text, no trailing text.\n\n3.  **Construct the Payload:**\n    *   Line 1: `status: active`\n    *   Line 2: `owner: Fae`\n    *   Line 3: `priority: high`\n\n4.  **Final Review:**",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 21.4
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "Return *only* the requested payload. No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before\/after the payload.",
+            "*   Constraint Check" : "No markdown fences (```yaml ... ```), no introductory text, no trailing text.",
+            "*   Content" : "",
+            "*   Data" : "`topic=benchmark review`, `day=Tuesday`, `action=share results`.",
+            "*   Format" : "YAML.",
+            "*   Line 1" : "`topic: benchmark review`",
+            "*   Line 2" : "`day: Tuesday`",
+            "*   Line 3" : "`action: share results`",
+            "*   Role" : "Qwen running in benchmark mode.",
+            "*   Specific Keys" : "`topic`, `day`, `action`.",
+            "*   Validation" : "The very first line must start with the first key (for YAML).",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine the Output" : "**",
+            "3.  **Construct the Payload" : "**",
+            "Thinking Process" : "",
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 3245.2,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Qwen running in benchmark mode.\n    *   Constraint: Return *only* the requested payload. No analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before\/after the payload.\n    *   Format: YAML.\n    *   Specific Keys: `topic`, `day`, `action`.\n    *   Data: `topic=benchmark review`, `day=Tuesday`, `action=share results`.\n    *   Validation: The very first line must start with the first key (for YAML).\n\n2.  **Determine the Output:**\n    *   Format: YAML.\n    *   Content:\n        ```yaml\n        topic: benchmark review\n        day: Tuesday\n        action: share results\n        ```\n    *   Constraint Check: No markdown fences (```yaml ... ```), no introductory text, no trailing text.\n\n3.  **Construct the Payload:**\n    *   Line 1: `topic: benchmark review`\n    *   Line 2: `day: Tuesday`\n    *   Line 3: `action: share results`\n\n4. ",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 21.39
+        }
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

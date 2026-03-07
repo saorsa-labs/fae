@@ -1,0 +1,105 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "LiquidAI\/LFM2.5-1.2B-Instruct-MLX-4bit",
+      "model_short" : "LFM2.5-1.2B-Instruct-MLX-4bit",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "calendar",
+          "prompt" : "What's on my calendar tomorrow?",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "reminders",
+          "prompt" : "Remind me to buy groceries at 5pm",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "web_search",
+          "prompt" : "Search the web for the latest news about Apple",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "mail",
+          "prompt" : "Send an email to john@example.com saying I'll be late",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "contacts",
+          "prompt" : "What's David's phone number?",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "notes",
+          "prompt" : "Create a note called Shopping List with milk, eggs, bread",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "read",
+          "prompt" : "Read the file at ~\/Documents\/todo.txt",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "web_search",
+          "prompt" : "Can you look something up for me about quantum computing?",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "How are you feeling today?",
+          "temperature" : 0.2
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "Tell me a joke about programming",
+          "temperature" : 0.2
+        }
+      ]
+    }
+  ]
+}

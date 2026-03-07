@@ -1,0 +1,49 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "idle_ram_mb" : 18804,
+      "model_id" : "NexVeridian\/Qwen3.5-35B-A3B-4bit",
+      "model_short" : "qwen3.5-35b-a3b",
+      "no_think_compliance" : [
+
+      ],
+      "throughput_no_think" : [
+        {
+          "context_label" : "~1K tok ctx",
+          "first_token_latency_ms" : 1576.8,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 852,
+          "prompt_tokens_per_second" : 540.4,
+          "ram_mb" : 18822,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 16.3,
+          "visible_chars" : 1165,
+          "wall_time_s" : 17.26
+        }
+      ],
+      "throughput_think_on" : [
+        {
+          "context_label" : "~1K tok ctx",
+          "first_token_latency_ms" : 1592,
+          "generated_tokens" : 256,
+          "prompt_tokens" : 848,
+          "prompt_tokens_per_second" : 532.8,
+          "ram_mb" : 18823,
+          "thinking_chars" : 0,
+          "tokens_per_second" : 16,
+          "visible_chars" : 1136,
+          "wall_time_s" : 17.6
+        }
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}

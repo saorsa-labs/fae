@@ -1,0 +1,864 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-07",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "fae_capability_eval" : [
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 547.1,
+          "prompt" : "User says: 'What's on my calendar tomorrow?' Which tool should Fae use first?\nA. calendar\nB. web_search\nC. none\nD. read",
+          "wall_time_s" : 4.46
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 548.7,
+          "prompt" : "User says: 'Tell me a short joke about programming.' Which tool should Fae use first?\nA. notes\nB. web_search\nC. none\nD. calendar",
+          "wall_time_s" : 4.49
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 547,
+          "prompt" : "User says: 'Read ~\/Documents\/todo.txt and summarise it.' Which tool should Fae use first?\nA. mail\nB. read\nC. none\nD. reminders",
+          "wall_time_s" : 4.47
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "tool_judgment",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 557,
+          "prompt" : "User says: 'Find the latest news about Apple and give me the headlines.' Which tool should Fae use first?\nA. web_search\nB. calendar\nC. read\nD. none",
+          "wall_time_s" : 4.53
+        },
+        {
+          "actual_answer" : "B",
+          "category" : "instruction_following",
+          "correct" : true,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 546.2,
+          "prompt" : "User asks: 'Reply with exactly the word BLUE.' Which answer best follows the instruction?\nA. blue\nB. BLUE\nC. The word is BLUE\nD. BLUE!",
+          "wall_time_s" : 4.54
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "instruction_following",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 588.1,
+          "prompt" : "User asks: 'Give exactly two bullet points: apples and pears.' Which answer best follows the instruction?\nA. apples, pears\nB. - apples\n- pears\nC. • apples • pears • bananas\nD. Here are two bullet points about fruit",
+          "wall_time_s" : 4.59
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "instruction_following",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 582.4,
+          "prompt" : "User asks: 'Answer in one sentence only.' Which reply best follows the instruction?\nA. First sentence. Second sentence.\nB. I can do that\nC. I can do that in one sentence.\nD. Sure\nHere is another line.",
+          "wall_time_s" : 4.61
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "instruction_following",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 592,
+          "prompt" : "User asks: 'Return valid JSON only: {\"status\":\"ok\"}'. Which answer best follows the instruction?\nA. {\"status\":\"ok\"}\nB. JSON: {\"status\":\"ok\"}\nC. ```json {\"status\":\"ok\"} ```\nD. status=ok",
+          "wall_time_s" : 4.65
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "summarization",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 640.3,
+          "prompt" : "Source: 'The team shipped the macOS update on Tuesday. It fixed a calendar sync bug, reduced memory usage, and improved startup time.' Which summary is best?\nA. A Tuesday macOS update fixed sync issues and improved performance.\nB. The team cancelled the update after a security failure.\nC. Startup time worsened after Tuesday's release.\nD. The update added a new social network.",
+          "wall_time_s" : 4.83
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "summarization",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 613.8,
+          "prompt" : "Source: 'Mara missed the bus because heavy rain slowed traffic. She called ahead and arrived twenty minutes late.' Which summary is best?\nA. Mara enjoyed a sunny walk and arrived early.\nB. Rain delayed Mara, so she arrived late after calling ahead.\nC. Mara forgot the meeting entirely.\nD. Traffic improved and Mara changed nothing.",
+          "wall_time_s" : 4.86
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "summarization",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 644.6,
+          "prompt" : "Source: 'The workshop covered prompt design, local models, and privacy trade-offs. Attendees asked many questions about on-device inference.' Which summary is best?\nA. The workshop focused only on gardening tools.\nB. Attendees were silent because the workshop was cancelled.\nC. The workshop discussed prompt design, local AI, and privacy, with strong audience interest.\nD. The event was about ocean tides.",
+          "wall_time_s" : 4.83
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "summarization",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 613.2,
+          "prompt" : "Source: 'A small fire in the kitchen was quickly extinguished. No one was hurt, but the room smelled strongly of smoke.' Which summary is best?\nA. A major fire destroyed the building.\nB. A minor kitchen fire was put out quickly and caused smoke but no injuries.\nC. The kitchen was renovated after flooding.\nD. No incident occurred at all.",
+          "wall_time_s" : 4.85
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "memory_extraction",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 616.1,
+          "prompt" : "Conversation: User says, 'My birthday is on April 12.' Which item is the best durable memory to store?\nA. The assistant answered in two sentences.\nB. The current message contained 6 words.\nC. User's birthday is April 12.\nD. The weather today was cloudy.",
+          "wall_time_s" : 4.91
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "memory_extraction",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 610.7,
+          "prompt" : "Conversation: User says, 'I had toast for breakfast this morning.' Which choice is best?\nA. Store it as a durable user profile fact.\nB. Usually do not store it as durable memory.\nC. Replace the user's name with Toast.\nD. Send it to calendar.",
+          "wall_time_s" : 4.93
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "memory_extraction",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 601.3,
+          "prompt" : "Conversation: User says, 'Please call me Ash from now on.' Which item is the best durable memory to store?\nA. Preferred name is Ash.\nB. User once typed 8 words.\nC. Toast is the user's favorite meal.\nD. The assistant used markdown.",
+          "wall_time_s" : 4.92
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "memory_extraction",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 612.1,
+          "prompt" : "Conversation: User says, 'I'm allergic to peanuts.' Which item is the best durable memory to store?\nA. User is allergic to peanuts.\nB. The assistant should always talk about peanuts.\nC. The user typed a short sentence.\nD. None, because health facts are never useful.",
+          "wall_time_s" : 4.96
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "helpfulness",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 603.9,
+          "prompt" : "User says: 'I'm overwhelmed and don't know where to start.' Which reply is most helpful?\nA. That's not my problem.\nB. Let's break it into one small first step—what feels most urgent right now?\nC. You should just calm down.\nD. ERROR",
+          "wall_time_s" : 4.97
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "helpfulness",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 594.8,
+          "prompt" : "User says: 'Can you explain this simply?' Which reply is most helpful?\nA. I will use more jargon.\nB. No.\nC. Sure—I'll keep it simple and concrete.\nD. Figure it out yourself.",
+          "wall_time_s" : 5.01
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "helpfulness",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 596.9,
+          "prompt" : "User says: 'I made a mistake in that email.' Which reply is most helpful?\nA. Mistakes are impossible to fix.\nB. Want help drafting a short correction email?\nC. Ignore it forever.\nD. Delete your account.",
+          "wall_time_s" : 5.1
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "helpfulness",
+          "correct" : false,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 599.3,
+          "prompt" : "User says: 'I need a quick summary before my meeting.' Which reply is most helpful?\nA. Here's a concise summary with the key points first.\nB. I will answer in 12 long paragraphs.\nC. Meetings are bad.\nD. No summary available.",
+          "wall_time_s" : 5.11
+        }
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 529.8,
+          "prompt" : "What is 17 × 23?\nA. 371\nB. 381\nC. 391\nD. 361",
+          "wall_time_s" : 3.44
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 546.6,
+          "prompt" : "A shop gives a 25% discount on a $120 item. What is the sale price?\nA. $80\nB. $90\nC. $95\nD. $100",
+          "wall_time_s" : 3.39
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 537.3,
+          "prompt" : "What is 15% of 80?\nA. 10\nB. 11\nC. 12\nD. 13",
+          "wall_time_s" : 3.42
+        },
+        {
+          "actual_answer" : "D",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 538.8,
+          "prompt" : "Solve: 3x + 5 = 20.\nA. 3\nB. 5\nC. 7\nD. 10",
+          "wall_time_s" : 3.37
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 534.5,
+          "prompt" : "What is the area of a rectangle with length 7 and width 4?\nA. 11\nB. 18\nC. 21\nD. 28",
+          "wall_time_s" : 3.46
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 556.3,
+          "prompt" : "What is the next number in the sequence 5, 10, 20, 40, ?\nA. 45\nB. 60\nC. 80\nD. 100",
+          "wall_time_s" : 3.58
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 549,
+          "prompt" : "If a train travels 60 miles in 1.5 hours, what is its average speed?\nA. 30 mph\nB. 40 mph\nC. 45 mph\nD. 50 mph",
+          "wall_time_s" : 3.55
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 534.1,
+          "prompt" : "Which fraction is largest?\nA. 1\/2\nB. 2\/3\nC. 3\/5\nD. 5\/8",
+          "wall_time_s" : 3.56
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 538,
+          "prompt" : "What is 2^5?\nA. 10\nB. 16\nC. 25\nD. 32",
+          "wall_time_s" : 3.63
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "math",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 543.3,
+          "prompt" : "If 8 notebooks cost $24, how much does 1 notebook cost?\nA. $2\nB. $3\nC. $4\nD. $5",
+          "wall_time_s" : 3.72
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 533.2,
+          "prompt" : "Which planet is known as the Red Planet?\nA. Venus\nB. Jupiter\nC. Mars\nD. Mercury",
+          "wall_time_s" : 3.69
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 561.4,
+          "prompt" : "Water boils at what temperature at sea level?\nA. 90°C\nB. 95°C\nC. 100°C\nD. 110°C",
+          "wall_time_s" : 3.73
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 549.8,
+          "prompt" : "Which gas do plants primarily absorb from the atmosphere?\nA. Oxygen\nB. Carbon dioxide\nC. Nitrogen\nD. Helium",
+          "wall_time_s" : 3.89
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 531.7,
+          "prompt" : "What force pulls objects toward Earth?\nA. Friction\nB. Magnetism\nC. Gravity\nD. Radiation",
+          "wall_time_s" : 3.78
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 534.2,
+          "prompt" : "Which part of the cell contains genetic material?\nA. Nucleus\nB. Membrane\nC. Ribosome\nD. Cytoplasm",
+          "wall_time_s" : 3.74
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 532.6,
+          "prompt" : "What is the chemical symbol for gold?\nA. Ag\nB. Gd\nC. Go\nD. Au",
+          "wall_time_s" : 3.74
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 531.1,
+          "prompt" : "Which organ pumps blood through the human body?\nA. Liver\nB. Heart\nC. Lung\nD. Kidney",
+          "wall_time_s" : 3.88
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 539.7,
+          "prompt" : "What type of energy is stored in food?\nA. Nuclear\nB. Chemical\nC. Sound\nD. Solar",
+          "wall_time_s" : 3.77
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 554.4,
+          "prompt" : "Which phase change turns a liquid into a gas?\nA. Freezing\nB. Condensation\nC. Evaporation\nD. Sublimation",
+          "wall_time_s" : 3.8
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "science",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 537.6,
+          "prompt" : "Which blood cells help fight infection?\nA. Red blood cells\nB. White blood cells\nC. Platelets\nD. Plasma cells",
+          "wall_time_s" : 3.79
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 527,
+          "prompt" : "Which city is the capital of Australia?\nA. Sydney\nB. Melbourne\nC. Perth\nD. Canberra",
+          "wall_time_s" : 3.79
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 544.8,
+          "prompt" : "World War II ended in which year?\nA. 1943\nB. 1944\nC. 1945\nD. 1946",
+          "wall_time_s" : 3.83
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 533.9,
+          "prompt" : "Who was the first president of the United States?\nA. Thomas Jefferson\nB. George Washington\nC. John Adams\nD. Abraham Lincoln",
+          "wall_time_s" : 3.86
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 536.6,
+          "prompt" : "The ancient pyramids are most strongly associated with which civilization?\nA. Romans\nB. Aztecs\nC. Egyptians\nD. Vikings",
+          "wall_time_s" : 3.98
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 550.6,
+          "prompt" : "Which wall fell in 1989, symbolizing the end of the Cold War in Europe?\nA. Great Wall\nB. Berlin Wall\nC. Hadrian's Wall\nD. Wailing Wall",
+          "wall_time_s" : 3.85
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 538.5,
+          "prompt" : "Which empire was ruled by Julius Caesar?\nA. Roman\nB. Ottoman\nC. Mongol\nD. British",
+          "wall_time_s" : 3.95
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 535.2,
+          "prompt" : "The Renaissance began in which country?\nA. France\nB. England\nC. Italy\nD. Spain",
+          "wall_time_s" : 4.02
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 539.4,
+          "prompt" : "Who is associated with the theory of relativity?\nA. Newton\nB. Einstein\nC. Galileo\nD. Darwin",
+          "wall_time_s" : 3.89
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 551.3,
+          "prompt" : "Which ship famously sank on its maiden voyage in 1912?\nA. Lusitania\nB. Bismarck\nC. Titanic\nD. Endeavour",
+          "wall_time_s" : 4.03
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "history",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 544.4,
+          "prompt" : "Which document declared the American colonies independent from Britain?\nA. Magna Carta\nB. Bill of Rights\nC. Declaration of Independence\nD. Articles of Confederation",
+          "wall_time_s" : 3.95
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 585.3,
+          "prompt" : "Passage: Nora packed an umbrella because dark clouds were gathering overhead. Why did Nora pack an umbrella?\nA. She wanted shade from the sun\nB. She expected rain\nC. She was going to the beach\nD. She was cleaning the house",
+          "wall_time_s" : 4.12
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 590.3,
+          "prompt" : "Passage: Liam studied every evening and asked questions in class. On the final exam, he earned the highest score. Why did Liam do well?\nA. He guessed on every question\nB. He was lucky only\nC. He prepared consistently\nD. He skipped difficult topics",
+          "wall_time_s" : 4.19
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 604.1,
+          "prompt" : "Passage: The museum closes at 5 p.m., but the last tickets are sold at 4:30 p.m. If Maya arrives at 4:40 p.m., what happens?\nA. She buys a ticket and enters\nB. She cannot buy a ticket\nC. The museum stays open late for her\nD. She enters for free",
+          "wall_time_s" : 4.28
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 589.3,
+          "prompt" : "Passage: Ben poured water on the campfire until the smoke stopped. What was Ben's goal?\nA. To make the fire larger\nB. To cook dinner\nC. To put the fire out safely\nD. To wash the rocks",
+          "wall_time_s" : 4.33
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 594.5,
+          "prompt" : "Passage: Priya left home early because the train schedule warned of delays. Why did Priya leave early?\nA. She wanted breakfast at the station\nB. She expected travel disruption\nC. She forgot her bag\nD. She was meeting a friend before dawn",
+          "wall_time_s" : 4.4
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 558,
+          "prompt" : "Passage: The recipe says to chill the dough for one hour before baking. What should happen before baking?\nA. Add more flour\nB. Freeze the cookies after baking\nC. Cool the dough for an hour\nD. Serve immediately",
+          "wall_time_s" : 4.4
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 602.9,
+          "prompt" : "Passage: After the storm, several roads were blocked by fallen trees. The town opened the school gym for stranded drivers. Why was the gym opened?\nA. For basketball practice\nB. To shelter people affected by road closures\nC. To store construction tools\nD. To hold a concert",
+          "wall_time_s" : 4.52
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 615.3,
+          "prompt" : "Passage: Mina's phone battery was at 2%, so she turned off video streaming and lowered the screen brightness. Why did Mina make these changes?\nA. To save battery\nB. To improve sound quality\nC. To update her apps\nD. To connect to Wi-Fi",
+          "wall_time_s" : 4.55
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 591.4,
+          "prompt" : "Passage: The sign says, 'Wet paint — do not touch.' What is the safest action?\nA. Press lightly to check\nB. Lean against the wall\nC. Avoid touching the painted surface\nD. Add another coat of paint",
+          "wall_time_s" : 4.58
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "reading",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 602.7,
+          "prompt" : "Passage: Omar borrowed a library book due on Friday and returned it on Thursday night. What can we infer?\nA. The book was returned late\nB. Omar returned the book before the deadline\nC. The library was closed all week\nD. Omar bought the book",
+          "wall_time_s" : 4.59
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 596.9,
+          "prompt" : "All bloops are razzies. All razzies are green. Which statement must be true?\nA. All green things are bloops\nB. All bloops are green\nC. No bloops are green\nD. Some razzies are not green",
+          "wall_time_s" : 4.57
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 565.1,
+          "prompt" : "What number comes next in the sequence 2, 4, 8, 16, ?\nA. 18\nB. 24\nC. 30\nD. 32",
+          "wall_time_s" : 4.59
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 548.4,
+          "prompt" : "If today is Monday, what day will it be in 10 days?\nA. Wednesday\nB. Thursday\nC. Friday\nD. Saturday",
+          "wall_time_s" : 4.59
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 594.5,
+          "prompt" : "A is taller than B. B is taller than C. Which must be true?\nA. C is taller than A\nB. A is taller than C\nC. B is shorter than C\nD. A and C are the same height",
+          "wall_time_s" : 4.61
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "D",
+          "first_token_latency_ms" : 542.4,
+          "prompt" : "Which option does not belong?\nA. Triangle\nB. Square\nC. Circle\nD. Table",
+          "wall_time_s" : 4.51
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 548.2,
+          "prompt" : "If no cats are dogs, and all poodles are dogs, which statement must be true?\nA. Some cats are poodles\nB. No poodles are cats\nC. All dogs are poodles\nD. Some dogs are cats",
+          "wall_time_s" : 4.45
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 557.8,
+          "prompt" : "Five people are in a race. Ana finished before Bo. Bo finished before Cy. Who finished ahead of Cy?\nA. Only Bo\nB. Only Ana\nC. Ana and Bo\nD. Cannot tell",
+          "wall_time_s" : 4.46
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "B",
+          "first_token_latency_ms" : 544.6,
+          "prompt" : "If a statement is false, which option cannot also be true?\nA. Its opposite\nB. A contradiction of it\nC. An unrelated fact\nD. A stronger true claim",
+          "wall_time_s" : 4.43
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : true,
+          "expected_answer" : "A",
+          "first_token_latency_ms" : 590.8,
+          "prompt" : "A code uses 1=red, 2=blue, 3=green. What is the color pattern for 2-1-3?\nA. blue-red-green\nB. red-blue-green\nC. green-red-blue\nD. blue-green-red",
+          "wall_time_s" : 4.51
+        },
+        {
+          "actual_answer" : "A",
+          "category" : "logic",
+          "correct" : false,
+          "expected_answer" : "C",
+          "first_token_latency_ms" : 541.6,
+          "prompt" : "You flip a fair coin twice. How many possible outcomes are there?\nA. 2\nB. 3\nC. 4\nD. 6",
+          "wall_time_s" : 4.47
+        }
+      ],
+      "model_id" : "NexVeridian\/Qwen3.5-35B-A3B-4bit",
+      "model_short" : "qwen3.5-35b-a3b",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 653.2,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as JSON.\n    *   Data: name=Iona, city=Edinburgh, role=engineer.\n    *   Format: JSON.\n    *   Keys: \"name\", \"city\", \"role\" (exactly these string keys).\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no markdown fences, no \"Thinking Process\" text. The very first character must be `{`.\n\n2.  **Construct the JSON:**\n    *   Keys: \"name\", \"city\", \"role\"\n    *   Values: \"Iona\", \"Edinburgh\", \"engineer\"\n    *   JSON Structure: `{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}`\n\n3.  **Verify Constraints:**\n    *   Is it valid JSON? Yes.\n    *   Are the keys correct? Yes (name, city, role).\n    *   Is there any extra text? No.\n    *   Does it start with `{`? Yes.\n\n4.  **Final",
+          "task" : "contact-card",
+          "valid" : false,
+          "wall_time_s" : 25.37
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 641.4,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as JSON.\n    *   Data: status=active, owner=Fae, priority=high.\n    *   Keys required: \"status\", \"owner\", \"priority\".\n    *   Format: JSON.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no markdown fences, no \"Thinking Process\" text. The very first character must be `{`.\n\n2.  **Construct the JSON:**\n    *   Keys: \"status\", \"owner\", \"priority\"\n    *   Values: \"active\", \"Fae\", \"high\"\n    *   JSON Structure: `{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}`\n\n3.  **Verify Constraints:**\n    *   Is it valid JSON? Yes.\n    *   Are the keys correct? Yes (status, owner, priority).\n    *   Are there any extra characters? No.\n    *   Does it start with `{`? Yes.\n    *   Are there markdown fences (```json)? No.\n    *   Is",
+          "task" : "task-status",
+          "valid" : false,
+          "wall_time_s" : 25.21
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 639.8,
+          "format" : "json",
+          "prompt" : "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as JSON.\n    *   Data: topic=\"benchmark review\", day=\"Tuesday\", action=\"share results\".\n    *   Format: JSON.\n    *   Keys: \"topic\", \"day\", \"action\".\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no markdown fences, no \"Thinking Process\" text. The very first character must be `{`.\n\n2.  **Construct the JSON:**\n    *   Keys: \"topic\", \"day\", \"action\"\n    *   Values: \"benchmark review\", \"Tuesday\", \"share results\"\n    *   JSON Structure: `{\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}`\n\n3.  **Verify Constraints:**\n    *   No extra text? Yes.\n    *   No markdown fences (```json ... ```)? Yes.\n    *   First character is `{`? Yes.\n    *   Correct keys? Yes.\n\n4.  **Final Output Generation:**\n    *   `{\"topic\":\"benchmark review\",\"day\":\"Tuesday",
+          "task" : "meeting-note",
+          "valid" : false,
+          "wall_time_s" : 25.15
+        },
+        {
+          "actual_fields" : {
+
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 656,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: \"Return only the payload with no prefix and no suffix. If you output any extra text before the payload, the answer is wrong. Task: Return this data as XML with a single root element<record> and child tags<name>,<city>,<role>. Data: name=Iona, city=Edinburgh, role=engineer.\"\n    *   Constraint: \"Return only the payload with no prefix and no suffix.\" \"If you output any extra text before the payload, the answer is wrong.\"\n    *   Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<name>`,<city>`,<role>`.\n    *   Data: name=Iona, city=Edinburgh, role=engineer.\n    *   System Instruction: \"You are Qwen running in benchmark mode. Return only the requested payload. Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload. If JSON is requested, the very first character must be {. If XML is requested, the very first character must be< and the root",
+          "task" : "contact-card",
+          "valid" : false,
+          "wall_time_s" : 26.25
+        },
+        {
+          "actual_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 659.1,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as XML.\n    *   Data: status=active, owner=Fae, priority=high.\n    *   Format: XML.\n    *   Root Element:<record>`.\n    *   Child Tags:<status>`,<owner>`,<priority>`.\n    *   Constraint: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels.\n    *   First Character: Must be<` (since it's XML).\n\n2.  **Construct the XML:**\n    *   Root:<record>`\n    *   Child 1:<status>active<\/status>`\n    *   Child 2:<owner>Fae<\/owner>`\n    *   Child 3:<priority>high<\/priority>`\n    *   Closing Root: `<\/record>`\n    *   Combined:<record<status>active<\/status<owner>Fae<\/owner<priority>high<\/priority><\/record>`\n\n3.  **Verify Constraints:**\n    *   No \"Thinking Process\" text.",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 27.36
+        },
+        {
+          "actual_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : true,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 656.5,
+          "format" : "xml",
+          "prompt" : "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as XML.\n    *   Data: topic=benchmark review, day=Tuesday, action=share results.\n    *   Format: XML with a single root element<record>` and child tags<topic>`,<day>`,<action>`.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no \"Thinking Process\", no markdown fences (```xml), no labels. The very first character must be<`. The root must be<record>`.\n\n2.  **Construct the XML:**\n    *   Root:<record>`\n    *   Child 1:<topic>benchmark review<\/topic>`\n    *   Child 2:<day>Tuesday<\/day>`\n    *   Child 3:<action>share results<\/action>`\n    *   Closing Root: `<\/record>`\n\n3.  **Draft the Output:**\n   <record<topic>benchmark review<\/topic<day>Tuesday<\/day<action>share results<\/action><\/record>`\n\n4.  **Verify Constraints:**\n    *",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 26.9
+        },
+        {
+          "actual_fields" : {
+            "*   Constraints" : "Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels. The very first character must be the start of the YAML content.",
+            "*   Data" : "name=Iona, city=Edinburgh, role=engineer.",
+            "*   Draft YAML" : "",
+            "*   Format" : "YAML.",
+            "*   Input" : "A task description asking to return specific data as YAML.",
+            "*   Keys" : "name, city, role.",
+            "*   Values" : "Iona, Edinburgh, engineer.",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine the Output" : "**",
+            "3.  **Check Constraints" : "**",
+            "Thinking Process" : "",
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "city" : "Edinburgh",
+            "name" : "Iona",
+            "role" : "engineer"
+          },
+          "first_token_latency_ms" : 821.6,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as YAML.\n    *   Data: name=Iona, city=Edinburgh, role=engineer.\n    *   Format: YAML.\n    *   Keys: name, city, role.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no \"Thinking Process\", no markdown fences, no labels. The very first character must be the start of the YAML content.\n\n2.  **Determine the Output:**\n    *   YAML format requires key-value pairs.\n    *   Keys: name, city, role.\n    *   Values: Iona, Edinburgh, engineer.\n    *   Draft YAML:\n        name: Iona\n        city: Edinburgh\n        role: engineer\n\n3.  **Check Constraints:**\n    *   \"Return only the payload with no prefix and no suffix.\"\n    *   \"If you output any extra text before the payload, the answer is wrong.\"\n    *   \"If YAML is requested, the very first line must start with the first key.\"\n    *   No markdown code",
+          "task" : "contact-card",
+          "valid" : true,
+          "wall_time_s" : 27.7
+        },
+        {
+          "actual_fields" : {
+            "*   Constraint" : "\"If you output any extra text before the payload, the answer is wrong.\"",
+            "*   Format" : "YAML.",
+            "*   Input" : "\"Return only the payload with no prefix and no suffix. If you output any extra text before the payload, the answer is wrong. Task: Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.\"",
+            "*   Keys" : "`status`, `owner`, `priority`.",
+            "*   System Instruction" : "\"You are Qwen running in benchmark mode. Return only the requested payload. Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload. If JSON is requested, the very first character must be {. If XML is requested, the very first character must be< and the root must be<record>. If YAML is requested, the very first line must start with the first key.\"",
+            "*   Values" : "`active`, `Fae`, `high`.",
+            "1.  **Analyze the Request" : "**",
+            "Thinking Process" : ""
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "owner" : "Fae",
+            "priority" : "high",
+            "status" : "active"
+          },
+          "first_token_latency_ms" : 831,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: \"Return only the payload with no prefix and no suffix. If you output any extra text before the payload, the answer is wrong. Task: Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.\"\n    *   Constraint: \"Return only the payload with no prefix and no suffix.\"\n    *   Constraint: \"If you output any extra text before the payload, the answer is wrong.\"\n    *   Format: YAML.\n    *   Keys: `status`, `owner`, `priority`.\n    *   Values: `active`, `Fae`, `high`.\n    *   System Instruction: \"You are Qwen running in benchmark mode. Return only the requested payload. Do not include analysis, reasoning, \"Thinking Process\", markdown fences, labels, or any text before the payload. If JSON is requested, the very first character must be {. If XML is requested, the very first character must be< and the root must be<record>. If YAML is requested, the very first line must start with the first key.\"\n\n2.  **",
+          "task" : "task-status",
+          "valid" : true,
+          "wall_time_s" : 26.83
+        },
+        {
+          "actual_fields" : {
+            "*   Constraints" : "Return *only* the payload. No prefix, no suffix, no analysis, no \"Thinking Process\", no markdown fences (```yaml), no labels.",
+            "*   Data" : "topic=benchmark review, day=Tuesday, action=share results.",
+            "*   First line requirement" : "If YAML is requested, the very first line must start with the first key.",
+            "*   Format" : "YAML.",
+            "*   Input" : "A task description asking to return specific data as YAML.",
+            "*   Keys" : "topic, day, action.",
+            "*   Structure" : "",
+            "*   Values" : "\"benchmark review\", \"Tuesday\", \"share results\".",
+            "1.  **Analyze the Request" : "**",
+            "2.  **Determine the Output" : "**",
+            "3.  **Check Constraints" : "**",
+            "4.  **Draft Output" : "**",
+            "Thinking Process" : "",
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "correct" : false,
+          "expected_fields" : {
+            "action" : "share results",
+            "day" : "Tuesday",
+            "topic" : "benchmark review"
+          },
+          "first_token_latency_ms" : 794.7,
+          "format" : "yaml",
+          "prompt" : "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+          "raw_output" : "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A task description asking to return specific data as YAML.\n    *   Data: topic=benchmark review, day=Tuesday, action=share results.\n    *   Format: YAML.\n    *   Constraints: Return *only* the payload. No prefix, no suffix, no analysis, no \"Thinking Process\", no markdown fences (```yaml), no labels.\n    *   First line requirement: If YAML is requested, the very first line must start with the first key.\n\n2.  **Determine the Output:**\n    *   Format: YAML.\n    *   Keys: topic, day, action.\n    *   Values: \"benchmark review\", \"Tuesday\", \"share results\".\n    *   Structure:\n        topic: benchmark review\n        day: Tuesday\n        action: share results\n\n3.  **Check Constraints:**\n    *   No \"Thinking Process\" text.\n    *   No markdown code blocks (```yaml ... ```).\n    *   No introductory text.\n    *   First line must start with the first key (\"topic\").\n\n4.  **Draft Output:**\n    topic",
+          "task" : "meeting-note",
+          "valid" : true,
+          "wall_time_s" : 27.28
+        }
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+
+      ]
+    }
+  ]
+}
