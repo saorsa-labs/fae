@@ -257,6 +257,11 @@ check: build test
 
 # ─── Bundle & Sign (local development) ──────────────────────────────────────
 
+# Build app bundle and launch it.
+# Requires signing identity: source ~/.secrets && just run-native
+run-native: bundle
+    open "$(cd "../../.." && pwd)/Fae.app"
+
 # Build a standalone Fae.app with all SPM frameworks embedded and sign it.
 # Requires signing identity: source ~/.secrets && just bundle
 bundle:
@@ -310,17 +315,31 @@ bundle:
         echo "  Bundled: $BNAME"
     done
 
-    # Copy all SPM dynamic frameworks (MLX, MLXNN, KokoroSwift, Sparkle, etc.).
+    # Copy Sparkle.framework — it lives in the top-level Products dir, not PackageFrameworks/.
+    SPARKLE_FW="$PRODUCTS/Sparkle.framework"
+    if [ ! -d "$SPARKLE_FW" ]; then
+        SPARKLE_FW="$PKG_FW_DIR/Sparkle.framework"
+    fi
+    if [ -d "$SPARKLE_FW" ]; then
+        cp -R "$SPARKLE_FW" "$APP_BUNDLE/Contents/Frameworks/"
+        echo "  Embedded: Sparkle.framework"
+    else
+        echo "  Warning: Sparkle.framework not found"
+    fi
+
+    # Copy all SPM dynamic frameworks (MLX, MLXNN, KokoroSwift, etc.).
     if [ -d "$PKG_FW_DIR" ]; then
         for fw in "$PKG_FW_DIR"/*.framework; do
             [ -d "$fw" ] || continue
+            FNAME=$(basename "$fw")
+            [ "$FNAME" = "Sparkle.framework" ] && continue
             cp -R "$fw" "$APP_BUNDLE/Contents/Frameworks/"
-            echo "  Embedded: $(basename "$fw")"
+            echo "  Embedded: $FNAME"
         done
     fi
 
     # Write Info.plist.
-    VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0")
+    VERSION=$(cat "../../../VERSION" 2>/dev/null || echo "0.0.0")
     cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
     sed -i '' "s/__VERSION__/${VERSION}/g" "$APP_BUNDLE/Contents/Info.plist"
     sed -i '' "s|__APPCAST_URL__||g" "$APP_BUNDLE/Contents/Info.plist"
