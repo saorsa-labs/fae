@@ -590,15 +590,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     // MARK: - Skill-Driven Voice Enrollment
 
-    /// Activate the voice-identity skill and prime the LLM to guide enrollment
-    /// conversationally when no owner voiceprint exists.
+    /// Prime first-launch owner enrollment without relying on a large conversational
+    /// onboarding skill. The native enrollment recorder is the primary path.
     private func runSkillDrivenEnrollment(
         coordinator: PipelineCoordinator,
         skillManager: SkillManager
     ) async {
-        _ = await skillManager.activate(skillName: "first-launch-onboarding")
-        // Activate the voice-identity skill so its full instructions load into context.
-        _ = await skillManager.activate(skillName: "voice-identity")
+        _ = skillManager
 
         // Mark enrollment active — bypasses direct-address and allows barge-in from anyone.
         await coordinator.setFirstOwnerEnrollmentActive(true)
@@ -614,21 +612,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Brief spoken intro — Fae then takes over via the skill.
         let intro = "Hey. Let’s get your voice set up so I know it’s you. Talk to me naturally and I’ll guide you through it."
         await coordinator.speakDirect(intro)
-
-        // Open follow-up window so user can respond without "Fae" prefix.
         await coordinator.wake()
-
-        // Prime the LLM with one-shot enrollment context (discarded after first turn).
-        let enrollmentContext = """
-            ENROLLMENT CONTEXT (one-time, not for the user to see):
-            No primary user is enrolled. The first-launch-onboarding and voice-identity skills are now active. \
-            Follow the onboarding flow from the voice-enrollment step onward. \
-            Use the voice_identity tool to collect voice samples and enroll the user as owner. \
-            Include wake-name tuning by asking for a few "Hey Fae" samples via collect_wake_samples. \
-            Onboarding is not complete until the owner voice is confirmed. \
-            Be warm and conversational — this is their very first interaction with Fae.
-            """
-        await coordinator.setFirstOwnerEnrollmentContext(enrollmentContext)
     }
 
     // MARK: - HostCommandSender Conformance

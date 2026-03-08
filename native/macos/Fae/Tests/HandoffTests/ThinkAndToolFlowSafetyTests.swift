@@ -105,6 +105,33 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertEqual(match?.matchedToken, "faeye")
     }
 
+    func testWakeAddressMatchRejectsTwoLetterFalsePositive() {
+        let match = TextProcessing.findWakeAddressMatch(
+            in: "Ah.",
+            aliases: TextProcessing.nameVariants,
+            wakeWord: "hi fae"
+        )
+
+        XCTAssertNil(match)
+    }
+
+    func testWakeAddressMatchRejectsOrdinaryWordNearMiss() {
+        let match = TextProcessing.findWakeAddressMatch(
+            in: "What day is it today?",
+            aliases: TextProcessing.nameVariants,
+            wakeWord: "hi fae"
+        )
+
+        XCTAssertNil(match)
+    }
+
+    func testExtractQueryAroundNameReturnsEmptyForWakeOnlyUtterance() {
+        let text = "Fae"
+        let range = text.startIndex..<text.endIndex
+
+        XCTAssertEqual(TextProcessing.extractQueryAroundName(in: text, nameRange: range), "")
+    }
+
     func testExtractWakeAliasCandidateFromGreeting() {
         let alias = TextProcessing.extractWakeAliasCandidate(from: "Hi Faye can you help")
         XCTAssertEqual(alias, "faye")

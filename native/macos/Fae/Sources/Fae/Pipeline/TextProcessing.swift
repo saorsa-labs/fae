@@ -739,13 +739,18 @@ enum TextProcessing {
 
         var best: WakeAddressMatch?
         for token in tokens {
+            guard token.text.count >= 3 else { continue }
             for alias in singleWordAliases {
                 let maxDist = alias.count <= 4 ? 1 : 2
                 let distance = editDistance(token.text, alias)
                 guard distance <= maxDist else { continue }
 
+                let firstCharacterMatches = token.text.first == alias.first
+                let looksLikeWakeStem = token.text.hasPrefix("fa") || token.text.hasPrefix("fe")
+                guard firstCharacterMatches || looksLikeWakeStem else { continue }
+
                 var score = 1.0 - (Float(distance) / Float(max(alias.count, token.text.count)))
-                if token.text.first == alias.first {
+                if firstCharacterMatches {
                     score += 0.12
                 }
                 if token.index <= 1 {
@@ -813,7 +818,7 @@ enum TextProcessing {
             .trimmingCharacters(in: CharacterSet(charactersIn: ",.!?: ").union(.whitespacesAndNewlines))
         if !before.isEmpty { return before }
 
-        return "Hello"
+        return ""
     }
 
     private static func normalizeWakeAlias(_ text: String) -> String {
