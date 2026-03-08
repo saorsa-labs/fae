@@ -33,9 +33,18 @@ Two voice embeddings are compared using cosine similarity (range: -1 to +1). Sam
 
 ## Owner Enrollment
 
-### Automatic First-Launch Enrollment
+### Guided First-Launch Enrollment
 
-The first person to speak to Fae after installation is automatically enrolled as the **owner**. This happens during the onboarding flow — no explicit enrollment step is needed.
+Fae now uses an explicit owner-enrollment flow during onboarding. The user is guided through voice setup and records multiple short samples before the owner profile is finalized.
+
+That means:
+
+- Fae does **not** silently promote the first detected voice to owner anymore.
+- The visible `Let me get to know you` button opens a native voice-enrollment recorder. It no longer injects a fake spoken prompt into the conversation.
+- While that recorder is open, the main conversation loop is paused so enrollment samples do not leak into the normal assistant transcript.
+- Fae keeps a separate internal `fae_self` echo-rejection profile for her own TTS voice. That profile is never treated as a human owner.
+- Resetting onboarding clears enrolled speaker profiles and returns Fae to the guided setup flow.
+- The test harness can drive this flow with `just test-onboarding-reset` and `just test-start-enrollment` while the app is running under `just test-serve`.
 
 ### Progressive Enrollment
 
@@ -138,10 +147,10 @@ This downloads the ONNX model, converts to Core ML, and compiles to `.mlmodelc` 
 
 ### Re-enrollment
 
-To start fresh with voice identity:
+To start fresh with voice identity, prefer the built-in onboarding reset flow from Settings or the local test harness:
 
 ```bash
-rm ~/Library/Application\ Support/fae/speakers.json
+just test-onboarding-reset
 ```
 
-On next launch, the first speaker will be enrolled as owner.
+If you need to clear profiles manually for recovery work, remove `~/Library/Application Support/fae/speakers.json` and relaunch. Fae will return to the guided owner-enrollment flow rather than silently trusting the next voice.

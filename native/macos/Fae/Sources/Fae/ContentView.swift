@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var orbAnimation: OrbAnimationState
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
@@ -10,6 +11,8 @@ struct ContentView: View {
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var faeCore: FaeCore
     @State private var viewLoaded = false
+    @State private var showingNativeEnrollment = false
+    @State private var listeningBeforeNativeEnrollment = true
 
     private static var menuHandlersKey: UInt8 = 0
 
@@ -60,6 +63,24 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
         .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
+        .sheet(isPresented: $showingNativeEnrollment) {
+            SpeakerEnrollmentView(
+                captureManager: faeCore.nativeEnrollmentCaptureManager,
+                speakerEncoder: faeCore.nativeEnrollmentSpeakerEncoder,
+                speakerProfileStore: faeCore.nativeEnrollmentSpeakerProfileStore,
+                onComplete: { enrolledName in
+                    showingNativeEnrollment = false
+                    restoreConversationAfterNativeEnrollment()
+                    faeCore.completeNativeOwnerEnrollment(displayName: enrolledName)
+                },
+                onCancel: {
+                    showingNativeEnrollment = false
+                    restoreConversationAfterNativeEnrollment()
+                },
+                initialName: onboarding.userName ?? faeCore.userName ?? ""
+            )
+            .preferredColorScheme(nil)
+        }
     }
 
     // MARK: - Collapsed View
@@ -110,7 +131,7 @@ struct ContentView: View {
             if !onboarding.isComplete {
                 EnrollmentInvitationBanner {
                     windowState.transitionToCompact()
-                    faeCore.injectText("Hi Fae, I'm ready to introduce myself.")
+                    beginNativeEnrollment()
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -150,6 +171,25 @@ struct ContentView: View {
                 ))
             }
         }
+    }
+
+    private func beginNativeEnrollment() {
+        listeningBeforeNativeEnrollment = conversation.isListening
+        NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
+        NotificationCenter.default.post(
+            name: .faeConversationGateSet,
+            object: nil,
+            userInfo: ["active": false]
+        )
+        showingNativeEnrollment = true
+    }
+
+    private func restoreConversationAfterNativeEnrollment() {
+        NotificationCenter.default.post(
+            name: .faeConversationGateSet,
+            object: nil,
+            userInfo: ["active": listeningBeforeNativeEnrollment]
+        )
     }
 
     // MARK: - Collapsed Context Menu

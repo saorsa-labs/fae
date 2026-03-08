@@ -30,6 +30,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var thinkingEnabled: Bool = false
     @Published var thinkingLevel: FaeThinkingLevel = .fast
 
+    var nativeEnrollmentCaptureManager: AudioCaptureManager { captureManager }
+    var nativeEnrollmentSpeakerEncoder: CoreMLSpeakerEncoder { speakerEncoder }
+    var nativeEnrollmentSpeakerProfileStore: SpeakerProfileStore { speakerProfileStore }
+
     /// Whether Fae is currently speaking (TTS playback in progress).
     /// Exposed for the test harness to wait until speech completes.
     func isSpeaking() async -> Bool {
@@ -663,6 +667,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "conversation.engage":
             Task { await pipelineCoordinator?.engage() }
 
+        case "tts.preview_voice":
+            if let voice = payload["voice"] as? String {
+                Task { await pipelineCoordinator?.previewTTSVoice(voice) }
+            }
+
         case "config.patch":
             if let key = payload["key"] as? String {
                 patchConfig(key: key, payload: payload)
@@ -1286,6 +1295,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
             persistConfig(reason: "config.patch.tts.custom_reference_text")
 
+        case "tts.voice":
+            guard let name = sanitizedString(value), !name.isEmpty else { return }
+            config.tts.voice = name
+            persistConfig(reason: "config.patch.tts.voice")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setTTSVoice(name) }
+            }
+
         case "tts.voice_identity_lock":
             guard let lock = value as? Bool else { return }
             config.tts.voiceIdentityLock = lock
@@ -1607,6 +1624,29 @@ final class FaeCore: ObservableObject, HostCommandSender {
             Task { [weak self] in
                 await self?.pipelineCoordinator?.setMicMuted(!active)
             }
+        }
+    }
+
+    func completeNativeOwnerEnrollment(displayName: String) {
+        let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        userName = trimmedName
+        config.userName = trimmedName
+        persistConfig(reason: "native_owner_enrollment")
+
+        NotificationCenter.default.post(
+            name: .faePipelineState,
+            object: nil,
+            userInfo: [
+                "event": "pipeline.enrollment_complete",
+                "payload": [:] as [String: Any],
+            ]
+        )
+
+        Task { [weak self] in
+            await self?.pipelineCoordinator?.wake()
+            await self?.pipelineCoordinator?.speakDirect("Thanks, \(trimmedName). I know your voice now.")
         }
     }
 
@@ -2082,6 +2122,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "tts": [
                         "speed": Double(config.tts.speed),
+                        "voice": config.tts.voice,
                         "custom_voice_path": config.tts.customVoicePath as Any,
                         "custom_reference_text": config.tts.customReferenceText as Any,
                         "voice_identity_lock": config.tts.voiceIdentityLock,

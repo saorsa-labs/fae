@@ -486,6 +486,48 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(coworkView.contains("conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)"))
     }
 
+    func testMainInputKeepsTypingAvailableWhileListening() throws {
+        let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
+        let coworkGuide = try loadRepositoryText(relativePath: "docs/guides/work-with-fae.md")
+
+        XCTAssertTrue(inputBar.contains("let shouldRestoreFocus = isTextFieldFocused || !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
+        XCTAssertTrue(inputBar.contains("isTextFieldFocused = true"))
+        XCTAssertTrue(inputBar.contains("Voice capture and typing can stay active at the same time."))
+        XCTAssertTrue(inputBar.contains("Type a message for Fae while listening stays on"))
+        XCTAssertTrue(coworkGuide.contains("voice capture should not turn typing into a separate mode"))
+    }
+
+    func testOnboardingBannerUsesNativeEnrollmentFlow() throws {
+        let contentView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ContentView.swift")
+
+        XCTAssertTrue(contentView.contains("SpeakerEnrollmentView("))
+        XCTAssertTrue(contentView.contains("beginNativeEnrollment()"))
+        XCTAssertTrue(contentView.contains("restoreConversationAfterNativeEnrollment()"))
+        XCTAssertFalse(contentView.contains("faeCore.injectText(\"Hi Fae, I'm ready to introduce myself.\")"))
+    }
+
+    @MainActor
+    func testFaeCoreCompleteNativeOwnerEnrollmentPersistsUserName() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+        core.completeNativeOwnerEnrollment(displayName: "David")
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertEqual(reloaded.userName, "David")
+    }
+
     @MainActor
     func testPipelineAuxBridgeTracksLocalModelStackDiagnostics() {
         let controller = PipelineAuxBridgeController()
