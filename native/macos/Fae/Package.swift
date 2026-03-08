@@ -28,7 +28,8 @@ let package = Package(
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
         // Neural Voice Activity Detection (Silero VAD v6 via CoreML).
         .package(url: "https://github.com/paean-ai/silero-vad-swift.git", from: "1.0.0"),
-        // Vendored Kokoro + Misaki packages avoid dynamic duplication and resource-packaging issues.
+        // Vendored Kokoro + Misaki packages are forced static to avoid duplicate
+        // MLXNN runtime class loading and resource-packaging issues in app bundles.
         .package(path: "Vendor/kokoro-ios"),
     ],
     targets: [

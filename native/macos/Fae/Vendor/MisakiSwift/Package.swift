@@ -9,6 +9,7 @@ let package = Package(
   products: [
     .library(
       name: "MisakiSwift",
+      type: .static,
       targets: ["MisakiSwift"]
     ),
   ],
