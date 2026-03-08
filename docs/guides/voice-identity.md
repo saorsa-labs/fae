@@ -45,6 +45,10 @@ That means:
 - While that recorder is open, the main conversation loop is paused so enrollment samples do not leak into the normal assistant transcript.
 - Fae keeps a separate internal `fae_self` echo-rejection profile for her own TTS voice. That profile is never treated as a human owner.
 - Resetting onboarding clears enrolled speaker profiles and returns Fae to the guided setup flow.
+- While first-owner enrollment is active, a natural follow-up utterance can still wake Fae even if STT drops the literal word `Fae`; tiny idle fragments are still ignored.
+- Short spoken turns like greetings and simple checks should prefer the fast local operator path without tool clutter unless the utterance clearly needs tools.
+- Simple spoken turns must not trigger a tool-access upgrade popup unless the block is actually actionable, and stalled local worker generations should time out and recover instead of leaving the main window stuck forever.
+- If the local model still fails during first-owner enrollment, Fae falls back to a deterministic spoken enrollment prompt instead of ending the turn in silence.
 - The test harness can drive this flow with `just test-onboarding-reset` and `just test-start-enrollment` while the app is running under `just test-serve`.
 
 ### Progressive Enrollment

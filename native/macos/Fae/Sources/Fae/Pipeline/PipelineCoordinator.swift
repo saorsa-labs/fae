@@ -140,6 +140,31 @@ actor PipelineCoordinator {
         privacyModeLive = mode
     }
 
+    static func shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: Bool) -> Bool {
+        !firstOwnerEnrollmentActive
+    }
+
+    static func visibleToolNamesForTurn(
+        firstOwnerEnrollmentActive: Bool,
+        proactiveAllowedTools: Set<String>?
+    ) -> Set<String>? {
+        if firstOwnerEnrollmentActive {
+            return ["voice_identity"]
+        }
+        return proactiveAllowedTools
+    }
+
+    static func llmFailureFallbackMessage(
+        firstOwnerEnrollmentActive: Bool,
+        proactiveContextPresent: Bool
+    ) -> String? {
+        guard !proactiveContextPresent else { return nil }
+        if firstOwnerEnrollmentActive {
+            return "I can hear you. Use Let me get to know you to record your voice, and then I'll recognize you properly."
+        }
+        return "I hit a local model problem just then. Please try that once more."
+    }
+
     /// Update the model locality (local vs. non-local co-work) for damage-control policy.
     func setModelLocality(_ locality: ModelLocality) {
         modelLocality = locality
@@ -178,6 +203,28 @@ actor PipelineCoordinator {
 
     func setVoiceIdentityLock(_ enabled: Bool) {
         voiceIdentityLockLive = enabled
+    }
+
+    /// Switch the TTS voice live without restarting. No-op if TTS engine is not Kokoro.
+    func setTTSVoice(_ voice: String) async {
+        if let kokoro = ttsEngine as? KokoroMLXTTSEngine {
+            await kokoro.switchVoice(to: voice)
+        }
+    }
+
+    /// Preview a named voice by synthesizing a short phrase and playing it once.
+    func previewTTSVoice(_ voice: String) async {
+        guard let kokoro = ttsEngine as? KokoroMLXTTSEngine else { return }
+        let phrase = "Hi, I'm Fae. This is what I sound like."
+        do {
+            guard let buffer = try await kokoro.previewSynthesize(voice: voice, text: phrase),
+                  let channelData = buffer.floatChannelData?[0]
+            else { return }
+            let samples = Array(UnsafeBufferPointer(start: channelData, count: Int(buffer.frameLength)))
+            await playback.enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
+        } catch {
+            NSLog("PipelineCoordinator: voice preview failed: %@", error.localizedDescription)
+        }
     }
 
     /// Update playback speed live without restarting.
@@ -1111,6 +1158,21 @@ actor PipelineCoordinator {
         speakerAllowsConversation: Bool,
         wordCount: Int
     ) -> VoiceAttentionDecision {
+        if firstOwnerEnrollmentActive {
+            if !speakerAllowsConversation {
+                return .dropSpeaker
+            }
+            if !awaitingApproval,
+               !addressedToFae,
+               wordCount <= 2
+            {
+                return .dropShortIdle
+            }
+            if gateState != .active {
+                return .wakeAndContinue
+            }
+        }
+
         if gateState != .active {
             return addressedToFae ? .wakeAndContinue : .ignoreWhileSleeping
         }
@@ -2496,6 +2558,10 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .command, "Direct-address extraction: \(queryText)")
             // Refresh follow-up window.
             engage()
+            if queryText.isEmpty {
+                debugLog(debugConsole, .command, "Wake-only utterance ignored after direct-address extraction")
+                return
+            }
         }
 
         // If assistant is still active, handle based on barge-in setting.
@@ -3109,10 +3175,15 @@ actor PipelineCoordinator {
             )
 
             // Memory recall — inject context before generation.
-            let memoryContext = await memoryOrchestrator?.recall(
-                query: userText,
-                proactiveTaskId: proactiveContext?.taskId
-            )
+            let memoryContext: String?
+            if Self.shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: firstOwnerEnrollmentActive) {
+                memoryContext = await memoryOrchestrator?.recall(
+                    query: userText,
+                    proactiveTaskId: proactiveContext?.taskId
+                )
+            } else {
+                memoryContext = nil
+            }
             if let ctx = memoryContext, !ctx.isEmpty {
                 let preview = String(ctx.prefix(120)).replacingOccurrences(of: "\n", with: " ")
                 debugLog(debugConsole, .memory, "Recalled: \(preview)…")
@@ -3122,8 +3193,18 @@ actor PipelineCoordinator {
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
-            let visibleToolNames = proactiveContext?.allowedTools
-            let toolsAvailableForTurn = toolMode != "off" && !ownerEnrollmentRequired
+            let preferToolFreeFastPath = TurnRoutingPolicy.shouldPreferToolFreeFastPath(
+                userText: userText,
+                allowsAudibleOutput: allowsAudibleOutput,
+                toolsAvailable: toolMode != "off" && !ownerEnrollmentRequired
+            )
+            let visibleToolNames = Self.visibleToolNamesForTurn(
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                proactiveAllowedTools: proactiveContext?.allowedTools
+            )
+            let toolsAvailableForTurn = toolMode != "off"
+                && !ownerEnrollmentRequired
+                && !preferToolFreeFastPath
             let selectedRoute = await selectLLMRoute(
                 userText: userText,
                 isToolFollowUp: isToolFollowUp,
@@ -3141,6 +3222,9 @@ actor PipelineCoordinator {
                 if ownerEnrollmentRequired {
                     return "owner_enrollment_required"
                 }
+                if preferToolFreeFastPath {
+                    return "quick_voice_fast_path"
+                }
                 if selectedRoute == .conciergeModel {
                     return "concierge_route"
                 }
@@ -3151,10 +3235,7 @@ actor PipelineCoordinator {
             if let hiddenToolsReason {
                 debugLog(debugConsole, .pipeline, "⚠️ Tools HIDDEN from LLM: \(hiddenToolsReason)")
                 NSLog("PipelineCoordinator: tools hidden — %@", hiddenToolsReason)
-                // Only show tool-mode upgrade popup for actionable reasons (enrollment needed,
-                // non-owner speaker). Do NOT nag when user explicitly set toolMode=off — that
-                // is intentional and showing a popup every turn is disruptive.
-                if !isToolFollowUp && hiddenToolsReason != "toolMode=off" {
+                if !isToolFollowUp && Self.shouldShowToolModeUpgradePopup(reasonCode: hiddenToolsReason) {
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(
                             name: .faeToolModeUpgradeRequested,
@@ -3372,6 +3453,7 @@ actor PipelineCoordinator {
         var deferredSentenceQueue: [String] = []
         var streamedToolCalls: [ToolCall] = []
         var completionInfo: GenerateCompletionInfo?
+        var llmFailureDescription: String?
 
         if turnCount == 0 {
             // Keep echo matching aligned with what we actually speak this turn.
@@ -3668,6 +3750,7 @@ actor PipelineCoordinator {
             }
         }
         } catch {
+            llmFailureDescription = error.localizedDescription
             NSLog("PipelineCoordinator: LLM error: %@", error.localizedDescription)
             debugLog(debugConsole, .pipeline, "⚠️ LLM error: \(error.localizedDescription)")
         }
@@ -3838,6 +3921,29 @@ actor PipelineCoordinator {
             let assistantTextForStorage = generationContext.allowsAudibleOutput ? spokenText : visibleText
             let visibleResponse = Self.stripThinkContent(fullResponse)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if assistantTextForStorage.isEmpty,
+               visibleResponse.isEmpty,
+               let llmFailureDescription,
+               let fallback = Self.llmFailureFallbackMessage(
+                    firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                    proactiveContextPresent: proactiveContext != nil
+               )
+            {
+                debugLog(debugConsole, .pipeline, "Deterministic LLM failure fallback: \(llmFailureDescription)")
+                eventBus.send(.assistantText(text: fallback, isFinal: true))
+                if generationContext.allowsAudibleOutput {
+                    recordSpokenText(fallback)
+                    enqueueTTS(fallback, isFinal: true)
+                }
+                await awaitPendingTTS()
+                await conversationState.addAssistantMessage(fallback, tag: proactiveContext?.conversationTag)
+                await synchronizeLLMSession()
+                endAssistantGeneration()
+                engage()
+                activeCapabilityTicket = nil
+                debugLog(debugConsole, .qa, "=== TURN END fallback reason=llm_error ===")
+                return
+            }
             if assistantTextForStorage.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
                 debugLog(debugConsole, .pipeline, "No visible response after thinking block — retrying with thinking disabled")
                 await generateWithTools(
@@ -3928,13 +4034,14 @@ actor PipelineCoordinator {
                 }
 
                 debugLog(debugConsole, .qa, "Tool-backed lookup fallback reason=\(reasonCode)")
-                // Show tool-mode upgrade popup (approval overlay, not canvas).
-                DispatchQueue.main.async {
-                    NotificationCenter.default.post(
-                        name: .faeToolModeUpgradeRequested,
-                        object: nil,
-                        userInfo: ["reason": reasonCode]
-                    )
+                if Self.shouldShowToolModeUpgradePopup(reasonCode: reasonCode) {
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(
+                            name: .faeToolModeUpgradeRequested,
+                            object: nil,
+                            userInfo: ["reason": reasonCode]
+                        )
+                    }
                 }
 
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
@@ -4202,6 +4309,15 @@ actor PipelineCoordinator {
         assistantGenerating = false
         eventBus.send(.assistantGenerating(false))
         scheduleDeferredProactiveDrain()
+    }
+
+    static func shouldShowToolModeUpgradePopup(reasonCode: String) -> Bool {
+        switch reasonCode {
+        case "owner_enrollment_required", "non-owner", "tool_not_called":
+            return true
+        default:
+            return false
+        }
     }
 
     private func markAssistantSpeechStarted() {

@@ -6,6 +6,7 @@ private enum WorkerLLMError: LocalizedError {
     case transportUnavailable
     case malformedResponse
     case commandTimeout(String)
+    case streamTimeout(String)
     case workerFailed(String)
 
     var errorDescription: String? {
@@ -18,8 +19,38 @@ private enum WorkerLLMError: LocalizedError {
             return "Worker returned a malformed response"
         case .commandTimeout(let command):
             return "Worker command timed out: \(command)"
+        case .streamTimeout(let detail):
+            return "Worker stream timed out: \(detail)"
         case .workerFailed(let message):
             return message
+        }
+    }
+}
+
+enum WorkerStreamWatchdogPhase: Sendable {
+    case awaitingFirstEvent
+    case streamingActive
+
+    var description: String {
+        switch self {
+        case .awaitingFirstEvent:
+            return "waiting for first token"
+        case .streamingActive:
+            return "stream stalled"
+        }
+    }
+}
+
+struct WorkerStreamWatchdogPolicy {
+    static let initialResponseTimeoutNanoseconds: UInt64 = 45_000_000_000
+    static let activeStreamTimeoutNanoseconds: UInt64 = 15_000_000_000
+
+    static func timeout(for phase: WorkerStreamWatchdogPhase) -> UInt64 {
+        switch phase {
+        case .awaitingFirstEvent:
+            return initialResponseTimeoutNanoseconds
+        case .streamingActive:
+            return activeStreamTimeoutNanoseconds
         }
     }
 }
@@ -33,6 +64,7 @@ actor WorkerLLMEngine: LLMEngine {
     private var commandContinuations: [String: CheckedContinuation<Void, Error>] = [:]
     private var pendingCommandTimeouts: [String: Task<Void, Never>] = [:]
     private var streamContinuations: [String: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation] = [:]
+    private var streamWatchdogs: [String: Task<Void, Never>] = [:]
     private var lastLoadedModelID: String?
     private var restartCount: Int = 0
     private let commandTimeoutNanoseconds: UInt64 = 30_000_000_000
@@ -162,10 +194,12 @@ actor WorkerLLMEngine: LLMEngine {
         requestID: String
     ) {
         streamContinuations[requestID] = continuation
+        armStreamWatchdog(for: requestID, phase: .awaitingFirstEvent)
     }
 
     private func cancelStream(requestID: String) async {
         streamContinuations.removeValue(forKey: requestID)
+        clearStreamTracking(requestID: requestID)
         guard process?.isRunning == true else { return }
         try? send(
             LLMWorkerRequest(
@@ -178,6 +212,49 @@ actor WorkerLLMEngine: LLMEngine {
                 options: nil
             )
         )
+    }
+
+    private func armStreamWatchdog(for requestID: String, phase: WorkerStreamWatchdogPhase) {
+        streamWatchdogs[requestID]?.cancel()
+        let timeout = WorkerStreamWatchdogPolicy.timeout(for: phase)
+        streamWatchdogs[requestID] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: timeout)
+            await self?.handleStreamTimeout(requestID: requestID, phase: phase)
+        }
+    }
+
+    private func noteStreamProgress(requestID: String) {
+        guard streamContinuations[requestID] != nil else { return }
+        armStreamWatchdog(for: requestID, phase: .streamingActive)
+    }
+
+    private func clearStreamTracking(requestID: String) {
+        streamWatchdogs[requestID]?.cancel()
+        streamWatchdogs.removeValue(forKey: requestID)
+    }
+
+    private func handleStreamTimeout(requestID: String, phase: WorkerStreamWatchdogPhase) {
+        guard let continuation = streamContinuations.removeValue(forKey: requestID) else { return }
+        clearStreamTracking(requestID: requestID)
+        let error = WorkerLLMError.streamTimeout(phase.description)
+        continuation.finish(throwing: error)
+        persistWorkerState(lastError: error.localizedDescription)
+
+        try? send(
+            LLMWorkerRequest(
+                requestID: requestID,
+                command: "cancel",
+                role: role,
+                modelID: nil,
+                messages: nil,
+                systemPrompt: nil,
+                options: nil
+            )
+        )
+
+        if let process, process.isRunning {
+            process.terminate()
+        }
     }
 
     private func ensureProcess() async throws {
@@ -306,20 +383,24 @@ actor WorkerLLMEngine: LLMEngine {
             }
 
         case "text":
+            noteStreamProgress(requestID: response.requestID)
             streamContinuations[response.requestID]?.yield(.text(response.text ?? ""))
 
         case "tool_call":
+            noteStreamProgress(requestID: response.requestID)
             guard let toolName = response.toolName else { return }
             let arguments = (response.toolArguments ?? [:]).mapValues(\.anyValue)
             let toolCall = ToolCall(function: .init(name: toolName, arguments: arguments))
             streamContinuations[response.requestID]?.yield(.toolCall(toolCall))
 
         case "end":
+            clearStreamTracking(requestID: response.requestID)
             if let continuation = streamContinuations.removeValue(forKey: response.requestID) {
                 continuation.finish()
             }
 
         case "error":
+            clearStreamTracking(requestID: response.requestID)
             let error = WorkerLLMError.workerFailed(response.error ?? "Unknown worker error")
             if let continuation = commandContinuations.removeValue(forKey: response.requestID) {
                 continuation.resume(throwing: error)
@@ -329,6 +410,7 @@ actor WorkerLLMEngine: LLMEngine {
             }
 
         default:
+            clearStreamTracking(requestID: response.requestID)
             let error = WorkerLLMError.malformedResponse
             if let continuation = commandContinuations.removeValue(forKey: response.requestID) {
                 continuation.resume(throwing: error)
@@ -351,6 +433,11 @@ actor WorkerLLMEngine: LLMEngine {
             timeoutTask.cancel()
         }
         pendingCommandTimeouts.removeAll()
+
+        for (_, watchdog) in streamWatchdogs {
+            watchdog.cancel()
+        }
+        streamWatchdogs.removeAll()
 
         for (_, continuation) in commandContinuations {
             continuation.resume(throwing: failure)

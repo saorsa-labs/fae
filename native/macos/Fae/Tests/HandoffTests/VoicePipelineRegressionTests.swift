@@ -117,6 +117,57 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
+    func testFusedVoiceAttentionWakesForEnrollmentWithoutDirectAddress() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: true,
+                speakerAllowsConversation: true,
+                wordCount: 4
+            ),
+            .wakeAndContinue
+        )
+    }
+
+    func testFusedVoiceAttentionStillDropsTinyEnrollmentFragments() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: true,
+                speakerAllowsConversation: true,
+                wordCount: 2
+            ),
+            .dropShortIdle
+        )
+    }
+
+    func testLlmFailureFallbackUsesOnboardingSpecificCopy() {
+        XCTAssertEqual(
+            PipelineCoordinator.llmFailureFallbackMessage(
+                firstOwnerEnrollmentActive: true,
+                proactiveContextPresent: false
+            ),
+            "I can hear you. Use Let me get to know you to record your voice, and then I'll recognize you properly."
+        )
+    }
+
+    func testLlmFailureFallbackSkipsProactiveTurns() {
+        XCTAssertNil(
+            PipelineCoordinator.llmFailureFallbackMessage(
+                firstOwnerEnrollmentActive: false,
+                proactiveContextPresent: true
+            )
+        )
+    }
+
     func testFusedVoiceAttentionAllowsFollowupWithoutAddress() {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
@@ -352,6 +403,28 @@ final class VoicePipelineRegressionTests: XCTestCase {
                 directAddressFollowupS: 12
             ),
             45
+        )
+    }
+
+    func testOnboardingTurnsSkipMemoryRecall() {
+        XCTAssertFalse(PipelineCoordinator.shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: true))
+        XCTAssertTrue(PipelineCoordinator.shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: false))
+    }
+
+    func testOnboardingTurnsLimitVisibleToolsToVoiceIdentity() {
+        XCTAssertEqual(
+            PipelineCoordinator.visibleToolNamesForTurn(
+                firstOwnerEnrollmentActive: true,
+                proactiveAllowedTools: ["read", "bash"]
+            ),
+            ["voice_identity"]
+        )
+        XCTAssertEqual(
+            PipelineCoordinator.visibleToolNamesForTurn(
+                firstOwnerEnrollmentActive: false,
+                proactiveAllowedTools: ["read", "bash"]
+            ),
+            ["read", "bash"]
         )
     }
 }
