@@ -60,7 +60,7 @@ struct ContentView: View {
             }
         )
         .animation(.easeInOut(duration: 0.5), value: windowState.mode)
-        .animation(.easeInOut(duration: 0.4), value: onboarding.isComplete)
+        .animation(.easeInOut(duration: 0.4), value: ownerEnrollmentComplete)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
         .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
         .sheet(isPresented: $showingNativeEnrollment) {
@@ -70,6 +70,11 @@ struct ContentView: View {
                 speakerProfileStore: faeCore.nativeEnrollmentSpeakerProfileStore,
                 onComplete: { enrolledName in
                     showingNativeEnrollment = false
+                    let trimmedName = enrolledName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedName.isEmpty {
+                        onboarding.userName = trimmedName
+                    }
+                    onboarding.isComplete = true
                     restoreConversationAfterNativeEnrollment()
                     faeCore.completeNativeOwnerEnrollment(displayName: enrolledName)
                 },
@@ -128,7 +133,7 @@ struct ContentView: View {
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
 
             // Enrollment invitation — visible until owner voice is enrolled.
-            if !onboarding.isComplete {
+            if !ownerEnrollmentComplete {
                 EnrollmentInvitationBanner {
                     windowState.transitionToCompact()
                     beginNativeEnrollment()
@@ -171,6 +176,10 @@ struct ContentView: View {
                 ))
             }
         }
+    }
+
+    private var ownerEnrollmentComplete: Bool {
+        onboarding.isComplete || faeCore.hasOwnerSetUp
     }
 
     private func beginNativeEnrollment() {

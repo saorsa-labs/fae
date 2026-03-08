@@ -503,6 +503,8 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(contentView.contains("SpeakerEnrollmentView("))
         XCTAssertTrue(contentView.contains("beginNativeEnrollment()"))
         XCTAssertTrue(contentView.contains("restoreConversationAfterNativeEnrollment()"))
+        XCTAssertTrue(contentView.contains("onboarding.isComplete = true"))
+        XCTAssertTrue(contentView.contains("onboarding.isComplete || faeCore.hasOwnerSetUp"))
         XCTAssertFalse(contentView.contains("faeCore.injectText(\"Hi Fae, I'm ready to introduce myself.\")"))
     }
 

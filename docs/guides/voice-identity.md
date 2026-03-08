@@ -41,6 +41,7 @@ That means:
 
 - Fae does **not** silently promote the first detected voice to owner anymore.
 - The visible `Let me get to know you` button opens a native voice-enrollment recorder. It no longer injects a fake spoken prompt into the conversation.
+- After a successful native enrollment, that button disappears immediately without requiring a relaunch or a second state refresh.
 - While that recorder is open, the main conversation loop is paused so enrollment samples do not leak into the normal assistant transcript.
 - Fae keeps a separate internal `fae_self` echo-rejection profile for her own TTS voice. That profile is never treated as a human owner.
 - Resetting onboarding clears enrolled speaker profiles and returns Fae to the guided setup flow.
