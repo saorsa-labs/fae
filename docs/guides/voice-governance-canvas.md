@@ -45,6 +45,8 @@ When users say "show tools and permissions", Fae renders a live snapshot with:
 - Allowed tools in current mode
 - Blocked tools in current mode
 
+Manual canvas toggles should only surface existing canvas content or activity. They should not open an empty placeholder panel over the main conversation UI.
+
 ## Canvas quick actions
 
 The canvas now includes:

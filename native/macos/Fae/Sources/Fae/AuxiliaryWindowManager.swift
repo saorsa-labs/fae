@@ -168,7 +168,17 @@ final class AuxiliaryWindowManager: ObservableObject {
     }
 
     func toggleCanvas() {
-        isCanvasVisible ? hideCanvas() : showCanvas()
+        if isCanvasVisible {
+            hideCanvas()
+            return
+        }
+
+        guard canvasController?.hasDisplayableContent == true else {
+            focusMainWindow()
+            return
+        }
+
+        showCanvas()
     }
 
     // MARK: - Debug Console

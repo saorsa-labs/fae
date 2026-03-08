@@ -65,6 +65,15 @@ final class CanvasController: ObservableObject {
     /// Whether we're in activity feed mode (vs static HTML mode).
     @Published var isActivityMode: Bool = false
 
+    /// Whether the canvas currently has anything meaningful to display.
+    var hasDisplayableContent: Bool {
+        if isActivityMode {
+            return !activityCards.isEmpty || !archivedTurns.isEmpty
+        }
+
+        return !htmlContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     // MARK: - Legacy HTML API (kept for backward compat)
 
     func setContent(_ html: String) {
