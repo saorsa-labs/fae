@@ -32,6 +32,8 @@ struct SettingsModelsPerformanceTab: View {
 
     // MARK: - Model Settings
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
+    @AppStorage("dualModelEnabled") private var dualModelEnabled: Bool = true
+    @AppStorage("conciergeModelPreset") private var conciergeModelPreset: String = "auto"
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
     @AppStorage("thinkingLevel") private var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
@@ -67,6 +69,11 @@ struct SettingsModelsPerformanceTab: View {
         ("Qwen3.5-4B", "qwen3_5_4b", "16+ GB"),
         ("Qwen3.5-2B", "qwen3_5_2b", "12+ GB"),
         ("Qwen3.5-0.8B", "qwen3_5_0_8b", "8+ GB"),
+    ]
+
+    private let conciergeModelOptions: [(label: String, value: String, ram: String)] = [
+        ("Auto (Recommended)", "auto", "32+ GB"),
+        ("Liquid LFM2-24B-A2B", "liquid_lfm2_24b_a2b", "32+ GB"),
     ]
 
     private let visionModelOptions: [(label: String, value: String)] = [
@@ -147,10 +154,17 @@ struct SettingsModelsPerformanceTab: View {
 
     private var modelsSection: some View {
         VStack(alignment: .leading, spacing: 24) {
-            // Voice Model
-            SettingsCard(title: "Voice Model", icon: "cpu", color: .blue) {
+            // Local LLM stack
+            SettingsCard(title: "Local LLM Stack", icon: "cpu", color: .blue) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Picker("Model", selection: $voiceModelPreset) {
+                    Toggle("Enable dual-model local pipeline", isOn: $dualModelEnabled)
+                        .onChange(of: dualModelEnabled) {
+                            guard !hydratingFromConfig else { return }
+                            patchConfig("llm.dual_model_enabled", value: dualModelEnabled)
+                            showRestartNotice = true
+                        }
+
+                    Picker("Operator model", selection: $voiceModelPreset) {
                         ForEach(voiceModelOptions, id: \.value) { opt in
                             HStack {
                                 Text(opt.label)
@@ -168,6 +182,33 @@ struct SettingsModelsPerformanceTab: View {
                         patchConfig("llm.voice_model_preset", value: voiceModelPreset)
                         showRestartNotice = true
                     }
+
+                    if dualModelEnabled {
+                        Picker("Concierge model", selection: $conciergeModelPreset) {
+                            ForEach(conciergeModelOptions, id: \.value) { opt in
+                                HStack {
+                                    Text(opt.label)
+                                    Spacer()
+                                    Text(opt.ram)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .tag(opt.value)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .onChange(of: conciergeModelPreset) {
+                            guard !hydratingFromConfig else { return }
+                            patchConfig("llm.concierge_model_preset", value: conciergeModelPreset)
+                            showRestartNotice = true
+                        }
+                    }
+
+                    Text(dualModelEnabled
+                         ? "Operator stays on the fast Qwen control path. Concierge uses Liquid for richer synthesis when RAM allows."
+                         : "Single-model mode uses only the operator model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Thinking level")
@@ -250,7 +291,7 @@ struct SettingsModelsPerformanceTab: View {
                         .frame(height: 40)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Loaded Model")
+                        Text("Active Stack")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Text(loadedModel)
@@ -559,11 +600,15 @@ struct SettingsModelsPerformanceTab: View {
         let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
         systemRAM = "\(totalGB) GB"
 
-        // Get loaded model from UserDefaults or config
-        if let model = UserDefaults.standard.string(forKey: "fae.loaded_model_id") {
-            loadedModel = model.components(separatedBy: "/").last ?? model
+        let config = FaeConfig.load()
+        let plan = FaeConfig.recommendedLocalModelStack(config: config)
+        let operatorModel = UserDefaults.standard.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
+        let conciergeModel = UserDefaults.standard.string(forKey: "fae.loaded_concierge_model_id")
+
+        if plan.dualModelActive, let conciergeModel {
+            loadedModel = "Operator: \((operatorModel.components(separatedBy: "/").last ?? operatorModel)) · Concierge: \((conciergeModel.components(separatedBy: "/").last ?? conciergeModel))"
         } else {
-            loadedModel = voiceModelPreset == "auto" ? "Auto-selected" : voiceModelPreset
+            loadedModel = operatorModel.components(separatedBy: "/").last ?? operatorModel
         }
 
         updateEstimatedSavings()
@@ -602,6 +647,12 @@ struct SettingsModelsPerformanceTab: View {
             {
                 if let preset = llm["voice_model_preset"] as? String {
                     voiceModelPreset = preset
+                }
+                if let dualEnabled = llm["dual_model_enabled"] as? Bool {
+                    dualModelEnabled = dualEnabled
+                }
+                if let conciergePreset = llm["concierge_model_preset"] as? String {
+                    conciergeModelPreset = conciergePreset
                 }
                 if let levelRaw = llm["thinking_level"] as? String,
                    let level = FaeThinkingLevel(rawValue: levelRaw)

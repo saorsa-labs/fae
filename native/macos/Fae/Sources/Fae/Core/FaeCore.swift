@@ -87,7 +87,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
         )
     }
     private let sttEngine = MLXSTTEngine()
-    private let llmEngine = MLXLLMEngine()
+    private let llmEngine: any LLMEngine = WorkerLLMEngine(role: .operatorModel)
+    private let conciergeLLMEngine: any LLMEngine = WorkerLLMEngine(role: .conciergeModel)
     private let ttsEngine: any TTSEngine = KokoroMLXTTSEngine()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
@@ -157,13 +158,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     config: config
                 )
 
-                let loadedModelManager = modelManager
-                await llmEngine.setWiredMemoryTicketProvider { promptTokens, expectedNewTokens in
-                    await loadedModelManager.generationTicket(
-                        promptTokens: promptTokens,
-                        expectedNewTokens: expectedNewTokens
-                    )
-                }
+                UserDefaults.standard.set("worker_process", forKey: "fae.runtime.operator_runtime")
+                UserDefaults.standard.set("worker_process", forKey: "fae.runtime.concierge_runtime")
 
                 // Initialize memory system.
                 let memoryStore = try Self.createMemoryStore()
@@ -276,6 +272,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     playback: playbackManager,
                     sttEngine: sttEngine,
                     llmEngine: llmEngine,
+                    conciergeEngine: conciergeLLMEngine,
                     ttsEngine: ttsEngine,
                     config: pipelineConfig,
                     conversationState: conversationState,
@@ -292,6 +289,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
+
+                if pipelineConfig.llm.dualModelEnabled {
+                    Task.detached(priority: .utility) { [weak self] in
+                        guard let self else { return }
+                        await self.modelManager.loadConciergeIfNeeded(
+                            llm: self.conciergeLLMEngine,
+                            config: pipelineConfig
+                        )
+                    }
+                }
 
                 // Sync barge-in setting from AppStorage on startup.
                 // bargeInEnabledLive defaults to nil, so we must explicitly
@@ -1205,6 +1212,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.llm.voiceModelPreset = value
             persistConfig(reason: "config.patch.llm.voice_model_preset")
 
+        case "llm.dual_model_enabled":
+            guard let enabled = value as? Bool else { return }
+            config.llm.dualModelEnabled = enabled
+            persistConfig(reason: "config.patch.llm.dual_model_enabled")
+
+        case "llm.concierge_model_preset":
+            guard let value = sanitizedString(value), !value.isEmpty else { return }
+            config.llm.conciergeModelPreset = value
+            persistConfig(reason: "config.patch.llm.concierge_model_preset")
+
         case "llm.remote_provider_preset":
             guard let value = sanitizedString(value), !value.isEmpty else { return }
             config.llm.remoteProviderPreset = value
@@ -2035,6 +2052,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "llm": [
                         "voice_model_preset": config.llm.voiceModelPreset,
+                        "dual_model_enabled": config.llm.dualModelEnabled,
+                        "concierge_model_preset": config.llm.conciergeModelPreset,
+                        "dual_model_min_system_ram_gb": config.llm.dualModelMinSystemRAMGB,
+                        "keep_concierge_hot": config.llm.keepConciergeHot,
+                        "allow_concierge_during_voice_turns": config.llm.allowConciergeDuringVoiceTurns,
                         "thinking_enabled": config.llm.thinkingEnabled,
                         "thinking_level": config.llm.resolvedThinkingLevel.rawValue,
                         "kv_quant_bits": config.llm.kvQuantBits as Any,

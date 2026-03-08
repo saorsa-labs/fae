@@ -63,7 +63,18 @@ struct FaeConfig: Codable {
         var topK: Int = 40
         var repeatPenalty: Float = 1.1
         var maxHistoryMessages: Int = 10
+        /// Operator / control model preset for the main local pipeline.
         var voiceModelPreset: String = "auto"
+        /// Enable the premium local dual-model stack when RAM allows.
+        var dualModelEnabled: Bool = true
+        /// Richer synthesis / concierge model preset.
+        var conciergeModelPreset: String = "auto"
+        /// Minimum installed system RAM required before concierge loading is attempted.
+        var dualModelMinSystemRAMGB: Int = 32
+        /// Keep the concierge model loaded in memory once available.
+        var keepConciergeHot: Bool = true
+        /// Allow the concierge model to answer rich foreground turns directly.
+        var allowConciergeDuringVoiceTurns: Bool = true
         /// Preferred remote provider preset for user-managed external sessions.
         var remoteProviderPreset: String = "openrouter"
         /// Preferred remote base URL for user-managed external sessions.
@@ -105,16 +116,37 @@ struct FaeConfig: Codable {
         var prefillStepSize: Int? = nil
     }
 
+    enum LocalPipelineMode: String, Codable {
+        case singleModel = "single_model"
+        case dualModel = "dual_model"
+    }
+
+    struct LocalLLMSelection: Equatable {
+        let role: String
+        let modelId: String
+        let contextSize: Int
+    }
+
+    struct LocalModelStackPlan: Equatable {
+        let mode: LocalPipelineMode
+        let dualModelEligible: Bool
+        let dualModelActive: Bool
+        let operatorModel: LocalLLMSelection
+        let conciergeModel: LocalLLMSelection?
+        let sttModelId: String
+        let ttsModelId: String
+        let visionModelId: String?
+    }
+
     // MARK: - TTS
 
     struct TtsConfig: Codable {
         var voice: String = "fae"
-        var modelId: String = "kokoro:af_heart"
+        var modelId: String = "kokoro:fae"
         var speed: Float = 1.1
         var sampleRate: Int = 24_000
-        /// Transcript of the reference audio for voice cloning.
-        /// Keep SHORT — Qwen3-TTS can bleed refText into generated audio.
-        /// Must roughly match the first ~1.5 seconds of speech in fae.wav.
+        /// Reference audio transcript (used by MLXTTSEngine / Qwen3-TTS ICL voice cloning).
+        /// Not used by KokoroMLXTTSEngine, which uses pre-computed .bin embeddings.
         var referenceText: String? = "Hello, I'm Fae."
         /// Path to a custom voice WAV file (overrides bundled fae.wav when voiceIdentityLock=false).
         var customVoicePath: String?
@@ -329,6 +361,61 @@ struct FaeConfig: Codable {
         }
     }
 
+    static func recommendedConciergeModel(
+        totalMemoryBytes: UInt64? = nil,
+        preset: String = "auto"
+    ) -> (modelId: String, contextSize: Int)? {
+        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+
+        switch preset.lowercased() {
+        case "off", "none", "disabled":
+            return nil
+        case "liquid_lfm2_24b_a2b", "lfm2_24b_a2b", "liquid":
+            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 16_384)
+        default: // auto
+            guard totalGB >= 32 else { return nil }
+            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 16_384)
+        }
+    }
+
+    static func isDualModelEligible(
+        totalMemoryBytes: UInt64? = nil,
+        minimumSystemRAMGB: Int = 32
+    ) -> Bool {
+        let totalGB = Int((totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024))
+        return totalGB >= minimumSystemRAMGB
+    }
+
+    static func recommendedLocalModelStack(
+        config: FaeConfig = FaeConfig(),
+        totalMemoryBytes: UInt64? = nil
+    ) -> LocalModelStackPlan {
+        let operatorModel = recommendedModel(
+            totalMemoryBytes: totalMemoryBytes,
+            preset: config.llm.voiceModelPreset
+        )
+        let dualEligible = isDualModelEligible(
+            totalMemoryBytes: totalMemoryBytes,
+            minimumSystemRAMGB: config.llm.dualModelMinSystemRAMGB
+        )
+        let conciergeModel = dualEligible && config.llm.dualModelEnabled
+            ? recommendedConciergeModel(totalMemoryBytes: totalMemoryBytes, preset: config.llm.conciergeModelPreset)
+            : nil
+
+        return LocalModelStackPlan(
+            mode: conciergeModel == nil ? .singleModel : .dualModel,
+            dualModelEligible: dualEligible,
+            dualModelActive: conciergeModel != nil,
+            operatorModel: LocalLLMSelection(role: "operator", modelId: operatorModel.modelId, contextSize: operatorModel.contextSize),
+            conciergeModel: conciergeModel.map {
+                LocalLLMSelection(role: "concierge", modelId: $0.modelId, contextSize: $0.contextSize)
+            },
+            sttModelId: recommendedSTTModel(totalMemoryBytes: totalMemoryBytes),
+            ttsModelId: recommendedTTSModel(totalMemoryBytes: totalMemoryBytes),
+            visionModelId: recommendedVLMModel(totalMemoryBytes: totalMemoryBytes, preset: config.vision.modelPreset)?.modelId
+        )
+    }
+
     /// Compute a sensible `maxHistoryMessages` from context size and generation budget.
     ///
     /// Formula: available = contextSize - systemPromptBudget(~5000) - maxTokens.
@@ -380,19 +467,14 @@ struct FaeConfig: Codable {
 
     // MARK: - TTS Model Selection
 
-    /// Select the appropriate TTS model based on system RAM.
+    /// Return the active TTS model identifier (used for display in About / Settings).
     ///
-    /// - >=16 GiB: 1.7B CustomVoice (voice cloning via fae.wav)
-    /// - <16 GiB: 0.6B standard (no voice cloning)
+    /// Active engine: KokoroMLXTTSEngine (Kokoro-82M via KokoroSwift / MLX).
+    /// The legacy MLXTTSEngine (Qwen3-TTS) is kept for potential fallback but is not active.
     static func recommendedTTSModel(
         totalMemoryBytes: UInt64? = nil
     ) -> String {
-        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
-        if totalGB >= 16 {
-            return "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
-        } else {
-            return "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16"
-        }
+        return "hexgrad/Kokoro-82M"
     }
 
     // MARK: - VLM Model Selection
@@ -620,6 +702,21 @@ struct FaeConfig: Codable {
                 case "voiceModelPreset":
                     guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.voiceModelPreset = v
+                case "dualModelEnabled", "dual_model_enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.dualModelEnabled = v
+                case "conciergeModelPreset", "concierge_model_preset":
+                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.conciergeModelPreset = v
+                case "dualModelMinSystemRAMGB", "dual_model_min_system_ram_gb":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.dualModelMinSystemRAMGB = v
+                case "keepConciergeHot", "keep_concierge_hot":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.keepConciergeHot = v
+                case "allowConciergeDuringVoiceTurns", "allow_concierge_during_voice_turns":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.allowConciergeDuringVoiceTurns = v
                 case "remoteProviderPreset":
                     guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.remoteProviderPreset = v
@@ -902,6 +999,11 @@ struct FaeConfig: Codable {
         lines.append("repeatPenalty = \(formatFloat(llm.repeatPenalty))")
         lines.append("maxHistoryMessages = \(llm.maxHistoryMessages)")
         lines.append("voiceModelPreset = \(encodeString(llm.voiceModelPreset))")
+        lines.append("dualModelEnabled = \(llm.dualModelEnabled ? "true" : "false")")
+        lines.append("conciergeModelPreset = \(encodeString(llm.conciergeModelPreset))")
+        lines.append("dualModelMinSystemRAMGB = \(llm.dualModelMinSystemRAMGB)")
+        lines.append("keepConciergeHot = \(llm.keepConciergeHot ? "true" : "false")")
+        lines.append("allowConciergeDuringVoiceTurns = \(llm.allowConciergeDuringVoiceTurns ? "true" : "false")")
         lines.append("remoteProviderPreset = \(encodeString(llm.remoteProviderPreset))")
         lines.append("remoteBaseURL = \(encodeString(llm.remoteBaseURL))")
         lines.append("remoteModel = \(encodeString(llm.remoteModel))")

@@ -144,16 +144,26 @@ struct WorkWithFaePreview: Sendable, Equatable {
     let textPreview: String?
 }
 
-enum WorkWithFaeProviderTrust: Sendable {
-    case faeLocalhost
-    case externalOpenAICompatible
-}
-
 struct WorkWithFaePreparedPrompt: Sendable, Equatable {
     let userVisiblePrompt: String
     let faeLocalPrompt: String
     let shareablePrompt: String
     let containsLocalOnlyContext: Bool
+    let shareableExport: CoworkExportPacket?
+
+    init(
+        userVisiblePrompt: String,
+        faeLocalPrompt: String,
+        shareablePrompt: String,
+        containsLocalOnlyContext: Bool,
+        shareableExport: CoworkExportPacket? = nil
+    ) {
+        self.userVisiblePrompt = userVisiblePrompt
+        self.faeLocalPrompt = faeLocalPrompt
+        self.shareablePrompt = shareablePrompt
+        self.containsLocalOnlyContext = containsLocalOnlyContext
+        self.shareableExport = shareableExport
+    }
 }
 
 enum WorkWithFaeRemoteExecutionPolicy: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
@@ -1056,13 +1066,19 @@ enum WorkWithFaeWorkspaceStore {
     ) -> WorkWithFaePreparedPrompt {
         let trimmedPrompt = userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let priorConversation = formattedConversationHistory(from: state.conversationMessages)
+        let shareableExport = buildShareableExportPacket(
+            userPrompt: trimmedPrompt,
+            state: state,
+            focusedPreview: focusedPreview
+        )
         let hasExtraContext = state.selectedDirectoryPath != nil || !state.attachments.isEmpty || focusedPreview != nil
         guard hasExtraContext || priorConversation != nil else {
             return WorkWithFaePreparedPrompt(
                 userVisiblePrompt: trimmedPrompt,
                 faeLocalPrompt: trimmedPrompt,
-                shareablePrompt: trimmedPrompt,
-                containsLocalOnlyContext: false
+                shareablePrompt: shareableExport.renderedPrompt,
+                containsLocalOnlyContext: shareableExport.containsLocalOnlyContext,
+                shareableExport: shareableExport
             )
         }
 
@@ -1070,19 +1086,12 @@ enum WorkWithFaeWorkspaceStore {
             "[WORK WITH FAE CONTEXT]",
             "Use this workspace context to ground your answer. Prefer the selected workspace and attached files before asking the user to re-explain.",
         ]
-        var shareableLines: [String] = [
-            "[WORK WITH FAE CONTEXT]",
-            "Use explicitly attached items as grounding. Do not assume access to the full local workspace unless the user pasted or attached it here.",
-        ]
         var containsLocalOnlyContext = false
 
         if let priorConversation {
             localLines.append("Recent conversation:")
             localLines.append(priorConversation)
-            shareableLines.append("Recent conversation:")
-            shareableLines.append(priorConversation)
             localLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
-            shareableLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
         }
 
         if let selectedDirectoryPath = state.selectedDirectoryPath {
@@ -1100,25 +1109,20 @@ enum WorkWithFaeWorkspaceStore {
 
         if !state.attachments.isEmpty {
             localLines.append("Attached items:")
-            shareableLines.append("Attached items:")
             for attachment in state.attachments.prefix(12) {
                 switch attachment.kind {
                 case .text:
                     localLines.append("- text: \(attachment.displayName)")
-                    shareableLines.append("- text: \(attachment.displayName)")
                     if let inlineText = attachment.inlineText {
                         let snippet = String(inlineText.prefix(1200))
                         localLines.append("  snippet: \(snippet)")
-                        shareableLines.append("  snippet: \(snippet)")
                     }
                 case .image:
                     let line = "- image: \(attachment.displayName) @ \(attachment.path ?? "unknown")"
                     localLines.append(line)
-                    shareableLines.append(line)
                 case .file:
                     let line = "- file: \(attachment.displayName) @ \(attachment.path ?? "unknown")"
                     localLines.append(line)
-                    shareableLines.append(line)
                 }
             }
         }
@@ -1137,34 +1141,143 @@ enum WorkWithFaeWorkspaceStore {
             }
             localLines.append("Prioritize this focused item when answering if it appears relevant.")
 
-            if focusedPreview.source == .attachment {
-                shareableLines.append("Focused item:")
-                shareableLines.append("- title: \(focusedPreview.title)")
-                if let subtitle = focusedPreview.subtitle {
-                    shareableLines.append("- type: \(subtitle)")
-                }
-                if let path = focusedPreview.path {
-                    shareableLines.append("- path: \(path)")
-                }
-                if let textPreview = focusedPreview.textPreview, !textPreview.isEmpty {
-                    shareableLines.append("- preview:\n\(String(textPreview.prefix(2400)))")
-                }
-                shareableLines.append("Prioritize this focused item when answering if it appears relevant.")
-            } else {
+            if focusedPreview.source != .attachment {
                 containsLocalOnlyContext = true
             }
         }
 
         localLines.append("[/WORK WITH FAE CONTEXT]")
         localLines.append(trimmedPrompt)
-        shareableLines.append("[/WORK WITH FAE CONTEXT]")
-        shareableLines.append(trimmedPrompt)
 
         return WorkWithFaePreparedPrompt(
             userVisiblePrompt: trimmedPrompt,
             faeLocalPrompt: localLines.joined(separator: "\n"),
-            shareablePrompt: shareableLines.joined(separator: "\n"),
-            containsLocalOnlyContext: containsLocalOnlyContext
+            shareablePrompt: shareableExport.renderedPrompt,
+            containsLocalOnlyContext: containsLocalOnlyContext || shareableExport.containsLocalOnlyContext,
+            shareableExport: shareableExport
+        )
+    }
+
+    private static func buildShareableExportPacket(
+        userPrompt: String,
+        state: WorkWithFaeWorkspaceState,
+        focusedPreview: WorkWithFaePreview?
+    ) -> CoworkExportPacket {
+        var sections: [CoworkExportSection] = []
+        var excludedDataClasses: Set<CoworkExportDataClass> = []
+        var excludedContext: [String] = []
+
+        if !state.conversationMessages.isEmpty {
+            excludedDataClasses.insert(.privateLocalOnly)
+            appendUnique("recent conversation history", to: &excludedContext)
+        }
+
+        if state.selectedDirectoryPath != nil {
+            excludedDataClasses.insert(.workspaceConfidential)
+            appendUnique("workspace root and indexed file inventory", to: &excludedContext)
+        }
+
+        if !state.attachments.isEmpty {
+            var lines = ["Attached items:"]
+            var transforms: [CoworkExportTransform] = [.userSelected]
+            var handles: [String] = []
+
+            for attachment in state.attachments.prefix(12) {
+                let handle = attachmentHandle(for: attachment)
+                handles.append(handle)
+
+                switch attachment.kind {
+                case .text:
+                    lines.append("- text: \(attachment.displayName)")
+                    if let inlineText = attachment.inlineText {
+                        let snippet = String(inlineText.prefix(1200))
+                        lines.append("  snippet: \(snippet)")
+                    }
+                    transforms.append(.truncated)
+                case .image:
+                    lines.append("- image: \(attachment.displayName)")
+                    if attachment.path != nil {
+                        transforms.append(.pathStripped)
+                        excludedDataClasses.insert(.workspaceConfidential)
+                        appendUnique("absolute attachment path metadata", to: &excludedContext)
+                    }
+                case .file:
+                    lines.append("- file: \(attachment.displayName)")
+                    if attachment.path != nil {
+                        transforms.append(.pathStripped)
+                        excludedDataClasses.insert(.workspaceConfidential)
+                        appendUnique("absolute attachment path metadata", to: &excludedContext)
+                    }
+                }
+            }
+
+            if lines.count > 1 {
+                sections.append(
+                    CoworkExportSection(
+                        id: "attachments",
+                        kind: .attachmentSummary,
+                        dataClass: .shareableContext,
+                        transforms: deduplicatedTransforms(transforms),
+                        artifactHandle: handles.isEmpty ? nil : handles.joined(separator: ","),
+                        content: lines.joined(separator: "\n")
+                    )
+                )
+            }
+        }
+
+        if let focusedPreview, focusedPreview.source == .attachment {
+            var lines = [
+                "Focused attachment:",
+                "- title: \(focusedPreview.title)",
+            ]
+            var transforms: [CoworkExportTransform] = [.userSelected]
+
+            if let subtitle = focusedPreview.subtitle {
+                lines.append("- type: \(subtitle)")
+            }
+            if focusedPreview.path != nil {
+                transforms.append(.pathStripped)
+                excludedDataClasses.insert(.workspaceConfidential)
+                appendUnique("focused attachment path metadata", to: &excludedContext)
+            }
+            if let textPreview = focusedPreview.textPreview, !textPreview.isEmpty {
+                lines.append("- preview:\n\(String(textPreview.prefix(2400)))")
+                transforms.append(.truncated)
+            }
+            lines.append("Prioritize this focused attachment when answering if it appears relevant.")
+
+            sections.append(
+                CoworkExportSection(
+                    id: "focused_attachment",
+                    kind: .focusedAttachment,
+                    dataClass: .shareableContext,
+                    transforms: deduplicatedTransforms(transforms),
+                    artifactHandle: attachmentHandle(for: focusedPreview.title),
+                    content: lines.joined(separator: "\n")
+                )
+            )
+        } else if focusedPreview != nil {
+            excludedDataClasses.insert(.workspaceConfidential)
+            appendUnique("focused workspace file preview", to: &excludedContext)
+        }
+
+        sections.append(
+            CoworkExportSection(
+                id: "user_prompt",
+                kind: .userPrompt,
+                dataClass: .generalPublic,
+                transforms: [.trimmed],
+                artifactHandle: nil,
+                content: userPrompt
+            )
+        )
+
+        return CoworkExportPacket(
+            destinationTrustTier: .thirdPartyCloud,
+            mode: .redactedRemote,
+            sections: sections,
+            excludedDataClasses: excludedDataClasses.sorted { $0.rawValue < $1.rawValue },
+            excludedContext: excludedContext
         )
     }
 
@@ -1197,5 +1310,32 @@ enum WorkWithFaeWorkspaceStore {
             return String(trimmed.prefix(maxCharacters))
         }
         return nil
+    }
+
+    private static func attachmentHandle(for attachment: WorkWithFaeAttachment) -> String {
+        attachmentHandle(for: attachment.displayName, fallback: attachment.id.uuidString)
+    }
+
+    private static func attachmentHandle(for title: String, fallback: String = "") -> String {
+        let slug = title.lowercased()
+            .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
+            .joined()
+            .replacingOccurrences(of: "--+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let suffix = String(fallback.prefix(8)).lowercased()
+        if slug.isEmpty {
+            return suffix.isEmpty ? "attachment" : "attachment-\(suffix)"
+        }
+        return suffix.isEmpty ? "attachment-\(slug)" : "attachment-\(slug)-\(suffix)"
+    }
+
+    private static func deduplicatedTransforms(_ transforms: [CoworkExportTransform]) -> [CoworkExportTransform] {
+        var seen: Set<CoworkExportTransform> = []
+        return transforms.filter { seen.insert($0).inserted }
+    }
+
+    private static func appendUnique(_ value: String, to values: inout [String]) {
+        guard !values.contains(value) else { return }
+        values.append(value)
     }
 }

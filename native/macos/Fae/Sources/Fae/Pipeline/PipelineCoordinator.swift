@@ -44,7 +44,8 @@ actor PipelineCoordinator {
     private let capture: AudioCaptureManager
     private let playback: AudioPlaybackManager
     private let sttEngine: MLXSTTEngine
-    private let llmEngine: MLXLLMEngine
+    private let llmEngine: any LLMEngine
+    private let conciergeEngine: (any LLMEngine)?
     private let ttsEngine: any TTSEngine
     private let config: FaeConfig
     private let conversationState: ConversationStateTracker
@@ -361,6 +362,7 @@ actor PipelineCoordinator {
         let systemPrompt: String
         let turnContextPrefix: String?
         let nativeTools: [[String: any Sendable]]?
+        let route: TurnLLMRoute
         let actionSource: ActionSource
         let playsThinkingTone: Bool
         let allowsAudibleOutput: Bool
@@ -376,6 +378,11 @@ actor PipelineCoordinator {
 
     /// Task-scoped capability grant consumed by the broker.
     private var activeCapabilityTicket: CapabilityTicket?
+
+    /// Tracks tool call signatures (name + args) already executed this user turn.
+    /// Prevents the LLM looping on identical web_search / calendar calls.
+    /// Reset at the start of each new user turn (turnCount == 0, isToolFollowUp == false).
+    private var seenToolCallSignatures: Set<String> = []
 
     // MARK: - Proactive Awareness
 
@@ -416,7 +423,8 @@ actor PipelineCoordinator {
         capture: AudioCaptureManager,
         playback: AudioPlaybackManager,
         sttEngine: MLXSTTEngine,
-        llmEngine: MLXLLMEngine,
+        llmEngine: any LLMEngine,
+        conciergeEngine: (any LLMEngine)? = nil,
         ttsEngine: any TTSEngine,
         config: FaeConfig,
         conversationState: ConversationStateTracker,
@@ -436,6 +444,7 @@ actor PipelineCoordinator {
         self.playback = playback
         self.sttEngine = sttEngine
         self.llmEngine = llmEngine
+        self.conciergeEngine = conciergeEngine
         self.ttsEngine = ttsEngine
         self.config = config
         self.conversationState = conversationState
@@ -882,6 +891,7 @@ actor PipelineCoordinator {
     func resetConversation() async {
         await conversationState.clear()
         await llmEngine.resetSession()
+        await conciergeEngine?.resetSession()
         currentTurnGenerationContext = nil
         NSLog("PipelineCoordinator: conversation history cleared (test reset)")
     }
@@ -889,6 +899,57 @@ actor PipelineCoordinator {
     private func synchronizeLLMSession() async {
         let history = await conversationState.history
         await llmEngine.synchronizeSession(history: history)
+        await conciergeEngine?.synchronizeSession(history: history)
+    }
+
+    private func currentDualModelPlan() -> FaeConfig.LocalModelStackPlan {
+        FaeConfig.recommendedLocalModelStack(config: config)
+    }
+
+    private func selectLLMRoute(
+        userText: String,
+        isToolFollowUp: Bool,
+        proactiveContext: ProactiveRequestContext?,
+        allowsAudibleOutput: Bool,
+        toolsAvailable: Bool
+    ) async -> TurnLLMRoute {
+        let conciergeLoaded = await conciergeEngine?.isLoaded ?? false
+        let route = TurnRoutingPolicy.decide(
+            userText: userText,
+            dualModelEnabled: currentDualModelPlan().dualModelActive,
+            conciergeLoaded: conciergeLoaded,
+            allowConciergeDuringVoiceTurns: config.llm.allowConciergeDuringVoiceTurns,
+            isToolFollowUp: isToolFollowUp,
+            proactive: proactiveContext != nil,
+            allowsAudibleOutput: allowsAudibleOutput,
+            toolsAvailable: toolsAvailable
+        )
+
+        let fallbackReason: String = {
+            if !currentDualModelPlan().dualModelActive { return "single_model_mode" }
+            if !conciergeLoaded { return "concierge_unavailable" }
+            if route == .operatorModel && toolsAvailable { return "operator_tool_priority" }
+            return "none"
+        }()
+        publishRouteDiagnostics(route: route, fallbackReason: fallbackReason)
+        return route
+    }
+
+    private func publishRouteDiagnostics(route: TurnLLMRoute, fallbackReason: String) {
+        UserDefaults.standard.set(route.rawValue, forKey: "fae.runtime.current_route")
+        UserDefaults.standard.set(fallbackReason, forKey: "fae.runtime.fallback_reason")
+        Task {
+            await modelManager?.publishLocalStackStatus(currentRoute: route.rawValue)
+        }
+    }
+
+    private func engine(for route: TurnLLMRoute) -> any LLMEngine {
+        switch route {
+        case .operatorModel:
+            return llmEngine
+        case .conciergeModel:
+            return conciergeEngine ?? llmEngine
+        }
     }
 
     // MARK: - Gate Control
@@ -3000,9 +3061,10 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "Generation started id=\(generationID.uuidString.prefix(8))")
         }
 
-        // Reset computer-use step counter at the start of each user turn.
+        // Reset computer-use step counter and duplicate-tool guard at the start of each user turn.
         if !isToolFollowUp {
             computerUseStepCount = 0
+            seenToolCallSignatures = []
         }
 
         await refreshDegradedModeIfNeeded(context: "before_generation")
@@ -3060,8 +3122,16 @@ actor PipelineCoordinator {
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
-            let includeTools = toolMode != "off" && !ownerEnrollmentRequired
             let visibleToolNames = proactiveContext?.allowedTools
+            let toolsAvailableForTurn = toolMode != "off" && !ownerEnrollmentRequired
+            let selectedRoute = await selectLLMRoute(
+                userText: userText,
+                isToolFollowUp: isToolFollowUp,
+                proactiveContext: proactiveContext,
+                allowsAudibleOutput: allowsAudibleOutput,
+                toolsAvailable: toolsAvailableForTurn
+            )
+            let includeTools = toolsAvailableForTurn && selectedRoute == .operatorModel
 
             let hiddenToolsReason: String? = {
                 guard !includeTools else { return nil }
@@ -3070,6 +3140,9 @@ actor PipelineCoordinator {
                 }
                 if ownerEnrollmentRequired {
                     return "owner_enrollment_required"
+                }
+                if selectedRoute == .conciergeModel {
+                    return "concierge_route"
                 }
                 return "unknown"
             }()
@@ -3193,6 +3266,7 @@ actor PipelineCoordinator {
                 systemPrompt: systemPrompt,
                 turnContextPrefix: turnContextPrefix,
                 nativeTools: nativeTools,
+                route: selectedRoute,
                 actionSource: proactiveContext?.source ?? turnSource,
                 playsThinkingTone: playsThinkingTone,
                 allowsAudibleOutput: allowsAudibleOutput
@@ -3289,10 +3363,11 @@ actor PipelineCoordinator {
         var spokenTextThisTurn = ""
         var visibleTextThisTurn = ""
         // Stability-first speech mode: keep live text streaming, but defer TTS
-        // until the turn completes so the TTS engine sees larger coherent text spans.
-        // KokoroPythonTTSEngine runs in a separate process on CPU (ONNX Runtime),
-        // so MLX Metal contention is no longer a concern.  We still defer to get
-        // better prosody from longer text spans rather than sentence fragments.
+        // until the turn completes. KokoroMLXTTSEngine produces a single-pass
+        // synthesis (non-streaming), so deferring lets it see complete sentence
+        // spans and produce better prosody than synthesising mid-stream fragments.
+        // The sentence queue below then synthesises sentence-by-sentence so
+        // time-to-first-audio scales with sentence length, not full response length.
         let preferFinalOnlySpeech = true
         var deferredSentenceQueue: [String] = []
         var streamedToolCalls: [ToolCall] = []
@@ -3399,12 +3474,23 @@ actor PipelineCoordinator {
         if forceSuppressThinking {
             debugLog(debugConsole, .pipeline, "Retrying turn with thinking suppression forced")
         }
-        debugLog(debugConsole, .pipeline, "LLM generating (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount), sysPrompt≈\(systemPromptTokens) tok, ctx=\(config.llm.contextSizeTokens), suppressThinking=\(options.suppressThinking))")
+        debugLog(debugConsole, .pipeline, "LLM generating route=\(generationContext.route.rawValue) (maxTokens=\(options.maxTokens), history=\(history.count) msgs, turn=\(turnCount), sysPrompt≈\(systemPromptTokens) tok, ctx=\(config.llm.contextSizeTokens), suppressThinking=\(options.suppressThinking))")
         if options.maxTokens < 1024 {
             debugLog(debugConsole, .pipeline, "⚠️ maxTokens=\(options.maxTokens) is very low — tool call JSON needs ~200-500 tokens")
         }
 
-        let tokenStream = await llmEngine.generate(
+        let activeLLMEngine = engine(for: generationContext.route)
+        let inferenceClass: InferenceWorkClass = generationContext.route == .operatorModel
+            ? .operatorLLM
+            : .conciergeLLM
+        await InferencePriorityController.shared.begin(inferenceClass)
+        defer {
+            Task {
+                await InferencePriorityController.shared.end(inferenceClass)
+            }
+        }
+
+        let tokenStream = await activeLLMEngine.generate(
             messages: history,
             systemPrompt: systemPrompt,
             options: options
@@ -3653,9 +3739,12 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .qa, "Model raw response preview: \(responsePreview)")
 
         // Prefer structured MLX tool calls; fall back to legacy text parsing.
-        let toolCalls = streamedToolCalls.isEmpty
-            ? Self.parseToolCalls(from: fullResponse)
-            : streamedToolCalls
+        let toolCalls: [ToolCall] = {
+            guard generationContext.route == .operatorModel else { return [] }
+            return streamedToolCalls.isEmpty
+                ? Self.parseToolCalls(from: fullResponse)
+                : streamedToolCalls
+        }()
         if !toolCalls.isEmpty {
             debugLog(debugConsole, .pipeline, "Found \(toolCalls.count) tool call(s): \(toolCalls.map(\.name).joined(separator: ", "))")
         } else if fullResponse.contains("<tool_call>") {
@@ -4015,11 +4104,19 @@ actor PipelineCoordinator {
             let inputPreview = String(inputJSON.prefix(220))
             debugLog(debugConsole, .toolCall, "id=\(callId.prefix(8)) name=\(call.name) args=\(inputPreview)")
 
-            var result = await executeTool(
-                call,
-                proactiveContext: proactiveContext,
-                generationContextOverride: generationContext
-            )
+            let callSignature = "\(call.name)|\(inputJSON)"
+            var result: ToolResult
+            if seenToolCallSignatures.contains(callSignature) {
+                debugLog(debugConsole, .toolCall, "⚠️ Duplicate tool call blocked: \(call.name) — returning cached notice")
+                result = .success("You already retrieved these results earlier in this conversation. Please synthesize your response using the data already provided rather than repeating the same search.")
+            } else {
+                seenToolCallSignatures.insert(callSignature)
+                result = await executeTool(
+                    call,
+                    proactiveContext: proactiveContext,
+                    generationContextOverride: generationContext
+                )
+            }
             if call.name == "camera", proactiveContext?.taskId == "camera_presence_check", !result.isError {
                 let userPresent = Self.inferUserPresentFromCameraOutput(result.output)
                 await proactivePresenceHandler?(userPresent)

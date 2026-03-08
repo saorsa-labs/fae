@@ -4,6 +4,19 @@ import Foundation
 
 @MainActor
 final class CoworkWorkspaceController: ObservableObject {
+    struct BlockedRemoteEgressRequest: Sendable, Equatable {
+        enum SubmissionMode: Sendable, Equatable {
+            case singleAgent
+            case compare(triggeredAutomatically: Bool)
+        }
+
+        let prompt: String
+        let preparedPrompt: WorkWithFaePreparedPrompt
+        let targetAgents: [WorkWithFaeAgentProfile]
+        let destinationList: String
+        let submissionMode: SubmissionMode
+        let createdAt: Date
+    }
     @Published var selectedSection: CoworkWorkspaceSection = .workspace
     @Published var draft: String = ""
     @Published private(set) var snapshot: CoworkWorkspaceSnapshot = .empty
@@ -19,11 +32,13 @@ final class CoworkWorkspaceController: ObservableObject {
     @Published private(set) var providerKind: CoworkLLMProviderKind = .faeLocalhost
     @Published private(set) var providerStatus: String = "Connecting to Fae localhost"
     @Published private(set) var latestConsensusResults: [WorkWithFaeConsensusResult] = []
+    @Published private(set) var blockedRemoteEgressRequest: BlockedRemoteEgressRequest?
 
     private let faeCore: FaeCore
     private let conversation: ConversationController
     private let runtimeDescriptor: FaeLocalRuntimeDescriptor?
     private let chatProvider: (any CoworkLLMProvider)?
+    private let remoteModelCatalog = CoworkRemoteModelCatalog.shared
     private var observations: [NSObjectProtocol] = []
     private var refreshTask: Task<Void, Never>?
     private var refreshTimer: Timer?
@@ -47,6 +62,7 @@ final class CoworkWorkspaceController: ObservableObject {
         schedulePeriodicRefresh()
         applySelectedWorkspaceState()
         refreshNow()
+        refreshRemoteModelCatalogInBackground()
     }
 
     deinit {
@@ -210,6 +226,10 @@ final class CoworkWorkspaceController: ObservableObject {
     }
 
     func submitDraft() {
+        submitDraft(allowBlockedRemoteEgressOverride: false)
+    }
+
+    func submitDraft(allowBlockedRemoteEgressOverride: Bool) {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         let preparedPrompt = WorkWithFaeWorkspaceStore.preparePrompt(
@@ -220,14 +240,28 @@ final class CoworkWorkspaceController: ObservableObject {
 
         if shouldCompareOnSubmit {
             let participants = consensusParticipants
-            if blockRemoteEgressIfNeeded(for: preparedPrompt, targetAgents: participants) {
+            if blockRemoteEgressIfNeeded(
+                for: preparedPrompt,
+                targetAgents: participants,
+                prompt: prompt,
+                submissionMode: .compare(triggeredAutomatically: true),
+                allowOverride: allowBlockedRemoteEgressOverride
+            ) {
                 return
             }
             runConsensus(prompt: prompt, preparedPrompt: preparedPrompt, triggeredAutomatically: true)
             return
         }
 
-        if let executionAgent, blockRemoteEgressIfNeeded(for: preparedPrompt, targetAgents: [executionAgent]) {
+        if let executionAgent,
+           blockRemoteEgressIfNeeded(
+                for: preparedPrompt,
+                targetAgents: [executionAgent],
+                prompt: prompt,
+                submissionMode: .singleAgent,
+                allowOverride: allowBlockedRemoteEgressOverride
+           )
+        {
             return
         }
 
@@ -235,6 +269,10 @@ final class CoworkWorkspaceController: ObservableObject {
     }
 
     func compareDraftAcrossAgents() {
+        compareDraftAcrossAgents(allowBlockedRemoteEgressOverride: false)
+    }
+
+    func compareDraftAcrossAgents(allowBlockedRemoteEgressOverride: Bool) {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
 
@@ -253,7 +291,13 @@ final class CoworkWorkspaceController: ObservableObject {
         }
 
         let participants = consensusParticipants
-        if blockRemoteEgressIfNeeded(for: preparedPrompt, targetAgents: participants) {
+        if blockRemoteEgressIfNeeded(
+            for: preparedPrompt,
+            targetAgents: participants,
+            prompt: prompt,
+            submissionMode: .compare(triggeredAutomatically: false),
+            allowOverride: allowBlockedRemoteEgressOverride
+        ) {
             return
         }
 
@@ -369,7 +413,7 @@ final class CoworkWorkspaceController: ObservableObject {
         NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
     }
 
-    func createWorkspace(named name: String, agentID: String? = nil, directoryURL: URL? = nil) {
+    func createWorkspace(named name: String, agentID: String? = nil, modelIdentifier: String? = nil, directoryURL: URL? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -382,9 +426,17 @@ final class CoworkWorkspaceController: ObservableObject {
             state.indexedFiles = WorkWithFaeWorkspaceStore.scanDirectory(standardizedURL)
         }
 
+        let effectiveAgentID = agentID ?? selectedAgent?.id ?? WorkWithFaeAgentProfile.faeLocal.id
+        if let requestedModel = modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !requestedModel.isEmpty,
+           let agentIndex = workspaceRegistry.agents.firstIndex(where: { $0.id == effectiveAgentID })
+        {
+            workspaceRegistry.agents[agentIndex].modelIdentifier = requestedModel
+        }
+
         let workspace = WorkWithFaeWorkspaceRecord(
             name: trimmed,
-            agentID: agentID ?? selectedAgent?.id ?? WorkWithFaeAgentProfile.faeLocal.id,
+            agentID: effectiveAgentID,
             sortOrder: (workspaceRegistry.workspaces.map(\.sortOrder).max() ?? -1) + 1,
             policy: selectedWorkspace?.policy ?? .default,
             state: state
@@ -764,11 +816,19 @@ final class CoworkWorkspaceController: ObservableObject {
     }
 
     func testConnection(for agent: WorkWithFaeAgentProfile) async throws -> CoworkProviderConnectionReport {
-        try await testConnection(
+        let report = try await testConnection(
             providerKind: agent.providerKind,
             baseURL: agent.baseURL,
             apiKey: agent.credentialKey.flatMap(CredentialManager.retrieve(key:))
         )
+        cacheDiscoveredModels(report.discoveredModels, for: agent)
+        return report
+    }
+
+    func cachedModels(for agent: WorkWithFaeAgentProfile, maxAge: TimeInterval? = nil) -> [String] {
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+        let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(agent.baseURL, fallback: preset.defaultBaseURL)
+        return remoteModelCatalog.cachedModels(providerPresetID: preset.id, baseURL: baseURL, maxAge: maxAge)
     }
 
     func chooseWorkspaceDirectory() {
@@ -884,6 +944,49 @@ final class CoworkWorkspaceController: ObservableObject {
         persistWorkspaceState()
     }
 
+    func sendBlockedRemoteEgressRequestAnyway() {
+        guard let blocked = blockedRemoteEgressRequest else { return }
+        guard blocked.targetAgents.allSatisfy({ blockedAgent in
+            agents.contains(where: { $0.id == blockedAgent.id })
+        }) else {
+            blockedRemoteEgressRequest = nil
+            providerStatus = "Blocked request expired"
+            prependActivity(
+                title: "Blocked request cleared",
+                detail: "The selected remote agents changed before the override could be sent.",
+                tone: .warning
+            )
+            return
+        }
+
+        blockedRemoteEgressRequest = nil
+        providerStatus = "Override confirmed — sending blocked request"
+        prependActivity(
+            title: "Remote send override confirmed",
+            detail: "Sending the previously blocked request to \(blocked.destinationList).",
+            tone: .warning
+        )
+
+        switch blocked.submissionMode {
+        case .singleAgent:
+            guard let targetAgent = blocked.targetAgents.first else { return }
+            runSingleAgentSubmission(prompt: blocked.prompt, preparedPrompt: blocked.preparedPrompt, executionAgent: targetAgent)
+        case .compare(let triggeredAutomatically):
+            runConsensus(
+                prompt: blocked.prompt,
+                preparedPrompt: blocked.preparedPrompt,
+                participants: blocked.targetAgents,
+                triggeredAutomatically: triggeredAutomatically
+            )
+        }
+    }
+
+    func dismissBlockedRemoteEgressRequest() {
+        guard blockedRemoteEgressRequest != nil else { return }
+        blockedRemoteEgressRequest = nil
+        providerStatus = "Held locally"
+    }
+
     func inspectScreen() {
         useQuickPrompt("Please use the screenshot tool to look at my current screen and help me with what is visible.")
     }
@@ -945,6 +1048,53 @@ final class CoworkWorkspaceController: ObservableObject {
         WorkWithFaeWorkspaceStore.filteredFiles(workspaceState.indexedFiles, query: workspaceSearchText)
     }
 
+    private func refreshRemoteModelCatalogInBackground() {
+        let config = FaeConfig.load()
+        let preset = CoworkBackendPresetCatalog.preset(id: config.llm.remoteProviderPreset)
+            ?? CoworkBackendPresetCatalog.preset(id: "openrouter")
+            ?? CoworkLLMProviderKind.openAICompatibleExternal.defaultPreset
+        guard preset.id == "openrouter" || preset.providerKind != .faeLocalhost else { return }
+
+        let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(config.llm.remoteBaseURL, fallback: preset.defaultBaseURL)
+        let hasFreshCache = remoteModelCatalog.cachedModels(
+            providerPresetID: preset.id,
+            baseURL: baseURL,
+            maxAge: CoworkRemoteModelCatalog.defaultFreshnessTTL
+        ).isEmpty == false
+        guard !hasFreshCache else { return }
+
+        let apiKey: String?
+        if preset.id == "openrouter" {
+            apiKey = CredentialManager.retrieve(key: "llm.openrouter.api_key")
+        } else {
+            apiKey = nil
+        }
+        guard let apiKey, !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        Task(priority: .background) { [runtimeDescriptor, remoteModelCatalog] in
+            do {
+                let report = try await CoworkProviderConnectionTester.testConnection(
+                    providerKind: preset.providerKind,
+                    runtimeDescriptor: runtimeDescriptor,
+                    baseURL: baseURL,
+                    apiKey: apiKey
+                )
+                guard report.isReachable, !report.discoveredModels.isEmpty else { return }
+                await MainActor.run {
+                    remoteModelCatalog.update(providerPresetID: preset.id, baseURL: baseURL, models: report.discoveredModels)
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func cacheDiscoveredModels(_ models: [String], for agent: WorkWithFaeAgentProfile) {
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+        let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(agent.baseURL, fallback: preset.defaultBaseURL)
+        remoteModelCatalog.update(providerPresetID: preset.id, baseURL: baseURL, models: models)
+    }
+
     private func bindConversationPersistence() {
         conversation.$messages
             .receive(on: RunLoop.main)
@@ -956,6 +1106,7 @@ final class CoworkWorkspaceController: ObservableObject {
 
     private func beginWorkspaceTurn(for prompt: String) {
         draft = ""
+        blockedRemoteEgressRequest = nil
         selectedSection = .workspace
         conversation.lastInteractionTimestamp = Date()
         conversationBindingWorkspaceID = selectedWorkspace?.id
@@ -972,13 +1123,25 @@ final class CoworkWorkspaceController: ObservableObject {
 
     private func blockRemoteEgressIfNeeded(
         for preparedPrompt: WorkWithFaePreparedPrompt,
-        targetAgents: [WorkWithFaeAgentProfile]
+        targetAgents: [WorkWithFaeAgentProfile],
+        prompt: String,
+        submissionMode: BlockedRemoteEgressRequest.SubmissionMode,
+        allowOverride: Bool
     ) -> Bool {
         let remoteAgents = targetAgents.filter { !$0.isTrustedLocal }
         guard !remoteAgents.isEmpty else { return false }
+        guard !allowOverride else { return false }
         guard SensitiveContentPolicy.shouldBlockRemoteEgress(preparedPrompt.shareablePrompt) else { return false }
 
         let destinationList = remoteAgents.map(\.backendDisplayName).joined(separator: ", ")
+        blockedRemoteEgressRequest = BlockedRemoteEgressRequest(
+            prompt: prompt,
+            preparedPrompt: preparedPrompt,
+            targetAgents: remoteAgents,
+            destinationList: destinationList,
+            submissionMode: submissionMode,
+            createdAt: Date()
+        )
         providerStatus = "Held locally — possible secret detected"
         prependActivity(
             title: "Remote send blocked",
@@ -987,7 +1150,7 @@ final class CoworkWorkspaceController: ObservableObject {
         )
         conversation.appendMessage(
             role: .assistant,
-            content: "That looks like it may contain a password, API key, token, or other secret, so I kept it on this Mac and did not send it to \(destinationList). Switch this conversation to Fae Local or remove the secret before sending."
+            content: "That looks like it may contain a password, API key, token, or other secret, so I kept it on this Mac and did not send it to \(destinationList). If this is a false positive, choose Send anyway to continue."
         )
         return true
     }
@@ -998,6 +1161,10 @@ final class CoworkWorkspaceController: ObservableObject {
             return
         }
 
+        runSingleAgentSubmission(prompt: prompt, preparedPrompt: preparedPrompt, executionAgent: executionAgent)
+    }
+
+    private func runSingleAgentSubmission(prompt: String, preparedPrompt: WorkWithFaePreparedPrompt, executionAgent: WorkWithFaeAgentProfile) {
         beginWorkspaceTurn(for: prompt)
 
         Task { [weak self] in
@@ -1067,7 +1234,15 @@ final class CoworkWorkspaceController: ObservableObject {
                 }
 
                 let response: CoworkProviderResponse
-                if let streamingProvider = provider as? any CoworkStreamingProvider {
+                if let searchProvider = provider as? any CoworkWebSearchProvider {
+                    // Use the web-search tool loop — non-streaming internally, enables
+                    // the external model to call web_search up to 3 times before replying.
+                    response = try await searchProvider.submitWithWebSearch(request: providerRequest)
+                    await MainActor.run {
+                        self.conversation.startStreaming()
+                        self.conversation.updateStreaming(text: response.content)
+                    }
+                } else if let streamingProvider = provider as? any CoworkStreamingProvider {
                     await MainActor.run {
                         self.conversation.startStreaming()
                     }
@@ -1127,7 +1302,20 @@ final class CoworkWorkspaceController: ObservableObject {
         preparedPrompt: WorkWithFaePreparedPrompt,
         triggeredAutomatically: Bool
     ) {
-        let participants = consensusParticipants
+        runConsensus(
+            prompt: prompt,
+            preparedPrompt: preparedPrompt,
+            participants: consensusParticipants,
+            triggeredAutomatically: triggeredAutomatically
+        )
+    }
+
+    private func runConsensus(
+        prompt: String,
+        preparedPrompt: WorkWithFaePreparedPrompt,
+        participants: [WorkWithFaeAgentProfile],
+        triggeredAutomatically: Bool
+    ) {
         guard !participants.isEmpty else {
             prependActivity(title: "No agents available", detail: "Add or attach an agent before comparing answers.", tone: .warning)
             return
@@ -1490,7 +1678,7 @@ final class CoworkWorkspaceController: ObservableObject {
 
 }
 
-private extension String {
+extension String {
     var nilIfEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed

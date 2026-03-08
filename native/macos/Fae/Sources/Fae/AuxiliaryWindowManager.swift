@@ -582,7 +582,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         panel.hidesOnDeactivate = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false  // macOS 26: hasShadow=true on borderless panels draws a 1px window frame; SwiftUI shadows on the shape are sufficient
         panel.isOpaque = false
         panel.ignoresMouseEvents = false
 

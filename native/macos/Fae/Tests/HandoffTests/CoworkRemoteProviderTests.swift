@@ -63,6 +63,61 @@ final class CoworkRemoteProviderTests: XCTestCase {
         XCTAssertEqual(reasoning["exclude"] as? Bool, true)
     }
 
+    func testOpenAICompatibleRequestUsesRenderedExportPacketAndMetadata() throws {
+        let export = CoworkExportPacket(
+            destinationTrustTier: .thirdPartyCloud,
+            mode: .redactedRemote,
+            sections: [
+                CoworkExportSection(
+                    id: "attachment_excerpt",
+                    kind: .attachmentExcerpt,
+                    dataClass: .shareableContext,
+                    transforms: [.userSelected, .pathStripped],
+                    artifactHandle: "attachment-note",
+                    content: "Attached items:\n- file: notes.txt"
+                ),
+                CoworkExportSection(
+                    id: "user_prompt",
+                    kind: .userPrompt,
+                    dataClass: .generalPublic,
+                    transforms: [.trimmed],
+                    artifactHandle: nil,
+                    content: "Summarize the note"
+                ),
+            ],
+            excludedDataClasses: [.privateLocalOnly],
+            excludedContext: ["recent conversation history"]
+        )
+        let request = CoworkProviderRequest(
+            model: "gpt-4.1",
+            preparedPrompt: WorkWithFaePreparedPrompt(
+                userVisiblePrompt: "Summarize the note",
+                faeLocalPrompt: "local prompt",
+                shareablePrompt: "legacy shareable prompt",
+                containsLocalOnlyContext: true,
+                shareableExport: export
+            ),
+            thinkingLevel: .balanced
+        )
+
+        let urlRequest = try OpenAICompatibleCoworkProvider.makeRequest(
+            baseURL: "https://api.openai.com",
+            apiKey: "secret-key",
+            request: request
+        )
+
+        let json = try XCTUnwrap(jsonObject(from: urlRequest))
+        let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.first?["content"] as? String, export.renderedPrompt)
+
+        let metadata = try XCTUnwrap(json["metadata"] as? [String: Any])
+        XCTAssertEqual(metadata["context_scope"] as? String, "redacted_shareable")
+        XCTAssertEqual(metadata["export_mode"] as? String, CoworkExportMode.redactedRemote.rawValue)
+        XCTAssertEqual(metadata["trust_tier"] as? String, CoworkExportTrustTier.thirdPartyCloud.rawValue)
+        XCTAssertEqual(metadata["applied_transforms"] as? [String], ["user_selected", "path_stripped", "trimmed", "local_context_excluded"])
+        XCTAssertEqual(metadata["excluded_context"] as? [String], ["recent conversation history"])
+    }
+
     func testReasoningHintsMapThinkingLevelsAcrossProviders() {
         let openAIFast = CoworkReasoningHints.openAICompatibleReasoning(
             baseURL: "https://openrouter.ai/api",

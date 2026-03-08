@@ -62,6 +62,14 @@ Use this checklist for any PR that adds or changes:
 - [ ] Regression test for bypass attempt included
 - [ ] Build/tests pass in CI-local run
 
+## I. Documentation and anti-drift
+
+- [ ] Canonical architecture/security doc updated in the same PR
+- [ ] User-visible behavior docs updated in the same PR when product behavior changed
+- [ ] Confirmation/review copy docs updated when approval or export-review text changed
+- [ ] Adversarial/security test plan docs updated when a new boundary or bypass surface was added
+- [ ] Docs clearly distinguish `planned`, `implemented baseline`, and `shipped` states
+
 ## Reviewer decision
 
 - [ ] Approve

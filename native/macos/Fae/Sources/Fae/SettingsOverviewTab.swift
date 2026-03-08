@@ -11,7 +11,6 @@ struct SettingsOverviewTab: View {
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
     @AppStorage("bargeInEnabled") private var bargeInEnabled: Bool = true
     @AppStorage("kvQuantEnabled") private var kvQuantEnabled: Bool = true
-    @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
 
     // System info
     @State private var systemRAM: UInt64 = 0
@@ -35,7 +34,7 @@ struct SettingsOverviewTab: View {
                     )
 
                     statusCard(
-                        title: "Model",
+                        title: "Stack",
                         value: loadedModelName,
                         icon: "cpu",
                         color: .purple
@@ -328,15 +327,15 @@ struct SettingsOverviewTab: View {
     private func loadSystemInfo() {
         systemRAM = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
 
-        // Get model name
-        if let model = UserDefaults.standard.string(forKey: "fae.loaded_model_id") {
-            loadedModelName = model.components(separatedBy: "/").last ?? model
-        } else if voiceModelPreset == "auto" {
-            // Estimate based on RAM
-            let (modelId, _) = FaeConfig.recommendedModel()
-            loadedModelName = modelId.components(separatedBy: "/").last ?? "Auto"
+        let config = FaeConfig.load()
+        let plan = FaeConfig.recommendedLocalModelStack(config: config)
+        let operatorModel = UserDefaults.standard.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
+        let conciergeModel = UserDefaults.standard.string(forKey: "fae.loaded_concierge_model_id")
+
+        if plan.dualModelActive, let conciergeModel {
+            loadedModelName = "\((operatorModel.components(separatedBy: "/").last ?? operatorModel)) + \((conciergeModel.components(separatedBy: "/").last ?? conciergeModel))"
         } else {
-            loadedModelName = voiceModelPreset
+            loadedModelName = operatorModel.components(separatedBy: "/").last ?? operatorModel
         }
     }
 

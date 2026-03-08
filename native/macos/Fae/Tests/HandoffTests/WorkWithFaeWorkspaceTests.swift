@@ -125,9 +125,11 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertFalse(prepared.shareablePrompt.contains("Project overview"))
         XCTAssertTrue(prepared.shareablePrompt.contains("Important pasted note"))
         XCTAssertTrue(prepared.shareablePrompt.contains("Summarize this project"))
+        XCTAssertEqual(prepared.shareableExport?.mode, .redactedRemote)
+        XCTAssertTrue(prepared.shareableExport?.excludedContext.contains("workspace root and indexed file inventory") == true)
     }
 
-    func testPreparePromptIncludesRecentConversationHistoryForContinuation() {
+    func testPreparePromptKeepsRecentConversationHistoryLocalByDefault() {
         let state = WorkWithFaeWorkspaceState(
             selectedDirectoryPath: nil,
             indexedFiles: [],
@@ -145,9 +147,44 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         )
 
         XCTAssertTrue(prepared.faeLocalPrompt.contains("Recent conversation:"))
-        XCTAssertTrue(prepared.shareablePrompt.contains("Recent conversation:"))
-        XCTAssertTrue(prepared.shareablePrompt.contains("Please compare these pricing options."))
+        XCTAssertFalse(prepared.shareablePrompt.contains("Recent conversation:"))
+        XCTAssertFalse(prepared.shareablePrompt.contains("Please compare these pricing options."))
+        XCTAssertTrue(prepared.shareablePrompt.contains("Context kept on this Mac:"))
+        XCTAssertTrue(prepared.shareablePrompt.contains("recent conversation history"))
         XCTAssertTrue(prepared.shareablePrompt.contains("Use OpenRouter for this next step."))
+        XCTAssertTrue(prepared.shareableExport?.excludedDataClasses.contains(.privateLocalOnly) == true)
+    }
+
+    func testPreparePromptStripsAttachmentPathMetadataFromShareablePrompt() {
+        let state = WorkWithFaeWorkspaceState(
+            selectedDirectoryPath: nil,
+            indexedFiles: [],
+            attachments: [
+                WorkWithFaeAttachment(kind: .file, displayName: "notes.txt", path: "/tmp/private/notes.txt")
+            ]
+        )
+
+        let focusedPreview = WorkWithFaePreview(
+            source: .attachment,
+            title: "notes.txt",
+            subtitle: "File attachment",
+            kind: "txt",
+            path: "/tmp/private/notes.txt",
+            textPreview: "Internal note body"
+        )
+
+        let prepared = WorkWithFaeWorkspaceStore.preparePrompt(
+            userPrompt: "Summarize the note",
+            state: state,
+            focusedPreview: focusedPreview
+        )
+
+        XCTAssertFalse(prepared.shareablePrompt.contains("/tmp/private/notes.txt"))
+        XCTAssertTrue(prepared.shareablePrompt.contains("notes.txt"))
+        XCTAssertTrue(prepared.shareablePrompt.contains("Internal note body"))
+        XCTAssertTrue(prepared.shareableExport?.appliedTransforms.contains(.pathStripped) == true)
+        XCTAssertTrue(prepared.shareableExport?.excludedContext.contains("absolute attachment path metadata") == true)
+        XCTAssertTrue(prepared.shareableExport?.excludedContext.contains("focused attachment path metadata") == true)
     }
 
     func testDefaultRegistryIncludesTrustedLocalFaeAgent() {

@@ -1,6 +1,6 @@
 # Voice Model Preset Switching (Swift Runtime)
 
-Fae runs locally on-device and supports switching **voice model presets** for the LLM.
+Fae runs locally on-device and supports switching the local **operator model preset** for the main LLM path. On supported machines, Fae can also load an optional **concierge** model for richer synthesis.
 
 ## What is supported
 
@@ -31,14 +31,19 @@ The setting is persisted in:
 
 UI path:
 
-- **Settings → Models → Voice Model**
+- **Settings → Models & Performance → Local LLM Stack**
+- legacy path: **Settings → Models → Voice Model**
 
 ## Runtime behavior
 
 - Changing the preset updates config immediately.
 - Model swap takes effect on next pipeline/model load.
 - In current app UX, restart is recommended after changing preset.
-- `auto` is currently pinned by benchmark policy to Qwen3.5-2B for every machine tier; this overrides the older RAM-tiered auto-selection behavior until benchmarking is complete.
+- `auto` is currently pinned by benchmark policy to Qwen3.5-2B for the operator model on every machine tier; this overrides the older RAM-tiered auto-selection behavior until benchmarking settles.
+- When dual-model local mode is enabled on 32+ GB systems, the current concierge default is `LiquidAI/LFM2-24B-A2B-MLX-4bit`.
+- Premium local mode now targets a **worker-backed** split: operator and concierge inference run in dedicated LLM worker processes while Kokoro remains in the main app process.
+- Inference priority is explicitly ordered as **operator > Kokoro > concierge**.
+- Runtime diagnostics for operator/concierge load state, current route, and fallback status are shown in **Settings → Diagnostics → Voice → Local model runtime**.
 
 ## Notes
 

@@ -365,8 +365,3 @@ final class FaeLocalRuntimeServer {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
-    }
-}

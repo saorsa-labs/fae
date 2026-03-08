@@ -486,6 +486,41 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(coworkView.contains("conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)"))
     }
 
+    @MainActor
+    func testPipelineAuxBridgeTracksLocalModelStackDiagnostics() {
+        let controller = PipelineAuxBridgeController()
+
+        controller.localStack = .init()
+        NotificationCenter.default.post(
+            name: .faePipelineState,
+            object: nil,
+            userInfo: [
+                "event": "pipeline.local_stack_status",
+                "payload": [
+                    "operator_loaded": true,
+                    "concierge_loaded": false,
+                    "dual_model_active": false,
+                    "current_route": "operator",
+                    "fallback_reason": "concierge_load_failed",
+                    "operator_runtime": "worker_process",
+                    "concierge_runtime": "worker_process",
+                ] as [String: Any],
+            ]
+        )
+
+        let expectation = expectation(description: "pipeline aux update")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertTrue(controller.localStack.operatorLoaded)
+        XCTAssertFalse(controller.localStack.conciergeLoaded)
+        XCTAssertEqual(controller.localStack.currentRoute, "operator")
+        XCTAssertEqual(controller.localStack.fallbackReason, "concierge_load_failed")
+        XCTAssertEqual(controller.localStack.operatorRuntime, "worker_process")
+    }
+
     private func loadRepositoryText(relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

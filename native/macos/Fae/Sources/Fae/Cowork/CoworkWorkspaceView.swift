@@ -20,6 +20,7 @@ private enum CoworkArtwork {
 private enum ModelPickerTarget {
     case agentEditor
     case selectedConversationAgent
+    case newWorkspaceAgent
 }
 
 private struct CoworkComposerTextView: NSViewRepresentable {
@@ -142,6 +143,7 @@ struct CoworkWorkspaceView: View {
     @State private var showingDeleteWorkspaceAlert = false
     @State private var newWorkspaceName = ""
     @State private var newWorkspaceAgentID = WorkWithFaeAgentProfile.faeLocal.id
+    @State private var newWorkspaceModel = ""
     @State private var newWorkspaceDirectoryURL: URL?
     @State private var renameWorkspaceName = ""
     @State private var draggedWorkspaceID: UUID?
@@ -160,7 +162,7 @@ struct CoworkWorkspaceView: View {
     @State private var showingModelPickerSheet = false
     @State private var modelPickerTarget: ModelPickerTarget = .agentEditor
     @State private var modelSearchText = ""
-    @State private var browsableModelOptions: [String] = []
+    @State private var browsableModelOptions: [CoworkModelOption] = []
     @State private var isLoadingModelPickerOptions = false
     @State private var composerHeight: CGFloat = 64
     @State private var showConsensusDetails = false
@@ -310,7 +312,7 @@ struct CoworkWorkspaceView: View {
                     .foregroundStyle(.white)
 
                 FlowLayout(spacing: 8) {
-                    headerPill(icon: controller.remoteAgentBlockedByPolicy ? "lock.shield" : "cpu", text: controller.remoteAgentBlockedByPolicy ? "Fae Local" : (controller.selectedAgent?.backendDisplayName ?? "Agent"))
+                    headerPill(icon: controller.remoteAgentBlockedByPolicy ? "lock.shield" : "cpu", text: controller.remoteAgentBlockedByPolicy ? "Fae Local" : (selectedAgentModelLabel ?? agentSummary(for: controller.selectedAgent)))
                     if controller.workspaceState.selectedDirectoryPath != nil {
                         headerPill(icon: "folder", text: "Folder attached")
                     }
@@ -456,7 +458,7 @@ struct CoworkWorkspaceView: View {
                                 .foregroundStyle(Color.white.opacity(0.68))
                                 .lineLimit(3)
                             FlowLayout(spacing: 8) {
-                                miniInfoBadge(icon: "sparkles", text: controller.selectedAgent?.backendDisplayName ?? "Fae Local")
+                                miniInfoBadge(icon: "sparkles", text: selectedAgentModelLabel ?? agentSummary(for: controller.selectedAgent))
                                 miniInfoBadge(icon: controller.isStrictLocalWorkspace ? "lock.shield" : "network", text: controller.selectedWorkspacePolicy.remoteExecution.displayName)
                                 miniInfoBadge(icon: "paperplane", text: controller.selectedWorkspacePolicy.compareBehavior.displayName)
                             }
@@ -816,6 +818,10 @@ struct CoworkWorkspaceView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
+                    if let blocked = controller.blockedRemoteEgressRequest {
+                        blockedRemoteEgressCard(blocked)
+                    }
+
                     FlowLayout(spacing: 8) {
                         Menu {
                             ForEach(FaeThinkingLevel.allCases) { level in
@@ -1290,6 +1296,8 @@ struct CoworkWorkspaceView: View {
                     Button {
                         newWorkspaceName = ""
                         newWorkspaceAgentID = controller.selectedAgent?.id ?? WorkWithFaeAgentProfile.faeLocal.id
+                        newWorkspaceModel = (controller.selectedAgent?.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty)
+                            ?? (newWorkspaceSelectedAgent?.backendPreset?.suggestedModels.first ?? "")
                         newWorkspaceDirectoryURL = nil
                         showingAddWorkspaceSheet = true
                     } label: {
@@ -1657,12 +1665,53 @@ struct CoworkWorkspaceView: View {
             TextField("Conversation name", text: $newWorkspaceName)
                 .textFieldStyle(.roundedBorder)
 
-            Picker("Model", selection: $newWorkspaceAgentID) {
+            Picker("Agent", selection: $newWorkspaceAgentID) {
                 ForEach(controller.agents) { agent in
                     Text(agent.name).tag(agent.id)
                 }
             }
             .pickerStyle(.menu)
+            .onChange(of: newWorkspaceAgentID) {
+                syncNewWorkspaceModelSelection()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Selected backend")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(newWorkspaceBackendSummary)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .lineLimit(1)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Model")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+
+                if let agent = newWorkspaceSelectedAgent {
+                    HStack(spacing: 8) {
+                        Text(newWorkspaceModelDisplayValue)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(newWorkspaceModelDisplayValue == "No model selected" ? Color.white.opacity(0.55) : Color.white.opacity(0.82))
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        if agent.providerKind != .faeLocalhost {
+                            Button("Choose") {
+                                openModelPickerForNewWorkspaceAgent()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.04))
+                    )
+                }
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Folder")
@@ -1704,6 +1753,7 @@ struct CoworkWorkspaceView: View {
                     controller.createWorkspace(
                         named: newWorkspaceName,
                         agentID: newWorkspaceAgentID,
+                        modelIdentifier: newWorkspaceModel.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
                         directoryURL: newWorkspaceDirectoryURL
                     )
                     showingAddWorkspaceSheet = false
@@ -1751,22 +1801,35 @@ struct CoworkWorkspaceView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(filteredModelOptions, id: \.self) { model in
+                    ForEach(filteredModelOptions) { option in
                         Button {
                             switch modelPickerTarget {
                             case .agentEditor:
-                                newAgentModel = model
+                                newAgentModel = option.modelIdentifier
                             case .selectedConversationAgent:
-                                controller.updateSelectedAgentModel(model)
+                                controller.updateSelectedAgentModel(option.modelIdentifier)
+                            case .newWorkspaceAgent:
+                                newWorkspaceModel = option.modelIdentifier
                             }
                             showingModelPickerSheet = false
                         } label: {
-                            HStack {
-                                Text(model)
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.white)
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(option.routeLabel)
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(Color.white.opacity(0.62))
+                                        .lineLimit(1)
+                                    Text(option.vendorModelLabel)
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(2)
+                                    Text(option.compactLabel)
+                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(Color.white.opacity(0.48))
+                                        .lineLimit(1)
+                                }
                                 Spacer()
-                                if selectedModelValue == model {
+                                if selectedModelValue == option.modelIdentifier {
                                     Image(systemName: "checkmark")
                                         .foregroundStyle(CoworkPalette.mint)
                                 }
@@ -1850,7 +1913,7 @@ struct CoworkWorkspaceView: View {
                         modelPickerTarget = .agentEditor
                         modelSearchText = ""
                         isLoadingModelPickerOptions = true
-                        browsableModelOptions = suggestedModels
+                        browsableModelOptions = modelOptions(from: suggestedModels, for: preset)
                         showingModelPickerSheet = true
                         Task {
                             do {
@@ -1866,7 +1929,7 @@ struct CoworkWorkspaceView: View {
                                         result.append(trimmed)
                                     }
                                     discoveredModels = report.discoveredModels
-                                    browsableModelOptions = merged
+                                    browsableModelOptions = modelOptions(from: merged, for: preset)
                                     isLoadingModelPickerOptions = false
                                 }
                             } catch {
@@ -2793,6 +2856,49 @@ struct CoworkWorkspaceView: View {
         )
     }
 
+    private func blockedRemoteEgressCard(_ blocked: CoworkWorkspaceController.BlockedRemoteEgressRequest) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.shield")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(CoworkPalette.amber)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Possible secret detected")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Fae kept this request on your Mac because it may contain a password, API key, token, or other secret. Nothing was sent to \(blocked.destinationList) yet. If this is a false positive, you can choose Send anyway.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.72))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+            }
+
+            HStack(spacing: 8) {
+                Button("Send anyway") {
+                    controller.sendBlockedRemoteEgressRequestAnyway()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Keep local") {
+                    controller.dismissBlockedRemoteEgressRequest()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(CoworkPalette.rose.opacity(0.14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(CoworkPalette.amber.opacity(0.35), lineWidth: 1)
+                )
+        )
+    }
+
     private func conversationControlPill(icon: String, title: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
@@ -2914,10 +3020,22 @@ struct CoworkWorkspaceView: View {
     }
 
     private var selectedAgentModelLabel: String? {
-        guard let model = controller.selectedAgent?.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty else {
+        guard let agent = controller.selectedAgent else {
             return nil
         }
+        let model = agent.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else {
+            return agent.backendDisplayName
+        }
         return model
+    }
+
+    private var newWorkspaceResolvedModelIdentifier: String {
+        let model = newWorkspaceModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !model.isEmpty {
+            return model
+        }
+        return newWorkspaceSelectedAgent?.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     private var selectedModelValue: String {
@@ -2926,6 +3044,8 @@ struct CoworkWorkspaceView: View {
             return newAgentModel
         case .selectedConversationAgent:
             return controller.selectedAgent?.modelIdentifier ?? ""
+        case .newWorkspaceAgent:
+            return newWorkspaceModel
         }
     }
 
@@ -2938,37 +3058,59 @@ struct CoworkWorkspaceView: View {
         return (presetSuggestedModels + discoveredModels).filter { seen.insert($0).inserted }
     }
 
-    private var filteredModelOptions: [String] {
-        let source = browsableModelOptions.isEmpty ? suggestedModels : browsableModelOptions
+    private var suggestedModelOptions: [CoworkModelOption] {
+        modelOptions(from: suggestedModels, for: selectedBackendPreset)
+    }
+
+    private var filteredModelOptions: [CoworkModelOption] {
+        let source = browsableModelOptions.isEmpty ? suggestedModelOptions : browsableModelOptions
         let query = modelSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return source }
-        return source.filter { $0.localizedCaseInsensitiveContains(query) }
+        return source.filter { $0.searchText.localizedCaseInsensitiveContains(query) }
     }
 
     private func openModelPickerForSelectedAgent() {
         guard let selectedAgent = controller.selectedAgent else { return }
-        modelPickerTarget = .selectedConversationAgent
+        openModelPicker(for: selectedAgent, target: .selectedConversationAgent)
+    }
+
+    private func openModelPickerForNewWorkspaceAgent() {
+        guard let agent = newWorkspaceSelectedAgent else { return }
+        openModelPicker(for: agent, target: .newWorkspaceAgent)
+    }
+
+    private func openModelPicker(for agent: WorkWithFaeAgentProfile, target: ModelPickerTarget) {
+        modelPickerTarget = target
         modelSearchText = ""
         isLoadingModelPickerOptions = true
-        let preset = selectedAgent.backendPreset ?? selectedAgent.providerKind.defaultPreset
-        browsableModelOptions = Array(([selectedAgent.modelIdentifier] + preset.suggestedModels).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }).reduce(into: [String]()) { result, item in
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+        let currentModel: String
+        switch target {
+        case .newWorkspaceAgent:
+            currentModel = newWorkspaceModel
+        case .agentEditor, .selectedConversationAgent:
+            currentModel = agent.modelIdentifier
+        }
+        let cachedModels = controller.cachedModels(for: agent, maxAge: CoworkRemoteModelCatalog.defaultFreshnessTTL)
+        let initialModels = Array(([currentModel] + preset.suggestedModels + cachedModels).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }).reduce(into: [String]()) { result, item in
             if !result.contains(item) {
                 result.append(item)
             }
         }
+        browsableModelOptions = modelOptions(from: initialModels, for: preset)
         showingModelPickerSheet = true
 
         Task {
             do {
-                let report = try await controller.testConnection(for: selectedAgent)
+                let report = try await controller.testConnection(for: agent)
                 await MainActor.run {
                     let discovered = report.discoveredModels.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                    let merged = ([selectedAgent.modelIdentifier] + preset.suggestedModels + discovered).reduce(into: [String]()) { result, item in
+                    let merged = ([currentModel] + preset.suggestedModels + discovered).reduce(into: [String]()) { result, item in
                         if !result.contains(item) {
                             result.append(item)
                         }
                     }
-                    browsableModelOptions = merged
+                    browsableModelOptions = modelOptions(from: merged, for: preset)
                     isLoadingModelPickerOptions = false
                 }
             } catch {
@@ -2977,6 +3119,44 @@ struct CoworkWorkspaceView: View {
                 }
             }
         }
+    }
+
+    private var newWorkspaceSelectedAgent: WorkWithFaeAgentProfile? {
+        controller.agents.first(where: { $0.id == newWorkspaceAgentID })
+    }
+
+    private var newWorkspaceSelectedPreset: CoworkBackendPreset? {
+        newWorkspaceSelectedAgent?.backendPreset ?? newWorkspaceSelectedAgent?.providerKind.defaultPreset
+    }
+
+    private var newWorkspaceBackendSummary: String {
+        guard let agent = newWorkspaceSelectedAgent else { return "No agent selected" }
+        let option = modelOption(for: newWorkspaceResolvedModelIdentifier, preset: newWorkspaceSelectedPreset ?? agent.providerKind.defaultPreset)
+        return option == nil ? agent.backendDisplayName : option!.vendorModelLabelWithRoute
+    }
+
+    private var newWorkspaceModelDisplayValue: String {
+        let model = newWorkspaceResolvedModelIdentifier
+        guard !model.isEmpty else { return "No model selected" }
+        guard let preset = newWorkspaceSelectedPreset else { return model }
+        return modelOption(for: model, preset: preset)?.compactLabel ?? model
+    }
+
+    private func syncNewWorkspaceModelSelection() {
+        guard let agent = newWorkspaceSelectedAgent else {
+            newWorkspaceModel = ""
+            return
+        }
+        let currentSelection = newWorkspaceModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !currentSelection.isEmpty {
+            return
+        }
+        let existing = agent.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !existing.isEmpty {
+            newWorkspaceModel = existing
+            return
+        }
+        newWorkspaceModel = (newWorkspaceSelectedPreset?.suggestedModels.first ?? "")
     }
 
     private func prepareNewAgentForm() {
@@ -3016,7 +3196,8 @@ struct CoworkWorkspaceView: View {
         guard let agent else { return "No agent" }
         let model = agent.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return agent.backendDisplayName }
-        return "\(agent.backendDisplayName) · \(model)"
+        let option = modelOption(for: model, preset: agent.backendPreset ?? agent.providerKind.defaultPreset)
+        return option?.vendorModelLabelWithRoute ?? "\(agent.backendDisplayName) · \(model)"
     }
 
     private var snapshot: CoworkWorkspaceSnapshot { controller.snapshot }
@@ -3035,7 +3216,7 @@ struct CoworkWorkspaceView: View {
     }
 
     private var workspaceHeaderSummary: String {
-        let agent = controller.remoteAgentBlockedByPolicy ? "Fae Local" : (controller.selectedAgent?.backendDisplayName ?? "Fae Local")
+        let agent = controller.remoteAgentBlockedByPolicy ? "Fae Local" : agentSummary(for: controller.selectedAgent)
         if let path = controller.workspaceState.selectedDirectoryPath {
             return "\(agent) · \(path)"
         }
@@ -3053,7 +3234,7 @@ struct CoworkWorkspaceView: View {
             return "Strict local only is active here. Remote agents stay attached but idle until you re-enable remote execution."
         }
         if let agent = controller.selectedAgent {
-            return agent.isTrustedLocal ? "Trusted local agent with memory, tools, scheduler, and approvals." : "\(agent.backendDisplayName) · \(agent.notes ?? "Remote agent profile")"
+            return agent.isTrustedLocal ? "Trusted local agent with memory, tools, scheduler, and approvals." : (agent.notes ?? "Remote agent profile")
         }
         return conversation.loadedModelLabel.isEmpty ? "Choose a folder or attach an agent to ground the workspace." : conversation.loadedModelLabel
     }
@@ -3067,6 +3248,78 @@ struct CoworkWorkspaceView: View {
         }
         return "No assistant reply yet."
     }
+}
+
+
+private func modelOptions(from models: [String], for preset: CoworkBackendPreset) -> [CoworkModelOption] {
+    var seen = Set<String>()
+    return models.compactMap { model in
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+        return modelOption(for: trimmed, preset: preset)
+    }
+}
+
+private func modelOption(for model: String, preset: CoworkBackendPreset) -> CoworkModelOption? {
+    let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    let route = preset.displayName
+    let vendor = vendorLabel(for: trimmed, preset: preset)
+    let compact = compactModelLabel(for: trimmed)
+    let vendorModel = "\(vendor) — \(compact)"
+    let routeLabel = "(\(route))"
+    return CoworkModelOption(
+        modelIdentifier: trimmed,
+        routeLabel: routeLabel,
+        vendorLabel: vendor,
+        compactLabel: compact,
+        vendorModelLabel: vendorModel,
+        vendorModelLabelWithRoute: "\(routeLabel) — \(vendorModel)",
+        searchText: [trimmed, compact, vendor, route].joined(separator: " ")
+    )
+}
+
+private func compactModelLabel(for model: String) -> String {
+    let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
+    return String(trimmed[trimmed.index(after: slash)...])
+}
+
+private func vendorLabel(for model: String, preset: CoworkBackendPreset) -> String {
+    let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    let prefix = trimmed.split(separator: "/", maxSplits: 1).first.map(String.init)?.lowercased()
+    switch prefix {
+    case "openai": return "OpenAI"
+    case "anthropic": return "Anthropic"
+    case "google": return "Google"
+    case "minimax": return "MiniMax"
+    case "meta": return "Meta"
+    case "mistralai": return "Mistral"
+    case "mistral": return "Mistral"
+    case "x-ai": return "xAI"
+    case "xai": return "xAI"
+    case "deepseek": return "DeepSeek"
+    case "qwen": return "Qwen"
+    case "liquid": return "Liquid"
+    case "cohere": return "Cohere"
+    case "perplexity": return "Perplexity"
+    case "moonshotai": return "Moonshot AI"
+    case "microsoft": return "Microsoft"
+    case "amazon": return "Amazon"
+    case .none:
+        break
+    case .some(let value):
+        return value.split(separator: "-").map { $0.capitalized }.joined(separator: "-")
+    }
+
+    if preset.id == "anthropic" {
+        return "Anthropic"
+    }
+    if preset.id == "openai" {
+        return "OpenAI"
+    }
+    return preset.displayName
 }
 
 private struct FlowLayout: Layout {

@@ -255,6 +255,27 @@ benchmark-compare model1 model2:
 # Full validation (build + test)
 check: build test
 
+# Production-focused validation for the worker-backed local runtime.
+prod-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> swift build"
+    swift build
+    echo "==> swift test list"
+    swift test list >/dev/null
+    echo "==> targeted runtime diagnostics test"
+    swift test --disable-swift-testing --filter HandoffTests.RuntimeContractTests/testPipelineAuxBridgeTracksLocalModelStackDiagnostics
+    echo "==> targeted config/runtime contract test"
+    swift test --disable-swift-testing --filter HandoffTests.RuntimeContractTests/testFaeCorePersistsThinkingLevelPatchAndConfigGet
+    echo "==> worker smoke (operator)"
+    printf '{"requestID":"prod-check-reset-op","command":"reset_session","role":"operator","modelID":null,"messages":null,"systemPrompt":null,"options":null}\n' | .build/debug/Fae --llm-worker --role operator >/dev/null
+    echo "==> worker smoke (concierge)"
+    printf '{"requestID":"prod-check-reset-con","command":"reset_session","role":"concierge","modelID":null,"messages":null,"systemPrompt":null,"options":null}\n' | .build/debug/Fae --llm-worker --role concierge >/dev/null
+    echo "==> xcodebuild build (app bundle)"
+    rm -rf .build/xcode-derived
+    xcodebuild -resolvePackageDependencies -scheme Fae -derivedDataPath .build/xcode-derived -quiet
+    xcodebuild build -scheme Fae -destination 'platform=macOS' -configuration Debug -derivedDataPath .build/xcode-derived -quiet
+
 # ─── Bundle & Sign (local development) ──────────────────────────────────────
 
 # Build app bundle and launch it.

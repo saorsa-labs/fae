@@ -242,6 +242,41 @@ Current benchmark-backed default:
 - this is an intentional temporary benchmark/default policy in `FaeConfig.recommendedModel(...)`
 - larger presets such as Qwen3.5-4B, 9B, 27B, and 35B-A3B remain available for manual selection
 
+### Benchmark reports
+
+The latest benchmark reports used to guide local model selection are checked into the repo.
+People should look at both:
+
+#### What we test
+
+- [Local model benchmark report — 2026-03-07](docs/benchmarks/local-model-eval-2026-03-07.md)
+
+This is the concrete evaluation surface we run today:
+- RAM
+- TTFT
+- throughput
+- tool-calling
+- MMLU-style mini eval
+- Fae-specific capability eval
+- assistant-fit eval (tool use, instruction following, memory discipline, tool-result handling)
+- structured output compliance for JSON / XML / YAML
+
+#### What matters for Fae
+
+- [Fae-priority local model evaluation — 2026-03-07](docs/benchmarks/fae-priority-eval-2026-03-07.md)
+
+This re-ranks models using Fae's actual product priorities:
+- tool use
+- strict instruction following
+- memory discipline
+- tool-result handling
+- speed
+- RAM efficiency
+
+#### Scoreboard / overview
+
+- [LLM benchmark overview / scoreboard](docs/benchmarks/llm-benchmarks.md)
+
 ### Pipeline
 
 The unified pipeline handles everything in a single pass — the LLM decides when to use tools via `<tool_call>` markup inline:

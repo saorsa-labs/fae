@@ -215,7 +215,12 @@ final class OnboardingController: ObservableObject {
                 }
             }
         } else {
-            let granted = calStatus == .authorized || calStatus == .fullAccess
+            let granted: Bool
+            if #available(macOS 14.0, *) {
+                granted = calStatus == .fullAccess || calStatus == .writeOnly
+            } else {
+                granted = calStatus == .authorized
+            }
             let state = granted ? "granted" : "denied"
             permissionStates["calendar"] = state
             onPermissionResult?("calendar", state)
@@ -250,7 +255,12 @@ final class OnboardingController: ObservableObject {
                 }
             }
         } else {
-            let granted = remStatus == .authorized || remStatus == .fullAccess
+            let granted: Bool
+            if #available(macOS 14.0, *) {
+                granted = remStatus == .fullAccess || remStatus == .writeOnly
+            } else {
+                granted = remStatus == .authorized
+            }
             let state = granted ? "granted" : "denied"
             permissionStates["reminders"] = state
             onPermissionResult?("reminders", state)

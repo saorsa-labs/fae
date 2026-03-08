@@ -61,7 +61,7 @@ Work with Fae supports provider-aware model setup:
 - searchable model pickers in provider setup surfaces
 - current model stays visible in the active conversation surface
 - selecting a different model updates the attached agent without resetting the thread
-- recent conversation history is included so model switches feel like one continuing conversation
+- local model switches continue with the full local thread; remote providers continue the thread using only the current exported shareable context
 
 ### Thinking levels
 
@@ -141,6 +141,26 @@ If a prompt looks like it contains:
 - similar credential material
 
 then remote egress is blocked locally and nothing is sent to the remote provider.
+
+### Current enforcement and approved hardening plan
+
+Current implemented behavior:
+
+- remote models receive only the shareable Cowork export packet rendered as prompt context, not the full local prompt
+- remote models do not get direct local tool access
+- raw recent conversation history stays local by default for remote sends
+- absolute attachment and focused-item path metadata is stripped from remote sends
+- likely credentials are blocked locally before remote send
+
+Approved next hardening steps:
+
+- replace the blunt hold/send-anyway card with a more precise export review
+- extend the export policy beyond likely credentials into richer personal/private data classes
+- keep local Fae as the only privileged principal while remote models use brokered follow-up intents
+
+Canonical technical plan:
+
+- `docs/architecture/cowork-security-and-egress-plan-2026-03-07.md`
 
 ### Shared approval model
 

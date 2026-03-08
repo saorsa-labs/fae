@@ -44,6 +44,10 @@ struct SettingsDiagnosticsTab: View {
         Array(diagnostics.recentEvents.prefix(8))
     }
 
+    private var localStack: PipelineAuxBridgeController.LocalStackDiagnostics {
+        pipelineAux.localStack
+    }
+
     private var micLevel: Double {
         min(max(pipelineAux.audioRMS * 8.0, 0.0), 1.0)
     }
@@ -167,6 +171,8 @@ struct SettingsDiagnosticsTab: View {
                 guidanceCard
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            localModelRuntimeCard
 
             recentEventsCard
         }
@@ -359,6 +365,41 @@ struct SettingsDiagnosticsTab: View {
                     title: "Merged follow-ups",
                     detail: "A semantic state of 'held' or 'merged' means the semantic turn detector saved an unfinished sentence."
                 )
+            }
+        }
+    }
+
+    private var localModelRuntimeCard: some View {
+        SettingsCard(title: "Local model runtime", icon: "cpu.fill", color: .purple) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    diagnosticMetric("Operator", value: localStack.operatorLoaded ? "Loaded" : "Not loaded")
+                    diagnosticMetric("Concierge", value: localStack.conciergeLoaded ? "Loaded" : "Fallback")
+                    diagnosticMetric("Current route", value: prettify(localStack.currentRoute))
+                    diagnosticMetric("Mode", value: localStack.dualModelActive ? "Dual" : "Single")
+                }
+
+                HStack(spacing: 8) {
+                    decisionPill("Operator: \(prettify(localStack.operatorRuntime))", color: localStack.operatorLoaded ? .green : .secondary)
+                    decisionPill("Concierge: \(prettify(localStack.conciergeRuntime))", color: localStack.conciergeLoaded ? .green : .secondary)
+                    decisionPill("Fallback: \(prettify(localStack.fallbackReason))", color: localStack.fallbackReason == "none" ? .green : .orange)
+                }
+
+                HStack(spacing: 12) {
+                    diagnosticMetric("Op restarts", value: "\(localStack.operatorWorkerRestarts)")
+                    diagnosticMetric("Con restarts", value: "\(localStack.conciergeWorkerRestarts)")
+                }
+
+                if let operatorError = localStack.operatorWorkerLastError, !operatorError.isEmpty {
+                    labeledValue("Operator error", operatorError)
+                }
+                if let conciergeError = localStack.conciergeWorkerLastError, !conciergeError.isEmpty {
+                    labeledValue("Concierge error", conciergeError)
+                }
+
+                Text("Production local mode now tracks worker-backed operator and concierge availability, the active route, restart counts, and whether Fae has fallen back to single-model behavior.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

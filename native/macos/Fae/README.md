@@ -24,6 +24,14 @@ swift test
 - First-time or clean builds may fail if SwiftPM cannot fetch remote dependencies/submodules (network/DNS required).
 - First run may require large model downloads before runtime is ready.
 
+## Benchmark reports
+
+Current benchmark docs live at the repository root so people can see both what we test and what matters for Fae:
+
+- [`../../docs/benchmarks/local-model-eval-2026-03-07.md`](../../docs/benchmarks/local-model-eval-2026-03-07.md) — what we test: RAM, TTFT, throughput, tool-calling, MMLU-style mini, Fae-capability, assistant-fit, and JSON/XML/YAML structured output
+- [`../../docs/benchmarks/fae-priority-eval-2026-03-07.md`](../../docs/benchmarks/fae-priority-eval-2026-03-07.md) — what matters for Fae: tool use, strict instruction following, memory discipline, tool-result handling, speed, and RAM efficiency
+- [`../../docs/benchmarks/llm-benchmarks.md`](../../docs/benchmarks/llm-benchmarks.md) — scoreboard / overview
+
 ## Notes
 
 - iPhone/Watch session continuation still requires matching companion targets using the same activity type/payload contract.

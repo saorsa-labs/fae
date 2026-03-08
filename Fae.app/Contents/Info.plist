@@ -1,44 +1,86 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>Fae</string>
-    <key>CFBundleDisplayName</key>
-    <string>Fae</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.saorsalabs.fae</string>
-    <key>CFBundleVersion</key>
-    <string>0.3.8</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.3.8</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleExecutable</key>
-    <string>fae</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>
-    
-    <!-- Microphone access for voice input -->
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Fae needs microphone access to hear your voice commands.</string>
-    
-    <!-- Folder access descriptions - triggers permission dialogs -->
-    <key>NSDesktopFolderUsageDescription</key>
-    <string>Fae needs access to your Desktop to help manage files when you ask.</string>
-    <key>NSDocumentsFolderUsageDescription</key>
-    <string>Fae needs access to your Documents to help manage files when you ask.</string>
-    <key>NSDownloadsFolderUsageDescription</key>
-    <string>Fae needs access to your Downloads to help manage files when you ask.</string>
-    
-    <!-- Speech recognition -->
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Fae uses speech recognition to understand your voice commands.</string>
+  <key>CFBundleDisplayName</key>
+  <string>Fae</string>
+  <key>CFBundleExecutable</key>
+  <string>Fae</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.saorsalabs.fae</string>
+  <key>CFBundleName</key>
+  <string>Fae</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.8.92</string>
+  <key>CFBundleVersion</key>
+  <string>0.8.92</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+
+  <!-- Handoff activity types -->
+  <key>NSUserActivityTypes</key>
+  <array>
+    <string>com.saorsalabs.fae.conversation</string>
+    <string>com.saorsalabs.fae.orb-state</string>
+    <string>com.saorsalabs.fae.session.handoff</string>
+  </array>
+
+  <!-- Deep link URL scheme (fae://) -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.saorsalabs.fae</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>fae</string>
+      </array>
+    </dict>
+  </array>
+
+  <!-- Multipeer Connectivity / local network (companion device relay) -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Fae uses the local network to connect with your iPhone or iPad companion app.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_fae-relay._tcp</string>
+  </array>
+
+  <!-- Privacy usage descriptions -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Fae needs microphone access to hear your voice commands.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Fae needs access to your Desktop to help manage files when you ask.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Fae needs access to your Documents to help manage files when you ask.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Fae needs access to your Downloads to help manage files when you ask.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Fae uses speech recognition to understand your voice commands.</string>
+  <key>NSContactsUsageDescription</key>
+  <string>Fae reads your contact card to personalise your experience with your name.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Fae can automate supported apps only when you explicitly request actions.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Fae needs camera access to see and describe what's in front of you when you ask.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Fae needs calendar access to help manage your schedule when you ask.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>Fae needs reminders access to help manage your tasks when you ask.</string>
+
+  <!-- Sparkle auto-update -->
+  <key>SUPublicEDKey</key>
+  <string>l2A5ko2QgGdXdquhdnTZius7+Ig92xJJhIkCoDsB7yg=</string>
+  <key>SUFeedURL</key>
+  <string></string>
 </dict>
 </plist>

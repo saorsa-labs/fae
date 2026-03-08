@@ -50,12 +50,30 @@ final class PipelineAuxBridgeController: ObservableObject {
         var recentEvents: [VoiceAttentionEvent] = []
     }
 
+    struct LocalStackDiagnostics: Sendable {
+        var operatorLoaded: Bool = false
+        var conciergeLoaded: Bool = false
+        var dualModelActive: Bool = false
+        var currentRoute: String = "operator"
+        var fallbackReason: String = "unknown"
+        var operatorRuntime: String = "in_process"
+        var conciergeRuntime: String = "in_process"
+        var operatorWorkerRestarts: Int = 0
+        var conciergeWorkerRestarts: Int = 0
+        var operatorWorkerLastError: String?
+        var conciergeWorkerLastError: String?
+        var lastUpdatedAt: Date?
+    }
+
     /// Last audio RMS level received from the pipeline (0.0–1.0).
     /// Read directly by `NativeOrbView` via SwiftUI property binding.
     @Published var audioRMS: Double = 0.0
 
     /// Latest voice attention diagnostics for the Settings > Diagnostics screen.
     @Published var voiceAttention: VoiceAttentionDiagnostics = VoiceAttentionDiagnostics()
+
+    /// Current dual-model runtime diagnostics for Settings > Diagnostics.
+    @Published var localStack: LocalStackDiagnostics = LocalStackDiagnostics()
 
     /// Native canvas store for the SwiftUI canvas window.
     /// Set by `FaeApp` during wiring.
@@ -92,6 +110,20 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     init() {
         subscribe()
+        localStack = LocalStackDiagnostics(
+            operatorLoaded: UserDefaults.standard.bool(forKey: "fae.runtime.operator_loaded"),
+            conciergeLoaded: UserDefaults.standard.bool(forKey: "fae.runtime.concierge_loaded"),
+            dualModelActive: UserDefaults.standard.bool(forKey: "fae.dual_model_active"),
+            currentRoute: UserDefaults.standard.string(forKey: "fae.runtime.current_route") ?? "operator",
+            fallbackReason: UserDefaults.standard.string(forKey: "fae.runtime.fallback_reason") ?? "unknown",
+            operatorRuntime: UserDefaults.standard.string(forKey: "fae.runtime.operator_runtime") ?? "in_process",
+            conciergeRuntime: UserDefaults.standard.string(forKey: "fae.runtime.concierge_runtime") ?? "in_process",
+            operatorWorkerRestarts: UserDefaults.standard.integer(forKey: "fae.runtime.operator_worker_restarts"),
+            conciergeWorkerRestarts: UserDefaults.standard.integer(forKey: "fae.runtime.concierge_worker_restarts"),
+            operatorWorkerLastError: UserDefaults.standard.string(forKey: "fae.runtime.operator_worker_last_error"),
+            conciergeWorkerLastError: UserDefaults.standard.string(forKey: "fae.runtime.concierge_worker_last_error"),
+            lastUpdatedAt: nil
+        )
     }
 
     deinit {
@@ -504,6 +536,9 @@ final class PipelineAuxBridgeController: ObservableObject {
             let name = payload["name"] as? String ?? "unknown"
             status = "Relationship update: \(name)"
 
+        case "pipeline.local_stack_status":
+            handleLocalStackStatus(payload: payload)
+
         default:
             break
         }
@@ -537,6 +572,23 @@ final class PipelineAuxBridgeController: ObservableObject {
         diagnostics.recentEvents.insert(event, at: 0)
         diagnostics.recentEvents = Array(diagnostics.recentEvents.prefix(20))
         voiceAttention = diagnostics
+    }
+
+    private func handleLocalStackStatus(payload: [String: Any]) {
+        localStack = LocalStackDiagnostics(
+            operatorLoaded: payload["operator_loaded"] as? Bool ?? false,
+            conciergeLoaded: payload["concierge_loaded"] as? Bool ?? false,
+            dualModelActive: payload["dual_model_active"] as? Bool ?? false,
+            currentRoute: payload["current_route"] as? String ?? "operator",
+            fallbackReason: payload["fallback_reason"] as? String ?? "unknown",
+            operatorRuntime: payload["operator_runtime"] as? String ?? "in_process",
+            conciergeRuntime: payload["concierge_runtime"] as? String ?? "in_process",
+            operatorWorkerRestarts: payload["operator_worker_restarts"] as? Int ?? 0,
+            conciergeWorkerRestarts: payload["concierge_worker_restarts"] as? Int ?? 0,
+            operatorWorkerLastError: payload["operator_worker_last_error"] as? String,
+            conciergeWorkerLastError: payload["concierge_worker_last_error"] as? String,
+            lastUpdatedAt: Date()
+        )
     }
 
     private func handleAudioLevel(rms: Double) {

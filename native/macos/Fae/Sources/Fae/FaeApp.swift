@@ -726,6 +726,23 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
 struct FaeApp: App {
     @NSApplicationDelegateAdaptor(FaeAppDelegate.self) var appDelegate
 
+    init() {
+        if CommandLine.arguments.contains("--llm-worker") {
+            let role: WorkerProcessRole = {
+                guard let index = CommandLine.arguments.firstIndex(of: "--role"),
+                      CommandLine.arguments.indices.contains(index + 1),
+                      let parsed = WorkerProcessRole(rawValue: CommandLine.arguments[index + 1])
+                else {
+                    return .operatorModel
+                }
+                return parsed
+            }()
+            let service = LLMWorkerService(role: role)
+            service.run()
+            Foundation.exit(0)
+        }
+    }
+
     var body: some Scene {
         Settings {
             SettingsView(

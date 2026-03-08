@@ -6,6 +6,9 @@ This index is the entry point for Fae's security architecture, policy, rollout, 
 
 ## Start here
 
+- [Cowork Security and Remote Egress Plan](../architecture/cowork-security-and-egress-plan-2026-03-07.md)  
+  Canonical Cowork trust model: local authority, remote export packets, brokered intents, and documentation gates.
+
 - [Security Autonomy Boundary + Execution Plan](security-autonomy-boundary-and-execution-plan.md)  
   Canonical architecture boundary: what is enforced in core code vs what belongs in skills.
 
@@ -82,7 +85,8 @@ This index is the entry point for Fae's security architecture, policy, rollout, 
 ---
 
 If you are making a security-sensitive code change, read in this order:
-1) Boundary + execution plan  
-2) Contributor guidelines  
-3) PR checklist  
-4) Adversarial test plan
+1) Cowork remote egress plan (for Cowork/export changes)  
+2) Boundary + execution plan  
+3) Contributor guidelines  
+4) PR checklist  
+5) Adversarial test plan

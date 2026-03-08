@@ -16,12 +16,8 @@ let package = Package(
         // Sparkle 2 auto-update framework (EdDSA signature verification).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         // MLX ecosystem — local ML inference on Apple Silicon.
-        // mlx-swift pinned to branch:main to override the .upToNextMinor(from:"0.30.6")
-        // constraint imposed by mlx-swift-lm. Required to pick up fixes merged after 0.30.6
-        // (e.g. wired memory race condition fix — PR #358 on mlx-swift).
-        .package(url: "https://github.com/ml-explore/mlx-swift", branch: "main"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main"),
-        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", branch: "main"),
+        .package(path: "Vendor/mlx-audio-swift"),
         // SQLite with ORM — memory store.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         // NOTE: SQLiteVec upstream removed — its CSQLiteVec C module exposes
@@ -32,8 +28,8 @@ let package = Package(
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
         // Neural Voice Activity Detection (Silero VAD v6 via CoreML).
         .package(url: "https://github.com/paean-ai/silero-vad-swift.git", from: "1.0.0"),
-        // Kokoro-82M TTS — pure Swift MLX port, no Python dependency.
-        .package(url: "https://github.com/mlalma/kokoro-ios", from: "1.0.11"),
+        // Vendored Kokoro + Misaki packages avoid dynamic duplication and resource-packaging issues.
+        .package(path: "Vendor/kokoro-ios"),
     ],
     targets: [
         .executableTarget(
@@ -64,6 +60,7 @@ let package = Package(
                 //      xcrun metallib /tmp/NebulaOrb.air -o Resources/default.metallib
                 "FogCloudOrb.metal",
                 "NebulaOrb.metal",
+                "Resources/bin/README.md",
             ],
             resources: [
                 // Individual resource entries avoid the double-nesting bug where
@@ -112,6 +109,7 @@ let package = Package(
             cSettings: [
                 .define("SQLITE_CORE"),
                 .define("SQLITE_ENABLE_FTS5"),
+                .unsafeFlags(["-Wno-shorten-64-to-32"]),
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),

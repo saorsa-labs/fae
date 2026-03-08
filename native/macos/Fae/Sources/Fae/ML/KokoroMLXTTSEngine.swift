@@ -19,8 +19,9 @@ import KokoroSwift
 ///   1. `~/Library/Application Support/fae/models/kokoro/`
 ///   2. `~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M/snapshots/*/`
 ///   3. ONNX voices dir + standalone safetensors model at app support path
-///   4. Auto-download from `hexgrad/Kokoro-82M` → saves to location 1
+///   4. Auto-download: safetensors from `prince-canuma/Kokoro-82M`, voices from `onnx-community/Kokoro-82M-v1.0-ONNX` → saves to location 1
 actor KokoroMLXTTSEngine: TTSEngine {
+    static let pinnedRevision = "f3ff3571791e39611d31c381e3a41a3af07b4987"
 
     // MARK: - State
 
@@ -97,12 +98,19 @@ actor KokoroMLXTTSEngine: TTSEngine {
     func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws {
         // Kokoro uses pre-computed style vectors; runtime voice cloning is not
         // supported. If the URL stem matches a known built-in voice, switch to it.
+        // For "fae", also check the bundled fae.bin (the cloned Fae voice).
         let stem = referenceAudioURL.deletingPathExtension().lastPathComponent
         if let vDir = voicesDir,
            let embedding = Self.loadVoiceEmbedding(voicesDir: vDir, name: stem) {
             voiceEmbedding = embedding
             voiceName = stem
             NSLog("KokoroMLXTTSEngine: voice → %@ (matched from loadVoice)", stem)
+        } else if let bundleURL = Bundle.module.url(forResource: stem, withExtension: "bin",
+                                                     subdirectory: "Voices"),
+                  let embedding = Self.loadBinFile(url: bundleURL) {
+            voiceEmbedding = embedding
+            voiceName = stem
+            NSLog("KokoroMLXTTSEngine: voice → %@ (bundled)", stem)
         } else {
             NSLog("KokoroMLXTTSEngine: loadVoice — no match for '%@', keeping current voice", stem)
         }
@@ -153,6 +161,13 @@ actor KokoroMLXTTSEngine: TTSEngine {
         voiceInstruct: String?,
         continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation
     ) async throws {
+        await InferencePriorityController.shared.begin(.kokoroTTS)
+        defer {
+            Task {
+                await InferencePriorityController.shared.end(.kokoroTTS)
+            }
+        }
+
         guard let tts = kokoroTTS else { throw KokoroMLXError.notReady }
 
         let embedding: MLXArray
@@ -201,12 +216,12 @@ actor KokoroMLXTTSEngine: TTSEngine {
 
     // MARK: - Auto-download
 
-    /// Pinned Hugging Face revision for deterministic Kokoro downloads.
-    /// Matches the local cache snapshot currently used in development.
-    static let pinnedRevision = "f3ff3571791e39611d31c381e3a41a3af07b4987"
-
-    /// Download `kokoro-v1_0.safetensors` and the 10 standard voice `.bin` files from
-    /// `hexgrad/Kokoro-82M` on HuggingFace into the app-support models directory.
+    /// Download `kokoro-v1_0.safetensors` and the 10 standard voice `.bin` files into
+    /// the app-support models directory.
+    ///
+    /// Sources:
+    /// - Model weights: `prince-canuma/Kokoro-82M` (hexgrad only publishes `.pth`, not safetensors)
+    /// - Voice embeddings: `onnx-community/Kokoro-82M-v1.0-ONNX` (raw float32 .bin format)
     ///
     /// Files are only fetched when absent — interrupted downloads resume on the next
     /// launch. The destination (`~/Library/Application Support/fae/models/kokoro/`) is
@@ -218,17 +233,18 @@ actor KokoroMLXTTSEngine: TTSEngine {
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         try fm.createDirectory(at: voicesBase, withIntermediateDirectories: true)
 
-        let hfBase = "https://huggingface.co/hexgrad/Kokoro-82M/resolve/\(pinnedRevision)/"
-
-        // Model weights (~326 MB as of v1.0).
+        // Model weights (~327 MB). hexgrad/Kokoro-82M only publishes .pth (PyTorch pickle),
+        // not safetensors. prince-canuma/Kokoro-82M provides the safetensors conversion.
         let modelDest = base.appendingPathComponent("kokoro-v1_0.safetensors")
         try await downloadFile(
-            from: URL(string: hfBase + "kokoro-v1_0.safetensors")!,
+            from: URL(string: "https://huggingface.co/prince-canuma/Kokoro-82M/resolve/\(pinnedRevision)/kokoro-v1_0.safetensors")!,
             to: modelDest,
             label: "kokoro-v1_0.safetensors"
         )
 
-        // Voice embeddings (~200 KB each, 10 standard voices).
+        // Voice embeddings (~512 KB each, raw float32 [510×1×256]).
+        // onnx-community publishes these in the .bin format KokoroSwift expects.
+        let onnxVoiceBase = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/\(pinnedRevision)/voices/"
         let knownVoices = [
             "af_aoede", "af_bella", "af_heart", "af_nicole", "af_sky",
             "bf_emma", "bf_isabella", "am_adam", "am_echo", "bm_daniel",
@@ -236,7 +252,7 @@ actor KokoroMLXTTSEngine: TTSEngine {
         for voice in knownVoices {
             let dest = voicesBase.appendingPathComponent("\(voice).bin")
             try await downloadFile(
-                from: URL(string: hfBase + "voices/\(voice).bin")!,
+                from: URL(string: onnxVoiceBase + "\(voice).bin")!,
                 to: dest,
                 label: "voices/\(voice).bin"
             )

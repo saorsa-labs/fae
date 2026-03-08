@@ -14,6 +14,9 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertNil(config.userName)
         XCTAssertEqual(config.audio.inputSampleRate, 16_000)
         XCTAssertEqual(config.llm.voiceModelPreset, "auto")
+        XCTAssertTrue(config.llm.dualModelEnabled)
+        XCTAssertEqual(config.llm.conciergeModelPreset, "auto")
+        XCTAssertEqual(config.llm.dualModelMinSystemRAMGB, 32)
         XCTAssertEqual(config.llm.remoteProviderPreset, "openrouter")
         XCTAssertEqual(config.llm.remoteBaseURL, "https://openrouter.ai/api")
         XCTAssertEqual(config.llm.remoteModel, "openai/gpt-4.1-mini")
@@ -74,6 +77,9 @@ final class FaeConfigTests: XCTestCase {
         original.llm.maxTokens = 1024
         original.llm.enableVision = true
         original.llm.voiceModelPreset = "qwen3_4b"
+        original.llm.dualModelEnabled = true
+        original.llm.conciergeModelPreset = "liquid_lfm2_24b_a2b"
+        original.llm.dualModelMinSystemRAMGB = 48
         original.llm.remoteProviderPreset = "openrouter"
         original.llm.remoteBaseURL = "https://openrouter.ai/api"
         original.llm.remoteModel = "anthropic/claude-sonnet-4"
@@ -111,6 +117,9 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.llm.maxTokens, 1024)
         XCTAssertTrue(loaded.llm.enableVision)
         XCTAssertEqual(loaded.llm.voiceModelPreset, "qwen3_4b")
+        XCTAssertTrue(loaded.llm.dualModelEnabled)
+        XCTAssertEqual(loaded.llm.conciergeModelPreset, "liquid_lfm2_24b_a2b")
+        XCTAssertEqual(loaded.llm.dualModelMinSystemRAMGB, 48)
         XCTAssertEqual(loaded.llm.remoteProviderPreset, "openrouter")
         XCTAssertEqual(loaded.llm.remoteBaseURL, "https://openrouter.ai/api")
         XCTAssertEqual(loaded.llm.remoteModel, "anthropic/claude-sonnet-4")
@@ -145,6 +154,26 @@ final class FaeConfigTests: XCTestCase {
             preset: "qwen3_vl_4b_8bit"
         )
         XCTAssertEqual(preset8bit?.modelId, "mlx-community/Qwen3-VL-4B-Instruct-8bit")
+    }
+
+    func testRecommendedLocalModelStackActivatesDualModeOnSupportedSystems() {
+        var config = FaeConfig()
+        config.llm.voiceModelPreset = "qwen3_5_2b"
+        config.llm.dualModelEnabled = true
+        config.llm.conciergeModelPreset = "auto"
+        config.llm.dualModelMinSystemRAMGB = 32
+
+        let plan = FaeConfig.recommendedLocalModelStack(
+            config: config,
+            totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024
+        )
+
+        XCTAssertEqual(plan.mode, .dualModel)
+        XCTAssertTrue(plan.dualModelEligible)
+        XCTAssertTrue(plan.dualModelActive)
+        XCTAssertEqual(plan.operatorModel.modelId, "mlx-community/Qwen3.5-2B-4bit")
+        XCTAssertEqual(plan.conciergeModel?.modelId, "LiquidAI/LFM2-24B-A2B-MLX-4bit")
+        XCTAssertEqual(plan.ttsModelId, "hexgrad/Kokoro-82M")
     }
 
     func testVisionModelPresetParsesSnakeCaseKey() throws {

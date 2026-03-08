@@ -50,8 +50,8 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  ML Engines (all MLX/CoreML, on-device):                     │
 │  ┌───────────┐ ┌────────────┐ ┌───────────┐ ┌────────────┐  │
 │  │ STT       │ │ LLM        │ │ TTS       │ │ Speaker    │  │
-│  │ Qwen3-ASR │ │ Qwen3-8B   │ │ Qwen3-TTS │ │ ECAPA-TDNN │  │
-│  │ 1.7B 4bit │ │ MLX 4bit   │ │ 1.7B bf16 │ │ Core ML    │  │
+│  │ Qwen3-ASR │ │ Qwen3-8B   │ │ Kokoro    │ │ ECAPA-TDNN │  │
+│  │ 1.7B 4bit │ │ MLX 4bit   │ │ 82M MLX   │ │ Core ML    │  │
 │  └───────────┘ └────────────┘ └───────────┘ └────────────┘  │
 │  ┌───────────┐                                               │
 │  │ VLM       │ ← on-demand, not loaded at startup            │
@@ -66,13 +66,30 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |--------|-------|-----------|-----------|---------|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3.5 (0.8B–35B-A3B) | MLX | 4-bit | Conversation, reasoning, tool use |
-| TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
+| LLM (operator) | Qwen3.5 (0.8B–35B-A3B) | MLX | 4-bit | Conversation, tool use, fast turns |
+| LLM (concierge) | LiquidAI/LFM2-24B-A2B | MLX | 4-bit | Rich synthesis: summaries, plans, long-form (32+ GB RAM only) |
+| TTS | Kokoro-82M (hexgrad) | KokoroSwift/MLX | float32 | Text-to-speech (pre-computed voice embeddings, 24 kHz) |
 | VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit/8-bit | Vision — screen + camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Auto mode selects the LLM based on system RAM (Qwen3.5 at every tier):
+### Dual-model pipeline
+
+When system RAM ≥ 32 GB and `dualModelEnabled = true`, Fae loads two local LLMs:
+
+- **Operator** — the auto-selected Qwen3.5 model (fast, tool-capable)
+- **Concierge** — `LiquidAI/LFM2-24B-A2B-MLX-4bit` (richer synthesis, no tools, 16K context)
+
+`TurnRoutingPolicy.decide()` selects the engine per turn:
+- **Always operator**: tool follow-ups, proactive queries, voice turns (unless `allowConciergeDuringVoiceTurns`), tool-biased queries (search, web, calendar, mail, bash, etc.)
+- **Concierge**: rich-response hints (summarize, explain, brainstorm, analyze, draft, plan, …) or long prompts (≥ 220 chars)
+- **Default**: operator
+
+The concierge model is loaded lazily in a background task after the main pipeline starts. If loading fails, the pipeline continues in single-model mode silently.
+
+Key files: `Pipeline/TurnRoutingPolicy.swift` (routing logic), `ML/ModelManager.swift` (`loadConciergeIfNeeded()`), `Core/FaeConfig.swift` (dual-model config + `recommendedConciergeModel()`, `isDualModelEligible()`, `recommendedLocalModelStack()`), `SettingsModelsPerformanceTab.swift` (dual-model UI toggle + concierge model picker).
+
+Auto mode selects the **operator** LLM based on system RAM (Qwen3.5 at every tier):
 - 96+ GiB → Qwen3.5-35B-A3B (65K context)
 - 80-95 GiB → Qwen3.5-35B-A3B (49K context)
 - 64-79 GiB → Qwen3.5-35B-A3B (32K context)
@@ -100,8 +117,8 @@ Single pipeline where the LLM decides tool use via `<tool_call>` markup inline �
 3. **Speaker ID** — ECAPA-TDNN embedding, owner verification
 4. **Echo suppression** — time-based + text-overlap + voice identity filtering + echo-aware barge-in gating
 5. **STT** — Qwen3-ASR transcription
-6. **LLM** — Qwen3 with inline tool calling (max 5 tool turns per query)
-7. **TTS** — Qwen3-TTS with voice cloning, sentence-level streaming
+6. **LLM** — `TurnRoutingPolicy` selects operator (Qwen3.5, tool-capable) or concierge (LFM2-24B, richer synthesis, no tools); max 5 tool turns per query
+7. **TTS** — Kokoro-82M (KokoroSwift/MLX), sentence-queued (deferred until LLM finishes, then synthesised sentence-by-sentence)
 8. **Playback** — with barge-in interruption support
 
 **Latency note:** This is not a low-latency conversational pipeline. Steps 5-7 each involve ML inference on local hardware. The LLM may chain multiple tool calls (web search, memory, file ops) before responding. Total end-to-end time ranges from ~3s (simple greetings) to ~30s (complex multi-tool queries). The orb visual state and thinking tone provide continuous user feedback throughout.
@@ -372,13 +389,14 @@ Fae can read plays, scripts, books, and news using distinct character voices.
 |------|------|
 | `Pipeline/VoiceTagParser.swift` | `VoiceSegment` + `VoiceTagStripper` — streaming `<voice>` tag parser |
 | `Tools/RoleplayTool.swift` | `RoleplayTool` (Tool protocol) + `RoleplaySessionStore` (actor) |
-| `ML/MLXTTSEngine.swift` | `synthesize(text:voiceInstruct:)` — dual-mode TTS |
+| `ML/KokoroMLXTTSEngine.swift` | Kokoro-82M TTS via KokoroSwift/MLX; pre-computed voice embeddings, 24 kHz |
+| `ML/MLXTTSEngine.swift` | Legacy Qwen3-TTS engine (mlx-audio-swift); retained but not active |
 | `Pipeline/PipelineCoordinator.swift` | Routes voice segments to TTS with per-character voices |
 | `Core/PersonalityManager.swift` | `roleplayPrompt` — LLM instructions for voice tag usage |
 
 ## Voice identity (speaker verification)
 
-ECAPA-TDNN speaker encoder (from Qwen3-TTS) runs via Core ML on the Neural Engine.
+ECAPA-TDNN speaker encoder runs via Core ML on the Neural Engine.
 Produces 1024-dim x-vector embeddings from audio for speaker verification.
 
 Speaker recognition is **always on** — no settings toggle. The ECAPA-TDNN encoder loads unconditionally when the Core ML model exists.
@@ -943,7 +961,7 @@ Since Fae is not a low-latency chatbot, continuous feedback during the thinking 
 - **Orb visual state**: transitions to `thinking` mode immediately on speech detection — the orb breathes and glows to show Fae is working.
 - **Thinking tone**: a warm ascending two-note tone (A3→C4, 300ms) plays when Fae begins thinking — audio confirmation that she heard you.
 - **Tool use indicator**: the orb shifts to `focus` state when tools are executing, so the user can distinguish thinking from active tool work.
-- **Sentence-level TTS streaming**: Fae begins speaking as soon as the first sentence is ready, rather than waiting for the full response.
+- **Sentence-queued TTS**: After LLM finishes, Fae synthesises and plays sentence 1 while sentence 2 queues. Time-to-first-audio scales with sentence length, not full response length. (Kokoro-82M is non-streaming; it synthesises one complete audio buffer per call.)
 
 These feedback mechanisms are not cosmetic — they are the primary UX that makes Fae usable despite the inherent latency of on-device ML inference.
 
@@ -985,6 +1003,11 @@ maxTokens = 512
 contextSizeTokens = 16384
 temperature = 0.7
 voiceModelPreset = "auto"
+dualModelEnabled = true
+conciergeModelPreset = "auto"   # auto = LiquidAI/LFM2-24B-A2B-MLX-4bit on 32+ GB
+dualModelMinSystemRAMGB = 32
+keepConciergeHot = true
+allowConciergeDuringVoiceTurns = true
 
 [memory]
 enabled = true
@@ -1069,7 +1092,9 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `ML/ModelManager.swift` | Loads STT, LLM, TTS, Speaker engines; on-demand VLM loading; tracks degraded mode |
 | `ML/MLXSTTEngine.swift` | Qwen3-ASR speech-to-text via mlx-swift |
 | `ML/MLXLLMEngine.swift` | Qwen3 LLM inference via mlx-swift |
-| `ML/MLXTTSEngine.swift` | Qwen3-TTS text-to-speech via mlx-audio-swift |
+| `ML/KokoroMLXTTSEngine.swift` | **Active TTS** — Kokoro-82M via KokoroSwift/MLX; pre-computed `.bin` voice embeddings |
+| `ML/KokoroPythonTTSEngine.swift` | Alternative TTS — Kokoro-82M via ONNX Runtime Python subprocess |
+| `ML/MLXTTSEngine.swift` | Legacy TTS — Qwen3-TTS via mlx-audio-swift (retained, not active) |
 | `ML/MLXVLMEngine.swift` | Qwen3-VL vision-language model inference via MLXVLM (on-demand) |
 | `ML/MLXEmbeddingEngine.swift` | Hash-384 embedding engine for semantic search |
 | `ML/CoreMLSpeakerEncoder.swift` | ECAPA-TDNN Core ML speaker embedding |
@@ -1079,7 +1104,8 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `Pipeline/PipelineCoordinator.swift` | Unified pipeline: STT → LLM (with tools) → TTS; `injectProactiveQuery()`, `ProactiveRequestContext` |
+| `Pipeline/PipelineCoordinator.swift` | Unified pipeline: STT → LLM (with tools) → TTS; dual-model routing via `TurnRoutingPolicy`; `injectProactiveQuery()`, `ProactiveRequestContext` |
+| `Pipeline/TurnRoutingPolicy.swift` | `TurnLLMRoute` enum + `TurnRoutingPolicy.decide()` — routes turns to operator or concierge model |
 | `Pipeline/EchoSuppressor.swift` | Time-based + text-overlap + voice identity echo filtering; `isInSuppression` for barge-in gating |
 | `Pipeline/VoiceActivityDetector.swift` | Voice activity detection |
 | `Pipeline/VoiceTagParser.swift` | `VoiceSegment` + `VoiceTagStripper` for multi-voice roleplay |
@@ -1184,6 +1210,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `SettingsView.swift` | TabView settings |
 | `SettingsGeneralTab.swift` | General settings (audio, barge-in toggle, window behavior) |
 | `SettingsModelsTab.swift` | Model selection and download |
+| `SettingsModelsPerformanceTab.swift` | Dual-model toggle + concierge model picker |
 | `SettingsSpeakerTab.swift` | Voice identity configuration |
 | `SettingsToolsTab.swift` | Tool mode picker + PolicyProfile selector |
 | `SettingsPersonalityTab.swift` | Personality: soul contract, custom instructions, rescue mode |
@@ -1441,3 +1468,15 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - MANIFEST.json with SHA-256 per-file integrity checksums for all three skills
   - Generated `run.py` wrapper in released tools auto-selects native → WASM → Python execution
   - Total: 14 built-in skills (was 11)
+- **v1.3.0** — Dual-model pipeline, CoWork web search, TTS switch to Kokoro, duplicate tool call guard
+  - Dual-model pipeline: operator (Qwen3.5, fast, tool-capable) + concierge (LiquidAI/LFM2-24B-A2B-MLX-4bit, rich synthesis, no tools)
+  - TurnRoutingPolicy: routes rich/long turns (summarize, brainstorm, ≥220 chars) to concierge; tool-biased and follow-up turns always to operator
+  - ModelManager: `loadConciergeIfNeeded()` — lazy background loading, silent fallback to single-model if RAM insufficient or load fails
+  - New config keys: `dualModelEnabled`, `conciergeModelPreset`, `dualModelMinSystemRAMGB`, `keepConciergeHot`, `allowConciergeDuringVoiceTurns`
+  - New types: `LocalPipelineMode`, `LocalLLMSelection`, `LocalModelStackPlan`; `recommendedLocalModelStack()` for settings overview
+  - New file: `Pipeline/TurnRoutingPolicy.swift`; new settings tab: `SettingsModelsPerformanceTab.swift`
+  - TTS switch: `KokoroMLXTTSEngine` (Kokoro-82M, KokoroSwift/MLX, pre-computed `.bin` embeddings, 24 kHz) replaces Qwen3-TTS; `MLXTTSEngine` retained as legacy
+  - Sentence-queue TTS: `deferredSentenceQueue [String]` replaces single `deferredStreamingSpeech`; each sentence enqueued separately for shorter time-to-first-audio on multi-sentence responses
+  - CoWork web search: `CoworkWebSearchProvider` protocol; both `OpenAICompatibleCoworkProvider` and `AnthropicCoworkProvider` now support native tool calling loop with `web_search` (backed by `SearchOrchestrator`); up to 3 tool turns per submission
+  - CoWork OpenRouter key fallback: `provider()` now falls back to global `llm.openrouter.api_key` when per-agent key absent
+  - Duplicate tool call guard: `seenToolCallSignatures: Set<String>` in PipelineCoordinator blocks identical tool calls within a turn; returns cached-results notice to prevent maxToolTurns loops

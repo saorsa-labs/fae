@@ -11,12 +11,12 @@ enum CoworkLLMProviderKind: String, CaseIterable, Codable, Sendable {
     case openAICompatibleExternal
     case anthropic
 
-    var trust: WorkWithFaeProviderTrust {
+    var trustTier: CoworkExportTrustTier {
         switch self {
         case .faeLocalhost:
-            return .faeLocalhost
+            return .deviceLocal
         case .openAICompatibleExternal, .anthropic:
-            return .externalOpenAICompatible
+            return .thirdPartyCloud
         }
     }
 
@@ -216,6 +216,12 @@ protocol CoworkStreamingProvider: CoworkLLMProvider {
     ) async throws -> CoworkProviderResponse
 }
 
+/// Provider that can run a web-search tool loop: the LLM may call `web_search` up to
+/// `maxToolTurns` times before producing its final text response.
+protocol CoworkWebSearchProvider: CoworkLLMProvider {
+    func submitWithWebSearch(request: CoworkProviderRequest) async throws -> CoworkProviderResponse
+}
+
 enum CoworkNetworkTransport {
     typealias Loader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     typealias Streamer = @Sendable (URLRequest) async throws -> (URLResponse, AsyncThrowingStream<String, Error>)
@@ -251,12 +257,15 @@ enum CoworkPromptEgressPolicy {
         case .faeLocalhost:
             return request.preparedPrompt.faeLocalPrompt
         case .openAICompatibleExternal, .anthropic:
-            return request.preparedPrompt.shareablePrompt
+            return request.preparedPrompt.shareableExport?.renderedPrompt ?? request.preparedPrompt.shareablePrompt
         }
     }
 
     static func statusText(for request: CoworkProviderRequest) -> String {
-        request.preparedPrompt.containsLocalOnlyContext
+        if let export = request.preparedPrompt.shareableExport, export.hasRedactions {
+            return "Local-only conversation or workspace context stayed on this Mac; only redacted shareable context was sent."
+        }
+        return request.preparedPrompt.containsLocalOnlyContext
             ? "Local-only workspace context stayed on this Mac; only shareable context was sent."
             : "Only shareable workspace context was sent."
     }
@@ -471,7 +480,7 @@ struct FaeLocalhostCoworkProvider: CoworkLLMProvider {
     }
 }
 
-struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
+struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider, CoworkWebSearchProvider {
     let baseURL: String
     let apiKey: String
 
@@ -534,15 +543,21 @@ struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvide
             "role": "user",
             "content": CoworkPromptEgressPolicy.prompt(for: .openAICompatibleExternal, request: request),
         ])
+        let exportMetadata: [String: Any] = [
+            "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
+            "context_scope": request.preparedPrompt.shareableExport?.contextScopeLabel
+                ?? (request.preparedPrompt.containsLocalOnlyContext ? "shareable_only" : "shareable"),
+            "thinking_level": request.thinkingLevel.rawValue,
+            "export_mode": request.preparedPrompt.shareableExport?.mode.rawValue ?? "legacy_prompt",
+            "trust_tier": CoworkLLMProviderKind.openAICompatibleExternal.trustTier.rawValue,
+            "applied_transforms": request.preparedPrompt.shareableExport?.appliedTransforms.map(\.rawValue) ?? [],
+            "excluded_context": request.preparedPrompt.shareableExport?.excludedContext ?? [],
+        ]
         var body: [String: Any] = [
             "model": request.model,
             "stream": stream,
             "messages": messages,
-            "metadata": [
-                "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
-                "context_scope": request.preparedPrompt.containsLocalOnlyContext ? "shareable_only" : "shareable",
-                "thinking_level": request.thinkingLevel.rawValue,
-            ],
+            "metadata": exportMetadata,
         ]
         if let reasoning = CoworkReasoningHints.openAICompatibleReasoning(
             baseURL: baseURL,
@@ -604,9 +619,118 @@ struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvide
         }
         return nil
     }
+
+    // MARK: - Web-search tool loop (CoworkWebSearchProvider)
+
+    func submitWithWebSearch(request: CoworkProviderRequest) async throws -> CoworkProviderResponse {
+        var messages: [[String: Any]] = []
+        if let sys = request.systemPrompt, !sys.isEmpty {
+            messages.append(["role": "system", "content": sys])
+        }
+        messages.append([
+            "role": "user",
+            "content": CoworkPromptEgressPolicy.prompt(for: .openAICompatibleExternal, request: request),
+        ])
+
+        for _ in 0 ..< 4 { // up to 3 tool turns + 1 final response
+            let urlRequest = try Self.makeRequestForMessages(
+                baseURL: baseURL, apiKey: apiKey,
+                messages: messages, model: request.model,
+                tools: [Self.webSearchToolDef], request: request
+            )
+            let (data, httpResp) = try await CoworkNetworkTransport.loader(urlRequest)
+            guard let httpResponse = httpResp as? HTTPURLResponse else {
+                throw CoworkProviderError.invalidResponse
+            }
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                throw CoworkProviderError.rejected(Self.errorMessage(from: data) ?? "Remote request failed.")
+            }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = json["choices"] as? [[String: Any]],
+                  let firstChoice = choices.first,
+                  let message = firstChoice["message"] as? [String: Any]
+            else {
+                throw CoworkProviderError.invalidResponse
+            }
+
+            if let toolCalls = message["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
+                // Append the assistant message (preserving tool_calls array for the follow-up turn).
+                var assistantMsg: [String: Any] = ["role": "assistant", "tool_calls": toolCalls]
+                if let c = message["content"] as? String, !c.isEmpty { assistantMsg["content"] = c }
+                messages.append(assistantMsg)
+
+                for toolCall in toolCalls {
+                    guard let callId = toolCall["id"] as? String,
+                          let fn = toolCall["function"] as? [String: Any],
+                          let fnName = fn["name"] as? String, fnName == "web_search",
+                          let argsStr = fn["arguments"] as? String,
+                          let argsData = argsStr.data(using: .utf8),
+                          let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any],
+                          let query = args["query"] as? String
+                    else { continue }
+
+                    let results = await CoworkWebSearchExecutor.search(query: query)
+                    messages.append(["role": "tool", "tool_call_id": callId, "content": results])
+                }
+            } else if let content = Self.parseContent(message["content"]) {
+                return CoworkProviderResponse(content: content, status: "completed")
+            } else {
+                throw CoworkProviderError.invalidResponse
+            }
+        }
+        throw CoworkProviderError.rejected("Web search loop exceeded maximum iterations.")
+    }
+
+    private static let webSearchToolDef: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "web_search",
+            "description": "Search the web using DuckDuckGo to find current information, news, facts, and recent events.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "query": ["type": "string", "description": "The search query"],
+                ],
+                "required": ["query"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ]
+
+    static func makeRequestForMessages(
+        baseURL: String, apiKey: String,
+        messages: [[String: Any]], model: String,
+        tools: [[String: Any]] = [],
+        request: CoworkProviderRequest
+    ) throws -> URLRequest {
+        guard let url = URL(string: CoworkProviderConnectionTester.normalizedBaseURL(
+            baseURL, fallback: CoworkLLMProviderKind.openAICompatibleExternal.defaultBaseURL
+        ))?.appendingPathComponent("v1/chat/completions") else {
+            throw CoworkProviderError.rejected("The provider URL is invalid.")
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        var body: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "messages": messages,
+        ]
+        if !tools.isEmpty {
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        }
+        if let reasoning = CoworkReasoningHints.openAICompatibleReasoning(
+            baseURL: baseURL, model: model, level: request.thinkingLevel
+        ) {
+            body["reasoning"] = reasoning
+        }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        return urlRequest
+    }
 }
 
-struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
+struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider, CoworkWebSearchProvider {
     let baseURL: String
     let apiKey: String
     let maxTokens: Int
@@ -668,6 +792,16 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        let exportMetadata: [String: Any] = [
+            "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
+            "thinking_level": request.thinkingLevel.rawValue,
+            "context_scope": request.preparedPrompt.shareableExport?.contextScopeLabel
+                ?? (request.preparedPrompt.containsLocalOnlyContext ? "shareable_only" : "shareable"),
+            "export_mode": request.preparedPrompt.shareableExport?.mode.rawValue ?? "legacy_prompt",
+            "trust_tier": CoworkLLMProviderKind.anthropic.trustTier.rawValue,
+            "applied_transforms": request.preparedPrompt.shareableExport?.appliedTransforms.map(\.rawValue) ?? [],
+            "excluded_context": request.preparedPrompt.shareableExport?.excludedContext ?? [],
+        ]
         var body: [String: Any] = [
             "model": request.model,
             "max_tokens": maxTokens,
@@ -678,10 +812,7 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
                     "content": CoworkPromptEgressPolicy.prompt(for: .anthropic, request: request),
                 ],
             ],
-            "metadata": [
-                "user_visible_prompt": request.preparedPrompt.userVisiblePrompt,
-                "thinking_level": request.thinkingLevel.rawValue,
-            ],
+            "metadata": exportMetadata,
         ]
         if let sys = request.systemPrompt, !sys.isEmpty {
             body["system"] = sys
@@ -744,6 +875,136 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider {
             return error["message"] as? String
         }
         return nil
+    }
+
+    // MARK: - Web-search tool loop (CoworkWebSearchProvider)
+
+    func submitWithWebSearch(request: CoworkProviderRequest) async throws -> CoworkProviderResponse {
+        var messages: [[String: Any]] = [
+            [
+                "role": "user",
+                "content": CoworkPromptEgressPolicy.prompt(for: .anthropic, request: request),
+            ],
+        ]
+
+        let toolDef: [String: Any] = [
+            "name": "web_search",
+            "description": "Search the web using DuckDuckGo to find current information, news, and facts.",
+            "input_schema": [
+                "type": "object",
+                "properties": [
+                    "query": ["type": "string", "description": "The search query"],
+                ],
+                "required": ["query"],
+            ] as [String: Any],
+        ]
+
+        for _ in 0 ..< 4 { // up to 3 tool turns + 1 final response
+            let urlRequest = try Self.makeRequestForMessages(
+                baseURL: baseURL, apiKey: apiKey, maxTokens: maxTokens,
+                messages: messages, model: request.model,
+                tools: [toolDef], systemPrompt: request.systemPrompt
+            )
+            let (data, httpResp) = try await CoworkNetworkTransport.loader(urlRequest)
+            guard let httpResponse = httpResp as? HTTPURLResponse else {
+                throw CoworkProviderError.invalidResponse
+            }
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                throw CoworkProviderError.rejected(Self.errorMessage(from: data) ?? "Anthropic request failed.")
+            }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let contentBlocks = json["content"] as? [[String: Any]]
+            else {
+                throw CoworkProviderError.invalidResponse
+            }
+
+            let toolUseBlocks = contentBlocks.filter { ($0["type"] as? String) == "tool_use" }
+            if !toolUseBlocks.isEmpty {
+                messages.append(["role": "assistant", "content": contentBlocks])
+
+                var toolResults: [[String: Any]] = []
+                for block in toolUseBlocks {
+                    guard let toolId = block["id"] as? String,
+                          let input = block["input"] as? [String: Any],
+                          let query = input["query"] as? String
+                    else { continue }
+                    let results = await CoworkWebSearchExecutor.search(query: query)
+                    toolResults.append([
+                        "type": "tool_result",
+                        "tool_use_id": toolId,
+                        "content": results,
+                    ])
+                }
+                if !toolResults.isEmpty {
+                    messages.append(["role": "user", "content": toolResults])
+                }
+            } else {
+                let content = contentBlocks.compactMap { block -> String? in
+                    guard (block["type"] as? String) == "text" else { return nil }
+                    return block["text"] as? String
+                }.joined(separator: "\n")
+                guard !content.isEmpty else { throw CoworkProviderError.invalidResponse }
+                return CoworkProviderResponse(content: content, status: "completed")
+            }
+        }
+        throw CoworkProviderError.rejected("Web search loop exceeded maximum iterations.")
+    }
+
+    static func makeRequestForMessages(
+        baseURL: String, apiKey: String, maxTokens: Int,
+        messages: [[String: Any]], model: String,
+        tools: [[String: Any]] = [],
+        systemPrompt: String? = nil
+    ) throws -> URLRequest {
+        guard let url = URL(string: CoworkProviderConnectionTester.normalizedBaseURL(
+            baseURL, fallback: CoworkLLMProviderKind.anthropic.defaultBaseURL
+        ))?.appendingPathComponent("v1/messages") else {
+            throw CoworkProviderError.rejected("The Anthropic URL is invalid.")
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "messages": messages,
+        ]
+        if let sys = systemPrompt, !sys.isEmpty {
+            body["system"] = sys
+        }
+        if !tools.isEmpty {
+            body["tools"] = tools
+        }
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        return urlRequest
+    }
+}
+
+/// Thin wrapper around SearchOrchestrator used inside the CoWork external-provider web-search loop.
+private enum CoworkWebSearchExecutor {
+    private static let orchestrator = SearchOrchestrator()
+
+    static func search(query: String, maxResults: Int = 5) async -> String {
+        var config = SearchConfig.default
+        config.maxResults = maxResults
+        do {
+            let results = try await orchestrator.search(query: query, config: config)
+            if results.isEmpty { return "No web results found for \"\(query)\"." }
+            var output = "## Web Search Results: \"\(query)\"\n\n"
+            for (i, result) in results.prefix(maxResults).enumerated() {
+                output += "\(i + 1). **\(result.title)**\n"
+                output += "   URL: \(result.url)\n"
+                if !result.snippet.isEmpty {
+                    output += "   \(result.snippet)\n"
+                }
+                output += "\n"
+            }
+            return output
+        } catch {
+            return "Web search failed: \(error.localizedDescription)"
+        }
     }
 }
 

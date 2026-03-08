@@ -253,27 +253,39 @@ _bundle-app:
     # Copy executable
     cp "$BUILD/Fae" "$BUNDLE/Contents/MacOS/Fae"
 
-    # Copy Sparkle framework
+    # Copy Sparkle framework (lives in top-level Products dir)
     cp -R "$BUILD/Sparkle.framework" "$BUNDLE/Contents/Frameworks/"
 
+    # Copy all SPM dynamic frameworks from PackageFrameworks/ (MLX, MLXNN, KokoroSwift, etc.)
+    PKG_FW="$BUILD/PackageFrameworks"
+    if [ -d "$PKG_FW" ]; then
+        for fw in "$PKG_FW"/*.framework; do
+            [ -d "$fw" ] || continue
+            FNAME=$(basename "$fw")
+            [ "$FNAME" = "Sparkle.framework" ] && continue
+            cp -R "$fw" "$BUNDLE/Contents/Frameworks/"
+            echo "  → Embedded $FNAME"
+        done
+    fi
+
     # Copy all SPM resource bundles (Fae_Fae, mlx-swift_Cmlx, etc.)
-    for bundle_dir in "$BUILD"/*.bundle; do
-        if [ -d "$bundle_dir" ]; then
-            BNAME=$(basename "$bundle_dir")
-            cp -R "$bundle_dir" "$BUNDLE/Contents/Resources/"
-            echo "  → Copied $BNAME"
+    for bundle_dir in "$BUILD"/*.bundle "$PKG_FW"/*.bundle; do
+        [ -d "$bundle_dir" ] || continue
+        BNAME=$(basename "$bundle_dir")
+        [ -d "$BUNDLE/Contents/Resources/$BNAME" ] && continue
+        cp -R "$bundle_dir" "$BUNDLE/Contents/Resources/"
+        echo "  → Copied $BNAME"
+    done
+
+    # Fix rpaths: remove absolute xcode build-dir paths baked in at compile time,
+    # add @executable_path/../Frameworks so dyld finds the embedded frameworks.
+    BINARY="$BUNDLE/Contents/MacOS/Fae"
+    while IFS= read -r rp; do
+        if [[ "$rp" == /Users/* ]] || [[ "$rp" == /var/* ]]; then
+            install_name_tool -delete_rpath "$rp" "$BINARY" 2>/dev/null || true
         fi
-    done
-
-    # Ensure rpath for Sparkle framework
-    install_name_tool -add_rpath "@executable_path/../Frameworks" \
-        "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
-
-    # Remove absolute rpaths left by xcodebuild — cause SIGABRT on launch
-    # when the app bundle is not at the exact build path.
-    for rp in $(otool -l "$BUNDLE/Contents/MacOS/Fae" | grep "path " | awk '{print $2}' | grep -v "^@" | grep -v "^/usr/lib"); do
-        install_name_tool -delete_rpath "$rp" "$BUNDLE/Contents/MacOS/Fae" 2>/dev/null || true
-    done
+    done < <(otool -l "$BINARY" | awk '/LC_RPATH/{found=1} found && /path /{print $2; found=0}')
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$BINARY" 2>/dev/null || true
 
     # Info.plist with version substitution
     VERSION=$(cat "$(git rev-parse --show-toplevel)/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.8.0")
@@ -292,6 +304,7 @@ _sign-bundle:
     BUNDLE="{{_app_bundle}}"
     ENT="{{_entitlements}}"
     security unlock-keychain -p "${KEYCHAIN_PASSWORD:-password}" "$KC" 2>/dev/null || true
+    # Sign Sparkle sub-components first (inside-out)
     for xpc in "$BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices"/*.xpc; do
         [ -d "$xpc" ] && codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" "$xpc"
     done
@@ -300,6 +313,13 @@ _sign-bundle:
             "$BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
     codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
         "$BUNDLE/Contents/Frameworks/Sparkle.framework"
+    # Sign all other embedded frameworks (MLX, MLXNN, KokoroSwift, etc.)
+    for fw in "$BUNDLE/Contents/Frameworks"/*.framework; do
+        [ -d "$fw" ] || continue
+        FNAME=$(basename "$fw")
+        [ "$FNAME" = "Sparkle.framework" ] && continue
+        codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" "$fw"
+    done
     codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
         --entitlements "$ENT" "$BUNDLE"
     echo "✓ Signed: $BUNDLE"

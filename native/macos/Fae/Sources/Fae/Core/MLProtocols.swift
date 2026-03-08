@@ -65,7 +65,8 @@ extension LLMEngine {
 
 /// Text-to-speech engine protocol.
 ///
-/// Implementations: `MLXTTSEngine` (Phase 1, Qwen3-TTS via mlx-audio-swift).
+/// Active implementation: `KokoroMLXTTSEngine` (Kokoro-82M via KokoroSwift/MLX).
+/// Legacy: `MLXTTSEngine` (Qwen3-TTS via mlx-audio-swift) — retained but not active.
 protocol TTSEngine: Actor {
     func load(modelID: String) async throws
     func loadVoice(referenceAudioURL: URL, referenceText: String?) async throws
