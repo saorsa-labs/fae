@@ -371,22 +371,35 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// - Parameter force: When `true`, bypass the "already seen" guard. Used after
     ///   enrollment completes so the user always sees the ready page post-enrollment.
     private func transitionToReadyCanvas(force: Bool = false) {
-        // On 2nd+ launches the startup canvas experience is complete — skip entirely
-        // unless forced (e.g. after enrollment).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
+            self?.finishStartupCanvasTransition(force: force)
+        }
+    }
+
+    /// Finalize the one-time startup canvas flow after the crawl delay.
+    ///
+    /// When first-launch enrollment is active, the main window already exposes the
+    /// owner setup path. In that state the startup canvas should step aside instead
+    /// of lingering on the frozen "First Contact" page.
+    func finishStartupCanvasTransition(force: Bool = false) {
         if !force, UserDefaults.standard.bool(forKey: Self.hasShownStartupCanvasKey) {
             return
         }
+        guard hasShownLoadingCanvas else { return }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
-            guard let self, self.hasShownLoadingCanvas, !self.enrollmentModeActive else { return }
-            // Mark startup canvas as seen — skip on all future launches.
-            UserDefaults.standard.set(true, forKey: Self.hasShownStartupCanvasKey)
-            self.canvasController?.setContent(LoadingCanvasContent.readyExperience())
+        UserDefaults.standard.set(true, forKey: Self.hasShownStartupCanvasKey)
 
-            // Auto-hide the canvas after 20s if the user hasn't interacted with it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
-                self?.auxiliaryWindows?.hideCanvas()
-            }
+        if enrollmentModeActive {
+            canvasController?.clear()
+            auxiliaryWindows?.hideCanvas()
+            return
+        }
+
+        canvasController?.setContent(LoadingCanvasContent.readyExperience())
+
+        // Auto-hide the canvas after 20s if the user hasn't interacted with it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+            self?.auxiliaryWindows?.hideCanvas()
         }
     }
 

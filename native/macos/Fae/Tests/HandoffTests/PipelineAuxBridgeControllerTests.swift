@@ -4,6 +4,11 @@ import XCTest
 @MainActor
 final class PipelineAuxBridgeControllerTests: XCTestCase {
 
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "fae.hasShownStartupCanvas")
+        super.tearDown()
+    }
+
     func testVoiceAttentionEventUpdatesDiagnosticsSnapshot() async throws {
         let controller = PipelineAuxBridgeController()
 
@@ -37,5 +42,36 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
         XCTAssertEqual(controller.voiceAttention.lastWakeScore ?? 0, 0.91, accuracy: 0.0001)
         XCTAssertEqual(controller.voiceAttention.lastSemanticState, "merged")
         XCTAssertEqual(controller.voiceAttention.recentEvents.count, 1)
+    }
+
+    func testStartupCanvasClearsWhenEnrollmentIsActive() async throws {
+        UserDefaults.standard.removeObject(forKey: "fae.hasShownStartupCanvas")
+
+        let controller = PipelineAuxBridgeController()
+        let canvas = CanvasController()
+        controller.canvasController = canvas
+
+        NotificationCenter.default.post(
+            name: .faeRuntimeProgress,
+            object: nil,
+            userInfo: ["stage": "stt"]
+        )
+        NotificationCenter.default.post(
+            name: .faePipelineState,
+            object: nil,
+            userInfo: [
+                "event": "pipeline.enrollment_started",
+                "payload": [:] as [String: Any],
+            ]
+        )
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        controller.finishStartupCanvasTransition()
+
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "fae.hasShownStartupCanvas"))
+        XCTAssertFalse(canvas.isActivityMode)
+        XCTAssertEqual(canvas.htmlContent, "")
+        XCTAssertFalse(canvas.isVisible)
     }
 }
