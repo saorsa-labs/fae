@@ -484,7 +484,9 @@ actor SQLiteMemoryStore {
     private func ftsSearch(query: String, limit: Int, includeInactive: Bool) throws -> [MemoryRecord] {
         try dbQueue.read { db in
             // Escape FTS5 special characters and form a simple query.
-            let ftsQuery = tokenizeForSearch(query).joined(separator: " OR ")
+            let ftsQuery = tokenizeForSearch(query)
+                .map(Self.quotedFTSToken)
+                .joined(separator: " OR ")
             guard !ftsQuery.isEmpty else { return [] }
 
             let statusFilter = includeInactive ? "" : "AND r.status = 'active'"
@@ -499,6 +501,11 @@ actor SQLiteMemoryStore {
             let rows = try Row.fetchAll(db, sql: sql, arguments: [ftsQuery, limit])
             return rows.map { Self.recordFromRow($0) }
         }
+    }
+
+    private static func quotedFTSToken(_ token: String) -> String {
+        let escaped = token.replacingOccurrences(of: "\"", with: "\"\"")
+        return "\"\(escaped)\""
     }
 
     // MARK: - List

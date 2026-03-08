@@ -1,5 +1,6 @@
 import Foundation
 import MLXLMCommon
+import Darwin
 
 private enum WorkerLLMError: LocalizedError {
     case executableUnavailable
@@ -42,7 +43,11 @@ enum WorkerStreamWatchdogPhase: Sendable {
 }
 
 struct WorkerStreamWatchdogPolicy {
-    static let initialResponseTimeoutNanoseconds: UInt64 = 45_000_000_000
+    // Tool-rich prompts on the production 9B operator can spend well over 45s
+    // in first-token prefill after a worker restart. Keep the active-stream
+    // watchdog tight, but give first-token generation enough headroom to avoid
+    // false-positive worker resets on legitimate tool turns.
+    static let initialResponseTimeoutNanoseconds: UInt64 = 120_000_000_000
     static let activeStreamTimeoutNanoseconds: UInt64 = 15_000_000_000
 
     static func timeout(for phase: WorkerStreamWatchdogPhase) -> UInt64 {
@@ -59,14 +64,16 @@ actor WorkerLLMEngine: LLMEngine {
     private let role: WorkerProcessRole
     private var process: Process?
     private var stdinHandle: FileHandle?
-    private var stdoutHandle: FileHandle?
+    private var responseFileURL: URL?
     private var readTask: Task<Void, Never>?
     private var commandContinuations: [String: CheckedContinuation<Void, Error>] = [:]
     private var pendingCommandTimeouts: [String: Task<Void, Never>] = [:]
     private var streamContinuations: [String: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation] = [:]
     private var streamWatchdogs: [String: Task<Void, Never>] = [:]
+    private var streamWatchdogGenerations: [String: UInt64] = [:]
     private var lastLoadedModelID: String?
     private var restartCount: Int = 0
+    private var launchGeneration: UInt64 = 0
     private let commandTimeoutNanoseconds: UInt64 = 30_000_000_000
 
     private(set) var isLoaded: Bool = false
@@ -152,41 +159,59 @@ actor WorkerLLMEngine: LLMEngine {
     }
 
     func synchronizeSession(history: [LLMMessage]) async {
-        do {
-            try await ensureProcess()
-            try await sendAwaitingAck(
-                LLMWorkerRequest(
-                    requestID: UUID().uuidString,
-                    command: "sync_session",
-                    role: role,
-                    modelID: nil,
-                    messages: history.map(WorkerLLMMessage.init),
-                    systemPrompt: nil,
-                    options: nil
-                )
-            )
-        } catch {
-            NSLog("WorkerLLMEngine[%@]: sync_session failed: %@", role.rawValue, error.localizedDescription)
-        }
+        _ = history
+        // Session sync is a cache-reuse hint in MLXLLMEngine, not a correctness requirement.
+        // Keep worker-backed generation reliable by avoiding an extra cross-process round trip
+        // on every conversation update.
     }
 
     func resetSession() async {
-        do {
-            try await ensureProcess()
-            try await sendAwaitingAck(
-                LLMWorkerRequest(
-                    requestID: UUID().uuidString,
-                    command: "reset_session",
-                    role: role,
-                    modelID: nil,
-                    messages: nil,
-                    systemPrompt: nil,
-                    options: nil
-                )
-            )
-        } catch {
-            NSLog("WorkerLLMEngine[%@]: reset_session failed: %@", role.rawValue, error.localizedDescription)
+        // Reset is only needed to clear reusable session cache state. Worker-backed turns send the
+        // full message list every time, so skipping this round trip is safer than stalling the live
+        // conversation loop on a non-essential worker command.
+    }
+
+    func shutdown() async {
+        for (_, timeoutTask) in pendingCommandTimeouts {
+            timeoutTask.cancel()
         }
+        pendingCommandTimeouts.removeAll()
+
+        for (_, watchdog) in streamWatchdogs {
+            watchdog.cancel()
+        }
+        streamWatchdogs.removeAll()
+        streamWatchdogGenerations.removeAll()
+
+        for (_, continuation) in commandContinuations {
+            continuation.resume(throwing: WorkerLLMError.transportUnavailable)
+        }
+        commandContinuations.removeAll()
+
+        for (_, continuation) in streamContinuations {
+            continuation.finish(throwing: WorkerLLMError.transportUnavailable)
+        }
+        streamContinuations.removeAll()
+
+        readTask?.cancel()
+        readTask = nil
+
+        if let process, process.isRunning {
+            process.terminate()
+        }
+        process = nil
+
+        try? stdinHandle?.close()
+        stdinHandle = nil
+        if let responseFileURL {
+            try? FileManager.default.removeItem(at: responseFileURL)
+        }
+        responseFileURL = nil
+
+        isLoaded = false
+        loadState = .notStarted
+        persistWorkerState(lastError: nil)
+        NSLog("WorkerLLMEngine[%@]: shutdown complete", role.rawValue)
     }
 
     private func registerStreamContinuation(
@@ -216,10 +241,12 @@ actor WorkerLLMEngine: LLMEngine {
 
     private func armStreamWatchdog(for requestID: String, phase: WorkerStreamWatchdogPhase) {
         streamWatchdogs[requestID]?.cancel()
+        let generation = (streamWatchdogGenerations[requestID] ?? 0) &+ 1
+        streamWatchdogGenerations[requestID] = generation
         let timeout = WorkerStreamWatchdogPolicy.timeout(for: phase)
         streamWatchdogs[requestID] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: timeout)
-            await self?.handleStreamTimeout(requestID: requestID, phase: phase)
+            await self?.handleStreamTimeout(requestID: requestID, phase: phase, generation: generation)
         }
     }
 
@@ -231,9 +258,11 @@ actor WorkerLLMEngine: LLMEngine {
     private func clearStreamTracking(requestID: String) {
         streamWatchdogs[requestID]?.cancel()
         streamWatchdogs.removeValue(forKey: requestID)
+        streamWatchdogGenerations.removeValue(forKey: requestID)
     }
 
-    private func handleStreamTimeout(requestID: String, phase: WorkerStreamWatchdogPhase) {
+    private func handleStreamTimeout(requestID: String, phase: WorkerStreamWatchdogPhase, generation: UInt64) {
+        guard streamWatchdogGenerations[requestID] == generation else { return }
         guard let continuation = streamContinuations.removeValue(forKey: requestID) else { return }
         clearStreamTracking(requestID: requestID)
         let error = WorkerLLMError.streamTimeout(phase.description)
@@ -267,24 +296,36 @@ actor WorkerLLMEngine: LLMEngine {
 
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = ["--llm-worker", "--role", role.rawValue]
+        let responseFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-worker-\(role.rawValue)-\(UUID().uuidString).ndjson")
+        FileManager.default.createFile(atPath: responseFileURL.path, contents: nil)
+
+        process.arguments = [
+            "--llm-worker",
+            "--role", role.rawValue,
+            "--response-file", responseFileURL.path,
+        ]
 
         let stdin = Pipe()
-        let stdout = Pipe()
         process.standardInput = stdin
-        process.standardOutput = stdout
+        process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.standardError
 
         try process.run()
 
         self.process = process
         self.stdinHandle = stdin.fileHandleForWriting
-        self.stdoutHandle = stdout.fileHandleForReading
+        self.responseFileURL = responseFileURL
+        launchGeneration &+= 1
+        let activeLaunchGeneration = launchGeneration
         self.readTask?.cancel()
         self.readTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            await self.readResponses(from: stdout.fileHandleForReading)
+            await Self.readResponses(from: responseFileURL, launchGeneration: activeLaunchGeneration, owner: self)
         }
+        // Model residency belongs to the worker subprocess, not the parent actor.
+        // A freshly launched worker always starts empty and must reload any prior model.
+        self.isLoaded = false
 
         if lastLoadedModelID != nil {
             restartCount += 1
@@ -292,7 +333,7 @@ actor WorkerLLMEngine: LLMEngine {
         persistWorkerState(lastError: nil)
         NSLog("WorkerLLMEngine[%@]: launched worker pid=%d", role.rawValue, process.processIdentifier)
 
-        if let lastLoadedModelID, !isLoaded {
+        if let lastLoadedModelID {
             try await sendAwaitingAck(
                 LLMWorkerRequest(
                     requestID: UUID().uuidString,
@@ -334,6 +375,7 @@ actor WorkerLLMEngine: LLMEngine {
         pendingCommandTimeouts[requestID]?.cancel()
         pendingCommandTimeouts.removeValue(forKey: requestID)
         let error = WorkerLLMError.commandTimeout(command)
+        NSLog("WorkerLLMEngine[%@]: timeout request=%@ command=%@", role.rawValue, requestID, command)
         continuation.resume(throwing: error)
         persistWorkerState(lastError: error.localizedDescription)
     }
@@ -355,29 +397,88 @@ actor WorkerLLMEngine: LLMEngine {
         try stdinHandle.write(contentsOf: lineData)
     }
 
-    private func readResponses(from stdout: FileHandle) async {
+    private static func readResponses(
+        from responseFileURL: URL,
+        launchGeneration: UInt64,
+        owner: WorkerLLMEngine
+    ) async {
+        var buffered = Data()
+        await owner.logReaderStart(launchGeneration: launchGeneration)
+        guard let fileHandle = try? FileHandle(forReadingFrom: responseFileURL) else {
+            await owner.handleWorkerTermination(
+                error: WorkerLLMError.workerFailed("Unable to open worker response file"),
+                launchGeneration: launchGeneration
+            )
+            return
+        }
+        defer { try? fileHandle.close() }
+
+        var offset: UInt64 = 0
         do {
-            for try await line in stdout.bytes.lines {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
-                guard let data = trimmed.data(using: .utf8) else { continue }
-                let response = try JSONDecoder().decode(LLMWorkerResponse.self, from: data)
-                handle(response: response)
+            while !Task.isCancelled {
+                try fileHandle.seek(toOffset: offset)
+                let chunk = try fileHandle.readToEnd() ?? Data()
+                if chunk.isEmpty {
+                    if !(await owner.isWorkerProcessRunning(launchGeneration: launchGeneration)) {
+                        break
+                    }
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                    continue
+                }
+                offset += UInt64(chunk.count)
+                await owner.logReaderChunk(launchGeneration: launchGeneration, byteCount: chunk.count)
+                buffered.append(chunk)
+
+                while let newlineIndex = buffered.firstIndex(of: 0x0A) {
+                    let lineData = buffered.subdata(in: buffered.startIndex..<newlineIndex)
+                    buffered.removeSubrange(buffered.startIndex...newlineIndex)
+
+                    guard let line = String(data: lineData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                          !line.isEmpty,
+                          let data = line.data(using: .utf8)
+                    else {
+                        continue
+                    }
+
+                    await owner.logReaderLine(launchGeneration: launchGeneration, line: line)
+                    let response = try JSONDecoder().decode(LLMWorkerResponse.self, from: data)
+                    await owner.handle(response: response, launchGeneration: launchGeneration)
+                }
             }
         } catch {
-            handleWorkerTermination(error: error)
+            await owner.handleWorkerTermination(error: error, launchGeneration: launchGeneration)
             return
         }
 
-        handleWorkerTermination(error: nil)
+        await owner.handleWorkerTermination(error: nil, launchGeneration: launchGeneration)
     }
 
-    private func handle(response: LLMWorkerResponse) {
+    private func logReaderStart(launchGeneration: UInt64) {
+        NSLog("WorkerLLMEngine[%@]: reader start launch=%llu", role.rawValue, launchGeneration)
+    }
+
+    private func logReaderChunk(launchGeneration: UInt64, byteCount: Int) {
+        NSLog("WorkerLLMEngine[%@]: reader chunk launch=%llu bytes=%d", role.rawValue, launchGeneration, byteCount)
+    }
+
+    private func logReaderLine(launchGeneration: UInt64, line: String) {
+        NSLog("WorkerLLMEngine[%@]: reader line launch=%llu %@", role.rawValue, launchGeneration, line)
+    }
+
+    private func isWorkerProcessRunning(launchGeneration: UInt64) -> Bool {
+        guard launchGeneration == self.launchGeneration else { return false }
+        return process?.isRunning == true
+    }
+
+    private func handle(response: LLMWorkerResponse, launchGeneration: UInt64) {
+        guard launchGeneration == self.launchGeneration else { return }
         pendingCommandTimeouts[response.requestID]?.cancel()
         pendingCommandTimeouts.removeValue(forKey: response.requestID)
 
         switch response.type {
         case "ack":
+            NSLog("WorkerLLMEngine[%@]: ack request=%@", role.rawValue, response.requestID)
             if let continuation = commandContinuations.removeValue(forKey: response.requestID) {
                 continuation.resume()
             }
@@ -421,13 +522,17 @@ actor WorkerLLMEngine: LLMEngine {
         }
     }
 
-    private func handleWorkerTermination(error: Error?) {
+    private func handleWorkerTermination(error: Error?, launchGeneration: UInt64) {
+        guard launchGeneration == self.launchGeneration else { return }
         let failure = error ?? WorkerLLMError.transportUnavailable
         loadState = .failed(failure.localizedDescription)
         isLoaded = false
         process = nil
         stdinHandle = nil
-        stdoutHandle = nil
+        if let responseFileURL {
+            try? FileManager.default.removeItem(at: responseFileURL)
+        }
+        responseFileURL = nil
 
         for (_, timeoutTask) in pendingCommandTimeouts {
             timeoutTask.cancel()
@@ -438,6 +543,7 @@ actor WorkerLLMEngine: LLMEngine {
             watchdog.cancel()
         }
         streamWatchdogs.removeAll()
+        streamWatchdogGenerations.removeAll()
 
         for (_, continuation) in commandContinuations {
             continuation.resume(throwing: failure)
@@ -466,9 +572,16 @@ final class LLMWorkerService {
     private let engine = MLXLLMEngine()
     private let stdoutLock = NSLock()
     private var generationTasks: [String: Task<Void, Never>] = [:]
+    private let responseHandle: FileHandle?
 
-    init(role: WorkerProcessRole) {
+    init(role: WorkerProcessRole, responseFileURL: URL?) {
         self.role = role
+        if let responseFileURL {
+            self.responseHandle = try? FileHandle(forWritingTo: responseFileURL)
+            _ = try? self.responseHandle?.seekToEnd()
+        } else {
+            self.responseHandle = nil
+        }
     }
 
     func run() {
@@ -626,6 +739,7 @@ final class LLMWorkerService {
     }
 
     private func sendAck(requestID: String) {
+        NSLog("LLMWorkerService[%@]: send ack request=%@", role.rawValue, requestID)
         send(
             LLMWorkerResponse(
                 requestID: requestID,
@@ -640,6 +754,7 @@ final class LLMWorkerService {
     }
 
     private func sendError(requestID: String, message: String) {
+        NSLog("LLMWorkerService[%@]: send error request=%@ message=%@", role.rawValue, requestID, message)
         send(
             LLMWorkerResponse(
                 requestID: requestID,
@@ -662,7 +777,26 @@ final class LLMWorkerService {
             if let line = String(data: data, encoding: .utf8)?.appending("\n"),
                let lineData = line.data(using: .utf8)
             {
-                try FileHandle.standardOutput.write(contentsOf: lineData)
+                if let responseHandle {
+                    try responseHandle.seekToEnd()
+                    try responseHandle.write(contentsOf: lineData)
+                } else {
+                    let result = lineData.withUnsafeBytes { rawBuffer -> ssize_t in
+                        guard let baseAddress = rawBuffer.baseAddress else { return -1 }
+                        return Darwin.write(STDOUT_FILENO, baseAddress, rawBuffer.count)
+                    }
+                    if result < 0 {
+                        let err = errno
+                        NSLog("LLMWorkerService[%@]: stdout write failed errno=%d", role.rawValue, err)
+                    } else if result != lineData.count {
+                        NSLog(
+                            "LLMWorkerService[%@]: short stdout write wrote=%zd expected=%d",
+                            role.rawValue,
+                            result,
+                            lineData.count
+                        )
+                    }
+                }
             }
         } catch {
             NSLog("LLMWorkerService[%@]: failed to send response: %@", role.rawValue, error.localizedDescription)

@@ -17,6 +17,7 @@ import Network
 /// - `POST /approve`       — `{"approved":true}` → resolve pending tool approval
 /// - `GET  /approvals`     — List pending approval requests
 /// - `POST /reset`         — Clear conversation, events, and pipeline history
+/// - `POST /command`       — `{"name":"...","payload":{...}}` → FaeCore.sendCommand()
 /// - `POST /test-input`    — Trigger input-required overlay (testing only)
 @MainActor
 final class TestServer {
@@ -25,6 +26,8 @@ final class TestServer {
     private weak var debugConsole: DebugConsoleController?
     private weak var conversation: ConversationController?
     private weak var approvalOverlay: ApprovalOverlayController?
+    private var injectedTurnMuteDepth: Int = 0
+    private var listeningStateBeforeInjectedTurns: Bool?
 
     private let port: UInt16 = 7433
 
@@ -162,6 +165,8 @@ final class TestServer {
             handleApprovals(connection: connection)
         case ("POST", "/reset"):
             handleReset(connection: connection)
+        case ("POST", "/command"):
+            handleCommand(body: body, connection: connection)
         case ("POST", "/test-input"):
             handleTestInput(body: body, connection: connection)
         default:
@@ -196,15 +201,24 @@ final class TestServer {
 
         let turnId = UUID().uuidString
 
-        // Add to conversation panel (mimics ConversationController.handleUserSent)
-        conversation?.appendMessage(role: .user, content: text)
-        faeCore.injectText(text)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.beginInjectedTurnIsolation()
 
-        sendResponse(connection: connection, status: 200, body: [
-            "ok": true,
-            "injected": text,
-            "turn_id": turnId,
-        ])
+            // Add to conversation panel (mimics ConversationController.handleUserSent)
+            self.conversation?.appendMessage(role: .user, content: text)
+            faeCore.injectText(text)
+
+            Task { @MainActor [weak self] in
+                await self?.endInjectedTurnIsolationWhenIdle()
+            }
+
+            self.sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "injected": text,
+                "turn_id": turnId,
+            ])
+        }
     }
 
     private func handleStatus(connection: NWConnection) {
@@ -214,6 +228,7 @@ final class TestServer {
         let thinkingEnabled = faeCore?.thinkingEnabled ?? false
         let thinkingLevel = faeCore?.thinkingLevel.rawValue ?? FaeThinkingLevel.fast.rawValue
         let hasOwnerSetUp = faeCore?.hasOwnerSetUp ?? false
+        let isListening = conversation?.isListening ?? false
 
         // Derive policy profile from tool mode (matches PolicyProfile enum rawValues)
         let policyProfile: String
@@ -233,6 +248,7 @@ final class TestServer {
             "thinkingEnabled": thinkingEnabled,
             "thinkingLevel": thinkingLevel,
             "hasOwnerSetUp": hasOwnerSetUp,
+            "isListening": isListening,
             "policyProfile": policyProfile,
         ])
     }
@@ -249,10 +265,18 @@ final class TestServer {
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         let serialized: [[String: Any]] = slice.enumerated().map { offset, event in
-            [
+            let normalizedKind: String
+            switch event.kind {
+            case .toolCall, .toolResult:
+                normalizedKind = "Tool"
+            default:
+                normalizedKind = event.kind.rawValue
+            }
+            return [
                 "seq": startIndex + offset,
                 "ts": isoFormatter.string(from: event.timestamp),
-                "kind": event.kind.rawValue,
+                "kind": normalizedKind,
+                "raw_kind": event.kind.rawValue,
                 "text": event.text,
             ]
         }
@@ -287,10 +311,59 @@ final class TestServer {
                 "isGenerating": isGenerating,
                 "isSpeaking": isSpeaking,
                 "hasDeferredTools": hasDeferredTools,
+                "isListening": self?.conversation?.isListening ?? false,
                 "streamingText": streamingText,
                 "count": messages.count,
             ])
         }
+    }
+
+    private func beginInjectedTurnIsolation() async {
+        guard let conversation else { return }
+        if injectedTurnMuteDepth == 0 {
+            listeningStateBeforeInjectedTurns = conversation.isListening
+            if conversation.isListening {
+                await setListeningStateForTestIsolation(false)
+            }
+        }
+        injectedTurnMuteDepth += 1
+    }
+
+    private func endInjectedTurnIsolationWhenIdle() async {
+        guard injectedTurnMuteDepth > 0 else { return }
+
+        let maxPolls = 240
+        for _ in 0..<maxPolls {
+            let isGenerating = conversation?.isGenerating ?? false
+            let isSpeaking = await faeCore?.isSpeaking() ?? false
+            let hasDeferredTools = await faeCore?.hasPendingDeferredTools() ?? false
+            if !isGenerating && !isSpeaking && !hasDeferredTools {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        injectedTurnMuteDepth = max(0, injectedTurnMuteDepth - 1)
+        guard injectedTurnMuteDepth == 0 else { return }
+
+        if listeningStateBeforeInjectedTurns == true {
+            await setListeningStateForTestIsolation(true)
+        }
+        listeningStateBeforeInjectedTurns = nil
+    }
+
+    private func setListening(_ active: Bool) {
+        conversation?.isListening = active
+        NotificationCenter.default.post(
+            name: .faeConversationGateSet,
+            object: nil,
+            userInfo: ["active": active]
+        )
+    }
+
+    private func setListeningStateForTestIsolation(_ active: Bool) async {
+        conversation?.isListening = active
+        await faeCore?.setMicMutedForTesting(!active)
     }
 
     private func handleCancel(connection: NWConnection) {
@@ -460,6 +533,38 @@ final class TestServer {
                 "cleared": ["conversation", "events", "history"],
             ])
         }
+    }
+
+    // MARK: - Command Endpoint
+
+    /// POST /command — Dispatch a host command through FaeCore.
+    ///
+    /// JSON body:
+    /// - `name`: command name (required)
+    /// - `payload`: command payload object (optional, defaults to `{}`)
+    private func handleCommand(body: Data?, connection: NWConnection) {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let name = json["name"] as? String,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            sendResponse(connection: connection, status: 400, body: ["error": "missing 'name' field"])
+            return
+        }
+
+        guard let faeCore else {
+            sendResponse(connection: connection, status: 503, body: ["error": "faeCore not available"])
+            return
+        }
+
+        let payload = json["payload"] as? [String: Any] ?? [:]
+        faeCore.sendCommand(name: name, payload: payload)
+
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "name": name,
+            "payload_keys": payload.keys.sorted(),
+        ])
     }
 
     // MARK: - Test Input Endpoint

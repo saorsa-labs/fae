@@ -182,6 +182,23 @@ struct SpeakerEnrollmentView: View {
             progressTask.cancel()
             recordingProgress = 1.0
 
+            let quality = AudioCaptureManager.analyzeSegment(samples)
+            NSLog(
+                "SpeakerEnrollmentView: sample %d quality rms=%.4f peak=%.4f voiced_ratio=%.3f voiced_seconds=%.2f usable=%@",
+                sampleIndex + 1,
+                quality.rms,
+                quality.peak,
+                quality.voicedFrameRatio,
+                quality.voicedDurationSeconds,
+                quality.hasUsableSpeech ? "true" : "false"
+            )
+            guard quality.hasUsableSpeech else {
+                errorMessage = "I didn't hear enough clear speech. Move a bit closer and try that sample again."
+                isRecording = false
+                recordingProgress = 0
+                return
+            }
+
             let embedding = try await speakerEncoder.embed(
                 audio: samples,
                 sampleRate: AudioCaptureManager.targetSampleRate

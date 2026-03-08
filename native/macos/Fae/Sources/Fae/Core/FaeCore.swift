@@ -30,7 +30,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var thinkingEnabled: Bool = false
     @Published var thinkingLevel: FaeThinkingLevel = .fast
 
-    var nativeEnrollmentCaptureManager: AudioCaptureManager { captureManager }
+    var nativeEnrollmentCaptureManager: AudioCaptureManager { enrollmentCaptureManager }
     var nativeEnrollmentSpeakerEncoder: CoreMLSpeakerEncoder { speakerEncoder }
     var nativeEnrollmentSpeakerProfileStore: SpeakerProfileStore { speakerProfileStore }
 
@@ -96,6 +96,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let ttsEngine: any TTSEngine = KokoroMLXTTSEngine()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
+    private let enrollmentCaptureManager = AudioCaptureManager()
     private let playbackManager = AudioPlaybackManager()
     private let conversationState = ConversationStateTracker()
     private lazy var modelManager = ModelManager(eventBus: eventBus)
@@ -414,7 +415,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 await MainActor.run { self.hasOwnerSetUp = hasOwner }
                 if !hasOwner {
-                    await runSkillDrivenEnrollment(coordinator: coordinator, skillManager: skillManager)
+                    NSLog("FaeCore: no owner enrolled — waiting for native enrollment flow")
                 }
 
                 // Listen for enrollment_complete to update hasOwnerSetUp.
@@ -588,33 +589,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
-    // MARK: - Skill-Driven Voice Enrollment
-
-    /// Prime first-launch owner enrollment without relying on a large conversational
-    /// onboarding skill. The native enrollment recorder is the primary path.
-    private func runSkillDrivenEnrollment(
-        coordinator: PipelineCoordinator,
-        skillManager: SkillManager
-    ) async {
-        _ = skillManager
-
-        // Mark enrollment active — bypasses direct-address and allows barge-in from anyone.
-        await coordinator.setFirstOwnerEnrollmentActive(true)
-        NotificationCenter.default.post(
-            name: .faePipelineState,
-            object: nil,
-            userInfo: [
-                "event": "pipeline.enrollment_started",
-                "payload": [:] as [String: Any],
-            ]
-        )
-
-        // Brief spoken intro — Fae then takes over via the skill.
-        let intro = "Hey. Let’s get your voice set up so I know it’s you. Talk to me naturally and I’ll guide you through it."
-        await coordinator.speakDirect(intro)
-        await coordinator.wake()
-    }
-
     // MARK: - HostCommandSender Conformance
 
     /// Handles commands from `HostCommandBridge`, Settings tabs, and relay server.
@@ -709,8 +683,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 NSLog("FaeCore: onboarding reset — all profiles cleared, config reset")
 
-                // Restart pipeline so enrollment flow re-triggers (new coordinator
-                // checks hasOwnerProfile → false → runSkillDrivenEnrollment).
+                // Restart pipeline so the app returns to the fresh ownerless state.
                 NSLog("FaeCore: restarting pipeline for re-enrollment")
                 await pipelineCoordinator?.stop()
                 pipelineCoordinator = nil
@@ -790,13 +763,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         case "speaker.start_enrollment":
-            if let coordinator = pipelineCoordinator,
-               let sm = skillManagerRef
-            {
-                Task {
-                    await runSkillDrivenEnrollment(coordinator: coordinator, skillManager: sm)
-                }
-            }
+            NotificationCenter.default.post(name: .faeStartNativeEnrollmentRequested, object: nil)
 
         case "awareness.start_onboarding":
             if let coordinator = pipelineCoordinator,
@@ -1639,6 +1606,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
         await speakerProfileStore.hasOwnerProfile()
     }
 
+    /// Mute/unmute the microphone directly without changing conversation gate state.
+    ///
+    /// Used by the localhost test harness so deterministic injected turns do not
+    /// perturb direct-address state or trigger idle/sleep transitions.
+    func setMicMutedForTesting(_ muted: Bool) async {
+        await pipelineCoordinator?.setMicMuted(muted)
+    }
+
     // MARK: - Audio Injection (for companion relay)
 
     /// Inject raw PCM audio from a companion device into the speech pipeline.
@@ -1992,13 +1967,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let mode = userInfo["mode"] as? String else { return }
             patchConfig(key: "tool_mode", payload: ["value": mode])
         case "start_enrollment":
-            if let coordinator = pipelineCoordinator {
-                Task {
-                    await coordinator.injectText(
-                        "Please start voice enrollment for me."
-                    )
-                }
-            }
+            NotificationCenter.default.post(name: .faeStartNativeEnrollmentRequested, object: nil)
         case "open_settings":
             NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
         default:

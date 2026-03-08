@@ -6,6 +6,17 @@ import Foundation
 ///
 /// Replaces: `src/audio/capture.rs` (CpalCapture)
 actor AudioCaptureManager {
+    struct SegmentSpeechQuality: Sendable {
+        let rms: Float
+        let peak: Float
+        let voicedFrameRatio: Float
+        let voicedDurationSeconds: Double
+
+        var hasUsableSpeech: Bool {
+            rms >= 0.003 && peak >= 0.012 && voicedFrameRatio >= 0.08 && voicedDurationSeconds >= 0.25
+        }
+    }
+
     private let engine = AVAudioEngine()
     private var continuation: AsyncStream<AudioChunk>.Continuation?
     private var isCapturing = false
@@ -132,6 +143,7 @@ actor AudioCaptureManager {
     func captureSegment(durationSeconds: Double) async throws -> [Float] {
         let tempEngine = AVAudioEngine()
         let inputNode = tempEngine.inputNode
+        configureVoiceProcessingIfAvailable(on: inputNode)
         let nativeFormat = inputNode.outputFormat(forBus: 0)
 
         guard let targetFormat = AVAudioFormat(
@@ -203,11 +215,64 @@ actor AudioCaptureManager {
 
             do {
                 try tempEngine.start()
+                self.logMicrophoneModeDiagnosticsIfAvailable()
             } catch {
                 finished = true
                 cont.resume(throwing: error)
             }
         }
+    }
+
+    static func analyzeSegment(_ samples: [Float], sampleRate: Int = targetSampleRate) -> SegmentSpeechQuality {
+        guard !samples.isEmpty else {
+            return SegmentSpeechQuality(rms: 0, peak: 0, voicedFrameRatio: 0, voicedDurationSeconds: 0)
+        }
+
+        var sumSquares: Float = 0
+        var peak: Float = 0
+        for sample in samples {
+            sumSquares += sample * sample
+            peak = max(peak, abs(sample))
+        }
+        let rms = (sumSquares / Float(samples.count)).squareRoot()
+
+        let frameSize = max(sampleRate / 50, 160) // ~20 ms
+        let hopSize = max(frameSize / 2, 80) // ~10 ms
+        let voicedThreshold = max(0.02, rms * 0.6)
+
+        var frameCount = 0
+        var voicedFrames = 0
+        var offset = 0
+        while offset + frameSize <= samples.count {
+            var frameSumSquares: Float = 0
+            for idx in offset..<(offset + frameSize) {
+                let sample = samples[idx]
+                frameSumSquares += sample * sample
+            }
+            let frameRMS = (frameSumSquares / Float(frameSize)).squareRoot()
+            frameCount += 1
+            if frameRMS >= voicedThreshold {
+                voicedFrames += 1
+            }
+            offset += hopSize
+        }
+
+        let voicedFrameRatio: Float
+        let voicedDurationSeconds: Double
+        if frameCount > 0 {
+            voicedFrameRatio = Float(voicedFrames) / Float(frameCount)
+            voicedDurationSeconds = Double(voicedFrames * hopSize) / Double(sampleRate)
+        } else {
+            voicedFrameRatio = 0
+            voicedDurationSeconds = 0
+        }
+
+        return SegmentSpeechQuality(
+            rms: rms,
+            peak: peak,
+            voicedFrameRatio: voicedFrameRatio,
+            voicedDurationSeconds: voicedDurationSeconds
+        )
     }
 
     // MARK: - Private

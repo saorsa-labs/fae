@@ -58,6 +58,24 @@ final class MemoryOrchestratorTests: XCTestCase {
         XCTAssertNil(recall)
     }
 
+    func testRecallHandlesQuotedAndPathLikeQueriesWithoutFTSSyntaxErrors() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let orchestrator = MemoryOrchestrator(store: store, config: enabledMemoryConfig())
+
+        _ = await orchestrator.capture(
+            turnId: UUID().uuidString,
+            userText: "remember the hosts file lives at /etc/hosts and the phrase 'hello fae test' matters",
+            assistantText: "Noted"
+        )
+
+        let recall = await orchestrator.recall(query: "use the read tool to get /etc/hosts and write 'hello fae test'")
+
+        let context = try XCTUnwrap(recall)
+        XCTAssertTrue(context.contains("/etc/hosts"))
+        XCTAssertTrue(context.contains("hello fae test"))
+    }
+
     func testSQLiteSupersedeMarksOldRecordInactiveAndLinksNewRecord() async throws {
         let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
         let store = try SQLiteMemoryStore(path: dbPath)
