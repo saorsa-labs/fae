@@ -49,7 +49,10 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
 
         let controller = PipelineAuxBridgeController()
         let canvas = CanvasController()
+        let windows = AuxiliaryWindowManager()
         controller.canvasController = canvas
+        controller.auxiliaryWindows = windows
+        windows.canvasController = canvas
 
         NotificationCenter.default.post(
             name: .faeRuntimeProgress,
@@ -73,5 +76,28 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
         XCTAssertFalse(canvas.isActivityMode)
         XCTAssertEqual(canvas.htmlContent, "")
         XCTAssertFalse(canvas.isVisible)
+    }
+
+    func testStartupProgressDoesNotAutoOpenCanvasWindow() async throws {
+        UserDefaults.standard.removeObject(forKey: "fae.hasShownStartupCanvas")
+
+        let controller = PipelineAuxBridgeController()
+        let canvas = CanvasController()
+        let windows = AuxiliaryWindowManager()
+        controller.canvasController = canvas
+        controller.auxiliaryWindows = windows
+        windows.canvasController = canvas
+
+        NotificationCenter.default.post(
+            name: .faeRuntimeProgress,
+            object: nil,
+            userInfo: ["stage": "stt"]
+        )
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(canvas.htmlContent, "")
+        XCTAssertFalse(canvas.isVisible)
+        XCTAssertFalse(windows.isCanvasVisible)
     }
 }

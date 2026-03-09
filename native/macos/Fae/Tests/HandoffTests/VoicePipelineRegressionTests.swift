@@ -30,6 +30,34 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertLessThanOrEqual(probability, 1)
     }
 
+    func testSegmentAnalysisRejectsSilence() {
+        let silence = [Float](repeating: 0, count: 16_000 * 4)
+
+        let quality = AudioCaptureManager.analyzeSegment(silence)
+
+        XCTAssertFalse(quality.hasUsableSpeech)
+        XCTAssertEqual(quality.voicedFrameRatio, 0, accuracy: 0.001)
+        XCTAssertEqual(quality.voicedDurationSeconds, 0, accuracy: 0.001)
+    }
+
+    func testSegmentAnalysisAcceptsStrongSpeechLikeSignal() {
+        let sampleRate = 16_000
+        var samples = [Float](repeating: 0, count: sampleRate * 4)
+        for index in sampleRate..<(sampleRate * 3) {
+            let t = Float(index - sampleRate) / Float(sampleRate)
+            let phaseA = 2 * Float.pi * 180 * t
+            let phaseB = 2 * Float.pi * 240 * t
+            let envelope = 0.65 + 0.35 * sin(2 * Float.pi * 3 * t)
+            samples[index] = (sin(phaseA) * 0.07 + sin(phaseB) * 0.05) * envelope
+        }
+
+        let quality = AudioCaptureManager.analyzeSegment(samples, sampleRate: sampleRate)
+
+        XCTAssertTrue(quality.hasUsableSpeech)
+        XCTAssertGreaterThan(quality.voicedFrameRatio, 0.18)
+        XCTAssertGreaterThan(quality.voicedDurationSeconds, 0.6)
+    }
+
     func testShouldSkipSTTAfterSpeakerVerificationForUnknownSpeakerWhenOwnerExists() {
         XCTAssertTrue(
             PipelineCoordinator.shouldSkipSTTAfterSpeakerVerification(
@@ -101,7 +129,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
-    func testFusedVoiceAttentionIgnoresSleepingBackgroundSpeech() {
+    func testFusedVoiceAttentionWakesSleepingOwnerSpeechWhenWakeWordDrops() {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .idle,
@@ -112,6 +140,22 @@ final class VoicePipelineRegressionTests: XCTestCase {
                 firstOwnerEnrollmentActive: false,
                 speakerAllowsConversation: true,
                 wordCount: 6
+            ),
+            .wakeAndContinue
+        )
+    }
+
+    func testFusedVoiceAttentionStillIgnoresShortSleepingBackgroundSpeech() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 2
             ),
             .ignoreWhileSleeping
         )
@@ -407,14 +451,28 @@ final class VoicePipelineRegressionTests: XCTestCase {
     }
 
     func testOnboardingTurnsSkipMemoryRecall() {
-        XCTAssertFalse(PipelineCoordinator.shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: true))
-        XCTAssertTrue(PipelineCoordinator.shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: false))
+        XCTAssertFalse(
+            PipelineCoordinator.shouldRecallMemoryForTurn(
+                firstOwnerEnrollmentActive: true,
+                userText: "hello",
+                availableToolNames: ["read"]
+            )
+        )
+        XCTAssertTrue(
+            PipelineCoordinator.shouldRecallMemoryForTurn(
+                firstOwnerEnrollmentActive: false,
+                userText: "tell me a joke",
+                availableToolNames: ["read"]
+            )
+        )
     }
 
     func testOnboardingTurnsLimitVisibleToolsToVoiceIdentity() {
         XCTAssertEqual(
             PipelineCoordinator.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: true,
+                userText: "",
+                availableToolNames: ["read", "bash", "voice_identity"],
                 proactiveAllowedTools: ["read", "bash"]
             ),
             ["voice_identity"]
@@ -422,6 +480,8 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: false,
+                userText: "",
+                availableToolNames: ["read", "bash", "voice_identity"],
                 proactiveAllowedTools: ["read", "bash"]
             ),
             ["read", "bash"]

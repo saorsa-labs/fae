@@ -320,7 +320,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 faeCore.acceptLicense()
                 startPipelineIfReady()
                 if !faeCore.hasOwnerSetUp {
-                    showIntroCanvas()
                     requestPermissionsForFirstLaunch()
                 }
             }
@@ -416,6 +415,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
+                    self?.windowState.showWindow()
+                    self?.windowState.transitionToCompact()
                     self?.coworkWindow.show()
                 }
             }
@@ -449,7 +450,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         if faeCore.isLicenseAccepted {
             startPipelineIfReady()
             if !faeCore.hasOwnerSetUp {
-                showIntroCanvas()
                 requestPermissionsForFirstLaunch()
             }
         }
@@ -623,18 +623,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - First Launch
 
     func showIntroCanvas() {
-        canvasController.setContent(IntroCrawl.fullHTML)
-        auxiliaryWindows.showCanvas()
-
-        // Auto-close the canvas after ~50s if model loading hasn't taken over yet.
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 50_000_000_000)
-            guard let self else { return }
-            if !self.canvasController.isActivityMode {
-                self.canvasController.clear()
-                self.auxiliaryWindows.hideCanvas()
-            }
-        }
+        // Startup now stays on the main conversation surface instead of opening
+        // a separate canvas window.
+        canvasController.clear()
+        auxiliaryWindows.hideCanvas()
     }
 
     func requestPermissionsForFirstLaunch() {
@@ -737,7 +729,15 @@ struct FaeApp: App {
                 }
                 return parsed
             }()
-            let service = LLMWorkerService(role: role)
+            let responseFileURL: URL? = {
+                guard let index = CommandLine.arguments.firstIndex(of: "--response-file"),
+                      CommandLine.arguments.indices.contains(index + 1)
+                else {
+                    return nil
+                }
+                return URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            }()
+            let service = LLMWorkerService(role: role, responseFileURL: responseFileURL)
             service.run()
             Foundation.exit(0)
         }

@@ -13,6 +13,7 @@ actor ApprovalManager {
     private let eventBus: FaeEventBus
     private var pendingApprovals: [UInt64: CheckedContinuation<Bool, Never>] = [:]
     private var pendingToolNames: [UInt64: String] = [:]
+    private var pendingDescriptions: [UInt64: String] = [:]
     private var pendingOrder: [UInt64] = []
     private var nextRequestId: UInt64 = 1
 
@@ -53,6 +54,7 @@ actor ApprovalManager {
         let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             pendingApprovals[requestId] = continuation
             pendingToolNames[requestId] = toolName
+            pendingDescriptions[requestId] = description
             pendingOrder.append(requestId)
 
             // Start timeout task.
@@ -147,6 +149,7 @@ actor ApprovalManager {
     private func resolveIfPending(requestId: UInt64, approved: Bool) -> Bool {
         pendingOrder.removeAll { $0 == requestId }
         pendingToolNames.removeValue(forKey: requestId)
+        pendingDescriptions.removeValue(forKey: requestId)
         if let continuation = pendingApprovals.removeValue(forKey: requestId) {
             continuation.resume(returning: approved)
             return true
@@ -157,5 +160,28 @@ actor ApprovalManager {
     private func resolveTimeoutIfPending(requestId: UInt64) {
         guard resolveIfPending(requestId: requestId, approved: false) else { return }
         eventBus.send(.approvalResolved(id: requestId, approved: false, source: "timeout"))
+    }
+
+    func pendingApprovalSnapshots() -> [[String: Any]] {
+        pendingOrder.compactMap { requestId in
+            guard let toolName = pendingToolNames[requestId] else { return nil }
+            return [
+                "id": requestId,
+                "tool": toolName,
+                "summary": pendingDescriptions[requestId] ?? "",
+            ]
+        }
+    }
+
+    func mostRecentPendingApprovalID() -> UInt64? {
+        pendingOrder.last
+    }
+
+    func clearPendingApprovals(source: String = "reset") {
+        let pendingIDs = pendingOrder
+        for requestId in pendingIDs {
+            guard resolveIfPending(requestId: requestId, approved: false) else { continue }
+            eventBus.send(.approvalResolved(id: requestId, approved: false, source: source))
+        }
     }
 }

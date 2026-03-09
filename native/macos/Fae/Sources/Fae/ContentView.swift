@@ -86,6 +86,10 @@ struct ContentView: View {
             )
             .preferredColorScheme(nil)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .faeStartNativeEnrollmentRequested)) { _ in
+            windowState.transitionToCompact()
+            beginNativeEnrollment()
+        }
     }
 
     // MARK: - Collapsed View

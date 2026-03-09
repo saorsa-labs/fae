@@ -467,6 +467,78 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertEqual(persistedAgent?.modelIdentifier, "openai/gpt-5")
     }
 
+    func testControllerApplyConversationModelSelectionSwitchesWorkspaceProviderAndModel() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cowork-model-browser-\(UUID().uuidString)", isDirectory: true)
+        let storageURL = tempRoot.appendingPathComponent("work_with_fae_workspace.json")
+        let originalOverride = WorkWithFaeWorkspaceStore.storageURLOverride
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        WorkWithFaeWorkspaceStore.storageURLOverride = storageURL
+        defer {
+            WorkWithFaeWorkspaceStore.storageURLOverride = originalOverride
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let openAIAgent = WorkWithFaeAgentProfile(
+            id: "agent-openai",
+            name: "OpenAI",
+            providerKind: .openAICompatibleExternal,
+            backendPresetID: "openai",
+            modelIdentifier: "gpt-4.1",
+            baseURL: "https://api.openai.com",
+            credentialKey: nil,
+            notes: nil,
+            createdAt: Date()
+        )
+        let workspace = WorkWithFaeWorkspaceRecord(name: "Workspace", agentID: openAIAgent.id)
+        WorkWithFaeWorkspaceStore.saveRegistry(
+            WorkWithFaeWorkspaceRegistry(
+                selectedWorkspaceID: workspace.id,
+                workspaces: [workspace],
+                agents: [.faeLocal, openAIAgent]
+            )
+        )
+
+        let controller = CoworkWorkspaceController(
+            faeCore: FaeCore(),
+            conversation: ConversationController(),
+            runtimeDescriptor: nil
+        )
+
+        let option = try XCTUnwrap(
+            controller.availableConversationModelOptions().first(where: {
+                $0.providerPresetID == "anthropic" && $0.modelIdentifier == "claude-sonnet-4-6"
+            })
+        )
+
+        controller.applyConversationModelSelection(option)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(controller.selectedAgent?.backendPresetID, "anthropic")
+        XCTAssertEqual(controller.selectedAgent?.modelIdentifier, "claude-sonnet-4-6")
+        XCTAssertEqual(controller.selectedWorkspace?.agentID, controller.selectedAgent?.id)
+
+        let persisted = WorkWithFaeWorkspaceStore.loadRegistry()
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedAgent(in: persisted)?.backendPresetID, "anthropic")
+        XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedAgent(in: persisted)?.modelIdentifier, "claude-sonnet-4-6")
+    }
+
+    func testModelOptionUsesModelNameAsPrimaryLabel() throws {
+        let preset = try XCTUnwrap(CoworkBackendPresetCatalog.preset(id: "openrouter"))
+        let option = try XCTUnwrap(
+            modelOption(
+                for: "anthropic/claude-sonnet-4.6",
+                preset: preset,
+                baseURL: preset.defaultBaseURL,
+                isConfigured: true
+            )
+        )
+
+        XCTAssertEqual(option.displayTitle, "claude-sonnet-4.6")
+        XCTAssertEqual(option.displaySubtitle, "Anthropic via OpenRouter")
+        XCTAssertEqual(option.accessibilityLabel, "claude-sonnet-4.6, Anthropic via OpenRouter")
+    }
+
     func testControllerThinkingLevelControlsDelegateToFaeCore() async throws {
         let core = FaeCore()
         let controller = CoworkWorkspaceController(

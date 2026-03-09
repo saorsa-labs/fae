@@ -3,6 +3,7 @@
 Last updated: March 8, 2026
 
 This checklist turns the Work with Fae launch bar into concrete pass/fail criteria.
+Use it together with [app-release-validation.md](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md), which is the canonical full-app release gate for main Fae, Cowork, audio, permissions, and scripted harness coverage.
 
 ## First impression
 

@@ -290,7 +290,8 @@ final class TestServer {
 
     private func handleConversation(connection: NWConnection) {
         let messages = conversation?.messages ?? []
-        let isGenerating = conversation?.isGenerating ?? false
+        let backgroundLookupActive = conversation?.isBackgroundLookupActive ?? false
+        let isGenerating = (conversation?.isGenerating ?? false) || backgroundLookupActive
         let streamingText = conversation?.streamingText ?? ""
 
         let serialized: [[String: Any]] = messages.map { msg in
@@ -309,6 +310,7 @@ final class TestServer {
             self?.sendResponse(connection: connection, status: 200, body: [
                 "messages": serialized,
                 "isGenerating": isGenerating,
+                "isBackgroundLookupActive": backgroundLookupActive,
                 "isSpeaking": isSpeaking,
                 "hasDeferredTools": hasDeferredTools,
                 "isListening": self?.conversation?.isListening ?? false,
@@ -463,48 +465,55 @@ final class TestServer {
             return
         }
 
-        // Determine request ID: explicit or from active approval.
-        let requestID: UInt64
-        if let explicitID = json["id"] as? UInt64 {
-            requestID = explicitID
-        } else if let numericID = json["id"] as? Int {
-            requestID = UInt64(numericID)
-        } else if let activeID = approvalOverlay?.activeApproval?.id {
-            requestID = activeID
-        } else {
-            sendResponse(connection: connection, status: 404, body: ["error": "no pending approval"])
-            return
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            let requestID: UInt64?
+            if let explicitID = json["id"] as? UInt64 {
+                requestID = explicitID
+            } else if let numericID = json["id"] as? Int {
+                requestID = UInt64(numericID)
+            } else {
+                requestID = await faeCore.mostRecentPendingApprovalID()
+            }
+
+            guard let requestID else {
+                self.sendResponse(connection: connection, status: 404, body: ["error": "no pending approval"])
+                return
+            }
+
+            let pending = await faeCore.pendingApprovalSnapshots()
+            let toolName = json["tool_name"] as? String
+                ?? pending.first(where: { ($0["id"] as? UInt64) == requestID })?["tool"] as? String
+
+            var payload: [String: Any] = ["approved": approved ?? (decisionStr != "no")]
+            if let decisionStr { payload["decision"] = decisionStr }
+            if let toolName { payload["tool_name"] = toolName }
+
+            faeCore.respondToApproval(requestID: requestID, decisionStr: decisionStr, toolName: toolName, payload: payload)
+
+            self.sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "approved": approved ?? (decisionStr != "no"),
+                "decision": decisionStr ?? (approved == true ? "yes" : "no"),
+                "requestId": requestID,
+            ] as [String: Any])
         }
-
-        let toolName = json["tool_name"] as? String ?? approvalOverlay?.activeApproval?.toolName
-
-        var payload: [String: Any] = ["approved": approved ?? true]
-        if let decisionStr { payload["decision"] = decisionStr }
-        if let toolName { payload["tool_name"] = toolName }
-
-        faeCore.respondToApproval(requestID: requestID, decisionStr: decisionStr, toolName: toolName, payload: payload)
-
-        sendResponse(connection: connection, status: 200, body: [
-            "ok": true,
-            "approved": approved ?? (decisionStr != "no"),
-            "decision": decisionStr ?? (approved == true ? "yes" : "no"),
-            "requestId": requestID,
-        ] as [String: Any])
     }
 
     private func handleApprovals(connection: NWConnection) {
-        var pending: [[String: Any]] = []
-        if let approval = approvalOverlay?.activeApproval {
-            pending.append([
-                "id": approval.id,
-                "tool": approval.toolName,
-                "summary": approval.description,
-            ])
+        guard let faeCore else {
+            sendResponse(connection: connection, status: 503, body: ["error": "faeCore not available"])
+            return
         }
 
-        sendResponse(connection: connection, status: 200, body: [
-            "pending": pending,
-        ])
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let pending = await faeCore.pendingApprovalSnapshots()
+            self.sendResponse(connection: connection, status: 200, body: [
+                "pending": pending,
+            ])
+        }
     }
 
     // MARK: - Reset Endpoint
@@ -527,10 +536,13 @@ final class TestServer {
 
             // 5. Reset pipeline conversation history
             await self.faeCore?.resetConversationAsync()
+            await self.faeCore?.clearPendingApprovalsForTest()
+            await self.faeCore?.clearAllToolApprovalsForTest()
+            await self.faeCore?.clearUserSchedulerTasksForTest()
 
             self.sendResponse(connection: connection, status: 200, body: [
                 "ok": true,
-                "cleared": ["conversation", "events", "history"],
+                "cleared": ["conversation", "events", "history", "approvals", "tool_grants", "scheduler_tasks"],
             ])
         }
     }

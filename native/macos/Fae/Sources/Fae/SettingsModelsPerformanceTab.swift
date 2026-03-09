@@ -62,7 +62,7 @@ struct SettingsModelsPerformanceTab: View {
     @State private var wakeTemplateCount: Int = 0
 
     private let voiceModelOptions: [(label: String, value: String, ram: String)] = [
-        ("Auto (Recommended)", "auto", "Auto"),
+        ("Auto (Recommended)", "auto", "12+ GB"),
         ("Qwen3.5-35B-A3B", "qwen3_5_35b_a3b", "64+ GB"),
         ("Qwen3.5-27B", "qwen3_5_27b", "32+ GB"),
         ("Qwen3.5-9B", "qwen3_5_9b", "24+ GB"),

@@ -354,10 +354,16 @@ struct FaeConfig: Codable {
         case "qwen3_0_6b":
             return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
         default: // "auto"
-            // BENCHMARK OVERRIDE: Qwen3.5-2B fixed on all machines until further notice.
-            // Restore RAM-tiered selection once benchmarking is complete.
-            _ = totalGB
-            return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
+            // Auto follows the current benchmark-backed operator policy.
+            // `qwen3.5-2b` is the strongest fit for Fae's operator role in the
+            // assistant-fit eval: tool use, strict instruction following, and
+            // tool-result handling all beat the larger Qwens while also keeping
+            // startup and first-token latency lower.
+            if totalGB >= 12 {
+                return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
+            } else {
+                return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
+            }
         }
     }
 

@@ -209,10 +209,15 @@ extension Notification.Name {
     static let faeCloseSettingsRequested = Notification.Name("faeCloseSettingsRequested")
     /// Posted when the user opens the cowork workspace from the orb UI or menus.
     static let faeOpenCoworkRequested = Notification.Name("faeOpenCoworkRequested")
+    /// Posted when the Work with Fae window is shown or closed.
+    /// userInfo: ["visible": Bool]
+    static let faeCoworkWindowVisibilityChanged = Notification.Name("faeCoworkWindowVisibilityChanged")
     /// Posted by the cowork runtime to route pipeline UI updates into the Work with Fae session.
     /// userInfo: ["active": Bool]
     static let faeCoworkConversationRoutingChanged = Notification.Name("faeCoworkConversationRoutingChanged")
     /// Posted by canvas interactions or voice authority flow to request a governed settings mutation.
     /// userInfo: ["action": String, "value": String, "source": String]
     static let faeGovernanceActionRequested = Notification.Name("faeGovernanceActionRequested")
+    /// Posted when the app should open the native speaker-enrollment sheet and capture real audio.
+    static let faeStartNativeEnrollmentRequested = Notification.Name("faeStartNativeEnrollmentRequested")
 }

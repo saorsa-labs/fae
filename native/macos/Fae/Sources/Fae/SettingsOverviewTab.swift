@@ -14,7 +14,8 @@ struct SettingsOverviewTab: View {
 
     // System info
     @State private var systemRAM: UInt64 = 0
-    @State private var loadedModelName: String = "—"
+    @State private var loadedOperatorModelName: String = "—"
+    @State private var loadedConciergeModelName: String?
     @State private var memoryUsage: String = "—"
     @State private var tokensPerSecond: String = "—"
 
@@ -33,12 +34,7 @@ struct SettingsOverviewTab: View {
                         color: .blue
                     )
 
-                    statusCard(
-                        title: "Stack",
-                        value: loadedModelName,
-                        icon: "cpu",
-                        color: .purple
-                    )
+                    modelStackCard
 
                     statusCard(
                         title: "KV Cache",
@@ -130,6 +126,41 @@ struct SettingsOverviewTab: View {
         .padding(16)
         .background(Color(NSColor.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var modelStackCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.purple)
+                Text("Stack")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                modelRoleRow(title: "Operator", value: loadedOperatorModelName)
+                modelRoleRow(title: "Concierge", value: loadedConciergeModelName ?? "Off")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func modelRoleRow(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - Quick Toggles
@@ -332,10 +363,11 @@ struct SettingsOverviewTab: View {
         let operatorModel = UserDefaults.standard.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
         let conciergeModel = UserDefaults.standard.string(forKey: "fae.loaded_concierge_model_id")
 
-        if plan.dualModelActive, let conciergeModel {
-            loadedModelName = "\((operatorModel.components(separatedBy: "/").last ?? operatorModel)) + \((conciergeModel.components(separatedBy: "/").last ?? conciergeModel))"
+        loadedOperatorModelName = operatorModel.components(separatedBy: "/").last ?? operatorModel
+        loadedConciergeModelName = if plan.dualModelActive, let conciergeModel {
+            conciergeModel.components(separatedBy: "/").last ?? conciergeModel
         } else {
-            loadedModelName = operatorModel.components(separatedBy: "/").last ?? operatorModel
+            nil
         }
     }
 

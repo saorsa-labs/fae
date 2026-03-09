@@ -44,6 +44,17 @@ final class SpeakerProfileStoreTests: XCTestCase {
         XCTAssertFalse(hasOwner)
     }
 
+    func testPromoteSoleHumanProfileSkipsLegacyFaeSelfLabelEvenIfRoleIsWrong() async {
+        let store = SpeakerProfileStore(storePath: makeTempStoreURL())
+        await store.enroll(label: "fae_self", embedding: [0.4, 0.1, 0.2], role: .guest, displayName: "Fae")
+
+        let promoted = await store.promoteSoleHumanProfileToOwnerIfUnambiguous()
+        let hasOwner = await store.hasOwnerProfile()
+
+        XCTAssertNil(promoted)
+        XCTAssertFalse(hasOwner)
+    }
+
     func testClearAllProfilesRemovesEverything() async {
         let store = SpeakerProfileStore(storePath: makeTempStoreURL())
         await store.enroll(label: "owner", embedding: [0.1, 0.2, 0.3], role: .owner, displayName: "David")

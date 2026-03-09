@@ -50,6 +50,8 @@ protocol LLMEngine: Actor {
     func synchronizeSession(history: [LLMMessage]) async
     /// Clear any retained prompt/session cache state.
     func resetSession() async
+    /// Tear down any engine-owned subprocesses, pipes, or transport state.
+    func shutdown() async
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
 }
@@ -61,6 +63,8 @@ extension LLMEngine {
     func synchronizeSession(history: [LLMMessage]) async {}
 
     func resetSession() async {}
+
+    func shutdown() async {}
 }
 
 /// Text-to-speech engine protocol.

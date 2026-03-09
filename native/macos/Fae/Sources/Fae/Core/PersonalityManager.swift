@@ -419,6 +419,9 @@ enum PersonalityManager {
                 Tool usage:
                 - Calendar, reminders, mail, contacts, notes queries: ALWAYS call the relevant tool. Do NOT answer from memory — these require real-time data from the tool.
                 - Real-time data, file access, web searches, system changes: use the appropriate tool.
+                - If the user explicitly names a tool, call that tool instead of answering from general knowledge.
+                - For Qwen-family local models, tool calls may be emitted in XML form such as:
+                  <tool_call><function=read><parameter=path>/tmp/example.txt</parameter></function></tool_call>
                 - After a tool result, respond naturally in 1-4 spoken sentences.
                 - General knowledge and simple conversation: respond directly without tools.
                 - NEVER expose tool markup, JSON, or code in your spoken response.

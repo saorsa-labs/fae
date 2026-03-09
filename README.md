@@ -231,16 +231,18 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3.5-2B (default) with optional larger manual presets | MLX | 4-bit | Conversation, reasoning, tool use |
+| LLM | Benchmark-backed Qwen3.5 operator (2B by default on 12+ GB, 0.8B fallback) with optional larger manual presets | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
 | VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit | Vision — screen/camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Current benchmark-backed default:
-- `auto` currently resolves to `mlx-community/Qwen3.5-2B-4bit` on all machines
-- this is an intentional temporary benchmark/default policy in `FaeConfig.recommendedModel(...)`
-- larger presets such as Qwen3.5-4B, 9B, 27B, and 35B-A3B remain available for manual selection
+- `auto` now follows the benchmark-backed operator policy:
+  - 12+ GB: `mlx-community/Qwen3.5-2B-4bit`
+  - below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit`
+- `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_27b`, and `qwen3_5_35b_a3b` remain manual opt-in presets for users who want more local depth over faster startup and stricter tool behavior
+- this benchmark-backed default policy lives in `FaeConfig.recommendedModel(...)`
 
 ### Benchmark reports
 

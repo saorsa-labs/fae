@@ -193,6 +193,23 @@ test-reset:
     curl -sf -X POST http://127.0.0.1:7433/reset | python3 -m json.tool 2>/dev/null || \
     curl -s -X POST http://127.0.0.1:7433/reset
 
+# Dispatch a host command through the test server.
+test-command name payload='{}':
+    curl -sf -X POST http://127.0.0.1:7433/command \
+        -H "Content-Type: application/json" \
+        -d '{"name":"{{name}}","payload":{{payload}}}' | python3 -m json.tool 2>/dev/null || \
+    curl -s -X POST http://127.0.0.1:7433/command \
+        -H "Content-Type: application/json" \
+        -d '{"name":"{{name}}","payload":{{payload}}}'
+
+# Reset onboarding state and clear enrolled speaker profiles.
+test-onboarding-reset:
+    just test-command onboarding.reset
+
+# Trigger the guided speaker enrollment flow.
+test-start-enrollment:
+    just test-command speaker.start_enrollment
+
 # Show pending approvals via test server
 test-approvals:
     curl -sf http://127.0.0.1:7433/approvals | python3 -m json.tool 2>/dev/null || \

@@ -18,6 +18,13 @@ actor MemoryOrchestrator {
         let recallSources: Set<String>
     }
 
+    private static let arithmeticNumberWords: Set<String> = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+        "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+        "sixty", "seventy", "eighty", "ninety", "hundred",
+    ]
+
     private let store: SQLiteMemoryStore
     private let config: FaeConfig.MemoryConfig
     private let embeddingEngine: NeuralEmbeddingEngine?
@@ -161,34 +168,38 @@ actor MemoryOrchestrator {
 
         do {
             // 1. Always insert episode record.
-            let episodeText: String
-            if sanitizedAssistantText.isEmpty {
-                episodeText = "User: \(sanitizedUserText)"
-            } else {
-                episodeText = "User: \(sanitizedUserText)\nAssistant: \(sanitizedAssistantText)"
-            }
-            let episode = try await store.insertRecord(
-                kind: .episode,
-                text: episodeText,
-                confidence: MemoryConstants.episodeConfidence,
-                sourceTurnId: turnId,
-                tags: ["turn"],
-                importanceScore: 0.30,
-                staleAfterSecs: 7_776_000,  // 90 days
-                speakerId: speakerId,
-                metadata: timestampMetadata
-            )
-            report.episodeId = episode.id
+            if !Self.shouldSkipEpisodeCapture(userText: sanitizedUserText) {
+                let episodeText: String
+                if sanitizedAssistantText.isEmpty {
+                    episodeText = "User: \(sanitizedUserText)"
+                } else {
+                    episodeText = "User: \(sanitizedUserText)\nAssistant: \(sanitizedAssistantText)"
+                }
+                let episode = try await store.insertRecord(
+                    kind: .episode,
+                    text: episodeText,
+                    confidence: MemoryConstants.episodeConfidence,
+                    sourceTurnId: turnId,
+                    tags: ["turn"],
+                    importanceScore: 0.30,
+                    staleAfterSecs: 7_776_000,  // 90 days
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
+                )
+                report.episodeId = episode.id
 
-            // Embed the new record non-blocking.
-            if let engine = embeddingEngine, let vs = vectorStore {
-                let recordId = episode.id
-                let textToEmbed = episodeText
-                Task {
-                    if let embedding = try? await engine.embed(text: textToEmbed) {
-                        try? await vs.upsertRecordEmbedding(recordId: recordId, embedding: embedding)
+                // Embed the new record non-blocking.
+                if let engine = embeddingEngine, let vs = vectorStore {
+                    let recordId = episode.id
+                    let textToEmbed = episodeText
+                    Task {
+                        if let embedding = try? await engine.embed(text: textToEmbed) {
+                            try? await vs.upsertRecordEmbedding(recordId: recordId, embedding: embedding)
+                        }
                     }
                 }
+            } else {
+                NSLog("MemoryOrchestrator: skipping episode capture for ephemeral arithmetic turn")
             }
 
             let lower = sanitizedUserText.lowercased()
@@ -351,6 +362,26 @@ actor MemoryOrchestrator {
         }
 
         return report
+    }
+
+    private static func shouldSkipEpisodeCapture(userText: String) -> Bool {
+        let lower = " " + userText.lowercased() + " "
+        let operatorHints = [
+            " plus ", " minus ", " times ", " multiplied by ", " divided by ",
+            " over ", " x ", " * ", " / ", " + ", " - ",
+        ]
+        guard operatorHints.contains(where: { lower.contains($0) }) else { return false }
+
+        let digitCount = userText
+            .replacingOccurrences(of: #"[^0-9]+"#, with: " ", options: .regularExpression)
+            .split(separator: " ")
+            .count
+        let wordCount = lower
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { arithmeticNumberWords.contains($0) }
+            .count
+
+        return digitCount + wordCount >= 2
     }
 
     /// Persist a structured proactive observation so silent scheduler turns remain queryable.

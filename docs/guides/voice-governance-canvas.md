@@ -47,6 +47,8 @@ When users say "show tools and permissions", Fae renders a live snapshot with:
 
 Manual canvas toggles should only surface existing canvas content or activity. They should not open an empty placeholder panel over the main conversation UI.
 
+Startup should not auto-open the canvas. The main Fae conversation surface is the first-run and normal-launch entry point; canvas is for explicit governance/activity content only.
+
 ## Canvas quick actions
 
 The canvas now includes:

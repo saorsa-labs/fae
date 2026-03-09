@@ -130,6 +130,49 @@ actor KokoroMLXTTSEngine: TTSEngine {
         }
     }
 
+    /// Switch the persistent voice to a named Kokoro voice or "fae" (bundled).
+    /// No-op if the engine is not loaded or the embedding can't be found.
+    func switchVoice(to name: String) {
+        let lower = name.lowercased()
+        if lower == "fae" {
+            if let url = Bundle.module.url(forResource: "fae", withExtension: "bin", subdirectory: "Voices"),
+               let embedding = Self.loadBinFile(url: url) {
+                voiceEmbedding = embedding
+                voiceName = "fae"
+                NSLog("KokoroMLXTTSEngine: voice switched → fae (bundled)")
+            }
+        } else if let vDir = voicesDir,
+                  let embedding = Self.loadVoiceEmbedding(voicesDir: vDir, name: lower) {
+            voiceEmbedding = embedding
+            voiceName = lower
+            NSLog("KokoroMLXTTSEngine: voice switched → %@", lower)
+        } else {
+            NSLog("KokoroMLXTTSEngine: switchVoice — no embedding found for '%@'", name)
+        }
+    }
+
+    /// Synthesize a short preview for a named voice without changing the persistent voice.
+    /// Returns nil if the engine is not ready or the voice is unavailable.
+    func previewSynthesize(voice: String, text: String) async throws -> AVAudioPCMBuffer? {
+        guard let tts = kokoroTTS else { return nil }
+        let lower = voice.lowercased()
+        let embedding: MLXArray?
+        if lower == "fae" {
+            embedding = Bundle.module.url(forResource: "fae", withExtension: "bin", subdirectory: "Voices")
+                .flatMap { Self.loadBinFile(url: $0) }
+        } else if let vDir = voicesDir {
+            embedding = Self.loadVoiceEmbedding(voicesDir: vDir, name: lower)
+        } else {
+            embedding = nil
+        }
+        guard let e = embedding else { return nil }
+        await InferencePriorityController.shared.begin(.kokoroTTS)
+        defer { Task { await InferencePriorityController.shared.end(.kokoroTTS) } }
+        let (samples, _) = try tts.generateAudio(voice: e, language: .enUS, text: text, speed: speed)
+        guard !samples.isEmpty else { return nil }
+        return try Self.makePCMBuffer(from: samples)
+    }
+
     func synthesize(text: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         synthesize(text: text, voiceInstruct: nil)
     }

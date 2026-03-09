@@ -239,4 +239,36 @@ final class ApprovalManagerTests: XCTestCase {
 
         XCTAssertEqual(resolutionSources, ["timeout"])
     }
+
+    func testPendingApprovalSnapshotsTrackAndClearCurrentRequests() async throws {
+        let bus = FaeEventBus()
+        let manager = ApprovalManager(eventBus: bus)
+        let requested = expectation(description: "approval requested")
+
+        bus.subject.sink { event in
+            if case .approvalRequested = event {
+                requested.fulfill()
+            }
+        }.store(in: &cancellables)
+
+        let task = Task {
+            await manager.requestApproval(toolName: "write", description: "Write a file")
+        }
+
+        await fulfillment(of: [requested], timeout: 1.0)
+        let pending = await manager.pendingApprovalSnapshots()
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending.first?["tool"] as? String, "write")
+        XCTAssertEqual(pending.first?["summary"] as? String, "Write a file")
+        let mostRecentPendingID = await manager.mostRecentPendingApprovalID()
+        XCTAssertEqual(mostRecentPendingID, pending.first?["id"] as? UInt64)
+
+        await manager.clearPendingApprovals(source: "test")
+        let denied = await task.value
+        XCTAssertFalse(denied)
+        let remainingPending = await manager.pendingApprovalSnapshots()
+        let remainingPendingID = await manager.mostRecentPendingApprovalID()
+        XCTAssertTrue(remainingPending.isEmpty)
+        XCTAssertNil(remainingPendingID)
+    }
 }

@@ -217,6 +217,7 @@ final class ApprovalOverlayController: ObservableObject {
     /// Approve the active request (button tap).
     func approve() {
         guard let request = activeApproval else { return }
+        NSLog("ApprovalOverlayController: approve() request_id=%llu tool=%@", request.id, request.toolName)
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,
@@ -232,6 +233,7 @@ final class ApprovalOverlayController: ObservableObject {
     /// Deny the active request (button tap).
     func deny() {
         guard let request = activeApproval else { return }
+        NSLog("ApprovalOverlayController: deny() request_id=%llu tool=%@", request.id, request.toolName)
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,
@@ -247,6 +249,7 @@ final class ApprovalOverlayController: ObservableObject {
     /// Approve and remember: auto-approve this tool name forever.
     func approveAlways() {
         guard let request = activeApproval else { return }
+        NSLog("ApprovalOverlayController: approveAlways() request_id=%llu tool=%@", request.id, request.toolName)
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,
@@ -263,6 +266,7 @@ final class ApprovalOverlayController: ObservableObject {
     /// Approve all low-risk (read-only) tools permanently.
     func approveAllReadOnly() {
         guard let request = activeApproval else { return }
+        NSLog("ApprovalOverlayController: approveAllReadOnly() request_id=%llu tool=%@", request.id, request.toolName)
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,
@@ -278,6 +282,7 @@ final class ApprovalOverlayController: ObservableObject {
     /// Approve all tools currently allowed by the selected tool mode.
     func approveAll() {
         guard let request = activeApproval else { return }
+        NSLog("ApprovalOverlayController: approveAll() request_id=%llu", request.id)
         NotificationCenter.default.post(
             name: .faeApprovalRespond,
             object: nil,

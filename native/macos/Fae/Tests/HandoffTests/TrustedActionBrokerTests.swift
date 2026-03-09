@@ -189,6 +189,29 @@ final class TrustedActionBrokerTests: XCTestCase {
         }
     }
 
+    func testAutonomousExplicitHighRiskAllowsWithoutConfirmation() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["bash"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(
+                toolName: "bash",
+                risk: .high,
+                requiresApproval: true,
+                explicitUserAuthorization: true,
+                profile: .moreAutonomous
+            )
+        )
+
+        if case .allow = decision {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("Expected allow for explicit high-risk action in autonomous mode")
+        }
+    }
+
     func testCautiousProfileAlwaysConfirms() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["read"],

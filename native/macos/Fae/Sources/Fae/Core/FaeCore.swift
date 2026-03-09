@@ -1083,10 +1083,38 @@ final class FaeCore: ObservableObject, HostCommandSender {
     func respondToApproval(requestID: UInt64, decisionStr: String?, toolName: String?, payload: [String: Any]) {
         let approved = payload["approved"] as? Bool ?? true
         guard let decision = mapDecision(decisionStr, approved: approved) else { return }
+        NSLog(
+            "FaeCore: respondToApproval request_id=%llu approved=%@ decision=%@ tool=%@ payload_keys=%@",
+            requestID,
+            String(describing: approved),
+            String(describing: decisionStr),
+            String(describing: toolName),
+            payload.keys.sorted().joined(separator: ",")
+        )
 
         Task {
             await approvalManager.resolve(requestId: requestID, decision: decision, source: "button")
         }
+    }
+
+    func pendingApprovalSnapshots() async -> [[String: Any]] {
+        await approvalManager.pendingApprovalSnapshots()
+    }
+
+    func mostRecentPendingApprovalID() async -> UInt64? {
+        await approvalManager.mostRecentPendingApprovalID()
+    }
+
+    func clearPendingApprovalsForTest() async {
+        await approvalManager.clearPendingApprovals(source: "test_reset")
+    }
+
+    func clearAllToolApprovalsForTest() async {
+        await ApprovedToolsStore.shared.revokeAll()
+    }
+
+    func clearUserSchedulerTasksForTest() async {
+        _ = await scheduler?.deleteAllUserTasksForTest()
     }
 
     /// Legacy method for simple approved/denied resolution.

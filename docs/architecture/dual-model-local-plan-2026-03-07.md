@@ -14,7 +14,7 @@ Recommendation: ship a **dual-model local architecture** for the premium local e
 
 ### Default pair
 
-- **Operator model:** `qwen3.5-2b`
+- **Operator model:** `qwen3.5-9b` on 24+ GB systems, `qwen3.5-4b` on 16+ GB systems
   - handles fast turns, tool routing, strict instruction following, structured output, and memory write decisions
 - **Concierge model:** `LiquidAI/LFM2-24B-A2B-MLX-4bit`
   - handles richer summarization, longer-form drafting, reflective background work, and higher-empathy responses
@@ -24,7 +24,7 @@ Recommendation: ship a **dual-model local architecture** for the premium local e
 Because MLX concurrency is currently a constraint, the safest architecture is:
 
 - **main app process** = orchestration, audio pipeline, tool execution, memory, UI
-- **LLM worker process A** = operator model (`qwen3.5-2b`)
+- **LLM worker process A** = operator model (`qwen3.5-9b` / `qwen3.5-4b`)
 - **LLM worker process B** = concierge model (`LFM2-24B-A2B`)
 
 This avoids fighting single-process MLX contention and gives the best path to a stable premium experience.
@@ -43,7 +43,7 @@ The dual-model local system should produce:
 
 Benchmarks now suggest a split between two kinds of excellence:
 
-- **best operator / control model:** `qwen3.5-2b`
+- **best launch-grade operator / control tier:** `qwen3.5-9b` or `qwen3.5-4b`, depending on RAM and startup budget
 - **best richer assistant / summary model:** `LFM2-24B-A2B`
 
 A single-model strategy forces a compromise. A dual-model strategy does not.

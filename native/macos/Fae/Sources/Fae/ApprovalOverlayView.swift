@@ -110,7 +110,6 @@ private struct ApprovalCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
-                .keyboardShortcut(.return, modifiers: [])
 
                 Button(action: { controller.approveAlways() }) {
                     Text("Always")
@@ -391,7 +390,6 @@ private struct ManualApprovalCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
-                .keyboardShortcut(.return, modifiers: [])
             }
         }
         .padding(14)

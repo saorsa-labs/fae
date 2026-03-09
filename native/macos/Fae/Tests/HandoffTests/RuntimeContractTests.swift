@@ -531,6 +531,25 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCoreStartEnrollmentRequestsNativeAudioFlow() async throws {
+        let core = FaeCore()
+        let expectation = expectation(description: "native enrollment requested")
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: .faeStartNativeEnrollmentRequested,
+            object: nil,
+            queue: .main
+        ) { _ in
+            expectation.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        core.sendCommand(name: "speaker.start_enrollment", payload: [:])
+
+        await fulfillment(of: [expectation], timeout: 1.0)
+    }
+
+    @MainActor
     func testPipelineAuxBridgeTracksLocalModelStackDiagnostics() {
         let controller = PipelineAuxBridgeController()
 

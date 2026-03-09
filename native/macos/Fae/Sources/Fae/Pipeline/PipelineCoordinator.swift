@@ -140,18 +140,178 @@ actor PipelineCoordinator {
         privacyModeLive = mode
     }
 
-    static func shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: Bool) -> Bool {
-        !firstOwnerEnrollmentActive
+    static func shouldRecallMemoryForTurn(
+        firstOwnerEnrollmentActive: Bool,
+        userText: String,
+        availableToolNames: [String]
+    ) -> Bool {
+        guard !firstOwnerEnrollmentActive else { return false }
+        return !shouldSuppressEpisodeRecallForToolSensitiveTurn(
+            userText: userText,
+            availableToolNames: availableToolNames
+        )
     }
 
     static func visibleToolNamesForTurn(
         firstOwnerEnrollmentActive: Bool,
+        userText: String,
+        availableToolNames: [String],
         proactiveAllowedTools: Set<String>?
     ) -> Set<String>? {
         if firstOwnerEnrollmentActive {
             return ["voice_identity"]
         }
-        return proactiveAllowedTools
+        let explicitMentions = explicitlyMentionedToolNames(
+            in: userText,
+            availableToolNames: availableToolNames
+        )
+        switch (proactiveAllowedTools, explicitMentions.isEmpty) {
+        case let (allowed?, false):
+            let narrowed = allowed.intersection(explicitMentions)
+            return narrowed.isEmpty ? allowed : narrowed
+        case let (allowed?, true):
+            return allowed
+        case (nil, false):
+            return explicitMentions
+        case (nil, true):
+            return nil
+        }
+    }
+
+    static func explicitlyMentionedToolNames(
+        in userText: String,
+        availableToolNames: [String]
+    ) -> Set<String> {
+        let normalized = " " + userText.lowercased() + " "
+        var matches: Set<String> = []
+
+        for toolName in availableToolNames {
+            for alias in toolNameAliases(toolName) {
+                guard !alias.isEmpty else { continue }
+                if normalized.contains(" \(alias) ") {
+                    matches.insert(toolName)
+                    break
+                }
+            }
+        }
+
+        return matches
+    }
+
+    static func shouldSuppressEpisodeRecallForToolSensitiveTurn(
+        userText: String,
+        availableToolNames: [String]
+    ) -> Bool {
+        if isEphemeralArithmeticQuery(userText) {
+            return true
+        }
+
+        if !explicitlyMentionedToolNames(in: userText, availableToolNames: availableToolNames).isEmpty {
+            return true
+        }
+
+        if isToolBackedLookupRequest(userText) {
+            return true
+        }
+
+        let lower = userText.lowercased()
+        if lower.contains("http://") || lower.contains("https://") {
+            return true
+        }
+
+        let pathHints = ["read", "write", "edit", "file", "folder", "path"]
+        if userText.contains("/") && pathHints.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        let commandHints = ["bash", "terminal", "command line", "run the command", "execute this command"]
+        if commandHints.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        return false
+    }
+
+    private static let arithmeticNumberWords: Set<String> = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+        "seventeen", "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty",
+        "sixty", "seventy", "eighty", "ninety", "hundred",
+    ]
+
+    private static func isEphemeralArithmeticQuery(_ text: String) -> Bool {
+        let lower = " " + text.lowercased() + " "
+        let operatorHints = [
+            " plus ", " minus ", " times ", " multiplied by ", " divided by ",
+            " over ", " x ", " * ", " / ", " + ", " - ",
+        ]
+        guard operatorHints.contains(where: { lower.contains($0) }) else { return false }
+
+        let digitCount = text
+            .replacingOccurrences(of: #"[^0-9]+"#, with: " ", options: .regularExpression)
+            .split(separator: " ")
+            .count
+        let wordCount = lower
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { arithmeticNumberWords.contains($0) }
+            .count
+
+        return digitCount + wordCount >= 2
+    }
+
+    static func shouldAcceptVoiceApprovalResponse(
+        awaitingApproval: Bool,
+        manualOnlyApprovalPending: Bool,
+        assistantSpeaking: Bool
+    ) -> Bool {
+        guard awaitingApproval else { return false }
+        guard !manualOnlyApprovalPending else { return false }
+        return !assistantSpeaking
+    }
+
+    private static func toolNameAliases(_ toolName: String) -> [String] {
+        var aliases: Set<String> = [toolName.lowercased()]
+        aliases.insert(toolName.lowercased().replacingOccurrences(of: "_", with: " "))
+        aliases.insert(toolName.lowercased().replacingOccurrences(of: "_", with: ""))
+
+        switch toolName {
+        case "self_config":
+            aliases.formUnion(["self config", "settings tool", "config tool"])
+        case "web_search":
+            aliases.formUnion(["web search", "search tool"])
+        case "fetch_url":
+            aliases.formUnion(["fetch url", "url fetch", "fetch tool"])
+        case "window_control":
+            aliases.formUnion(["window control", "window tool"])
+        case "read_screen":
+            aliases.formUnion(["read screen", "screen reader tool"])
+        case "type_text":
+            aliases.formUnion(["type text", "typing tool"])
+        case "find_element":
+            aliases.formUnion(["find element", "find on screen"])
+        case "voice_identity":
+            aliases.formUnion(["voice identity", "voice profile", "speaker profile"])
+        case "activate_skill":
+            aliases.formUnion(["activate skill", "skill activation"])
+        case "run_skill":
+            aliases.formUnion(["run skill", "execute skill"])
+        case "manage_skill":
+            aliases.formUnion(["manage skill", "skill manager"])
+        case "scheduler_list":
+            aliases.formUnion(["scheduler list", "list schedules", "list schedule"])
+        case "scheduler_create":
+            aliases.formUnion(["scheduler create", "create schedule", "create a schedule"])
+        case "scheduler_update":
+            aliases.formUnion(["scheduler update", "update schedule"])
+        case "scheduler_delete":
+            aliases.formUnion(["scheduler delete", "delete schedule"])
+        case "scheduler_trigger":
+            aliases.formUnion(["scheduler trigger", "run schedule now", "trigger schedule"])
+        default:
+            break
+        }
+
+        return aliases.sorted()
     }
 
     static func llmFailureFallbackMessage(
@@ -163,6 +323,12 @@ actor PipelineCoordinator {
             return "I can hear you. Use Let me get to know you to record your voice, and then I'll recognize you properly."
         }
         return "I hit a local model problem just then. Please try that once more."
+    }
+
+    static func prefersLegacyInlineToolPrompt(modelId: String?) -> Bool {
+        guard let modelId else { return false }
+        let normalized = modelId.lowercased()
+        return normalized.contains("qwen3.5") || normalized.contains("qwen3-")
     }
 
     /// Update the model locality (local vs. non-local co-work) for damage-control policy.
@@ -221,6 +387,7 @@ actor PipelineCoordinator {
                   let channelData = buffer.floatChannelData?[0]
             else { return }
             let samples = Array(UnsafeBufferPointer(start: channelData, count: Int(buffer.frameLength)))
+            markAssistantSpeechStarted()
             await playback.enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
         } catch {
             NSLog("PipelineCoordinator: voice preview failed: %@", error.localizedDescription)
@@ -270,6 +437,7 @@ actor PipelineCoordinator {
     /// Active generation scope for streaming-token isolation across interrupted turns.
     private var activeGenerationID: UUID?
     private var interrupted: Bool = false
+    private var interruptedGenerationID: UUID?
     private var awaitingApproval: Bool = false
     /// When true, the current pending approval requires a physical button press.
     /// Voice "yes/no" is rejected and Fae speaks an explanation instead.
@@ -555,7 +723,7 @@ actor PipelineCoordinator {
     /// Stop the pipeline.
     func stop() async {
         debugLog(debugConsole, .qa, "Pipeline stop requested")
-        interrupted = true
+        markGenerationInterrupted()
         pendingGovernanceAction = nil
         awaitingApproval = false
         manualOnlyApprovalPending = false
@@ -573,6 +741,8 @@ actor PipelineCoordinator {
         await stopSpeechSegmentProcessingLoop()
         await capture.stopCapture()
         await playback.stop()
+        await llmEngine.shutdown()
+        await conciergeEngine?.shutdown()
         eventBus.send(.pipelineStateChanged(.stopped))
         NSLog("PipelineCoordinator: pipeline stopped")
     }
@@ -582,7 +752,7 @@ actor PipelineCoordinator {
     /// Sets `interrupted = true` and stops audio playback. The pipeline
     /// loop checks `interrupted` at each step and exits cleanly.
     func cancel() {
-        interrupted = true
+        markGenerationInterrupted()
         pendingGovernanceAction = nil
         computerUseStepCount = 0
 
@@ -599,7 +769,7 @@ actor PipelineCoordinator {
 
     /// Cancel and await full stop — including playback + deferred tools (test harness use).
     func cancelAndWait() async {
-        interrupted = true
+        markGenerationInterrupted()
         pendingGovernanceAction = nil
         awaitingApproval = false
         manualOnlyApprovalPending = false
@@ -691,7 +861,7 @@ actor PipelineCoordinator {
 
         // If assistant is active, trigger barge-in.
         if assistantSpeaking || assistantGenerating {
-            interrupted = true
+            markGenerationInterrupted()
             await playback.stop()
         }
 
@@ -939,6 +1109,7 @@ actor PipelineCoordinator {
         await conversationState.clear()
         await llmEngine.resetSession()
         await conciergeEngine?.resetSession()
+        _ = await RoleplaySessionStore.shared.stop()
         currentTurnGenerationContext = nil
         NSLog("PipelineCoordinator: conversation history cleared (test reset)")
     }
@@ -951,6 +1122,49 @@ actor PipelineCoordinator {
 
     private func currentDualModelPlan() -> FaeConfig.LocalModelStackPlan {
         FaeConfig.recommendedLocalModelStack(config: config)
+    }
+
+    private func selectedLocalModel(for route: TurnLLMRoute) -> FaeConfig.LocalLLMSelection {
+        let plan = currentDualModelPlan()
+        switch route {
+        case .operatorModel:
+            return plan.operatorModel
+        case .conciergeModel:
+            return plan.conciergeModel ?? plan.operatorModel
+        }
+    }
+
+    private func ensureLLMReady(
+        _ engine: any LLMEngine,
+        route: TurnLLMRoute
+    ) async -> Bool {
+        if await engine.isLoaded {
+            return true
+        }
+
+        let selection = selectedLocalModel(for: route)
+        debugLog(
+            debugConsole,
+            .pipeline,
+            "LLM reload requested for route=\(route.rawValue) model=\(selection.modelId)"
+        )
+        do {
+            try await engine.load(modelID: selection.modelId)
+            return true
+        } catch {
+            NSLog(
+                "PipelineCoordinator: failed to reload %@ model %@: %@",
+                route.rawValue,
+                selection.modelId,
+                error.localizedDescription
+            )
+            debugLog(
+                debugConsole,
+                .pipeline,
+                "⚠️ LLM reload failed for route=\(route.rawValue): \(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     private func selectLLMRoute(
@@ -1014,7 +1228,7 @@ actor PipelineCoordinator {
         idleRearmTask = nil
         engagedUntil = nil
         if assistantSpeaking || assistantGenerating {
-            interrupted = true
+            markGenerationInterrupted()
             Task { await playback.stop() }
         }
         NSLog("PipelineCoordinator: gate → idle")
@@ -1038,6 +1252,17 @@ actor PipelineCoordinator {
             return "strict_local"
         }
         return privacyModeLive ?? config.privacy.mode
+    }
+
+    private func selectedModelId(for route: TurnLLMRoute) -> String? {
+        switch route {
+        case .operatorModel:
+            return FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset).modelId
+        case .conciergeModel:
+            return FaeConfig.recommendedConciergeModel(
+                preset: config.llm.conciergeModelPreset
+            )?.modelId
+        }
     }
 
     private func effectiveRequireDirectAddress() -> Bool {
@@ -1174,7 +1399,13 @@ actor PipelineCoordinator {
         }
 
         if gateState != .active {
-            return addressedToFae ? .wakeAndContinue : .ignoreWhileSleeping
+            if addressedToFae {
+                return .wakeAndContinue
+            }
+            if speakerAllowsConversation && wordCount >= 4 {
+                return .wakeAndContinue
+            }
+            return .ignoreWhileSleeping
         }
 
         if requireDirectAddress,
@@ -2014,6 +2245,12 @@ actor PipelineCoordinator {
                 // Only a physical button press on the overlay can proceed.
                 debugLog(debugConsole, .approval, "Voice rejected for manual-only approval: \(effectiveText)")
                 await speakDirect("This operation requires a deliberate button press to confirm. Voice approval is not accepted — please use the overlay.")
+            } else if !Self.shouldAcceptVoiceApprovalResponse(
+                awaitingApproval: awaitingApproval,
+                manualOnlyApprovalPending: manualOnlyApprovalPending,
+                assistantSpeaking: assistantSpeaking
+            ) {
+                debugLog(debugConsole, .approval, "Ignoring voice approval while assistant is still speaking the approval prompt")
             } else if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText),
                let manager = approvalManager,
                await manager.resolveMostRecent(decision: decision, source: "voice")
@@ -2569,7 +2806,7 @@ actor PipelineCoordinator {
             let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
             if bargeInEnabled {
                 // Barge-in: interrupt speech and process the new transcription.
-                interrupted = true
+                markGenerationInterrupted()
                 pendingTTSTask?.cancel()
                 pendingTTSTask = nil
                 await playback.stop()
@@ -3135,16 +3372,11 @@ actor PipelineCoordinator {
 
         await refreshDegradedModeIfNeeded(context: "before_generation")
 
-        guard await llmEngine.isLoaded else {
-            NSLog("PipelineCoordinator: LLM not loaded")
-            debugLog(debugConsole, .pipeline, "⚠️ LLM not loaded — cannot generate")
-            return
-        }
-
         let generationContext: GenerationContext
         if !isToolFollowUp {
             debugLog(debugConsole, .qa, "=== TURN START user=\(userText.prefix(160)) ===")
             interrupted = false
+            interruptedGenerationID = nil
             // Ensure no stale TTS tasks from a previous turn can block this one.
             pendingTTSTask?.cancel()
             pendingTTSTask = nil
@@ -3174,9 +3406,42 @@ actor PipelineCoordinator {
                 registry: registry
             )
 
+            if proactiveContext == nil,
+               let inferredToolCall = Self.repairedToolCallForSkippedTurn(userText),
+               let preflightDenial = Self.preflightToolDenial(
+                    for: [inferredToolCall],
+                    registry: registry,
+                    toolMode: toolMode,
+                    privacyMode: privacyMode
+               )
+            {
+                debugLog(
+                    debugConsole,
+                    .approval,
+                    "Blocked requested tool before generation: \(inferredToolCall.name) — \(preflightDenial)"
+                )
+                let msg = "I can't do that in the current mode: \(preflightDenial)"
+                eventBus.send(.assistantText(text: msg, isFinal: true))
+                if allowsAudibleOutput {
+                    await speakText(msg, isFinal: true)
+                }
+                await conversationState.addAssistantMessage(
+                    msg,
+                    tag: proactiveContext?.conversationTag
+                )
+                endAssistantGeneration()
+                activeCapabilityTicket = nil
+                debugLog(debugConsole, .qa, "=== TURN END blocked_before_generation tool=\(inferredToolCall.name) ===")
+                return
+            }
+
             // Memory recall — inject context before generation.
             let memoryContext: String?
-            if Self.shouldRecallMemoryForTurn(firstOwnerEnrollmentActive: firstOwnerEnrollmentActive) {
+            if Self.shouldRecallMemoryForTurn(
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                userText: userText,
+                availableToolNames: registry.toolNames
+            ) {
                 memoryContext = await memoryOrchestrator?.recall(
                     query: userText,
                     proactiveTaskId: proactiveContext?.taskId
@@ -3200,6 +3465,8 @@ actor PipelineCoordinator {
             )
             let visibleToolNames = Self.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                userText: userText,
+                availableToolNames: registry.toolNames,
                 proactiveAllowedTools: proactiveContext?.allowedTools
             )
             let toolsAvailableForTurn = toolMode != "off"
@@ -3213,6 +3480,10 @@ actor PipelineCoordinator {
                 toolsAvailable: toolsAvailableForTurn
             )
             let includeTools = toolsAvailableForTurn && selectedRoute == .operatorModel
+            let selectedModelId = selectedModelId(for: selectedRoute)
+            let preferLegacyInlineToolPrompt = Self.prefersLegacyInlineToolPrompt(
+                modelId: selectedModelId
+            )
 
             let hiddenToolsReason: String? = {
                 guard !includeTools else { return nil }
@@ -3271,7 +3542,7 @@ actor PipelineCoordinator {
                 legacySkills = []
             }
             // Build native tool specs for MLX tool calling.
-            let nativeTools = includeTools
+            let nativeTools = includeTools && !preferLegacyInlineToolPrompt
                 ? registry.nativeToolSpecs(
                     for: toolMode,
                     privacyMode: privacyMode,
@@ -3299,6 +3570,12 @@ actor PipelineCoordinator {
 
             if let specs = nativeTools {
                 debugLog(debugConsole, .pipeline, "Native tool specs: \(specs.count) tools")
+            } else if includeTools, preferLegacyInlineToolPrompt {
+                debugLog(
+                    debugConsole,
+                    .pipeline,
+                    "Using legacy inline tool prompt for model=\(selectedModelId ?? "unknown")"
+                )
             }
 
             if let schemas = toolSchemas {
@@ -3422,6 +3699,7 @@ actor PipelineCoordinator {
         thinkTagStripper = TextProcessing.ThinkTagStripper()
         voiceTagStripper = VoiceTagStripper()
         let roleplayActive = await RoleplaySessionStore.shared.isActive
+        var roleplayChunker = RoleplaySpeechChunker()
         var fullResponse = ""
         var sentenceBuffer = ""
         var detectedToolCall = false
@@ -3437,7 +3715,10 @@ actor PipelineCoordinator {
             eventBus.send(.thinkingText(text: "", isActive: true))
         }
         var firstTtsSent = false
-        let suppressProvisionalSpeechForLikelyToolTurn = !isToolFollowUp && Self.isToolBackedLookupRequest(userText)
+        let suppressProvisionalOutputForLikelyToolTurn = !isToolFollowUp && (
+            Self.isToolBackedLookupRequest(userText)
+                || Self.repairedToolCallForSkippedTurn(userText) != nil
+        )
         let llmStartedAt = Date()
         var llmTokenCount = 0
         var firstTokenAt: Date?
@@ -3515,12 +3796,11 @@ actor PipelineCoordinator {
                 return
             }
 
-            // Tool-backed lookup turns often emit provisional wording before tool calls.
-            // Keep UI text live, but avoid speaking provisional chunks to prevent
-            // rambling/contradictory audio while tools are still pending.
-            if suppressProvisionalSpeechForLikelyToolTurn {
-                recordVisibleText(cleaned)
-                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+            // Explicit tool-backed turns often emit provisional prose before the
+            // actual repair/approval path runs. Hide those chunks entirely so the
+            // user sees the real tool/approval state rather than a fake success.
+            if suppressProvisionalOutputForLikelyToolTurn {
+                debugLog(debugConsole, .pipeline, "[suppressed provisional tool-turn text] \(String(cleaned.prefix(80)))")
                 return
             }
 
@@ -3548,7 +3828,46 @@ actor PipelineCoordinator {
             eventBus.send(.assistantText(text: cleaned, isFinal: false))
             if generationContext.allowsAudibleOutput {
                 recordSpokenText(cleaned)
-                enqueueTTS(cleaned, isFinal: false)
+                enqueueTTS(cleaned, isFinal: false, generationID: generationID)
+            }
+        }
+
+        func voiceInstruct(for character: String?) async -> String? {
+            guard let character else { return nil }
+
+            var matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
+            if matched == nil {
+                let globalEntry = await CharacterVoiceLibrary.shared.find(name: character)
+                matched = globalEntry?.voiceInstruct
+            }
+            if matched == nil {
+                NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
+            }
+            return matched
+        }
+
+        func emitRoleplayChunk(_ chunk: RoleplaySpeechChunk, isFinal: Bool) async {
+            let cleaned = TextProcessing.stripNonSpeechChars(chunk.text)
+            guard !cleaned.isEmpty else { return }
+
+            if TextProcessing.looksLikeNonProse(cleaned) {
+                debugLog(debugConsole, .pipeline, "[suppressed non-prose roleplay TTS] \(String(cleaned.prefix(80)))")
+                recordVisibleText(cleaned)
+                eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
+                return
+            }
+
+            if suppressProvisionalOutputForLikelyToolTurn {
+                debugLog(debugConsole, .pipeline, "[suppressed provisional roleplay tool-turn text] \(String(cleaned.prefix(80)))")
+                return
+            }
+
+            let voice = await voiceInstruct(for: chunk.character)
+            recordVisibleText(cleaned)
+            eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
+            if generationContext.allowsAudibleOutput {
+                recordSpokenText(cleaned)
+                enqueueTTS(cleaned, isFinal: isFinal, voiceInstruct: voice, generationID: generationID)
             }
         }
 
@@ -3562,14 +3881,29 @@ actor PipelineCoordinator {
         }
 
         let activeLLMEngine = engine(for: generationContext.route)
+        guard await ensureLLMReady(activeLLMEngine, route: generationContext.route) else {
+            NSLog("PipelineCoordinator: LLM not loaded for route %@", generationContext.route.rawValue)
+            debugLog(
+                debugConsole,
+                .pipeline,
+                "⚠️ LLM not loaded for route=\(generationContext.route.rawValue) — cannot generate"
+            )
+            return
+        }
         let inferenceClass: InferenceWorkClass = generationContext.route == .operatorModel
             ? .operatorLLM
             : .conciergeLLM
         await InferencePriorityController.shared.begin(inferenceClass)
-        defer {
+        var inferencePriorityReleased = false
+        let releaseInferencePriority = {
+            guard !inferencePriorityReleased else { return }
+            inferencePriorityReleased = true
             Task {
                 await InferencePriorityController.shared.end(inferenceClass)
             }
+        }
+        defer {
+            releaseInferencePriority()
         }
 
         let tokenStream = await activeLLMEngine.generate(
@@ -3589,7 +3923,7 @@ actor PipelineCoordinator {
                     break
                 }
 
-                guard !interrupted else {
+                guard !isGenerationInterrupted(generationID) else {
                     NSLog("PipelineCoordinator: generation interrupted")
                     break
                 }
@@ -3674,34 +4008,12 @@ actor PipelineCoordinator {
 
                     // Roleplay mode: route through voice tag parser for per-character TTS.
                     if roleplayActive {
-                    let segments = voiceTagStripper.process(visible)
-                    for segment in segments {
-                        let voice: String?
-                        if let character = segment.character {
-                            // Check session first, then fall back to global character voice library.
-                            var matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
-                            if matched == nil {
-                                let globalEntry = await CharacterVoiceLibrary.shared.find(name: character)
-                                matched = globalEntry?.voiceInstruct
-                            }
-                            if matched == nil {
-                                NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
-                            }
-                            voice = matched
-                        } else {
-                            voice = nil
+                        let segments = voiceTagStripper.process(visible)
+                        let readyChunks = roleplayChunker.process(segments)
+                        for chunk in readyChunks {
+                            await emitRoleplayChunk(chunk, isFinal: false)
                         }
-                        let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
-                        if !cleaned.isEmpty {
-                            recordVisibleText(cleaned)
-                            eventBus.send(.assistantText(text: cleaned, isFinal: false))
-                            if generationContext.allowsAudibleOutput {
-                                recordSpokenText(cleaned)
-                                enqueueTTS(cleaned, isFinal: false, voiceInstruct: voice)
-                            }
-                        }
-                    }
-                } else {
+                    } else {
                     // Standard sentence-boundary streaming flow.
                     sentenceBuffer += visible
 
@@ -3834,36 +4146,129 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .qa, "⚠️ Model emitted tool_call markup but no valid calls parsed")
         }
 
+        // Release the LLM slot before any final TTS flush or tool follow-up work.
+        releaseInferencePriority()
+
+        if turnCount == 0,
+           toolCalls.isEmpty,
+           proactiveContext == nil,
+           let repairCall = Self.repairedToolCallForSkippedTurn(userText),
+           effectiveToolMode() != "off",
+           Self.shouldAttemptRepairToolCall(
+                repairCall,
+                registry: registry,
+                toolMode: effectiveToolMode(),
+                privacyMode: effectivePrivacyMode()
+           )
+        {
+            debugLog(debugConsole, .qa, "Tool repair fallback: forcing \(repairCall.name) tool call")
+            if Self.canRunDeferredToolCalls([repairCall], registry: registry) {
+                let ack = "I’ll check that in the background and report back as soon as it’s ready."
+                eventBus.send(.assistantText(text: ack, isFinal: true))
+                if generationContext.allowsAudibleOutput {
+                    enqueueTTS(ack, isFinal: true, generationID: generationID)
+                }
+
+                await awaitPendingTTS()
+                if generationContext.allowsAudibleOutput {
+                    await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_repaired_deferred_tools")
+                }
+
+                await startDeferredToolJob(
+                    userText: userText,
+                    toolCalls: [repairCall],
+                    assistantToolMessage: "I'll check that with the \(repairCall.name) tool.",
+                    forceSuppressThinking: forceSuppressThinking,
+                    capabilityTicket: activeCapabilityTicket,
+                    explicitUserAuthorization: explicitUserAuthorizationForTurn,
+                    generationContext: generationContext,
+                    originTurnID: currentTurnID
+                )
+
+                endAssistantGeneration()
+                engage()
+                activeCapabilityTicket = nil
+                debugLog(debugConsole, .qa, "=== TURN END repaired_deferred_tools count=1 ===")
+                return
+            }
+
+            let repairCallID = UUID().uuidString
+            let inputJSON = Self.serializeArguments(repairCall.arguments)
+            eventBus.send(.toolCall(id: repairCallID, name: repairCall.name, inputJSON: inputJSON))
+
+            let repairResult = await executeTool(
+                repairCall,
+                proactiveContext: proactiveContext,
+                generationContextOverride: generationContext
+            )
+
+            eventBus.send(.toolResult(
+                id: repairCallID,
+                name: repairCall.name,
+                success: !repairResult.isError,
+                output: String(repairResult.output.prefix(200))
+            ))
+
+            if !repairResult.isError {
+                let trimmedRepairOutput = repairResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                if repairCall.name == "bash",
+                   !trimmedRepairOutput.isEmpty,
+                   trimmedRepairOutput.count <= 500
+                {
+                    let directReply = "Command output:\n\(trimmedRepairOutput)"
+                    eventBus.send(.assistantText(text: directReply, isFinal: true))
+                    if generationContext.allowsAudibleOutput {
+                        await speakText(directReply, isFinal: true)
+                    }
+                    await conversationState.addAssistantMessage(
+                        directReply,
+                        tag: proactiveContext?.conversationTag
+                    )
+                    await synchronizeLLMSession()
+                    endAssistantGeneration()
+                    engage()
+                    activeCapabilityTicket = nil
+                    debugLog(debugConsole, .qa, "=== TURN END repaired_direct_tool_reply name=\(repairCall.name) ===")
+                    return
+                }
+
+                await conversationState.addAssistantMessage(
+                    "I checked that with the \(repairCall.name) tool.",
+                    tag: proactiveContext?.conversationTag
+                )
+                await conversationState.addToolResult(
+                    id: repairCallID,
+                    name: repairCall.name,
+                    content: repairResult.output
+                )
+
+                await generateWithTools(
+                    userText: userText,
+                    isToolFollowUp: true,
+                    turnCount: turnCount + 1,
+                    forceSuppressThinking: true,
+                    generationContext: generationContext,
+                    generationID: generationID,
+                    proactiveContext: proactiveContext
+                )
+                return
+            }
+
+            debugLog(debugConsole, .qa, "Tool repair fallback failed: \(repairResult.output)")
+        }
+
         if toolCalls.isEmpty {
             // No tool calls — flush remaining speech and finish.
             if roleplayActive {
                 // Flush voice tag stripper with remaining think-tag text.
-                let voiceRemaining = voiceTagStripper.process(remaining) + voiceTagStripper.flush()
+                let roleplaySegments = voiceTagStripper.process(remaining) + voiceTagStripper.flush()
+                let voiceRemaining = roleplayChunker.process(roleplaySegments, isFinal: true)
                 var spokeSomething = false
-                for segment in voiceRemaining {
-                    let voice: String?
-                    if let character = segment.character {
-                        var matched = await RoleplaySessionStore.shared.voiceForCharacter(character)
-                        if matched == nil {
-                            let globalEntry = await CharacterVoiceLibrary.shared.find(name: character)
-                            matched = globalEntry?.voiceInstruct
-                        }
-                        if matched == nil {
-                            NSLog("PipelineCoordinator: unassigned character '%@' — using narrator voice", character)
-                        }
-                        voice = matched
-                    } else {
-                        voice = nil
-                    }
-                    let cleaned = TextProcessing.stripNonSpeechChars(segment.text)
-                    if !cleaned.isEmpty {
-                        recordVisibleText(cleaned)
-                        eventBus.send(.assistantText(text: cleaned, isFinal: true))
-                        if generationContext.allowsAudibleOutput {
-                            recordSpokenText(cleaned)
-                            enqueueTTS(cleaned, isFinal: true, voiceInstruct: voice)
-                            spokeSomething = true
-                        }
+                for (index, chunk) in voiceRemaining.enumerated() {
+                    await emitRoleplayChunk(chunk, isFinal: index == voiceRemaining.count - 1)
+                    let cleaned = TextProcessing.stripNonSpeechChars(chunk.text)
+                    if generationContext.allowsAudibleOutput, !cleaned.isEmpty {
+                        spokeSomething = true
                     }
                 }
                 // Wait for all TTS (streaming + final) to complete.
@@ -3898,7 +4303,7 @@ actor PipelineCoordinator {
                     let fullText = filteredSentences.joined(separator: " ")
                     NSLog("PipelineCoordinator: TTS full response → \"%@\" (from %d parts)", String(fullText.prefix(120)), filteredSentences.count)
                     recordSpokenText(fullText)
-                    enqueueTTS(fullText, isFinal: true)
+                    enqueueTTS(fullText, isFinal: true, generationID: generationID)
                 }
                 // Wait for all TTS (streaming + final) to complete.
                 await awaitPendingTTS()
@@ -3933,7 +4338,7 @@ actor PipelineCoordinator {
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
                 if generationContext.allowsAudibleOutput {
                     recordSpokenText(fallback)
-                    enqueueTTS(fallback, isFinal: true)
+                    enqueueTTS(fallback, isFinal: true, generationID: generationID)
                 }
                 await awaitPendingTTS()
                 await conversationState.addAssistantMessage(fallback, tag: proactiveContext?.conversationTag)
@@ -4046,7 +4451,7 @@ actor PipelineCoordinator {
 
                 eventBus.send(.assistantText(text: fallback, isFinal: true))
                 if generationContext.allowsAudibleOutput {
-                    enqueueTTS(fallback, isFinal: true)
+                    enqueueTTS(fallback, isFinal: true, generationID: generationID)
                 }
                 await awaitPendingTTS()
                 endAssistantGeneration()
@@ -4124,7 +4529,7 @@ actor PipelineCoordinator {
             let ack = "I’ll check that in the background and report back as soon as it’s ready."
             eventBus.send(.assistantText(text: ack, isFinal: true))
             if generationContext.allowsAudibleOutput {
-                enqueueTTS(ack, isFinal: true)
+                enqueueTTS(ack, isFinal: true, generationID: generationID)
             }
 
             // Prevent audio stutter: do not launch background tool execution while
@@ -4168,16 +4573,23 @@ actor PipelineCoordinator {
         // preamble, speak a short acknowledgement so users don't hear dead air
         // while tools execute.
         var didEnqueueToolFiller = false
+        let preflightToolDenial = Self.preflightToolDenial(
+            for: Array(toolCalls.prefix(5)),
+            registry: registry,
+            toolMode: effectiveToolMode(),
+            privacyMode: effectivePrivacyMode()
+        )
         if turnCount == 0,
            !isToolFollowUp,
-           spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+           spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           preflightToolDenial == nil
         {
             let filler = Self.toolCallAcknowledgement(for: toolCalls)
             if !filler.isEmpty {
                 eventBus.send(.assistantText(text: filler, isFinal: false))
                 if generationContext.allowsAudibleOutput {
                     recordSpokenText(filler)
-                    enqueueTTS(filler, isFinal: false)
+                    enqueueTTS(filler, isFinal: false, generationID: generationID)
                     didEnqueueToolFiller = true
                 }
             }
@@ -4186,6 +4598,9 @@ actor PipelineCoordinator {
         // Add the assistant's tool-calling message to history (strip think content).
         await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse), tag: proactiveContext?.conversationTag)
         await synchronizeLLMSession()
+
+        let capabilityTicketForToolTurn = activeCapabilityTicket
+        let explicitAuthorizationForToolTurn = explicitUserAuthorizationForTurn
 
         // Prevent synthesis/playback jitter: avoid starting tool execution while
         // filler/pre-tool speech is still active.
@@ -4198,10 +4613,32 @@ actor PipelineCoordinator {
         var toolSuccessCount = 0
         var toolFailureCount = 0
         var firstToolError: String?
+        var directToolReply: String?
 
         for call in toolCalls.prefix(5) {
             let callId = UUID().uuidString
             let inputJSON = Self.serializeArguments(call.arguments)
+            let preflightDenial = Self.preflightToolDenial(
+                for: [call],
+                registry: registry,
+                toolMode: effectiveToolMode(),
+                privacyMode: effectivePrivacyMode()
+            )
+
+            if let preflightDenial {
+                debugLog(debugConsole, .approval, "Blocked tool call before execution: \(call.name) — \(preflightDenial)")
+                toolFailureCount += 1
+                if firstToolError == nil {
+                    firstToolError = preflightDenial
+                }
+                await conversationState.addToolResult(
+                    id: callId,
+                    name: call.name,
+                    content: preflightDenial,
+                    tag: proactiveContext?.conversationTag
+                )
+                continue
+            }
 
             if assistantSpeaking {
                 debugLog(debugConsole, .pipeline, "⚠️ Tool start while assistantSpeaking=true (\(call.name))")
@@ -4220,6 +4657,8 @@ actor PipelineCoordinator {
                 seenToolCallSignatures.insert(callSignature)
                 result = await executeTool(
                     call,
+                    capabilityTicketOverride: capabilityTicketForToolTurn,
+                    explicitUserAuthorizationOverride: explicitAuthorizationForToolTurn,
                     proactiveContext: proactiveContext,
                     generationContextOverride: generationContext
                 )
@@ -4243,6 +4682,12 @@ actor PipelineCoordinator {
                 }
             } else {
                 toolSuccessCount += 1
+                if toolCalls.count == 1, call.name == "bash" {
+                    let trimmed = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty, trimmed.count <= 500 {
+                        directToolReply = "Command output:\n\(trimmed)"
+                    }
+                }
             }
 
             eventBus.send(.toolResult(
@@ -4285,6 +4730,27 @@ actor PipelineCoordinator {
             }
             endAssistantGeneration()
             activeCapabilityTicket = nil
+            return
+        }
+
+        if turnCount == 0,
+           toolFailureCount == 0,
+           toolCalls.count == 1,
+           let directToolReply
+        {
+            eventBus.send(.assistantText(text: directToolReply, isFinal: true))
+            if generationContext.allowsAudibleOutput {
+                await speakText(directToolReply, isFinal: true)
+            }
+            await conversationState.addAssistantMessage(
+                directToolReply,
+                tag: proactiveContext?.conversationTag
+            )
+            await synchronizeLLMSession()
+            endAssistantGeneration()
+            engage()
+            activeCapabilityTicket = nil
+            debugLog(debugConsole, .qa, "=== TURN END direct_tool_reply name=\(toolCalls[0].name) ===")
             return
         }
 
@@ -4350,14 +4816,14 @@ actor PipelineCoordinator {
     ///
     /// Call this from inside the token generation loop. The LLM keeps producing tokens
     /// while TTS runs concurrently on the actor (re-entrant at `await` points).
-    private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) {
+    private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil, generationID: UUID? = nil) {
         // Set speaking state immediately so echo suppressor and barge-in work correctly.
         markAssistantSpeechStarted()
 
         let previous = pendingTTSTask
         pendingTTSTask = Task {
             await previous?.value  // Ensure sentence ordering
-            guard !interrupted else {
+            guard !isGenerationInterrupted(generationID) else {
                 // If this was the final chunk and we're interrupted, ensure speaking
                 // state is cleared. The barge-in path calls playback.stop() which
                 // fires .stopped → clears assistantSpeaking, but there's a race
@@ -4607,11 +5073,26 @@ actor PipelineCoordinator {
         }
 
         interrupted = true
+        interruptedGenerationID = activeGenerationID
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
         Task { await playback.stop() }
         debugLog(debugConsole, .command, "Barge-in (owner verified) rms=\(String(format: "%.4f", barge.lastRms))")
         NSLog("PipelineCoordinator: barge-in triggered (owner verified, rms=%.4f)", barge.lastRms)
+    }
+
+    private func markGenerationInterrupted() {
+        interrupted = true
+        interruptedGenerationID = activeGenerationID
+    }
+
+    private func isGenerationInterrupted(_ generationID: UUID?) -> Bool {
+        guard interrupted else { return false }
+        guard let generationID else { return true }
+        if let interruptedGenerationID {
+            return interruptedGenerationID == generationID
+        }
+        return true
     }
 
     /// Verify the barge-in speaker is the owner. Fail-closed: if owner exists but
@@ -4725,12 +5206,12 @@ actor PipelineCoordinator {
     /// - XML (Qwen3.5): `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
     static func parseToolCalls(from text: String) -> [ToolCall] {
         var calls: [ToolCall] = []
-        var searchRange = text.startIndex..<text.endIndex
+        var searchStart = text.startIndex
 
-        while let openRange = text.range(of: "<tool_call>", range: searchRange),
-              let closeRange = text.range(of: "</tool_call>", range: openRange.upperBound..<text.endIndex)
-        {
-            let content = text[openRange.upperBound..<closeRange.lowerBound]
+        while let openRange = text.range(of: "<tool_call>", range: searchStart..<text.endIndex) {
+            let closeRange = text.range(of: "</tool_call>", range: openRange.upperBound..<text.endIndex)
+            let contentEnd = closeRange?.lowerBound ?? text.endIndex
+            let content = text[openRange.upperBound..<contentEnd]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
             // Try JSON format first (Qwen3): {"name":"...","arguments":{...}}
@@ -4742,7 +5223,7 @@ actor PipelineCoordinator {
                 calls.append(call)
             }
 
-            searchRange = closeRange.upperBound..<text.endIndex
+            searchStart = closeRange?.upperBound ?? text.endIndex
         }
 
         return calls
@@ -4763,16 +5244,26 @@ actor PipelineCoordinator {
               let funcEnd = content.range(of: ">", range: funcMatch.upperBound..<content.endIndex)
         else { return nil }
         let name = String(content[funcMatch.upperBound..<funcEnd.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
 
         var args: [String: Any] = [:]
-        var paramSearch = content.startIndex..<content.endIndex
-        while let paramOpen = content.range(of: "<parameter=", range: paramSearch),
-              let paramNameEnd = content.range(of: ">", range: paramOpen.upperBound..<content.endIndex),
-              let paramClose = content.range(of: "</parameter>", range: paramNameEnd.upperBound..<content.endIndex)
+        var paramSearchStart = funcEnd.upperBound
+        while let paramOpen = content.range(of: "<parameter=", range: paramSearchStart..<content.endIndex),
+              let paramNameEnd = content.range(of: ">", range: paramOpen.upperBound..<content.endIndex)
         {
             let key = String(content[paramOpen.upperBound..<paramNameEnd.lowerBound])
-            let value = String(content[paramNameEnd.upperBound..<paramClose.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else {
+                paramSearchStart = paramNameEnd.upperBound
+                continue
+            }
+
+            let nextBoundary = nextXMLParameterBoundary(in: content, from: paramNameEnd.upperBound)
+            let paramClose = content.range(of: "</parameter>", range: paramNameEnd.upperBound..<nextBoundary)
+            let valueEnd = paramClose?.lowerBound ?? nextBoundary
+            let value = String(content[paramNameEnd.upperBound..<valueEnd])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
 
             // Try to parse value as JSON for nested objects/arrays/numbers/booleans
             if let data = value.data(using: .utf8),
@@ -4783,10 +5274,19 @@ actor PipelineCoordinator {
                 args[key] = value
             }
 
-            paramSearch = paramClose.upperBound..<content.endIndex
+            paramSearchStart = paramClose?.upperBound ?? valueEnd
         }
 
         return ToolCall(name: name, arguments: args)
+    }
+
+    private static func nextXMLParameterBoundary(in content: String, from start: String.Index) -> String.Index {
+        let parameterOpen = content.range(of: "<parameter=", range: start..<content.endIndex)?.lowerBound
+        let functionClose = content.range(of: "</function", range: start..<content.endIndex)?.lowerBound
+
+        return [parameterOpen, functionClose, content.endIndex]
+            .compactMap { $0 }
+            .min() ?? content.endIndex
     }
 
     private static func toolCallAcknowledgement(for calls: [ToolCall]) -> String {
@@ -4808,12 +5308,15 @@ actor PipelineCoordinator {
     }
 
     /// Strip tool call markup from response text, leaving only human-readable content.
-    private static func stripToolCallMarkup(_ text: String) -> String {
+    static func stripToolCallMarkup(_ text: String) -> String {
         var result = text
-        while let open = result.range(of: "<tool_call>"),
-              let close = result.range(of: "</tool_call>", range: open.upperBound..<result.endIndex)
-        {
-            result.removeSubrange(open.lowerBound..<close.upperBound)
+        while let open = result.range(of: "<tool_call>") {
+            if let close = result.range(of: "</tool_call>", range: open.upperBound..<result.endIndex) {
+                result.removeSubrange(open.lowerBound..<close.upperBound)
+            } else {
+                result.removeSubrange(open.lowerBound..<result.endIndex)
+                break
+            }
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -4934,6 +5437,342 @@ actor PipelineCoordinator {
         return hasNoun && hasVerb
     }
 
+    static func repairedToolCallForSkippedTurn(_ text: String) -> ToolCall? {
+        let lower = text.lowercased()
+        let quotedSegments = extractSingleQuotedSegments(from: text)
+        let path = extractPathCandidate(from: text)
+        let url = extractURLCandidate(from: text)
+
+        if let path, lower.contains("write ") || lower.contains("save the text") || lower.contains("create a file") {
+            if let content = quotedSegments.first {
+                return ToolCall(name: "write", arguments: ["path": path, "content": content])
+            }
+        }
+
+        if let path, lower.contains("edit ") || lower.contains("replace ") || lower.contains(" change ") {
+            if quotedSegments.count >= 2 {
+                return ToolCall(
+                    name: "edit",
+                    arguments: [
+                        "path": path,
+                        "old_string": quotedSegments[0],
+                        "new_string": quotedSegments[1],
+                    ]
+                )
+            }
+        }
+
+        if let path, lower.contains("read ") || lower.contains("read the file") {
+            return ToolCall(name: "read", arguments: ["path": path])
+        }
+
+        if let url,
+           lower.contains("fetch ")
+                || lower.contains("download ")
+                || lower.contains("get the contents")
+                || lower.contains("page at ")
+        {
+            return ToolCall(name: "fetch_url", arguments: ["url": url])
+        }
+
+        if lower.contains("web_search")
+            || lower.contains("search the web")
+            || lower.contains("search for ")
+            || lower.contains("look up")
+        {
+            if let query = extractSearchQuery(from: text) {
+                return ToolCall(name: "web_search", arguments: ["query": query])
+            }
+        }
+
+        if lower.contains("bash")
+            || lower.contains("terminal")
+            || lower.contains("run the command")
+            || lower.contains("execute this bash command")
+        {
+            if let command = extractCommandCandidate(from: text) {
+                return ToolCall(name: "bash", arguments: ["command": command])
+            }
+        }
+
+        if lower.contains("self_config") || lower.contains("show me all your current settings") {
+            return ToolCall(name: "self_config", arguments: ["action": "get_settings"])
+        }
+
+        if lower.contains("voice_identity") || lower.contains("voice identity") {
+            return ToolCall(name: "voice_identity", arguments: ["action": "check_status"])
+        }
+
+        if isCameraIntentRequest(text)
+            || lower.contains("capture from the webcam")
+            || lower.contains("snap a picture")
+        {
+            return ToolCall(name: "camera", arguments: ["prompt": "Describe what the camera sees right now."])
+        }
+
+        if lower.contains("read what's on the screen")
+            || lower.contains("describe what you see on my screen")
+            || lower.contains("what's currently displayed on the screen")
+            || lower.contains("what is currently displayed on the screen")
+        {
+            return ToolCall(name: "read_screen", arguments: [:])
+        }
+
+        if lower.contains("create a task called ")
+            || lower.contains("schedule a new task named ")
+            || lower.contains("scheduler_create")
+        {
+            if let name = extractNamedEntity(from: text, markers: ["create a task called ", "task called ", "task named ", "schedule a new task named "]),
+               let schedule = extractIntervalSchedule(from: lower)
+            {
+                return ToolCall(
+                    name: "scheduler_create",
+                    arguments: [
+                        "name": name,
+                        "schedule_type": "interval",
+                        "schedule_params": schedule,
+                        "action": "Run scheduled task '\(name)'"
+                    ]
+                )
+            }
+        }
+
+        if lower.contains("activate the ") || lower.contains("load the ") || lower.contains("activate_skill") {
+            if let skillName = extractSkillName(from: text) {
+                return ToolCall(name: "activate_skill", arguments: ["name": skillName])
+            }
+        }
+
+        if lower.contains("run the ") || lower.contains("execute ") || lower.contains("run_skill") {
+            if let skillName = extractExecutableSkillName(from: text) {
+                return ToolCall(name: "run_skill", arguments: ["name": skillName])
+            }
+        }
+
+        if lower.contains("take a screenshot")
+            || lower.contains("capture my screen")
+            || lower.contains("screenshot what's on my display")
+            || lower.contains("screenshot what is on my display")
+        {
+            return ToolCall(name: "screenshot", arguments: ["prompt": "Describe what is visible on the current screen."])
+        }
+
+        if lower.contains("click on element "),
+           let index = extractElementIndex(from: lower)
+        {
+            return ToolCall(name: "click", arguments: ["element_index": index])
+        }
+
+        if lower.contains("click on the fae menu bar icon") {
+            return ToolCall(name: "click", arguments: ["x": 848, "y": 16])
+        }
+
+        if lower.contains("type "),
+           let textToType = extractTypeText(from: text)
+        {
+            return ToolCall(name: "type_text", arguments: ["text": textToType])
+        }
+
+        if lower.contains("scroll down") || lower.contains("scroll the page down") {
+            return ToolCall(name: "scroll", arguments: ["direction": "down", "amount": 300])
+        }
+
+        return nil
+    }
+
+    static func shouldAttemptRepairToolCall(
+        _ call: ToolCall,
+        registry: ToolRegistry,
+        toolMode: String,
+        privacyMode: String
+    ) -> Bool {
+        preflightToolDenial(
+            for: [call],
+            registry: registry,
+            toolMode: toolMode,
+            privacyMode: privacyMode
+        ) == nil
+    }
+
+    static func preflightToolDenial(
+        for calls: [ToolCall],
+        registry: ToolRegistry,
+        toolMode: String,
+        privacyMode: String
+    ) -> String? {
+        for call in calls {
+            guard registry.isToolAllowed(call.name, mode: toolMode, privacyMode: privacyMode) else {
+                return "Tool '\(call.name)' is not available in current mode/privacy policy (\(toolMode), \(privacyMode))"
+            }
+
+            switch call.name {
+            case "write", "edit":
+                if let path = call.arguments["path"] as? String {
+                    switch PathPolicy.validateWritePath(path) {
+                    case .blocked(let reason):
+                        return reason
+                    case .allowed:
+                        break
+                    }
+                }
+            default:
+                break
+            }
+        }
+
+        return nil
+    }
+
+    private static func extractSingleQuotedSegments(from text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: "'([^']*)'") else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard match.numberOfRanges > 1,
+                  let segmentRange = Range(match.range(at: 1), in: text)
+            else { return nil }
+            return String(text[segmentRange])
+        }
+    }
+
+    private static func extractPathCandidate(from text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"(?:(?:~|/)[^\s'",]+)"#) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let candidateRange = Range(match.range(at: 0), in: text)
+        else { return nil }
+        return String(text[candidateRange])
+    }
+
+    private static func extractURLCandidate(from text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s'"]+"#) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let candidateRange = Range(match.range(at: 0), in: text)
+        else { return nil }
+        return String(text[candidateRange])
+    }
+
+    private static func extractSearchQuery(from text: String) -> String? {
+        let lower = text.lowercased()
+        for marker in ["search for ", "look up ", "search the web for "] {
+            if let range = lower.range(of: marker) {
+                let originalRange = range.upperBound..<text.endIndex
+                let query = text[originalRange].trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                if !query.isEmpty {
+                    return query
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func extractCommandCandidate(from text: String) -> String? {
+        let lower = text.lowercased()
+        for marker in ["run the command ", "execute this bash command: ", "run ", "command: "] {
+            if let range = lower.range(of: marker) {
+                let candidate = text[range.upperBound...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                if !candidate.isEmpty {
+                    return candidate
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func extractNamedEntity(from text: String, markers: [String]) -> String? {
+        let lower = text.lowercased()
+        for marker in markers {
+            guard let range = lower.range(of: marker) else { continue }
+            let remainder = text[range.upperBound...]
+            let terminators = [" that ", " to ", " with ", ".", ",", "\n"]
+            let stop = terminators.compactMap { remainder.range(of: $0)?.lowerBound }.min() ?? remainder.endIndex
+            let value = remainder[..<stop].trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func extractIntervalSchedule(from lower: String) -> [String: String]? {
+        guard let regex = try? NSRegularExpression(pattern: #"every\s+(\d+)\s+(minute|minutes|hour|hours)"#),
+              let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..<lower.endIndex, in: lower)),
+              let amountRange = Range(match.range(at: 1), in: lower),
+              let unitRange = Range(match.range(at: 2), in: lower)
+        else {
+            return nil
+        }
+
+        let amount = String(lower[amountRange])
+        let unit = String(lower[unitRange])
+        if unit.hasPrefix("minute") {
+            return ["minutes": amount]
+        }
+        return ["hours": amount]
+    }
+
+    private static func extractSkillName(from text: String) -> String? {
+        let lower = text.lowercased()
+        for marker in ["activate the ", "load the ", "activate "] {
+            guard let range = lower.range(of: marker) else { continue }
+            let remainder = text[range.upperBound...]
+            if let skillRange = remainder.range(of: "skill", options: .caseInsensitive) {
+                let name = remainder[..<skillRange.lowerBound]
+                    .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                if isSafeSkillName(name) {
+                    return name
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func extractExecutableSkillName(from text: String) -> String? {
+        let lower = text.lowercased()
+        for marker in ["run the ", "run ", "execute "] {
+            guard let range = lower.range(of: marker) else { continue }
+            let remainder = text[range.upperBound...]
+            let stop = [" skill", ".", ",", "\n"].compactMap { remainder.range(of: $0, options: .caseInsensitive)?.lowerBound }.min() ?? remainder.endIndex
+            let candidate = remainder[..<stop].trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            if isSafeSkillName(candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private static func extractElementIndex(from lower: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: #"element\s+(\d+)"#),
+              let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..<lower.endIndex, in: lower)),
+              let range = Range(match.range(at: 1), in: lower)
+        else {
+            return nil
+        }
+        return Int(lower[range])
+    }
+
+    private static func extractTypeText(from text: String) -> String? {
+        if let quoted = extractSingleQuotedSegments(from: text).first, !quoted.isEmpty {
+            return quoted
+        }
+
+        let lower = text.lowercased()
+        for marker in ["type ", "type_text "] {
+            guard let range = lower.range(of: marker) else { continue }
+            let remainder = text[range.upperBound...]
+            let stop = [" into ", " in the ", " into the ", ".", ",", "\n"]
+                .compactMap { remainder.range(of: $0, options: .caseInsensitive)?.lowerBound }
+                .min() ?? remainder.endIndex
+            let candidate = remainder[..<stop].trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            if !candidate.isEmpty {
+                return candidate
+            }
+        }
+
+        return nil
+    }
+
     private static func estimateTokenCount(for text: String) -> Int {
         Int(Double(text.count) / 3.5)
     }
@@ -5023,6 +5862,23 @@ actor PipelineCoordinator {
 
             let callId = UUID().uuidString
             let inputJSON = Self.serializeArguments(call.arguments)
+            let preflightDenial = Self.preflightToolDenial(
+                for: [call],
+                registry: registry,
+                toolMode: effectiveToolMode(),
+                privacyMode: effectivePrivacyMode()
+            )
+
+            if let preflightDenial {
+                debugLog(debugConsole, .approval, "Blocked deferred tool call before execution: \(call.name) — \(preflightDenial)")
+                toolFailureCount += 1
+                if firstToolError == nil {
+                    firstToolError = preflightDenial
+                }
+                await conversationState.addToolResult(id: callId, name: call.name, content: preflightDenial)
+                continue
+            }
+
             let inputPreview = String(inputJSON.prefix(100))
             debugLog(debugConsole, .toolCall, "id=\(callId.prefix(8)) name=\(call.name) args=\(inputPreview) [deferred]")
             eventBus.send(.toolCall(id: callId, name: call.name, inputJSON: inputJSON))

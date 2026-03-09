@@ -200,8 +200,10 @@ fae_wait_generation() {
     while [ "$elapsed" -lt "$max_wait" ]; do
         fae_get "/conversation"
         local generating
+        local background
         generating=$(echo "$HTTP_BODY" | jq -r '.isGenerating' 2>/dev/null || echo "false")
-        if [ "$generating" = "true" ]; then
+        background=$(echo "$HTTP_BODY" | jq -r '.isBackgroundLookupActive // false' 2>/dev/null || echo "false")
+        if [ "$generating" = "true" ] || [ "$background" = "true" ]; then
             started=true
             break
         fi
@@ -210,11 +212,14 @@ fae_wait_generation() {
     done
 
     if ! $started; then
-        # Generation never started — check if there's a response anyway
-        # (very fast response that completed before first poll)
-        local count
-        count=$(echo "$HTTP_BODY" | jq -r '.count // 0' 2>/dev/null || echo "0")
-        if [ "$count" -gt 0 ]; then
+        # Generation never started — only treat it as a fast completed response
+        # if assistant/tool output already exists. A lone injected user message
+        # must not count as completion.
+        local non_user_count
+        local streaming_text
+        non_user_count=$(echo "$HTTP_BODY" | jq -r '[.messages[]? | select(.role != "user")] | length' 2>/dev/null || echo "0")
+        streaming_text=$(echo "$HTTP_BODY" | jq -r '.streamingText // ""' 2>/dev/null || echo "")
+        if [ "$non_user_count" -gt 0 ] || [ -n "$streaming_text" ]; then
             return 0  # Response exists
         fi
         return 1  # Timed out waiting for generation to start
@@ -268,6 +273,35 @@ fae_wait_generation() {
     done
     # Speaking timeout — proceed anyway (TTS may be slow)
     return 0
+}
+
+fae_wait_speech_complete() {
+    local max_wait="${1:-30}"
+    local elapsed=0
+    local started=false
+
+    while [ "$elapsed" -lt "$max_wait" ]; do
+        fae_get "/conversation"
+        local speaking
+        local generating
+        local assistant_count
+        speaking=$(echo "$HTTP_BODY" | jq -r '.isSpeaking' 2>/dev/null || echo "false")
+        generating=$(echo "$HTTP_BODY" | jq -r '.isGenerating' 2>/dev/null || echo "false")
+        assistant_count=$(echo "$HTTP_BODY" | jq -r '[.messages[]? | select(.role == "assistant")] | length' 2>/dev/null || echo "0")
+
+        if [ "$speaking" = "true" ]; then
+            started=true
+        elif $started; then
+            return 0
+        elif [ "$generating" = "false" ] && [ "$assistant_count" -gt "0" ] && [ "$elapsed" -ge 2 ]; then
+            return 0
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    return 1
 }
 
 # GET /events?since=N, return JSON body.
@@ -855,21 +889,9 @@ execute_step() {
                 || yellow "  Warning: Chatterbox speak request failed"
             ;;
         wait_speech)
-            # Wait for Fae to finish speaking (isSpeaking==false), separate from generation
             local max_wait
             max_wait=$(echo "$step_json" | jq -r '.max_wait_s // 30')
-            local elapsed=0
-            while [ "$elapsed" -lt "$max_wait" ]; do
-                fae_get "/conversation"
-                local speaking
-                speaking=$(echo "$HTTP_BODY" | jq -r '.isSpeaking' 2>/dev/null || echo "false")
-                if [ "$speaking" = "false" ]; then
-                    break
-                fi
-                sleep 1
-                elapsed=$((elapsed + 1))
-            done
-            if [ "$elapsed" -ge "$max_wait" ]; then
+            if ! fae_wait_speech_complete "$max_wait"; then
                 yellow "  Warning: speech timed out after ${max_wait}s"
             fi
             ;;
@@ -1437,6 +1459,7 @@ main() {
     fae_set_config "tool_mode" "full_no_approval"
     fae_inject "Fae, say hello"
     fae_wait_generation 120
+    fae_wait_speech_complete 30 || yellow "  Warning: warm-up speech timed out after 30s"
     fae_post "/reset" "{}"
     fae_set_config "tool_mode" "off"
     sleep 2

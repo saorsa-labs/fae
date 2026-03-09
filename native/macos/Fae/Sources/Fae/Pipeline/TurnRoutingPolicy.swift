@@ -20,8 +20,9 @@ struct TurnRoutingPolicy {
 
     private static let toolBiasedHints = [
         "search", "web", "news", "today", "calendar", "reminder", "mail", "email",
-        "notes", "contact", "contacts", "file", "folder", "read", "open", "fetch",
-        "look up", "check", "bash", "terminal", "website", "url"
+        "notes", "contact", "contacts", "file", "folder", "read", "write", "edit",
+        "open", "fetch", "look up", "check", "bash", "terminal", "website", "url",
+        "tool", "scheduler", "trigger", "task"
     ]
 
     static func decide(

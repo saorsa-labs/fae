@@ -15,6 +15,26 @@ Fae should be:
 - proactive where useful
 - quiet by default (no noise/clutter)
 
+## Release-validation contract
+
+When working on anything user-visible or runtime-critical, the canonical validation source is
+`docs/checklists/app-release-validation.md`.
+
+That contract is not optional for:
+
+- local model swaps or prompt/routing changes
+- voice capture, STT, wake logic, TTS, or playback changes
+- approval, permission, popup, or remote-egress changes
+- memory, scheduler, skills, or settings behavior changes
+- Cowork UI, model switching, compare/fork, or remote-provider behavior changes
+
+Use both sides of the workflow:
+
+- `just run-native` or `just rebuild` for the real app experience
+- `just test-serve` plus `scripts/test-comprehensive.sh` for scripted phase coverage
+
+For voice features, use real audio playback/capture, not text injection, and capture screenshots plus test-server evidence for failures.
+
 ## Interaction model
 
 Fae is **not** a real-time voice chat app. The current interaction pattern is:
@@ -75,19 +95,36 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 
 ### Dual-model pipeline
 
-When system RAM ≥ 32 GB and `dualModelEnabled = true`, Fae loads two local LLMs:
+When system RAM ≥ 32 GB and `dualModelEnabled = true`, Fae runs two local LLMs in separate **worker subprocesses**:
 
 - **Operator** — the auto-selected Qwen3.5 model (fast, tool-capable)
 - **Concierge** — `LiquidAI/LFM2-24B-A2B-MLX-4bit` (richer synthesis, no tools, 16K context)
 
-`TurnRoutingPolicy.decide()` selects the engine per turn:
+**Worker subprocess architecture** (`ML/WorkerLLMEngine.swift`):
+- Each engine runs as a child process (`fae --llm-worker --role [operator|concierge]`)
+- Communication: JSON-lines on stdin/stdout (`LLMWorkerRequest` / `LLMWorkerResponse` in `ML/LLMWorkerProtocol.swift`)
+- 30-second command timeout per request; automatic model restore after worker restart
+- `restartCount` and last error persisted to UserDefaults; visible in Settings > Diagnostics
+- Worker termination sweeps all in-flight continuations — no orphaned streams
+
+**Inference priority** (`Core/InferencePriorityController.swift`):
+- Actor that serialises GPU access: operator (0) > Kokoro TTS (1) > concierge (2)
+- Lower-priority work parks via `CheckedContinuation` until higher-priority work ends
+- Prevents Metal contention between concurrent operator + concierge inference
+
+**Turn routing** (`Pipeline/TurnRoutingPolicy.swift`):
 - **Always operator**: tool follow-ups, proactive queries, voice turns (unless `allowConciergeDuringVoiceTurns`), tool-biased queries (search, web, calendar, mail, bash, etc.)
 - **Concierge**: rich-response hints (summarize, explain, brainstorm, analyze, draft, plan, …) or long prompts (≥ 220 chars)
 - **Default**: operator
 
-The concierge model is loaded lazily in a background task after the main pipeline starts. If loading fails, the pipeline continues in single-model mode silently.
+The concierge worker is started lazily after the main pipeline starts. If loading fails, the pipeline continues in single-model mode silently.
 
-Key files: `Pipeline/TurnRoutingPolicy.swift` (routing logic), `ML/ModelManager.swift` (`loadConciergeIfNeeded()`), `Core/FaeConfig.swift` (dual-model config + `recommendedConciergeModel()`, `isDualModelEligible()`, `recommendedLocalModelStack()`), `SettingsModelsPerformanceTab.swift` (dual-model UI toggle + concierge model picker).
+**Vendored packages** (`native/macos/Fae/Vendor/`):
+- `Vendor/kokoro-ios` and `Vendor/MisakiSwift` — vendored and patched to remove forced `.dynamic` packaging and fix duplicate-symbol warnings that appeared during worker subprocess execution.
+
+**Diagnostics** — `SettingsDiagnosticsTab.swift` now shows: operator/concierge loaded state, current route, fallback reason, operator/concierge runtime, restart counts, last worker errors.
+
+Key files: `Pipeline/TurnRoutingPolicy.swift`, `ML/WorkerLLMEngine.swift`, `ML/LLMWorkerProtocol.swift`, `Core/InferencePriorityController.swift`, `ML/ModelManager.swift` (`loadConciergeIfNeeded()`), `Core/FaeConfig.swift` (`recommendedConciergeModel()`, `isDualModelEligible()`, `recommendedLocalModelStack()`), `SettingsModelsPerformanceTab.swift`, `SettingsDiagnosticsTab.swift`.
 
 Auto mode selects the **operator** LLM based on system RAM (Qwen3.5 at every tier):
 - 96+ GiB → Qwen3.5-35B-A3B (65K context)
@@ -1082,6 +1119,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `Core/SoulManager.swift` | Soul lifecycle: load, save, reset, ensure user copy (bundled default → user dir) |
 | `Core/RescueMode.swift` | Rescue mode state (ObservableObject): safe boot bypassing customizations |
 | `Core/DiagnosticsManager.swift` | Diagnostics and debug info |
+| `Core/InferencePriorityController.swift` | Actor serialising GPU access: operator (0) > Kokoro TTS (1) > concierge (2); parks lower-priority work via `CheckedContinuation` |
 | `Core/PermissionStatusProvider.swift` | macOS permission status checks |
 | `Core/IntroCrawl.swift` | Intro text crawl animation |
 
@@ -1089,9 +1127,11 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 
 | File | Role |
 |------|------|
-| `ML/ModelManager.swift` | Loads STT, LLM, TTS, Speaker engines; on-demand VLM loading; tracks degraded mode |
+| `ML/ModelManager.swift` | Loads STT, LLM, TTS, Speaker engines; on-demand VLM loading; `loadConciergeIfNeeded()`; tracks degraded mode and restart diagnostics |
+| `ML/WorkerLLMEngine.swift` | `actor WorkerLLMEngine: LLMEngine` — wraps a child process (`fae --llm-worker`); JSON-lines stdin/stdout protocol; 30s command timeout; auto model-restore on restart |
+| `ML/LLMWorkerProtocol.swift` | `LLMWorkerRequest` + `LLMWorkerResponse` Codable types for worker IPC protocol |
 | `ML/MLXSTTEngine.swift` | Qwen3-ASR speech-to-text via mlx-swift |
-| `ML/MLXLLMEngine.swift` | Qwen3 LLM inference via mlx-swift |
+| `ML/MLXLLMEngine.swift` | Qwen3 LLM inference via mlx-swift (used inside worker subprocess) |
 | `ML/KokoroMLXTTSEngine.swift` | **Active TTS** — Kokoro-82M via KokoroSwift/MLX; pre-computed `.bin` voice embeddings |
 | `ML/KokoroPythonTTSEngine.swift` | Alternative TTS — Kokoro-82M via ONNX Runtime Python subprocess |
 | `ML/MLXTTSEngine.swift` | Legacy TTS — Qwen3-TTS via mlx-audio-swift (retained, not active) |
@@ -1219,6 +1259,7 @@ All paths under `native/macos/Fae/Sources/Fae/`.
 | `SettingsSkillsTab.swift` | Unified skill display with type/tier badges, Apple apps, system capabilities |
 | `SettingsAwarenessTab.swift` | Proactive awareness settings (consent, camera, screen, overnight, briefing, resource toggles) |
 | `SettingsAboutTab.swift` | About, version info |
+| `SettingsDiagnosticsTab.swift` | Runtime diagnostics: operator/concierge loaded, current route, fallback reason, restart counts, last worker errors |
 | `SettingsDeveloperTab.swift` | Developer diagnostics (Option-held) + security dashboard |
 | `PersonalityEditorController.swift` | Opens soul.md / directive.md in system text editor |
 
@@ -1468,15 +1509,20 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - MANIFEST.json with SHA-256 per-file integrity checksums for all three skills
   - Generated `run.py` wrapper in released tools auto-selects native → WASM → Python execution
   - Total: 14 built-in skills (was 11)
-- **v1.3.0** — Dual-model pipeline, CoWork web search, TTS switch to Kokoro, duplicate tool call guard
-  - Dual-model pipeline: operator (Qwen3.5, fast, tool-capable) + concierge (LiquidAI/LFM2-24B-A2B-MLX-4bit, rich synthesis, no tools)
-  - TurnRoutingPolicy: routes rich/long turns (summarize, brainstorm, ≥220 chars) to concierge; tool-biased and follow-up turns always to operator
-  - ModelManager: `loadConciergeIfNeeded()` — lazy background loading, silent fallback to single-model if RAM insufficient or load fails
+- **v1.3.0** — Dual-model pipeline, worker subprocess architecture, CoWork web search, TTS switch to Kokoro
+  - **Worker subprocess architecture**: each LLM engine runs as a child process (`fae --llm-worker --role [operator|concierge]`); JSON-lines stdin/stdout IPC; 30s command timeout; automatic model restore after crash/restart; restart count + last error persisted to UserDefaults
+  - `WorkerLLMEngine` actor + `LLMWorkerProtocol` types (`LLMWorkerRequest`/`LLMWorkerResponse`)
+  - `InferencePriorityController` actor: serialises GPU access across operator (0) > Kokoro TTS (1) > concierge (2); parks lower-priority tasks via `CheckedContinuation`
+  - Dual-model: operator (Qwen3.5, fast, tool-capable) + concierge (LiquidAI/LFM2-24B-A2B-MLX-4bit, rich synthesis, no tools)
+  - `TurnRoutingPolicy`: routes rich/long turns (summarize, brainstorm, ≥220 chars) to concierge; tool-biased and follow-up turns always to operator
   - New config keys: `dualModelEnabled`, `conciergeModelPreset`, `dualModelMinSystemRAMGB`, `keepConciergeHot`, `allowConciergeDuringVoiceTurns`
   - New types: `LocalPipelineMode`, `LocalLLMSelection`, `LocalModelStackPlan`; `recommendedLocalModelStack()` for settings overview
-  - New file: `Pipeline/TurnRoutingPolicy.swift`; new settings tab: `SettingsModelsPerformanceTab.swift`
+  - New files: `Pipeline/TurnRoutingPolicy.swift`, `ML/WorkerLLMEngine.swift`, `ML/LLMWorkerProtocol.swift`, `Core/InferencePriorityController.swift`
+  - Vendored + patched `Vendor/kokoro-ios` + `Vendor/MisakiSwift` to remove forced `.dynamic` and fix duplicate-symbol warnings during worker execution
+  - Expanded diagnostics in `SettingsDiagnosticsTab.swift`: operator/concierge load state, current route, fallback reason, restart counts, last worker errors
   - TTS switch: `KokoroMLXTTSEngine` (Kokoro-82M, KokoroSwift/MLX, pre-computed `.bin` embeddings, 24 kHz) replaces Qwen3-TTS; `MLXTTSEngine` retained as legacy
-  - Sentence-queue TTS: `deferredSentenceQueue [String]` replaces single `deferredStreamingSpeech`; each sentence enqueued separately for shorter time-to-first-audio on multi-sentence responses
-  - CoWork web search: `CoworkWebSearchProvider` protocol; both `OpenAICompatibleCoworkProvider` and `AnthropicCoworkProvider` now support native tool calling loop with `web_search` (backed by `SearchOrchestrator`); up to 3 tool turns per submission
-  - CoWork OpenRouter key fallback: `provider()` now falls back to global `llm.openrouter.api_key` when per-agent key absent
-  - Duplicate tool call guard: `seenToolCallSignatures: Set<String>` in PipelineCoordinator blocks identical tool calls within a turn; returns cached-results notice to prevent maxToolTurns loops
+  - Sentence-queue TTS: `deferredSentenceQueue [String]` replaces single `deferredStreamingSpeech`; each sentence enqueued separately for shorter time-to-first-audio
+  - CoWork web search: `CoworkWebSearchProvider` protocol; both `OpenAICompatibleCoworkProvider` and `AnthropicCoworkProvider` support native tool calling loop with `web_search`; up to 3 tool turns per submission
+  - CoWork OpenRouter key fallback: `provider()` falls back to global `llm.openrouter.api_key` when per-agent key absent
+  - Duplicate tool call guard: `seenToolCallSignatures: Set<String>` in PipelineCoordinator; blocks identical tool calls within a turn to prevent maxToolTurns loops
+  - Deprecated calendar/reminders authorization APIs replaced in `OnboardingController.swift`

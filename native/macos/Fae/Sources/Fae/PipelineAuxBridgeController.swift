@@ -97,13 +97,13 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Set once on the first loading event to avoid re-showing on restarts.
     private var hasShownLoadingCanvas: Bool = false
 
-    /// When true, voice enrollment is in progress. Prevents
-    /// `transitionToReadyCanvas()` from overwriting the enrollment card.
+    /// When true, voice enrollment is in progress. Startup should continue to
+    /// stay on the main conversation surface without auxiliary canvas windows.
     private var enrollmentModeActive: Bool = false
 
-    /// UserDefaults key — set after the user has seen the full startup canvas
-    /// experience (crawl + ready page) at least once. On subsequent launches
-    /// the canvas stays closed so it doesn't interrupt the user's workflow.
+    /// Retained for compatibility with older releases that tracked whether the
+    /// startup canvas had already been shown. Startup now goes directly to the
+    /// main conversation surface and keeps auxiliary windows closed.
     private static let hasShownStartupCanvasKey = "fae.hasShownStartupCanvas"
 
     private var observations: [NSObjectProtocol] = []
@@ -267,8 +267,6 @@ final class PipelineAuxBridgeController: ObservableObject {
         NSLog("PipelineAuxBridgeController: progress stage='%@' loadCompleteCount=%d isPipelineReady=%d",
               stage, loadCompleteCount, isPipelineReady ? 1 : 0)
 
-        // Show the loading canvas on the first progress event so users see
-        // the Star Wars-style informational crawl while models download/load.
         if !hasShownLoadingCanvas {
             hasShownLoadingCanvas = true
             showLoadingCanvas()
@@ -354,22 +352,14 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     // MARK: - Loading Canvas
 
-    /// Push the Star Wars-style informational canvas and show it.
-    /// Only shown on the first-ever launch — on subsequent launches the canvas
-    /// stays closed so it doesn't interrupt the user's workflow.
+    /// Keep the legacy startup-canvas hook as a no-op that clears any stale
+    /// content from prior sessions. Startup no longer auto-opens the canvas.
     private func showLoadingCanvas() {
-        guard !UserDefaults.standard.bool(forKey: Self.hasShownStartupCanvasKey) else { return }
-        canvasController?.setContent(LoadingCanvasContent.crawlExperience())
-        auxiliaryWindows?.showCanvas()
+        canvasController?.clear()
+        auxiliaryWindows?.hideCanvas()
     }
 
-    /// Clear the crawl and replace with the interactive "Fae is Ready" FAQ page.
-    /// Gives users time to finish reading the crawl ending before swapping.
-    /// After 20s of the ready page being shown, auto-hide the canvas if still visible.
-    /// Marks the startup canvas as seen so it is skipped on subsequent launches.
-    ///
-    /// - Parameter force: When `true`, bypass the "already seen" guard. Used after
-    ///   enrollment completes so the user always sees the ready page post-enrollment.
+    /// Preserve the prior timing behavior, but keep startup on the main surface.
     private func transitionToReadyCanvas(force: Bool = false) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
             self?.finishStartupCanvasTransition(force: force)
@@ -382,25 +372,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// owner setup path. In that state the startup canvas should step aside instead
     /// of lingering on the frozen "First Contact" page.
     func finishStartupCanvasTransition(force: Bool = false) {
-        if !force, UserDefaults.standard.bool(forKey: Self.hasShownStartupCanvasKey) {
-            return
-        }
-        guard hasShownLoadingCanvas else { return }
-
         UserDefaults.standard.set(true, forKey: Self.hasShownStartupCanvasKey)
-
-        if enrollmentModeActive {
-            canvasController?.clear()
-            auxiliaryWindows?.hideCanvas()
-            return
-        }
-
-        canvasController?.setContent(LoadingCanvasContent.readyExperience())
-
-        // Auto-hide the canvas after 20s if the user hasn't interacted with it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
-            self?.auxiliaryWindows?.hideCanvas()
-        }
+        guard hasShownLoadingCanvas || force || enrollmentModeActive else { return }
+        canvasController?.clear()
+        auxiliaryWindows?.hideCanvas()
     }
 
     // MARK: - Canvas Activity Cards

@@ -76,6 +76,22 @@ final class MemoryOrchestratorTests: XCTestCase {
         XCTAssertTrue(context.contains("hello fae test"))
     }
 
+    func testCaptureSkipsEpisodeForArithmeticQuery() async throws {
+        let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
+        let store = try makeStore(path: dbPath)
+        let orchestrator = MemoryOrchestrator(store: store, config: enabledMemoryConfig())
+
+        let report = await orchestrator.capture(
+            turnId: UUID().uuidString,
+            userText: "What is seven times eight?",
+            assistantText: "Fifty-six."
+        )
+
+        XCTAssertNil(report.episodeId)
+        let records = try await store.listRecords(includeInactive: true)
+        XCTAssertTrue(records.isEmpty)
+    }
+
     func testSQLiteSupersedeMarksOldRecordInactiveAndLinksNewRecord() async throws {
         let dbPath = "\(NSTemporaryDirectory())/memory-orchestrator-test-\(UUID().uuidString).sqlite"
         let store = try SQLiteMemoryStore(path: dbPath)

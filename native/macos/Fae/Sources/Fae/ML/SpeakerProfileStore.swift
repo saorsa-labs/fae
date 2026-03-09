@@ -328,6 +328,7 @@ actor SpeakerProfileStore {
     @discardableResult
     func promoteToOwner(label: String) -> Bool {
         guard let idx = profiles.firstIndex(where: { $0.label == label }) else { return false }
+        guard profiles[idx].label != "fae_self" else { return false }
         guard profiles[idx].role != .faeSelf else { return false }
         profiles[idx].role = .owner
         persist()
@@ -351,7 +352,7 @@ actor SpeakerProfileStore {
     /// Returns the promoted label when applied.
     func promoteSoleHumanProfileToOwnerIfUnambiguous() -> String? {
         guard !hasOwnerProfile() else { return nil }
-        let candidates = profiles.filter { $0.role != .faeSelf }
+        let candidates = profiles.filter { $0.role != .faeSelf && $0.label != "fae_self" }
         guard candidates.count == 1 else { return nil }
         let label = candidates[0].label
         guard promoteToOwner(label: label) else { return nil }

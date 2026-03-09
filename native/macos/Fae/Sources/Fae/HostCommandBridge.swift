@@ -185,6 +185,13 @@ final class HostCommandBridge: ObservableObject {
                 if let toolName = notification.userInfo?["tool_name"] as? String {
                     payload["tool_name"] = toolName
                 }
+                NSLog(
+                    "HostCommandBridge: approval.respond request_id=%@ approved=%@ decision=%@ tool=%@",
+                    String(describing: requestId),
+                    String(describing: approved),
+                    String(describing: payload["decision"]),
+                    String(describing: payload["tool_name"])
+                )
                 Task { @MainActor in
                     self?.dispatch("approval.respond", payload: payload)
                 }

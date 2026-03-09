@@ -59,24 +59,34 @@ final class DocsContractTests: XCTestCase {
         }
     }
 
-    func testModelDocsReflectCurrentBenchmarkDefaultOfQwen35TwoB() throws {
+    func testModelDocsReflectCurrentAutoOperatorPolicy() throws {
         let readme = try loadRepositoryText(relativePath: "README.md")
         let modelSwitchingGuide = try loadRepositoryText(relativePath: "docs/guides/model-switching.md")
+        let expectations: [(Int, String, Int)] = [
+            (8, "mlx-community/Qwen3.5-0.8B-4bit", 8_192),
+            (16, "mlx-community/Qwen3.5-2B-4bit", 16_384),
+            (32, "mlx-community/Qwen3.5-2B-4bit", 16_384),
+            (64, "mlx-community/Qwen3.5-2B-4bit", 16_384),
+            (128, "mlx-community/Qwen3.5-2B-4bit", 16_384),
+        ]
 
-        for ramGB in [8, 16, 32, 64, 128] {
+        for (ramGB, modelId, contextSize) in expectations {
             let selection = FaeConfig.recommendedModel(
                 totalMemoryBytes: UInt64(ramGB) * 1024 * 1024 * 1024,
                 preset: "auto"
             )
-            XCTAssertEqual(selection.modelId, "mlx-community/Qwen3.5-2B-4bit")
-            XCTAssertEqual(selection.contextSize, 16_384)
+            XCTAssertEqual(selection.modelId, modelId)
+            XCTAssertEqual(selection.contextSize, contextSize)
         }
 
-        XCTAssertTrue(readme.contains("Qwen3.5-2B (default)"))
-        XCTAssertTrue(readme.contains("`auto` currently resolves to `mlx-community/Qwen3.5-2B-4bit` on all machines"))
-        XCTAssertFalse(readme.contains("Auto mode selects the LLM based on system RAM"))
+        XCTAssertTrue(readme.contains("Benchmark-backed Qwen3.5 operator"))
+        XCTAssertTrue(readme.contains("benchmark-backed operator policy"))
+        XCTAssertTrue(readme.contains("12+ GB: `mlx-community/Qwen3.5-2B-4bit`"))
+        XCTAssertTrue(readme.contains("below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit`"))
 
-        XCTAssertTrue(modelSwitchingGuide.contains("current default — presently resolves to `qwen3_5_2b` on all machines"))
+        XCTAssertTrue(modelSwitchingGuide.contains("benchmark-backed operator policy"))
+        XCTAssertTrue(modelSwitchingGuide.contains("12+ GB: `qwen3_5_2b` at 16K context"))
+        XCTAssertTrue(modelSwitchingGuide.contains("below 12 GB: `qwen3_5_0_8b` at 8K context"))
         XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_35b_a3b`"))
         XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_27b`"))
         XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_9b`"))

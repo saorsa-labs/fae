@@ -14,6 +14,8 @@ struct SettingsModelsTab: View {
     @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = false
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
     @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
+    @AppStorage("ttsVoice") private var selectedVoice: String = "fae"
+    @State private var previewingVoice: String? = nil
     @State private var hydratingFromConfig: Bool = false
     @State private var hasLoadedConfig: Bool = false
     @State private var showRestartNotice: Bool = false
@@ -25,17 +27,17 @@ struct SettingsModelsTab: View {
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
         ("Auto (Recommended)", "auto",
-         "Selects the best Qwen3.5 model for your system RAM — from 35B-A3B on 64+ GB to 0.8B on 8 GB."),
+         "Uses Qwen3.5-2B as the benchmark-backed local operator on 12+ GB systems, with 0.8B as the small-machine fallback."),
         ("Qwen3.5-35B-A3B", "qwen3_5_35b_a3b",
          "MoE flagship (3B active). Best quality. Requires 64+ GB RAM."),
         ("Qwen3.5-27B", "qwen3_5_27b",
          "Dense 27B. Excellent quality. Requires 32+ GB RAM."),
         ("Qwen3.5-9B", "qwen3_5_9b",
-         "Hybrid 9B. Great balance of quality and speed. Requires 24+ GB RAM."),
+         "Hybrid 9B. Richer than 2B, but slower and less reliable for strict tool/operator work in the current Fae benchmark suite. Requires 24+ GB RAM."),
         ("Qwen3.5-4B", "qwen3_5_4b",
          "Hybrid 4B. Good quality, fast responses. Requires 16+ GB RAM."),
         ("Qwen3.5-2B", "qwen3_5_2b",
-         "Compact 2B. Decent quality, very fast. Requires 12+ GB RAM."),
+         "Compact 2B. Best current local operator fit for tool use, instruction following, and latency. Requires 12+ GB RAM."),
         ("Qwen3.5-0.8B", "qwen3_5_0_8b",
          "Tiny 0.8B. Basic quality, instant responses. Runs on 8+ GB RAM."),
     ]
@@ -79,51 +81,47 @@ struct SettingsModelsTab: View {
 
     // MARK: - Sections
 
+    private struct KokoroVoiceOption: Identifiable {
+        let id: String
+        let label: String
+        let accent: String
+        let gender: String
+    }
+
+    private let kokoroVoices: [KokoroVoiceOption] = [
+        KokoroVoiceOption(id: "fae",        label: "Fae",     accent: "Scottish",         gender: "Female"),
+        KokoroVoiceOption(id: "af_heart",   label: "Heart",   accent: "American",         gender: "Female"),
+        KokoroVoiceOption(id: "af_bella",   label: "Bella",   accent: "American",         gender: "Female"),
+        KokoroVoiceOption(id: "af_aoede",   label: "Aoede",   accent: "American",         gender: "Female"),
+        KokoroVoiceOption(id: "af_nicole",  label: "Nicole",  accent: "American",         gender: "Female"),
+        KokoroVoiceOption(id: "af_sky",     label: "Sky",     accent: "American",         gender: "Female"),
+        KokoroVoiceOption(id: "bf_emma",    label: "Emma",    accent: "British",          gender: "Female"),
+        KokoroVoiceOption(id: "bf_isabella",label: "Isabella",accent: "British",          gender: "Female"),
+        KokoroVoiceOption(id: "am_adam",    label: "Adam",    accent: "American",         gender: "Male"),
+        KokoroVoiceOption(id: "am_echo",    label: "Echo",    accent: "American",         gender: "Male"),
+        KokoroVoiceOption(id: "bm_daniel",  label: "Daniel",  accent: "British",          gender: "Male"),
+    ]
+
     @ViewBuilder
     private var faeVoiceSection: some View {
         Section("Fae's Voice") {
-            HStack {
-                Label("Current Voice", systemImage: "waveform")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Spacer()
-                Text(customVoiceSource)
-                    .font(.system(size: 11, design: .rounded))
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Choose a voice for Fae. Tap the play button to preview.")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                let columns = [
+                    GridItem(.adaptive(minimum: 110, maximum: 160), spacing: 10)
+                ]
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(kokoroVoices) { voice in
+                        voiceCard(voice)
+                    }
+                }
             }
+            .padding(.vertical, 4)
 
-            Toggle("Lock to canonical Fae voice (fae.wav)", isOn: $voiceIdentityLock)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .onChange(of: voiceIdentityLock) {
-                    guard !hydratingFromConfig else { return }
-                    commandSender?.sendCommand(
-                        name: "config.patch",
-                        payload: ["key": "tts.voice_identity_lock", "value": voiceIdentityLock]
-                    )
-                    showRestartNotice = true
-                }
-
-            HStack(spacing: 8) {
-                Button("Choose Reference Audio") {
-                    showFilePicker = true
-                }
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .disabled(voiceIdentityLock)
-
-                Button("Reset to Default") {
-                    commandSender?.sendCommand(
-                        name: "config.patch",
-                        payload: ["key": "tts.custom_voice_path", "value": "nil"]
-                    )
-                    customVoiceSource = "Default (fae.wav)"
-                    customReferenceText = ""
-                    showRestartNotice = true
-                }
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
-                .disabled(voiceIdentityLock)
-            }
-
-            if customVoiceSource != "Default (fae.wav)", !voiceIdentityLock {
+            if customVoiceSource != "Default (fae.wav)", selectedVoice == "fae" {
                 TextField("Reference text (what's spoken in the WAV)", text: $customReferenceText)
                     .font(.system(size: 11, design: .rounded))
                     .textFieldStyle(.roundedBorder)
@@ -135,14 +133,90 @@ struct SettingsModelsTab: View {
                         )
                     }
             }
+        }
+    }
 
-            Text(runtimeVoiceStatusText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    @ViewBuilder
+    private func voiceCard(_ voice: KokoroVoiceOption) -> some View {
+        let isSelected = selectedVoice == voice.id
+        let isPreviewing = previewingVoice == voice.id
 
-            Text("WAV must be mono PCM 16-bit, 2-8 seconds of clear speech. Restart to apply.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 6) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: voice.gender == "Female" ? "person.crop.circle" : "person.crop.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(isSelected ? .white : .secondary)
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
+                        .offset(x: 4, y: -4)
+                }
+            }
+
+            Text(voice.label)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(isSelected ? .white : .primary)
+
+            Text(voice.accent)
+                .font(.system(size: 10, design: .rounded))
+                .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
+
+            Button {
+                previewVoice(voice.id)
+            } label: {
+                Image(systemName: isPreviewing ? "waveform" : "play.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(isSelected ? .white : .accentColor)
+                    .frame(width: 24, height: 20)
+            }
+            .buttonStyle(.plain)
+            .disabled(isPreviewing)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectVoice(voice.id)
+        }
+    }
+
+    private func selectVoice(_ voiceID: String) {
+        guard !hydratingFromConfig else { return }
+        selectedVoice = voiceID
+        let isFae = voiceID == "fae"
+        voiceIdentityLock = isFae
+        commandSender?.sendCommand(
+            name: "config.patch",
+            payload: ["key": "tts.voice_identity_lock", "value": isFae]
+        )
+        commandSender?.sendCommand(
+            name: "config.patch",
+            payload: ["key": "tts.voice", "value": voiceID]
+        )
+    }
+
+    private func previewVoice(_ voiceID: String) {
+        guard previewingVoice == nil else { return }
+        previewingVoice = voiceID
+        commandSender?.sendCommand(
+            name: "tts.preview_voice",
+            payload: ["voice": voiceID]
+        )
+        // Clear the previewing indicator after a few seconds.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if previewingVoice == voiceID { previewingVoice = nil }
         }
     }
 
@@ -455,6 +529,11 @@ struct SettingsModelsTab: View {
             }
             if let lock = tts["voice_identity_lock"] as? Bool {
                 voiceIdentityLock = lock
+            }
+            if let voice = tts["voice"] as? String, !voice.isEmpty {
+                selectedVoice = voice
+            } else if let lock = tts["voice_identity_lock"] as? Bool, lock {
+                selectedVoice = "fae"
             }
             if let source = tts["runtime_voice_source"] as? String, !source.isEmpty {
                 runtimeVoiceSource = source

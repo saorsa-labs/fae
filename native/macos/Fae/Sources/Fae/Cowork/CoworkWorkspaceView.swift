@@ -13,14 +13,388 @@ private enum CoworkPalette {
     static let mint = Color(red: 150 / 255, green: 172 / 255, blue: 160 / 255)
 }
 
-private enum CoworkArtwork {
-    static let orb = FaeApp.renderStaticOrb()
-}
-
 private enum ModelPickerTarget {
     case agentEditor
     case selectedConversationAgent
     case newWorkspaceAgent
+}
+
+private struct CoworkModelOptionSection: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let options: [CoworkModelOption]
+}
+
+private struct WorkspaceSidebarCapsule: View {
+    let text: String
+    let accent: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                Capsule()
+                    .fill(accent.opacity(0.16))
+                    .overlay(Capsule().stroke(accent.opacity(0.28), lineWidth: 1))
+            )
+    }
+}
+
+private struct WorkspaceSidebarRow: View {
+    let workspaceID: UUID
+    let workspaceName: String
+    let summary: String
+    let isLocal: Bool
+    let isSelected: Bool
+    let depth: Int
+    let childrenCount: Int
+    let parentName: String?
+    let hasFolder: Bool
+    let attachmentCount: Int
+    let compareAlwaysOn: Bool
+    let isDragged: Bool
+    let namespace: Namespace.ID
+
+    private var metadataFragments: [String] {
+        var fragments: [String] = [isLocal ? "On-device" : "Remote"]
+        if !summary.isEmpty {
+            fragments.append(summary)
+        }
+        if let parentName {
+            fragments.append("Fork of \(parentName)")
+        } else if childrenCount > 0 {
+            fragments.append("\(childrenCount) fork\(childrenCount == 1 ? "" : "s")")
+        }
+        if hasFolder {
+            fragments.append("Folder")
+        }
+        if attachmentCount > 0 {
+            fragments.append("\(attachmentCount) file\(attachmentCount == 1 ? "" : "s")")
+        }
+        if compareAlwaysOn {
+            fragments.append("Compare")
+        }
+        return fragments
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                if depth > 0 {
+                    HStack(spacing: 4) {
+                        ForEach(0 ..< depth, id: \.self) { _ in
+                            Rectangle()
+                                .fill(Color.white.opacity(0.12))
+                                .frame(width: 6, height: 1)
+                        }
+                    }
+                    .frame(width: CGFloat(depth * 10), alignment: .leading)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(workspaceName)
+                        .font(.system(size: isSelected ? 13.5 : 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+
+                    Text(metadataFragments.joined(separator: "  ·  "))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle((isLocal ? CoworkPalette.mint : CoworkPalette.cyan).opacity(0.78))
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 0)
+
+                if isSelected {
+                    WorkspaceSidebarCapsule(
+                        text: isLocal ? "On-device" : "Remote",
+                        accent: isLocal ? CoworkPalette.mint : CoworkPalette.cyan
+                    )
+                }
+            }
+
+        }
+        .padding(.leading, 12 + CGFloat(depth * 8))
+        .padding(.trailing, 12)
+        .padding(.vertical, 11)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.025))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(isSelected ? Color.white.opacity(0.16) : Color.white.opacity(0.05), lineWidth: 1)
+                )
+                .matchedGeometryEffect(id: "workspace-row-\(workspaceID.uuidString)", in: namespace)
+        )
+        .scaleEffect(isSelected ? 1.0 : 0.99)
+        .opacity(isDragged ? 0.72 : 1)
+    }
+}
+
+private struct WorkspaceSidebarButtonView: View {
+    let workspace: WorkWithFaeWorkspaceRecord
+    let summary: String
+    let isLocal: Bool
+    let isSelected: Bool
+    let depth: Int
+    let childrenCount: Int
+    let parentName: String?
+    let canDelete: Bool
+    let namespace: Namespace.ID
+    @Binding var draggedWorkspaceID: UUID?
+    let onSelect: () -> Void
+    let onFork: () -> Void
+    let onRename: () -> Void
+    let onDelete: () -> Void
+    let onMoveBefore: () -> Bool
+
+    var body: some View {
+        Button(action: onSelect) {
+            WorkspaceSidebarRow(
+                workspaceID: workspace.id,
+                workspaceName: workspace.name,
+                summary: summary,
+                isLocal: isLocal,
+                isSelected: isSelected,
+                depth: depth,
+                childrenCount: childrenCount,
+                parentName: parentName,
+                hasFolder: workspace.state.selectedDirectoryPath != nil,
+                attachmentCount: workspace.state.attachments.count,
+                compareAlwaysOn: workspace.policy.compareBehavior == .alwaysCompare,
+                isDragged: draggedWorkspaceID == workspace.id,
+                namespace: namespace
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(workspace.name)
+        .accessibilityValue(summary)
+        .accessibilityHint(isSelected ? "Current conversation." : "Open this conversation.")
+        .contextMenu {
+            Button("Fork conversation", action: onFork)
+            Button("Rename conversation", action: onRename)
+            Divider()
+            Button("Delete conversation", role: .destructive, action: onDelete)
+                .disabled(!canDelete)
+        }
+        .onDrag {
+            draggedWorkspaceID = workspace.id
+            return NSItemProvider(object: workspace.id.uuidString as NSString)
+        }
+        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { _ in
+            onMoveBefore()
+        }
+    }
+}
+
+private struct CoworkBrandOrbView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: reduceMotion ? 1.0 / 12.0 : 1.0 / 30.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+
+            Canvas { context, size in
+                let inset = min(size.width, size.height) * 0.1
+                let rect = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
+                let orbPath = Path(ellipseIn: rect)
+                let center = CGPoint(x: rect.midX, y: rect.midY)
+                let radius = min(rect.width, rect.height) * 0.5
+                let motion = reduceMotion ? 0.22 : 1.0
+                let phase = time * motion
+
+                context.fill(
+                    Path(ellipseIn: rect.insetBy(dx: -radius * 0.46, dy: -radius * 0.46)),
+                    with: .radialGradient(
+                        Gradient(colors: [
+                            Color(red: 1.0, green: 0.48, blue: 0.12).opacity(0.22),
+                            Color(red: 0.72, green: 0.25, blue: 0.04).opacity(0.1),
+                            .clear,
+                        ]),
+                        center: center,
+                        startRadius: radius * 0.08,
+                        endRadius: radius * 1.5
+                    )
+                )
+
+                context.fill(
+                    orbPath,
+                    with: .radialGradient(
+                        Gradient(stops: [
+                            .init(color: Color(red: 0.44, green: 0.18, blue: 0.03), location: 0.02),
+                            .init(color: Color(red: 0.19, green: 0.06, blue: 0.01), location: 0.48),
+                            .init(color: Color.black.opacity(0.98), location: 1),
+                        ]),
+                        center: CGPoint(x: center.x + radius * 0.18, y: center.y - radius * 0.22),
+                        startRadius: radius * 0.08,
+                        endRadius: radius * 1.1
+                    )
+                )
+
+                context.stroke(
+                    orbPath,
+                    with: .linearGradient(
+                        Gradient(colors: [
+                            Color.white.opacity(0.22),
+                            Color(red: 1.0, green: 0.71, blue: 0.34).opacity(0.16),
+                            Color.black.opacity(0.28),
+                        ]),
+                        startPoint: CGPoint(x: rect.minX, y: rect.minY),
+                        endPoint: CGPoint(x: rect.maxX, y: rect.maxY)
+                    ),
+                    lineWidth: 1
+                )
+
+                var clipped = context
+                clipped.clip(to: orbPath)
+
+                drawRibbon(
+                    in: &clipped,
+                    rect: rect,
+                    phase: phase * 0.85 + 0.4,
+                    rotation: -.pi / 5,
+                    thickness: 0.34,
+                    brightness: 1.0
+                )
+                drawRibbon(
+                    in: &clipped,
+                    rect: rect,
+                    phase: phase * 0.72 + 1.8,
+                    rotation: .pi / 3.2,
+                    thickness: 0.28,
+                    brightness: 0.86
+                )
+                drawRibbon(
+                    in: &clipped,
+                    rect: rect,
+                    phase: phase * 0.96 + 3.2,
+                    rotation: .pi / 1.1,
+                    thickness: 0.2,
+                    brightness: 0.74
+                )
+
+                let sparkAngle = phase * 0.7 + .pi * 0.18
+                let sparkCenter = CGPoint(
+                    x: center.x + cos(sparkAngle) * radius * 0.28,
+                    y: center.y + sin(sparkAngle * 1.22) * radius * 0.18
+                )
+                clipped.fill(
+                    Path(ellipseIn: CGRect(x: sparkCenter.x - radius * 0.1, y: sparkCenter.y - radius * 0.1, width: radius * 0.2, height: radius * 0.2)),
+                    with: .radialGradient(
+                        Gradient(colors: [
+                            Color.white.opacity(0.92),
+                            Color(red: 1.0, green: 0.84, blue: 0.46).opacity(0.88),
+                            Color(red: 1.0, green: 0.5, blue: 0.16).opacity(0.0),
+                        ]),
+                        center: sparkCenter,
+                        startRadius: 0,
+                        endRadius: radius * 0.18
+                    )
+                )
+
+                context.stroke(
+                    Path(ellipseIn: rect.insetBy(dx: radius * 0.04, dy: radius * 0.04)),
+                    with: .color(Color.white.opacity(0.08)),
+                    lineWidth: 0.8
+                )
+            }
+        }
+        .drawingGroup()
+        .aspectRatio(1, contentMode: .fit)
+        .background(
+            Circle()
+                .fill(Color.black.opacity(0.24))
+        )
+        .shadow(color: Color(red: 1.0, green: 0.45, blue: 0.08).opacity(0.28), radius: 18, y: 6)
+        .accessibilityHidden(true)
+    }
+
+    private func drawRibbon(
+        in context: inout GraphicsContext,
+        rect: CGRect,
+        phase: Double,
+        rotation: Double,
+        thickness: CGFloat,
+        brightness: CGFloat
+    ) {
+        let path = ribbonPath(in: rect, phase: phase)
+
+        var ribbonContext = context
+        ribbonContext.blendMode = .screen
+        ribbonContext.translateBy(x: rect.midX, y: rect.midY)
+        ribbonContext.rotate(by: .radians(rotation + sin(phase * 0.45) * 0.18))
+        ribbonContext.translateBy(x: -rect.midX, y: -rect.midY)
+
+        let warmCore = Color(red: 1.0, green: 0.84, blue: 0.52).opacity(0.92 * brightness)
+        let warmMid = Color(red: 1.0, green: 0.6, blue: 0.19).opacity(0.44 * brightness)
+        let warmEdge = Color(red: 0.92, green: 0.28, blue: 0.06).opacity(0.16 * brightness)
+        let lineWidth = rect.width * thickness
+
+        ribbonContext.stroke(
+            path,
+            with: .color(warmEdge),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+        )
+        ribbonContext.stroke(
+            path,
+            with: .linearGradient(
+                Gradient(colors: [warmMid.opacity(0.22), warmMid, warmCore.opacity(0.84), warmMid]),
+                startPoint: CGPoint(x: rect.midX, y: rect.minY),
+                endPoint: CGPoint(x: rect.midX, y: rect.maxY)
+            ),
+            style: StrokeStyle(lineWidth: lineWidth * 0.56, lineCap: .round, lineJoin: .round)
+        )
+        ribbonContext.stroke(
+            path,
+            with: .linearGradient(
+                Gradient(colors: [Color.white.opacity(0.08), warmCore, Color.white.opacity(0.14)]),
+                startPoint: CGPoint(x: rect.minX, y: rect.midY),
+                endPoint: CGPoint(x: rect.maxX, y: rect.midY)
+            ),
+            style: StrokeStyle(lineWidth: lineWidth * 0.18, lineCap: .round, lineJoin: .round)
+        )
+    }
+
+    private func ribbonPath(in rect: CGRect, phase: Double) -> Path {
+        let radius = min(rect.width, rect.height) * 0.5
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let steps = 96
+
+        var points: [CGPoint] = []
+        points.reserveCapacity(steps + 1)
+        for step in 0 ... steps {
+            let progress = Double(step) / Double(steps)
+            let local = progress * 2 - 1
+            let taper = max(0.12, 1 - pow(abs(local), 1.45))
+            let horizontal = sin(progress * .pi * 2.15 + phase) * 0.55 + sin(progress * .pi * 6.2 - phase * 0.7) * 0.08
+            let vertical = local + cos(progress * .pi * 2.8 + phase * 0.6) * 0.08
+
+            points.append(
+                CGPoint(
+                    x: center.x + horizontal * radius * taper,
+                    y: center.y + vertical * radius * 0.92
+                )
+            )
+        }
+
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for index in 1 ..< points.count {
+            let previous = points[index - 1]
+            let current = points[index]
+            let midpoint = CGPoint(x: (previous.x + current.x) * 0.5, y: (previous.y + current.y) * 0.5)
+            path.addQuadCurve(to: midpoint, control: previous)
+        }
+        if let last = points.last {
+            path.addLine(to: last)
+        }
+        return path
+    }
 }
 
 private struct CoworkComposerTextView: NSViewRepresentable {
@@ -49,12 +423,16 @@ private struct CoworkComposerTextView: NSViewRepresentable {
         textView.submitHandler = onSubmit
         textView.placeholderString = placeholder
         textView.string = text
+        textView.setAccessibilityLabel("Conversation message")
+        textView.setAccessibilityHelp("Type a message for this conversation. Press Return to send, or Shift-Return for a new line.")
 
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = false
         scrollView.documentView = textView
+        scrollView.setAccessibilityLabel("Conversation composer")
+        scrollView.setAccessibilityHelp("Type a message for this conversation. Press Return to send, or Shift-Return for a new line.")
 
         DispatchQueue.main.async {
             context.coordinator.recalculateHeight(for: textView)
@@ -132,8 +510,6 @@ struct CoworkWorkspaceView: View {
     @ObservedObject var controller: CoworkWorkspaceController
     @ObservedObject var faeCore: FaeCore
     @ObservedObject var conversation: ConversationController
-    @ObservedObject var orbAnimation: OrbAnimationState
-    @ObservedObject var pipelineAux: PipelineAuxBridgeController
 
     @State private var isDropTargeted = false
     @State private var showingAddWorkspaceSheet = false
@@ -167,16 +543,12 @@ struct CoworkWorkspaceView: View {
     @State private var composerHeight: CGFloat = 64
     @State private var showConsensusDetails = false
     @State private var showWorkspacePolicies = false
-    @State private var showAgentControls = false
-    @State private var showSidebarUtilities = false
-    @State private var showSidebarAgents = false
     @State private var showDetailsRail = false
     @State private var presentedUtilitySection: CoworkWorkspaceSection?
     @State private var showContextFolderSection = true
     @State private var showContextAttachmentsSection = false
     @State private var showContextIndexedFilesSection = false
     @State private var showContextPreviewSection = true
-    @State private var isHoveringPresenceOrb = false
     @Namespace private var workspaceSelectionAnimation
 
     var body: some View {
@@ -185,7 +557,7 @@ struct CoworkWorkspaceView: View {
 
             HStack(spacing: 16) {
                 sidebar
-                    .frame(width: 220)
+                    .frame(width: 236)
 
                 VStack(spacing: 14) {
                     header
@@ -239,7 +611,6 @@ struct CoworkWorkspaceView: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.9), value: controller.selectedWorkspace?.id)
         .animation(.easeInOut(duration: 0.22), value: showDetailsRail)
         .animation(.easeInOut(duration: 0.22), value: showWorkspacePolicies)
-        .animation(.easeInOut(duration: 0.22), value: showAgentControls)
         .animation(.easeInOut(duration: 0.22), value: showConsensusDetails)
         .sheet(isPresented: $showingAddWorkspaceSheet) {
             workspaceCreationSheet
@@ -305,106 +676,53 @@ struct CoworkWorkspaceView: View {
     }
 
     private var workspaceHeader: some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(controller.selectedWorkspace?.name ?? "Conversation")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(controller.selectedWorkspace?.name ?? "Conversation")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
 
-                FlowLayout(spacing: 8) {
-                    headerPill(icon: controller.remoteAgentBlockedByPolicy ? "lock.shield" : "cpu", text: controller.remoteAgentBlockedByPolicy ? "Fae Local" : (selectedAgentModelLabel ?? agentSummary(for: controller.selectedAgent)))
-                    if controller.workspaceState.selectedDirectoryPath != nil {
-                        headerPill(icon: "folder", text: "Folder attached")
-                    }
-                    if let workspace = controller.selectedWorkspace,
-                       let parent = controller.parentWorkspace(for: workspace)
-                    {
-                        headerPill(icon: "arrow.triangle.branch", text: "Fork of \(parent.name)")
+                    if controller.isStrictLocalWorkspace {
+                        capsule(text: "Local only", accent: CoworkPalette.mint)
                     }
                 }
-            }
 
-            Spacer(minLength: 12)
-
-            headerPresenceOrb
-                .padding(.top, 2)
-
-            Spacer(minLength: 12)
-
-            HStack(spacing: 8) {
-                agentPickerPill
-                if controller.selectedAgent != nil {
-                    modelPickerPill
-                }
-                quickActionPill(title: showDetailsRail ? "Hide details" : "Details", accent: CoworkPalette.heather) {
-                    showDetailsRail.toggle()
-                }
-                utilityMenuPill
-                if let selectedWorkspace = controller.selectedWorkspace {
-                    Menu {
-                        Button("Rename conversation") {
-                            renameWorkspaceName = selectedWorkspace.name
-                            showingRenameWorkspaceSheet = true
-                        }
-                        Button("Fork conversation") {
-                            controller.forkSelectedWorkspace()
-                        }
-                        Divider()
-                        Button("Move up") {
-                            controller.moveSelectedWorkspaceUp()
-                        }
-                        .disabled(!controller.canMoveSelectedWorkspaceUp)
-                        Button("Move down") {
-                            controller.moveSelectedWorkspaceDown()
-                        }
-                        .disabled(!controller.canMoveSelectedWorkspaceDown)
-                        Divider()
-                        Button("Refresh workspace") {
-                            controller.refreshNow()
-                        }
-                        Button("Open settings") {
-                            controller.openSettings()
-                        }
-                        Divider()
-                        Button("Delete conversation", role: .destructive) {
-                            showingDeleteWorkspaceAlert = true
-                        }
-                        .disabled(controller.workspaces.count <= 1)
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.72))
-                            .frame(width: 34, height: 34)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(0.05))
-                                    .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
-                            )
-                    }
-                    .menuStyle(.borderlessButton)
-                }
-            }
-        }
-    }
-
-    private var utilityHeader: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Work with Fae")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                Text(headerSubtitle)
+                Text(workspaceHeaderCaption)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.62))
                     .lineLimit(2)
+
+                if let workspaceHeaderMetaLine, !workspaceHeaderMetaLine.isEmpty {
+                    Text(workspaceHeaderMetaLine)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.46))
+                        .lineLimit(2)
+                }
             }
-            Spacer()
-            workspaceActionButton(
-                title: controller.isRefreshing ? "Refreshing" : "Refresh",
-                systemImage: "arrow.clockwise",
-                accent: CoworkPalette.cyan,
-                action: { controller.refreshNow() }
-            )
+
+            Spacer(minLength: 12)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    if controller.selectedAgent != nil {
+                        modelPickerPill
+                        thinkingLevelPill
+                    }
+                    detailsRailToggleButton(labelStyle: .titleAndIcon)
+                    workspaceOverflowMenu
+                }
+
+                HStack(spacing: 8) {
+                    if controller.selectedAgent != nil {
+                        modelPickerCompactPill
+                        thinkingLevelCompactPill
+                    }
+                    detailsRailToggleButton(labelStyle: .iconOnly)
+                    workspaceOverflowMenu
+                }
+            }
         }
     }
 
@@ -420,92 +738,11 @@ struct CoworkWorkspaceView: View {
 
             if showDetailsRail {
                 workspaceContextPanel
-                    .frame(width: 208)
+                    .frame(width: 228)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var workspaceHeroCard: some View {
-        glassCard {
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [CoworkPalette.heather.opacity(0.16), CoworkPalette.amber.opacity(0.08), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .top, spacing: 14) {
-                        Image(nsImage: CoworkArtwork.orb)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 60, height: 60)
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .shadow(color: CoworkPalette.heather.opacity(0.25), radius: 12, y: 6)
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(controller.selectedWorkspace?.name ?? "Workspace")
-                                .font(.system(size: 24, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .contentTransition(.interpolate)
-                            Text(currentWorkspaceSubtitle)
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.68))
-                                .lineLimit(3)
-                            FlowLayout(spacing: 8) {
-                                miniInfoBadge(icon: "sparkles", text: selectedAgentModelLabel ?? agentSummary(for: controller.selectedAgent))
-                                miniInfoBadge(icon: controller.isStrictLocalWorkspace ? "lock.shield" : "network", text: controller.selectedWorkspacePolicy.remoteExecution.displayName)
-                                miniInfoBadge(icon: "paperplane", text: controller.selectedWorkspacePolicy.compareBehavior.displayName)
-                            }
-                        }
-                    }
-
-                    HStack(spacing: 14) {
-                        metricTile(title: "Files", value: "\(controller.workspaceState.indexedFiles.count)", accent: CoworkPalette.amber)
-                        metricTile(title: "Attached", value: "\(controller.workspaceState.attachments.count)", accent: CoworkPalette.cyan)
-                        metricTile(title: "Tasks", value: "\(controller.schedulerTasks.filter(\.enabled).count)", accent: CoworkPalette.mint)
-                    }
-
-                    HStack(spacing: 10) {
-                        workspaceActionButton(
-                            title: controller.workspaceState.selectedDirectoryPath == nil ? "Choose folder" : "Change folder",
-                            systemImage: "folder",
-                            accent: CoworkPalette.heather,
-                            action: controller.chooseWorkspaceDirectory
-                        )
-
-                        workspaceActionButton(
-                            title: "Add files",
-                            systemImage: "paperclip",
-                            accent: CoworkPalette.cyan,
-                            action: controller.addAttachmentsViaPicker
-                        )
-
-                        workspaceActionButton(
-                            title: "Look at screen",
-                            systemImage: "rectangle.on.rectangle",
-                            accent: CoworkPalette.amber,
-                            action: controller.inspectScreen
-                        )
-
-                        if controller.workspaceState.selectedDirectoryPath != nil {
-                            workspaceActionButton(
-                                title: "Clear",
-                                systemImage: "xmark.circle",
-                                accent: CoworkPalette.rose,
-                                action: controller.clearWorkspaceDirectory
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        .matchedGeometryEffect(id: "workspace-hero", in: workspaceSelectionAnimation)
     }
 
     private var workspaceContextPanel: some View {
@@ -513,18 +750,12 @@ struct CoworkWorkspaceView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Details")
+                        Text("Context")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white)
-                        Text("Small, quiet context for this conversation.")
+                        Text(detailsRailCaption)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.54))
-                    }
-
-                    FlowLayout(spacing: 8) {
-                        miniInfoBadge(icon: "folder", text: controller.workspaceState.selectedDirectoryPath == nil ? "No folder" : "Folder attached")
-                        miniInfoBadge(icon: "paperclip", text: "\(controller.workspaceState.attachments.count) items")
-                        miniInfoBadge(icon: "doc.text", text: "\(controller.workspaceState.indexedFiles.count) files")
                     }
 
                     DisclosureGroup(isExpanded: $showWorkspacePolicies) {
@@ -588,11 +819,34 @@ struct CoworkWorkspaceView: View {
                     DisclosureGroup(isExpanded: $showContextFolderSection) {
                         VStack(alignment: .leading, spacing: 8) {
                             if let path = controller.workspaceState.selectedDirectoryPath {
-                                Text(path)
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(.white)
-                                    .textSelection(.enabled)
-                                    .lineLimit(4)
+                                let directoryURL = URL(fileURLWithPath: path)
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(directoryURL.lastPathComponent)
+                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(2)
+
+                                    Text("Connected locally and used for grounded file lookups.")
+                                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.white.opacity(0.52))
+
+                                    Button {
+                                        NSWorkspace.shared.activateFileViewerSelecting([directoryURL])
+                                    } label: {
+                                        Label("Reveal in Finder", systemImage: "arrow.up.forward.app")
+                                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 7)
+                                            .background(
+                                                Capsule()
+                                                    .fill(Color.white.opacity(0.05))
+                                                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             } else {
                                 Text("Choose a folder to let Fae ground answers in local files.")
                                     .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -621,12 +875,10 @@ struct CoworkWorkspaceView: View {
                                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                                                 .foregroundStyle(.white)
                                                 .lineLimit(2)
-                                            if let path = attachment.path {
-                                                Text(path)
-                                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                                    .foregroundStyle(Color.white.opacity(0.42))
-                                                    .lineLimit(2)
-                                            }
+                                            Text(attachmentMetadataLabel(for: attachment))
+                                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                                .foregroundStyle(Color.white.opacity(0.42))
+                                                .lineLimit(2)
                                         }
                                         Spacer()
                                     }
@@ -711,14 +963,6 @@ struct CoworkWorkspaceView: View {
                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                                     .foregroundStyle(.white)
                                     .textSelection(.enabled)
-
-                                if let path = focusedPreview.path {
-                                    Text(path)
-                                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.42))
-                                        .lineLimit(2)
-                                        .textSelection(.enabled)
-                                }
 
                                 if focusedPreview.kind == "image", let path = focusedPreview.path,
                                    let image = NSImage(contentsOf: URL(fileURLWithPath: path))
@@ -822,50 +1066,7 @@ struct CoworkWorkspaceView: View {
                         blockedRemoteEgressCard(blocked)
                     }
 
-                    FlowLayout(spacing: 8) {
-                        Menu {
-                            ForEach(FaeThinkingLevel.allCases) { level in
-                                Button {
-                                    controller.setThinkingLevel(level)
-                                } label: {
-                                    if faeCore.thinkingLevel == level {
-                                        Label(level.displayName, systemImage: "checkmark")
-                                    } else {
-                                        Label(level.displayName, systemImage: level.systemImage)
-                                    }
-                                }
-                            }
-                        } label: {
-                            conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)
-                        }
-                        .menuStyle(.borderlessButton)
-
-                        Button {
-                            if controller.workspaceState.selectedDirectoryPath == nil {
-                                controller.chooseWorkspaceDirectory()
-                            } else {
-                                showDetailsRail = true
-                            }
-                        } label: {
-                            conversationControlPill(icon: "folder", title: controller.workspaceState.selectedDirectoryPath == nil ? "Add folder" : "Folder")
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            presentedUtilitySection = .tools
-                        } label: {
-                            conversationControlPill(icon: "wrench.and.screwdriver", title: "Tools")
-                        }
-                        .buttonStyle(.plain)
-
-                        if let focusedTitle = controller.focusedPreview?.title {
-                            conversationControlPill(icon: "scope", title: focusedTitle)
-                        }
-                    }
-
-                    HStack(alignment: .bottom, spacing: 12) {
-                        contextActionMenu
-
+                    VStack(alignment: .leading, spacing: 10) {
                         VStack(alignment: .leading, spacing: 8) {
                             ZStack(alignment: .topLeading) {
                                 if controller.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -884,20 +1085,38 @@ struct CoworkWorkspaceView: View {
                                 )
                                 .frame(minHeight: max(52, composerHeight), maxHeight: 144)
                             }
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("Conversation composer")
+                            .accessibilityHint("Type a message, then press Return to send. Use Shift-Return for a new line.")
 
-                            HStack(spacing: 8) {
-                                Text(conversation.isGenerating ? (conversation.isStreaming ? "Fae is replying live…" : "Fae is thinking…") : "Ready in this conversation.")
-                                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.48))
-                                    .contentTransition(.interpolate)
+                            HStack(alignment: .center, spacing: 8) {
+                                voiceCaptureButton
+                                replayLatestReplyButton
+                                contextActionMenu
+
+                                thinkingLevelCompactPill
+
+                                Button {
+                                    if controller.workspaceState.selectedDirectoryPath == nil {
+                                        controller.chooseWorkspaceDirectory()
+                                    } else {
+                                        showDetailsRail = true
+                                    }
+                                } label: {
+                                    conversationControlPill(icon: "folder", title: controller.workspaceState.selectedDirectoryPath == nil ? "Add folder" : "Folder")
+                                }
+                                .buttonStyle(.plain)
+
+                                if let focusedTitle = controller.focusedPreview?.title {
+                                    conversationControlPill(icon: "scope", title: focusedTitle)
+                                }
 
                                 Spacer()
 
-                                if !controller.latestConsensusResults.isEmpty {
-                                    Text("Last compare: \(controller.latestConsensusResults.count) agents")
-                                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.42))
-                                }
+                                Text(conversation.isGenerating ? (conversation.isStreaming ? "Replying live" : "Thinking") : "Ready")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.white.opacity(0.48))
+                                    .contentTransition(.interpolate)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -911,132 +1130,101 @@ struct CoworkWorkspaceView: View {
                                 )
                         )
 
-                        Button(action: controller.compareDraftAcrossAgents) {
-                            Label(controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "Auto" : "Compare", systemImage: "square.stack.3d.up.fill")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 12)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.white.opacity(0.08))
-                                        .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
-                                )
-                                .opacity(controller.canCompareAcrossAgents && controller.selectedWorkspacePolicy.compareBehavior != .alwaysCompare ? 1 : 0.55)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!controller.canCompareAcrossAgents || controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare)
-                        .help(controller.isStrictLocalWorkspace ? "This workspace is strict local only, so comparison stays disabled." : (controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare ? "This workspace already compares automatically when you send." : "Compare across the selected workspace agents now."))
+                        HStack(alignment: .center, spacing: 10) {
+                            if controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "square.stack.3d.up.fill")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(CoworkPalette.amber.opacity(0.92))
+                                    Text(controller.canCompareAcrossAgents
+                                         ? "Auto compare on send for \(controller.consensusParticipants.count) agents"
+                                         : "Auto compare is on, but only one agent is available")
+                                        .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                        .foregroundStyle(Color.white.opacity(0.58))
+                                        .lineLimit(2)
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel(controller.canCompareAcrossAgents
+                                                    ? "Auto compare on send for \(controller.consensusParticipants.count) agents"
+                                                    : "Auto compare on, but only one agent is available")
+                            } else {
+                                Button(action: controller.compareDraftAcrossAgents) {
+                                    HStack(spacing: 7) {
+                                        Image(systemName: "square.stack.3d.up.fill")
+                                            .font(.system(size: 11, weight: .semibold))
+                                        Text("Compare \(controller.consensusParticipants.count)")
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    }
+                                    .foregroundStyle(.white.opacity(controller.canCompareAcrossAgents ? 0.84 : 0.42))
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color.white.opacity(0.05))
+                                            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!controller.canCompareAcrossAgents)
+                                .help(controller.isStrictLocalWorkspace ? "This workspace is strict local only, so comparison stays disabled." : "Ask multiple agents to answer this draft and let Fae summarize the results.")
+                                .accessibilityLabel("Compare models")
+                                .accessibilityValue("\(controller.consensusParticipants.count) agents")
+                                .accessibilityHint("Ask multiple agents to answer this draft.")
+                            }
 
-                        Button(action: controller.submitDraft) {
-                            Label(controller.shouldCompareOnSubmit ? "Compare & Send" : "Send", systemImage: "paperplane.fill")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
-                                .background(
-                                    Capsule()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [CoworkPalette.heather, CoworkPalette.amber],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
+                            Spacer(minLength: 8)
+
+                            Button(action: controller.submitDraft) {
+                                Label(controller.shouldCompareOnSubmit ? "Compare & Send" : "Send", systemImage: "paperplane.fill")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+                                    .background(
+                                        Capsule()
+                                            .fill(
+                                                LinearGradient(
+                                                    colors: [CoworkPalette.heather, CoworkPalette.amber],
+                                                    startPoint: .leading,
+                                                    endPoint: .trailing
+                                                )
                                             )
-                                        )
-                                )
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(controller.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .accessibilityLabel("Send message")
+                            .accessibilityHint("Send the draft in this conversation.")
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
+            .frame(maxWidth: 860)
+            .frame(maxWidth: .infinity)
         }
-    }
-
-    private var headerPresenceOrb: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                RadialGradient(
-                    colors: [CoworkPalette.heather.opacity(isHoveringPresenceOrb ? 0.18 : 0.1), Color.clear],
-                    center: .center,
-                    startRadius: 6,
-                    endRadius: 44
-                )
-                .frame(width: 72, height: 72)
-
-                NativeOrbView(
-                    orbAnimation: orbAnimation,
-                    audioRMS: pipelineAux.audioRMS,
-                    windowMode: "cowork",
-                    onLoad: nil,
-                    onOrbClicked: nil,
-                    onOrbContextMenu: nil
-                )
-                .frame(width: 34, height: 34)
-                .clipShape(Circle())
-                .scaleEffect(isHoveringPresenceOrb ? 1.04 : 1)
-                .shadow(color: CoworkPalette.heather.opacity(isHoveringPresenceOrb ? 0.16 : 0.08), radius: isHoveringPresenceOrb ? 12 : 6, y: 4)
-            }
-            .frame(width: 72, height: 40)
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                isHoveringPresenceOrb = hovering
-            }
-            .help("Fae is always watching over you, and she is listening.")
-
-            if isHoveringPresenceOrb {
-                Text("Fae is always watching over you, and she is listening.")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.05))
-                            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .frame(width: 120)
-        .allowsHitTesting(true)
     }
 
     private var emptyConversationState: some View {
         let setupState = controller.selectedWorkspaceSetupState
 
-        return VStack(alignment: .leading, spacing: 14) {
-            Text(setupState.isFreshWorkspace ? "Start a new conversation here." : "Pick up exactly where you left off.")
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
+        return VStack(alignment: .center, spacing: 14) {
+            Text(setupState.isFreshWorkspace ? "Start working in this conversation." : "Pick up where you left off.")
+                .font(.system(size: 28, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
 
             Text(setupState.isFreshWorkspace
-                 ? "Pick a folder, drop in files or images, then start working in this space."
-                 : "This conversation keeps its own model, context, attachments, and branch history close at hand.")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                 ? "Choose a folder or add a few files, then ask Fae what you need."
+                 : "This thread keeps its own model, context, and branch history.")
+                .font(.system(size: 14, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.62))
+                .multilineTextAlignment(.center)
 
-            FlowLayout(spacing: 10) {
-                if controller.workspaceState.selectedDirectoryPath == nil {
-                    quickActionPill(title: "Choose folder", accent: CoworkPalette.heather) {
-                        controller.chooseWorkspaceDirectory()
-                    }
-                }
-                if controller.workspaceState.attachments.isEmpty {
-                    quickActionPill(title: "Add files", accent: CoworkPalette.cyan) {
-                        controller.addAttachmentsViaPicker()
-                    }
-                }
-                if controller.agents.count <= 1 {
-                    quickActionPill(title: "Add agent", accent: CoworkPalette.amber) {
-                        prepareNewAgentForm()
-                        showingAddAgentSheet = true
-                    }
-                }
-                quickActionPill(title: "Summarize workspace", accent: CoworkPalette.heather) {
-                    controller.useQuickPrompt("Summarize this workspace and tell me where I should start.")
-                }
-            }
+            compactWorkspaceSetupStrip
         }
-        .padding(.top, 4)
-        .padding(.bottom, 2)
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 26)
+        .padding(.bottom, 12)
     }
 
     private var schedulerSection: some View {
@@ -1176,151 +1364,10 @@ struct CoworkWorkspaceView: View {
         }
     }
 
-    private var inspector: some View {
-        VStack(spacing: 18) {
-            glassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Runtime")
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-
-                    inspectorRow(title: "Owner", value: snapshot.hasOwnerSetUp ? (snapshot.userName ?? "Configured") : "Not enrolled")
-                    inspectorRow(title: "Listening", value: conversation.isListening ? "Open" : "Muted")
-                    inspectorRow(title: "Model", value: conversation.loadedModelLabel.isEmpty ? "Loading..." : conversation.loadedModelLabel)
-                    inspectorRow(title: "Background tools", value: "\(conversation.backgroundToolJobsInFlight)")
-
-                    Divider().overlay(Color.white.opacity(0.08))
-
-                    HStack(spacing: 10) {
-                        quickActionPill(title: "Morning briefing", action: { controller.runTask(id: "morning_briefing") })
-                        quickActionPill(title: "Settings", action: controller.openSettings)
-                    }
-                }
-            }
-
-            glassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Latest reply")
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-
-                    Text(latestAssistantExcerpt)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.70))
-                        .lineSpacing(4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-
-            glassCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Activity")
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-
-                    if controller.activityItems.isEmpty {
-                        Text("Tool calls, scheduler runs, and runtime changes appear here as they happen.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.62))
-                    } else {
-                        ForEach(controller.activityItems.prefix(7)) { item in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Circle()
-                                        .fill(activityAccent(item.tone))
-                                        .frame(width: 8, height: 8)
-                                    Text(item.title)
-                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white)
-                                    Spacer()
-                                    Text(item.timestamp, style: .time)
-                                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.50))
-                                }
-
-                                Text(item.detail)
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.62))
-                                    .lineLimit(3)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-            }
-
-            glassCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Workspace at a glance")
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-
-                    inspectorRow(title: "Folder", value: controller.workspaceState.selectedDirectoryPath == nil ? "Not selected" : "Selected")
-                    inspectorRow(title: "Indexed files", value: "\(controller.workspaceState.indexedFiles.count)")
-                    inspectorRow(title: "Attachments", value: "\(controller.workspaceState.attachments.count)")
-                    inspectorRow(title: "Apple tools", value: "\(snapshot.appleTools.count)")
-
-                    if !snapshot.appleTools.isEmpty {
-                        FlowLayout(spacing: 6) {
-                            ForEach(snapshot.appleTools) { tool in
-                                capsule(text: tool.displayName, accent: CoworkPalette.cyan)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private var sidebar: some View {
         glassCard(padding: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    Image(nsImage: CoworkArtwork.orb)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 34, height: 34)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Work with Fae")
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                        Text("Conversations")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.54))
-                    }
-
-                    Spacer()
-
-                    Button {
-                        newWorkspaceName = ""
-                        newWorkspaceAgentID = controller.selectedAgent?.id ?? WorkWithFaeAgentProfile.faeLocal.id
-                        newWorkspaceModel = (controller.selectedAgent?.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty)
-                            ?? (newWorkspaceSelectedAgent?.backendPreset?.suggestedModels.first ?? "")
-                        newWorkspaceDirectoryURL = nil
-                        showingAddWorkspaceSheet = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 30, height: 30)
-                            .background(
-                                Circle()
-                                    .fill(Color.white.opacity(0.06))
-                                    .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("New conversation")
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-
-                Text("Every workspace is a conversation with its own model, context, and permissions.")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.48))
-                    .padding(.horizontal, 16)
+                sidebarHeader
 
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: 8) {
@@ -1335,16 +1382,6 @@ struct CoworkWorkspaceView: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                 }
-
-                HStack(spacing: 8) {
-                    utilityMenuPill
-                    quickActionPill(title: "Agent", accent: CoworkPalette.cyan) {
-                        prepareNewAgentForm()
-                        showingAddAgentSheet = true
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
             }
         }
     }
@@ -1388,86 +1425,6 @@ struct CoworkWorkspaceView: View {
         )
     }
 
-    private var workspaceSetupCard: some View {
-        let setupState = controller.selectedWorkspaceSetupState
-
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(setupState.isFreshWorkspace ? "Get this workspace ready" : "Workspace readiness")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(setupState.isReadyForGroundedWork
-                         ? "Grounded context is ready. Add a specialist any time you want comparisons."
-                         : (setupState.nextStep?.detail ?? "Add a little context so Fae can start grounded work."))
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.66))
-                        .lineLimit(3)
-                }
-
-                Spacer()
-
-                Text("\(setupState.completedRequiredCount)/\(max(setupState.totalRequiredCount, 1))")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(setupState.steps) { step in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: step.isComplete ? "checkmark.circle.fill" : (step.isOptional ? "circle.dashed" : "circle"))
-                            .foregroundStyle(step.isComplete ? CoworkPalette.mint : (step.isOptional ? CoworkPalette.heather : Color.white.opacity(0.55)))
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(step.title)
-                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                if step.isOptional {
-                                    capsule(text: "Optional", accent: CoworkPalette.heather)
-                                }
-                            }
-                            Text(step.detail)
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.54))
-                                .lineLimit(2)
-                        }
-                    }
-                }
-            }
-
-            FlowLayout(spacing: 8) {
-                quickActionPill(title: controller.workspaceState.selectedDirectoryPath == nil ? "Choose folder" : "Change folder", accent: CoworkPalette.heather) {
-                    controller.chooseWorkspaceDirectory()
-                }
-                quickActionPill(title: "Add files", accent: CoworkPalette.cyan) {
-                    controller.addAttachmentsViaPicker()
-                }
-                if controller.agents.count <= 1 {
-                    quickActionPill(title: "Add agent", accent: CoworkPalette.amber) {
-                        prepareNewAgentForm()
-                        showingAddAgentSheet = true
-                    }
-                } else if !controller.canCompareAcrossAgents {
-                    quickActionPill(title: "Enable compare", accent: CoworkPalette.amber) {
-                        controller.updateWorkspaceCompareBehavior(.alwaysCompare)
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
-    }
-
     private var workspaceDropTail: some View {
         RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(Color.white.opacity(0.035))
@@ -1499,119 +1456,48 @@ struct CoworkWorkspaceView: View {
         let depth = controller.forkDepth(for: workspace)
         let childrenCount = controller.forkChildrenCount(for: workspace)
         let parentName = controller.parentWorkspace(for: workspace)?.name
-
-        return Button {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
-                controller.selectWorkspace(workspace)
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    if depth > 0 {
-                        HStack(spacing: 4) {
-                            ForEach(0 ..< depth, id: \.self) { _ in
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.12))
-                                    .frame(width: 6, height: 1)
-                            }
-                        }
-                        .frame(width: CGFloat(depth * 10), alignment: .leading)
-                    }
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(workspace.name)
-                            .font(.system(size: isSelected ? 13.5 : 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-
-                        HStack(spacing: 6) {
-                            Text(agentSummary(for: agent))
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .foregroundStyle((agent?.isTrustedLocal == true ? CoworkPalette.mint : CoworkPalette.cyan).opacity(0.84))
-                                .lineLimit(1)
-
-                            if let parentName {
-                                Text("Fork of \(parentName)")
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.42))
-                                    .lineLimit(1)
-                            } else if childrenCount > 0 {
-                                Text("\(childrenCount) fork\(childrenCount == 1 ? "" : "s")")
-                                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.42))
-                            }
-                        }
-                    }
-
-                    Spacer(minLength: 0)
-
-                    if isSelected && agent?.isTrustedLocal == true {
-                        capsule(text: "Local", accent: CoworkPalette.mint)
-                    }
+        let summary = agentSummary(for: agent)
+        return WorkspaceSidebarButtonView(
+            workspace: workspace,
+            summary: summary,
+            isLocal: agent?.isTrustedLocal == true,
+            isSelected: isSelected,
+            depth: depth,
+            childrenCount: childrenCount,
+            parentName: parentName,
+            canDelete: controller.workspaces.count > 1,
+            namespace: workspaceSelectionAnimation,
+            draggedWorkspaceID: $draggedWorkspaceID,
+            onSelect: {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                    controller.selectWorkspace(workspace)
                 }
-
-                if isSelected {
-                    FlowLayout(spacing: 6) {
-                        if workspace.state.selectedDirectoryPath != nil {
-                            capsule(text: "Folder", accent: CoworkPalette.heather)
-                        }
-                        if !workspace.state.attachments.isEmpty {
-                            capsule(text: "\(workspace.state.attachments.count) files", accent: CoworkPalette.cyan)
-                        }
-                        if workspace.policy.compareBehavior == .alwaysCompare {
-                            capsule(text: "Compare", accent: CoworkPalette.amber)
-                        }
-                    }
-                }
-            }
-            .padding(.leading, 12 + CGFloat(depth * 8))
-            .padding(.trailing, 12)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.025))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(isSelected ? Color.white.opacity(0.16) : Color.white.opacity(0.05), lineWidth: 1)
-                    )
-                    .matchedGeometryEffect(id: "workspace-row-\(workspace.id.uuidString)", in: workspaceSelectionAnimation)
-            )
-            .scaleEffect(isSelected ? 1.0 : 0.99)
-            .opacity(draggedWorkspaceID == workspace.id ? 0.72 : 1)
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("Fork conversation") {
+            },
+            onFork: {
                 controller.selectWorkspace(workspace)
                 controller.forkSelectedWorkspace()
-            }
-            Button("Rename conversation") {
+            },
+            onRename: {
                 controller.selectWorkspace(workspace)
                 renameWorkspaceName = workspace.name
                 showingRenameWorkspaceSheet = true
-            }
-            Divider()
-            Button("Delete conversation", role: .destructive) {
+            },
+            onDelete: {
                 controller.selectWorkspace(workspace)
                 showingDeleteWorkspaceAlert = true
+            },
+            onMoveBefore: {
+                guard let draggedWorkspaceID,
+                      draggedWorkspaceID != workspace.id,
+                      let draggedWorkspace = controller.workspaces.first(where: { $0.id == draggedWorkspaceID })
+                else {
+                    return false
+                }
+                controller.moveWorkspace(draggedWorkspace, before: workspace)
+                self.draggedWorkspaceID = nil
+                return true
             }
-            .disabled(controller.workspaces.count <= 1)
-        }
-        .onDrag {
-            draggedWorkspaceID = workspace.id
-            return NSItemProvider(object: workspace.id.uuidString as NSString)
-        }
-        .onDrop(of: [UTType.text.identifier], isTargeted: nil) { _ in
-            guard let draggedWorkspaceID,
-                  draggedWorkspaceID != workspace.id,
-                  let draggedWorkspace = controller.workspaces.first(where: { $0.id == draggedWorkspaceID })
-            else {
-                return false
-            }
-            controller.moveWorkspace(draggedWorkspace, before: workspace)
-            self.draggedWorkspaceID = nil
-            return true
-        }
+        )
     }
 
     private func sidebarButton(for section: CoworkWorkspaceSection) -> some View {
@@ -1791,8 +1677,15 @@ struct CoworkWorkspaceView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(modelPickerTarget == .selectedConversationAgent ? "Choose conversation model" : "Choose model")
                 .font(.system(size: 20, weight: .bold, design: .rounded))
+            Text(modelPickerTarget == .selectedConversationAgent
+                 ? "Switch between local and remote models without losing the conversation. Model names stay primary; provider details are secondary."
+                 : "Pick the model this agent should use.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.64))
+                .fixedSize(horizontal: false, vertical: true)
             TextField("Search models", text: $modelSearchText)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Search available models")
 
             if isLoadingModelPickerOptions {
                 ProgressView("Loading models…")
@@ -1801,51 +1694,75 @@ struct CoworkWorkspaceView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(filteredModelOptions) { option in
-                        Button {
-                            switch modelPickerTarget {
-                            case .agentEditor:
-                                newAgentModel = option.modelIdentifier
-                            case .selectedConversationAgent:
-                                controller.updateSelectedAgentModel(option.modelIdentifier)
-                            case .newWorkspaceAgent:
-                                newWorkspaceModel = option.modelIdentifier
+                    ForEach(filteredModelOptionSections) { section in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(section.title)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                Text(section.subtitle)
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(Color.white.opacity(0.44))
                             }
-                            showingModelPickerSheet = false
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(option.routeLabel)
-                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.62))
-                                        .lineLimit(1)
-                                    Text(option.vendorModelLabel)
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(.white)
-                                        .lineLimit(2)
-                                    Text(option.compactLabel)
-                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.48))
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                if selectedModelValue == option.modelIdentifier {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(CoworkPalette.mint)
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color.white.opacity(0.04))
-                                    .overlay(
+
+                            ForEach(section.options) { option in
+                                Button {
+                                    switch modelPickerTarget {
+                                    case .agentEditor:
+                                        newAgentModel = option.modelIdentifier
+                                    case .selectedConversationAgent:
+                                        controller.applyConversationModelSelection(option)
+                                    case .newWorkspaceAgent:
+                                        newWorkspaceModel = option.modelIdentifier
+                                    }
+                                    showingModelPickerSheet = false
+                                } label: {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(option.displayTitle)
+                                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                                .foregroundStyle(.white)
+                                                .lineLimit(2)
+                                            Text(option.displaySubtitle)
+                                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                .foregroundStyle(Color.white.opacity(0.58))
+                                                .lineLimit(2)
+                                            Text(option.modelIdentifier)
+                                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                                .foregroundStyle(Color.white.opacity(0.40))
+                                                .lineLimit(1)
+                                        }
+                                        Spacer()
+                                        VStack(alignment: .trailing, spacing: 6) {
+                                            if selectedModelOptionID == option.id {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .foregroundStyle(CoworkPalette.mint)
+                                            }
+                                            if !option.isConfigured {
+                                                Text("Needs key")
+                                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                                    .foregroundStyle(CoworkPalette.amber)
+                                            }
+                                        }
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+                                    .background(
                                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                            .fill(Color.white.opacity(0.04))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                            )
                                     )
-                            )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(option.accessibilityLabel)
+                                .accessibilityHint(option.isConfigured ? "Use this model for the active conversation." : "Select this model, then add an API key before sending.")
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .padding(.bottom, 6)
                     }
                 }
             }
@@ -1913,7 +1830,7 @@ struct CoworkWorkspaceView: View {
                         modelPickerTarget = .agentEditor
                         modelSearchText = ""
                         isLoadingModelPickerOptions = true
-                        browsableModelOptions = modelOptions(from: suggestedModels, for: preset)
+                        browsableModelOptions = modelOptions(from: suggestedModels, for: preset, baseURL: newAgentBaseURL)
                         showingModelPickerSheet = true
                         Task {
                             do {
@@ -1929,7 +1846,7 @@ struct CoworkWorkspaceView: View {
                                         result.append(trimmed)
                                     }
                                     discoveredModels = report.discoveredModels
-                                    browsableModelOptions = modelOptions(from: merged, for: preset)
+                                    browsableModelOptions = modelOptions(from: merged, for: preset, baseURL: newAgentBaseURL)
                                     isLoadingModelPickerOptions = false
                                 }
                             } catch {
@@ -2115,69 +2032,6 @@ struct CoworkWorkspaceView: View {
         }
     }
 
-    private func statusChip(icon: String, title: String, accent: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(accent)
-            Text(title)
-                .lineLimit(1)
-        }
-        .font(.system(size: 12, weight: .semibold, design: .rounded))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            Capsule()
-                .fill(Color.white.opacity(0.06))
-                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-        )
-    }
-
-    private func metricTile(title: String, value: String, accent: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-            Text(title)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(accent)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                )
-        )
-    }
-
-    private func quickPromptButton(title: String, subtitle: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                Text(subtitle)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.60))
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
     private func quickSuggestionChip(_ text: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(text)
@@ -2189,42 +2043,6 @@ struct CoworkWorkspaceView: View {
                         .fill(Color.white.opacity(0.05))
                         .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
                 )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func luxuryPromptCard(title: String, subtitle: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(CoworkPalette.heather)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.05))
-                    )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(subtitle)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.58))
-                        .lineLimit(3)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.white.opacity(0.07), lineWidth: 1)
-                    )
-            )
         }
         .buttonStyle(.plain)
     }
@@ -2272,41 +2090,27 @@ struct CoworkWorkspaceView: View {
         .preferredColorScheme(.dark)
     }
 
-    private var utilityMenuPill: some View {
-        Menu {
-            ForEach(CoworkWorkspaceSection.allCases.filter { $0 != .workspace }) { section in
-                Button(section.title) {
-                    presentedUtilitySection = section
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("More")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                Capsule()
-                    .fill(Color.white.opacity(0.05))
-                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-            )
-        }
-        .menuStyle(.borderlessButton)
-    }
-
-    private var agentPickerPill: some View {
+    private var workspaceOverflowMenu: some View {
         Menu {
             if let selectedWorkspace = controller.selectedWorkspace {
-                ForEach(controller.agents) { agent in
-                    Button(agent.name) {
-                        controller.assignAgent(agent, to: selectedWorkspace)
-                    }
+                Button("Rename conversation") {
+                    renameWorkspaceName = selectedWorkspace.name
+                    showingRenameWorkspaceSheet = true
+                }
+                Button("Fork conversation") {
+                    controller.forkSelectedWorkspace()
                 }
                 Divider()
+            }
+
+            if let selectedWorkspace = controller.selectedWorkspace {
+                Menu("Switch agent") {
+                    ForEach(controller.agents) { agent in
+                        Button(agent.name) {
+                            controller.assignAgent(agent, to: selectedWorkspace)
+                        }
+                    }
+                }
             }
 
             Button("Add agent") {
@@ -2320,38 +2124,101 @@ struct CoworkWorkspaceView: View {
                     showingAddAgentSheet = true
                 }
             }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(controller.selectedAgent?.name ?? "Agent")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
+
+            Divider()
+
+            Button("Refresh conversation") {
+                controller.refreshNow()
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                Capsule()
-                    .fill(Color.white.opacity(0.05))
-                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-            )
+
+            ForEach(CoworkWorkspaceSection.allCases.filter { $0 != .workspace }) { section in
+                Button("Open \(section.title)") {
+                    presentedUtilitySection = section
+                }
+            }
+
+            Divider()
+
+            Button("Open settings") {
+                controller.openSettings()
+            }
+
+            if controller.selectedWorkspace != nil {
+                Button("Delete conversation", role: .destructive) {
+                    showingDeleteWorkspaceAlert = true
+                }
+                .disabled(controller.workspaces.count <= 1)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.72))
+                .frame(width: 34, height: 34)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                )
         }
         .menuStyle(.borderlessButton)
+        .accessibilityLabel("Conversation actions")
+        .accessibilityHint("Rename the conversation, manage agents, open tools, or open settings.")
     }
 
     private var modelPickerPill: some View {
         Button {
             openModelPickerForSelectedAgent()
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles.rectangle.stack")
+            HStack(spacing: 10) {
+                Image(systemName: selectedAgentLocalityIcon)
                     .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(selectedAgentLocalityAccent.opacity(0.92))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedAgentModelLabel ?? "Model")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+
+                    Text(selectedAgentLocalityCaption)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.48))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Choose the model for this conversation. Switching models keeps the same thread.")
+        .accessibilityLabel("Conversation model")
+        .accessibilityValue(selectedAgentModelLabel ?? "No model selected")
+        .accessibilityHint("Browse local and remote models for this conversation.")
+    }
+
+    private var modelPickerCompactPill: some View {
+        Button {
+            openModelPickerForSelectedAgent()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: selectedAgentLocalityIcon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(selectedAgentLocalityAccent.opacity(0.92))
                 Text(selectedAgentModelLabel ?? "Model")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
-            .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(
@@ -2361,25 +2228,53 @@ struct CoworkWorkspaceView: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Choose the model for this conversation. OpenRouter and other remote backends keep the same thread when you switch models.")
+        .help("Choose the model for this conversation. Switching models keeps the same thread.")
+        .accessibilityLabel("Conversation model")
+        .accessibilityValue(selectedAgentModelLabel ?? "No model selected")
     }
 
-    private func headerPill(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: .semibold))
-            Text(text)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .lineLimit(1)
+    private var sidebarHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            CoworkBrandOrbView()
+                .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Work with Fae")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("Private cowork on your Mac")
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.46).opacity(0.78))
+                Text("\(controller.workspaces.count) conversation\(controller.workspaces.count == 1 ? "" : "s")")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.52))
+            }
+
+            Spacer()
+
+            Button {
+                newWorkspaceName = ""
+                newWorkspaceAgentID = controller.selectedAgent?.id ?? WorkWithFaeAgentProfile.faeLocal.id
+                newWorkspaceModel = (controller.selectedAgent?.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty)
+                    ?? (newWorkspaceSelectedAgent?.backendPreset?.suggestedModels.first ?? "")
+                newWorkspaceDirectoryURL = nil
+                showingAddWorkspaceSheet = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Circle()
+                            .fill(Color.white.opacity(0.06))
+                            .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("New conversation")
         }
-        .foregroundStyle(Color.white.opacity(0.82))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            Capsule()
-                .fill(Color.white.opacity(0.05))
-                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-        )
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
     }
 
     private var contextActionMenu: some View {
@@ -2419,6 +2314,44 @@ struct CoworkWorkspaceView: View {
                 )
         }
         .menuStyle(.borderlessButton)
+        .accessibilityLabel("Add context")
+        .accessibilityHint("Add files, paste content, use the camera, or inspect the screen.")
+    }
+
+    private var voiceCaptureButton: some View {
+        Button {
+            conversation.toggleListening()
+        } label: {
+            conversationControlPill(
+                icon: conversation.isListening ? "mic.fill" : "mic.slash.fill",
+                title: conversation.isListening ? "Listening" : "Voice off",
+                accent: conversation.isListening ? CoworkPalette.mint : CoworkPalette.rose
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Keep Fae listening while you type or speak.")
+        .accessibilityLabel(conversation.isListening ? "Listening" : "Voice off")
+        .accessibilityHint("Toggle shared voice capture for Fae.")
+    }
+
+    private var replayLatestReplyButton: some View {
+        Button {
+            if let latestAssistantReply {
+                faeCore.speakDirect(latestAssistantReply)
+            }
+        } label: {
+            conversationControlPill(
+                icon: "speaker.wave.2.fill",
+                title: "Read reply",
+                accent: latestAssistantReply == nil ? CoworkPalette.heather : CoworkPalette.amber
+            )
+            .opacity(latestAssistantReply == nil ? 0.55 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(latestAssistantReply == nil)
+        .help("Read the latest assistant reply aloud in Fae's voice.")
+        .accessibilityLabel("Read latest reply aloud")
+        .accessibilityHint("Replay the latest assistant response using Fae's voice.")
     }
 
     private func workspaceActionButton(
@@ -2461,6 +2394,111 @@ struct CoworkWorkspaceView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    private enum HeaderButtonLabelStyle {
+        case iconOnly
+        case titleAndIcon
+    }
+
+    private func detailsRailToggleButton(labelStyle: HeaderButtonLabelStyle) -> some View {
+        Button {
+            showDetailsRail.toggle()
+        } label: {
+            Group {
+                switch labelStyle {
+                case .iconOnly:
+                    Image(systemName: "sidebar.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(
+                            Circle()
+                                .fill(CoworkPalette.heather.opacity(0.16))
+                                .overlay(Circle().stroke(CoworkPalette.heather.opacity(0.28), lineWidth: 1))
+                        )
+                case .titleAndIcon:
+                    Label(showDetailsRail ? "Hide inspector" : "Inspector", systemImage: "sidebar.right")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(
+                            Capsule()
+                                .fill(CoworkPalette.heather.opacity(0.16))
+                                .overlay(Capsule().stroke(CoworkPalette.heather.opacity(0.28), lineWidth: 1))
+                        )
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help(showDetailsRail ? "Hide details" : "Show details")
+        .accessibilityLabel(showDetailsRail ? "Hide inspector" : "Show inspector")
+    }
+
+    private var thinkingLevelPill: some View {
+        Menu {
+            ForEach(FaeThinkingLevel.allCases) { level in
+                Button {
+                    controller.setThinkingLevel(level)
+                } label: {
+                    if faeCore.thinkingLevel == level {
+                        Label(level.displayName, systemImage: "checkmark")
+                    } else {
+                        Label(level.displayName, systemImage: level.systemImage)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: faeCore.thinkingLevel.systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CoworkPalette.amber.opacity(0.9))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(faeCore.thinkingLevel.displayName)
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Response style")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.48))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .accessibilityLabel("Thinking level")
+        .accessibilityValue(faeCore.thinkingLevel.displayName)
+    }
+
+    private var thinkingLevelCompactPill: some View {
+        Menu {
+            ForEach(FaeThinkingLevel.allCases) { level in
+                Button {
+                    controller.setThinkingLevel(level)
+                } label: {
+                    if faeCore.thinkingLevel == level {
+                        Label(level.displayName, systemImage: "checkmark")
+                    } else {
+                        Label(level.displayName, systemImage: level.systemImage)
+                    }
+                }
+            }
+        } label: {
+            conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)
+        }
+        .menuStyle(.borderlessButton)
+        .accessibilityLabel("Thinking level")
+        .accessibilityValue(faeCore.thinkingLevel.displayName)
     }
 
     private var consensusSummaryStrip: some View {
@@ -2587,72 +2625,42 @@ struct CoworkWorkspaceView: View {
     }
 
     private func conversationBubble(_ message: ChatMessage) -> some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack {
             if message.role == .assistant {
-                messageAccessory(role: .assistant, timestamp: message.timestamp)
-                bubble(message.content, accent: CoworkPalette.heather, isTrailing: false)
+                bubble(message.content, accent: Color.white.opacity(0.10), borderAccent: Color.white.opacity(0.10), isTrailing: false)
                 Spacer(minLength: 60)
             } else {
                 Spacer(minLength: 60)
-                bubble(message.content, accent: CoworkPalette.cyan, isTrailing: true)
-                messageAccessory(role: .user, timestamp: message.timestamp)
+                bubble(message.content, accent: CoworkPalette.heather.opacity(0.18), borderAccent: CoworkPalette.heather.opacity(0.28), isTrailing: true)
             }
         }
     }
 
     private func streamingBubble(_ text: String) -> some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            messageAccessory(role: .assistant, timestamp: Date(), showPulse: true)
-            bubble(text, accent: CoworkPalette.heather, isTrailing: false, isStreaming: true)
+        HStack {
+            bubble(text, accent: Color.white.opacity(0.10), borderAccent: CoworkPalette.heather.opacity(0.34), isTrailing: false, isStreaming: true)
             Spacer(minLength: 60)
         }
     }
 
-    private func messageAccessory(role: ChatRole, timestamp: Date, showPulse: Bool = false) -> some View {
-        VStack(alignment: .center, spacing: 6) {
-            Circle()
-                .fill(role == .assistant ? CoworkPalette.heather.opacity(0.9) : CoworkPalette.cyan.opacity(0.9))
-                .frame(width: 8, height: 8)
-                .overlay {
-                    if showPulse {
-                        Circle()
-                            .stroke((role == .assistant ? CoworkPalette.heather : CoworkPalette.cyan).opacity(0.5), lineWidth: 1)
-                            .scaleEffect(1.8)
-                            .opacity(0.6)
-                    }
-                }
-            Text(timestamp.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.38))
-        }
-        .frame(width: 42)
-    }
-
-    private func bubble(_ text: String, accent: Color, isTrailing: Bool, isStreaming: Bool = false) -> some View {
-        VStack(alignment: isTrailing ? .trailing : .leading, spacing: 8) {
-            Text(isTrailing ? "You" : (isStreaming ? "Fae · live" : "Fae"))
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(accent.opacity(0.9))
-                .textCase(.uppercase)
-
-            Text(text)
-                .font(.system(size: 14, weight: .medium, design: .rounded))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(isTrailing ? .trailing : .leading)
-                .lineSpacing(3)
-        }
+    private func bubble(_ text: String, accent: Color, borderAccent: Color, isTrailing: Bool, isStreaming: Bool = false) -> some View {
+        Text(text)
+            .font(.system(size: 14.5, weight: .regular, design: .rounded))
+            .foregroundStyle(.white.opacity(0.94))
+            .multilineTextAlignment(isTrailing ? .trailing : .leading)
+            .lineSpacing(4)
         .padding(.horizontal, 15)
         .padding(.vertical, 13)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(accent.opacity(isStreaming ? 0.17 : 0.14))
+                .fill(accent.opacity(isStreaming ? 1 : 1))
                 .overlay(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(accent.opacity(isStreaming ? 0.32 : 0.25), lineWidth: 1)
+                        .stroke(borderAccent.opacity(isStreaming ? 1 : 1), lineWidth: 1)
                 )
         )
-        .shadow(color: accent.opacity(isStreaming ? 0.16 : 0.08), radius: 12, y: 6)
-        .frame(maxWidth: 620, alignment: isTrailing ? .trailing : .leading)
+        .shadow(color: .black.opacity(isStreaming ? 0.14 : 0.06), radius: 10, y: 4)
+        .frame(maxWidth: 680, alignment: isTrailing ? .trailing : .leading)
     }
 
     private func schedulerTaskCard(_ task: CoworkSchedulerTask) -> some View {
@@ -2730,16 +2738,19 @@ struct CoworkWorkspaceView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func inspectorRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.52))
-            Spacer()
-            Text(value)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
+    private func attachmentMetadataLabel(for attachment: WorkWithFaeAttachment) -> String {
+        switch attachment.kind {
+        case .image:
+            return "Image"
+        case .text:
+            return "Pasted text"
+        case .file:
+            if let path = attachment.path {
+                return URL(fileURLWithPath: path).pathExtension.isEmpty
+                    ? "File"
+                    : URL(fileURLWithPath: path).pathExtension.uppercased()
+            }
+            return "File"
         }
     }
 
@@ -2781,79 +2792,6 @@ struct CoworkWorkspaceView: View {
             )
         }
         .menuStyle(.borderlessButton)
-    }
-
-    private func miniWorkspaceStat(label: String, value: some CustomStringConvertible) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.40))
-            Text(value.description)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.82))
-                .lineLimit(1)
-        }
-    }
-
-    private func sidebarMiniSectionLabel(title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-            Text(subtitle)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.48))
-        }
-    }
-
-    private func sidebarSectionHeader(
-        title: String,
-        subtitle: String,
-        action: (() -> Void)? = nil
-    ) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.86))
-                Text(subtitle)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.48))
-            }
-            Spacer()
-            if let action {
-                Button(action: action) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            Circle()
-                                .fill(Color.white.opacity(0.05))
-                                .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func miniInfoBadge(icon: String, text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(CoworkPalette.heather)
-            Text(text)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.76))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            Capsule()
-                .fill(Color.white.opacity(0.05))
-                .overlay(Capsule().stroke(Color.white.opacity(0.07), lineWidth: 1))
-        )
     }
 
     private func blockedRemoteEgressCard(_ blocked: CoworkWorkspaceController.BlockedRemoteEgressRequest) -> some View {
@@ -2899,11 +2837,11 @@ struct CoworkWorkspaceView: View {
         )
     }
 
-    private func conversationControlPill(icon: String, title: String) -> some View {
+    private func conversationControlPill(icon: String, title: String, accent: Color = CoworkPalette.heather) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(CoworkPalette.heather)
+                .foregroundStyle(accent)
             Text(title)
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.82))
@@ -2988,14 +2926,6 @@ struct CoworkWorkspaceView: View {
         }
     }
 
-    private func activityAccent(_ tone: CoworkActivityItem.Tone) -> Color {
-        switch tone {
-        case .success: return CoworkPalette.mint
-        case .warning: return CoworkPalette.rose
-        case .neutral: return CoworkPalette.cyan
-        }
-    }
-
     private var selectedBackendPreset: CoworkBackendPreset {
         CoworkBackendPresetCatalog.preset(id: newAgentBackendPresetID) ?? CoworkLLMProviderKind.openAICompatibleExternal.defaultPreset
     }
@@ -3023,11 +2953,37 @@ struct CoworkWorkspaceView: View {
         guard let agent = controller.selectedAgent else {
             return nil
         }
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
         let model = agent.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else {
             return agent.backendDisplayName
         }
-        return model
+        return compactModelLabel(for: model, preset: preset)
+    }
+
+    private var selectedAgentLocalityCaption: String {
+        guard let agent = controller.selectedAgent else { return "Choose a model" }
+        if agent.isTrustedLocal {
+            return "On-device"
+        }
+        return controller.isStrictLocalWorkspace ? "Remote blocked by workspace policy" : "Remote model"
+    }
+
+    private var selectedAgentLocalityIcon: String {
+        guard let agent = controller.selectedAgent else { return "sparkles.rectangle.stack" }
+        return agent.isTrustedLocal ? "lock.shield.fill" : "network"
+    }
+
+    private var selectedAgentLocalityAccent: Color {
+        guard let agent = controller.selectedAgent else { return CoworkPalette.heather }
+        if agent.isTrustedLocal {
+            return CoworkPalette.mint
+        }
+        return controller.isStrictLocalWorkspace ? CoworkPalette.rose : CoworkPalette.cyan
+    }
+
+    private var latestAssistantReply: String? {
+        conversation.messages.last(where: { $0.role == .assistant })?.content.nilIfEmpty
     }
 
     private var newWorkspaceResolvedModelIdentifier: String {
@@ -3049,6 +3005,21 @@ struct CoworkWorkspaceView: View {
         }
     }
 
+    private var selectedModelOptionID: String? {
+        switch modelPickerTarget {
+        case .agentEditor:
+            return modelOptionID(for: newAgentModel, preset: selectedBackendPreset, baseURL: newAgentBaseURL)
+        case .selectedConversationAgent:
+            guard let agent = controller.selectedAgent else { return nil }
+            let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+            return modelOptionID(for: agent.modelIdentifier, preset: preset, baseURL: agent.baseURL)
+        case .newWorkspaceAgent:
+            guard let agent = newWorkspaceSelectedAgent else { return nil }
+            let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+            return modelOptionID(for: newWorkspaceResolvedModelIdentifier, preset: preset, baseURL: agent.baseURL)
+        }
+    }
+
     private var presetSuggestedModels: [String] {
         selectedBackendPreset.suggestedModels
     }
@@ -3059,7 +3030,7 @@ struct CoworkWorkspaceView: View {
     }
 
     private var suggestedModelOptions: [CoworkModelOption] {
-        modelOptions(from: suggestedModels, for: selectedBackendPreset)
+        modelOptions(from: suggestedModels, for: selectedBackendPreset, baseURL: newAgentBaseURL)
     }
 
     private var filteredModelOptions: [CoworkModelOption] {
@@ -3069,9 +3040,44 @@ struct CoworkWorkspaceView: View {
         return source.filter { $0.searchText.localizedCaseInsensitiveContains(query) }
     }
 
+    private var filteredModelOptionSections: [CoworkModelOptionSection] {
+        let grouped = Dictionary(grouping: filteredModelOptions) { option in
+            option.providerDisplayName
+        }
+
+        return grouped.keys.sorted { lhs, rhs in
+            let lhsRank = grouped[lhs]?.first?.providerSortRank ?? Int.max
+            let rhsRank = grouped[rhs]?.first?.providerSortRank ?? Int.max
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }.compactMap { key in
+            guard let options = grouped[key] else { return nil }
+            let configuredCount = options.filter(\.isConfigured).count
+            let subtitle = configuredCount == options.count
+                ? "Ready"
+                : (configuredCount == 0 ? "Choose a model, then finish setup if needed" : "\(configuredCount) ready")
+            return CoworkModelOptionSection(
+                id: key,
+                title: key,
+                subtitle: subtitle,
+                options: options.sorted { lhs, rhs in
+                    if lhs.isConfigured != rhs.isConfigured {
+                        return lhs.isConfigured && !rhs.isConfigured
+                    }
+                    return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+                }
+            )
+        }
+    }
+
     private func openModelPickerForSelectedAgent() {
-        guard let selectedAgent = controller.selectedAgent else { return }
-        openModelPicker(for: selectedAgent, target: .selectedConversationAgent)
+        modelPickerTarget = .selectedConversationAgent
+        modelSearchText = ""
+        isLoadingModelPickerOptions = false
+        browsableModelOptions = controller.availableConversationModelOptions()
+        showingModelPickerSheet = true
     }
 
     private func openModelPickerForNewWorkspaceAgent() {
@@ -3097,7 +3103,7 @@ struct CoworkWorkspaceView: View {
                 result.append(item)
             }
         }
-        browsableModelOptions = modelOptions(from: initialModels, for: preset)
+        browsableModelOptions = modelOptions(from: initialModels, for: preset, baseURL: agent.baseURL)
         showingModelPickerSheet = true
 
         Task {
@@ -3110,7 +3116,7 @@ struct CoworkWorkspaceView: View {
                             result.append(item)
                         }
                     }
-                    browsableModelOptions = modelOptions(from: merged, for: preset)
+                    browsableModelOptions = modelOptions(from: merged, for: preset, baseURL: agent.baseURL)
                     isLoadingModelPickerOptions = false
                 }
             } catch {
@@ -3132,7 +3138,8 @@ struct CoworkWorkspaceView: View {
     private var newWorkspaceBackendSummary: String {
         guard let agent = newWorkspaceSelectedAgent else { return "No agent selected" }
         let option = modelOption(for: newWorkspaceResolvedModelIdentifier, preset: newWorkspaceSelectedPreset ?? agent.providerKind.defaultPreset)
-        return option == nil ? agent.backendDisplayName : option!.vendorModelLabelWithRoute
+        guard let option else { return agent.backendDisplayName }
+        return "\(option.displayTitle) · \(option.providerDisplayName)"
     }
 
     private var newWorkspaceModelDisplayValue: String {
@@ -3194,132 +3201,62 @@ struct CoworkWorkspaceView: View {
 
     private func agentSummary(for agent: WorkWithFaeAgentProfile?) -> String {
         guard let agent else { return "No agent" }
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
         let model = agent.modelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return agent.backendDisplayName }
-        let option = modelOption(for: model, preset: agent.backendPreset ?? agent.providerKind.defaultPreset)
-        return option?.vendorModelLabelWithRoute ?? "\(agent.backendDisplayName) · \(model)"
+        return compactModelLabel(for: model, preset: preset)
     }
 
     private var snapshot: CoworkWorkspaceSnapshot { controller.snapshot }
 
-    private var headerSubtitle: String {
-        let user = snapshot.userName ?? "you"
-        let workspaceName = controller.selectedWorkspace?.name ?? "this workspace"
-        let agentName = controller.remoteAgentBlockedByPolicy ? "Fae Local" : (controller.selectedAgent?.name ?? "Fae Local")
-        if faeCore.pipelineState == .running {
-            if controller.isStrictLocalWorkspace {
-                return "\(workspaceName) is in strict local mode for \(user). Fae keeps this workspace on-device, even if a remote agent is attached for later use."
-            }
-            return "\(workspaceName) is attached to \(agentName). Fae keeps watching over \(user)'s work locally, while workspace context, skills, and agent setup stay close at hand."
-        }
-        return "Fae is still starting. \(workspaceName) stays mounted so context and agent setup are ready when she is."
-    }
-
-    private var workspaceHeaderSummary: String {
-        let agent = controller.remoteAgentBlockedByPolicy ? "Fae Local" : agentSummary(for: controller.selectedAgent)
-        if let path = controller.workspaceState.selectedDirectoryPath {
-            return "\(agent) · \(path)"
-        }
-        return "\(agent) · no folder attached"
-    }
-
-    private var currentWorkspaceSubtitle: String {
-        if let path = controller.workspaceState.selectedDirectoryPath {
-            return path
-        }
-        if controller.selectedWorkspaceSetupState.isFreshWorkspace {
-            return "Fresh workspace. Choose a folder or add a few files to make Fae's answers feel grounded right away."
-        }
+    private var workspaceHeaderCaption: String {
+        var parts: [String] = []
         if controller.remoteAgentBlockedByPolicy {
-            return "Strict local only is active here. Remote agents stay attached but idle until you re-enable remote execution."
+            parts.append("Fae Local is handling this thread")
+        } else {
+            parts.append(selectedAgentModelLabel ?? agentSummary(for: controller.selectedAgent))
+            parts.append(selectedAgentLocalityCaption)
         }
-        if let agent = controller.selectedAgent {
-            return agent.isTrustedLocal ? "Trusted local agent with memory, tools, scheduler, and approvals." : (agent.notes ?? "Remote agent profile")
+        if controller.workspaceState.selectedDirectoryPath != nil {
+            parts.append("folder attached")
+        } else {
+            parts.append("no folder yet")
         }
-        return conversation.loadedModelLabel.isEmpty ? "Choose a folder or attach an agent to ground the workspace." : conversation.loadedModelLabel
-    }
-
-    private var latestAssistantExcerpt: String {
-        if conversation.isStreaming, !conversation.streamingText.isEmpty {
-            return conversation.streamingText
+        if controller.workspaceState.attachments.isEmpty == false {
+            parts.append("\(controller.workspaceState.attachments.count) attachment\(controller.workspaceState.attachments.count == 1 ? "" : "s")")
         }
-        if let message = conversation.messages.last(where: { $0.role == .assistant }) {
-            return message.content
+        if controller.selectedWorkspacePolicy.compareBehavior == .alwaysCompare {
+            parts.append("auto compare on")
         }
-        return "No assistant reply yet."
-    }
-}
-
-
-private func modelOptions(from models: [String], for preset: CoworkBackendPreset) -> [CoworkModelOption] {
-    var seen = Set<String>()
-    return models.compactMap { model in
-        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
-        return modelOption(for: trimmed, preset: preset)
-    }
-}
-
-private func modelOption(for model: String, preset: CoworkBackendPreset) -> CoworkModelOption? {
-    let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-
-    let route = preset.displayName
-    let vendor = vendorLabel(for: trimmed, preset: preset)
-    let compact = compactModelLabel(for: trimmed)
-    let vendorModel = "\(vendor) — \(compact)"
-    let routeLabel = "(\(route))"
-    return CoworkModelOption(
-        modelIdentifier: trimmed,
-        routeLabel: routeLabel,
-        vendorLabel: vendor,
-        compactLabel: compact,
-        vendorModelLabel: vendorModel,
-        vendorModelLabelWithRoute: "\(routeLabel) — \(vendorModel)",
-        searchText: [trimmed, compact, vendor, route].joined(separator: " ")
-    )
-}
-
-private func compactModelLabel(for model: String) -> String {
-    let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let slash = trimmed.firstIndex(of: "/") else { return trimmed }
-    return String(trimmed[trimmed.index(after: slash)...])
-}
-
-private func vendorLabel(for model: String, preset: CoworkBackendPreset) -> String {
-    let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-    let prefix = trimmed.split(separator: "/", maxSplits: 1).first.map(String.init)?.lowercased()
-    switch prefix {
-    case "openai": return "OpenAI"
-    case "anthropic": return "Anthropic"
-    case "google": return "Google"
-    case "minimax": return "MiniMax"
-    case "meta": return "Meta"
-    case "mistralai": return "Mistral"
-    case "mistral": return "Mistral"
-    case "x-ai": return "xAI"
-    case "xai": return "xAI"
-    case "deepseek": return "DeepSeek"
-    case "qwen": return "Qwen"
-    case "liquid": return "Liquid"
-    case "cohere": return "Cohere"
-    case "perplexity": return "Perplexity"
-    case "moonshotai": return "Moonshot AI"
-    case "microsoft": return "Microsoft"
-    case "amazon": return "Amazon"
-    case .none:
-        break
-    case .some(let value):
-        return value.split(separator: "-").map { $0.capitalized }.joined(separator: "-")
+        return parts.joined(separator: " · ")
     }
 
-    if preset.id == "anthropic" {
-        return "Anthropic"
+    private var workspaceHeaderMetaLine: String? {
+        var parts: [String] = []
+        if controller.workspaceState.selectedDirectoryPath != nil {
+            parts.append("Folder attached")
+        }
+        if controller.workspaceState.attachments.isEmpty == false {
+            parts.append("\(controller.workspaceState.attachments.count) attachment\(controller.workspaceState.attachments.count == 1 ? "" : "s")")
+        }
+        if let workspace = controller.selectedWorkspace,
+           let parent = controller.parentWorkspace(for: workspace)
+        {
+            parts.append("Fork of \(parent.name)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ·  ")
     }
-    if preset.id == "openai" {
-        return "OpenAI"
+
+    private var detailsRailCaption: String {
+        var parts: [String] = []
+        parts.append(controller.workspaceState.selectedDirectoryPath == nil ? "No folder" : "Folder ready")
+        parts.append("\(controller.workspaceState.attachments.count) attachment\(controller.workspaceState.attachments.count == 1 ? "" : "s")")
+        if !controller.workspaceState.indexedFiles.isEmpty {
+            parts.append("\(controller.workspaceState.indexedFiles.count) indexed")
+        }
+        return parts.joined(separator: "  ·  ")
     }
-    return preset.displayName
+
 }
 
 private struct FlowLayout: Layout {

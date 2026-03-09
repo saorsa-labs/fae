@@ -376,7 +376,12 @@ actor ModelManager {
                         let samples = MLXTTSEngine.parseWAVToFloat32(voiceData)
                         if !samples.isEmpty {
                             let embedding = try await speaker.embed(audio: samples, sampleRate: 24_000)
-                            await store.enroll(label: "fae_self", embedding: embedding)
+                            await store.enroll(
+                                label: "fae_self",
+                                embedding: embedding,
+                                role: .faeSelf,
+                                displayName: "Fae"
+                            )
                             NSLog("ModelManager: Fae self-voiceprint enrolled for echo rejection")
                         }
                     } catch {

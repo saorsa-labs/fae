@@ -1078,6 +1078,20 @@ actor FaeScheduler {
         NSLog("FaeScheduler: deleted user task '%@'", id)
     }
 
+    func deleteAllUserTasksForTest() async -> Int {
+        let tasks = readSchedulerTasks()
+        let removed = tasks.filter { $0.kind == "user" }
+        guard !removed.isEmpty else { return 0 }
+
+        persistSchedulerTasks(tasks.filter { $0.kind != "user" })
+        for task in removed {
+            disabledTaskIDs.remove(task.id)
+            runHistory[task.id] = nil
+        }
+        NSLog("FaeScheduler: deleted %d user task(s) for test reset", removed.count)
+        return removed.count
+    }
+
     func setTaskEnabled(id: String, enabled: Bool) async {
         if enabled {
             disabledTaskIDs.remove(id)

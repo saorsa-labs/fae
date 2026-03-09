@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class CoworkWindowController {
+final class CoworkWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var controller: CoworkWorkspaceController?
 
@@ -17,12 +17,13 @@ final class CoworkWindowController {
     func show() {
         if let window {
             controller?.scheduleRefresh(after: 0.05)
+            announceVisibility(true)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
-        guard let faeCore, let conversation, let orbAnimation, let pipelineAux else {
+        guard let faeCore, let conversation else {
             NSLog("CoworkWindowController: dependencies not wired")
             return
         }
@@ -35,9 +36,7 @@ final class CoworkWindowController {
         let rootView = CoworkWorkspaceView(
             controller: controller,
             faeCore: faeCore,
-            conversation: conversation,
-            orbAnimation: orbAnimation,
-            pipelineAux: pipelineAux
+            conversation: conversation
         )
 
         let hostingController = NSHostingController(rootView: rootView)
@@ -61,11 +60,27 @@ final class CoworkWindowController {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 1120, height: 760)
         window.center()
+        window.delegate = self
         window.contentViewController = hostingController
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
         self.controller = controller
         self.window = window
+        announceVisibility(true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        announceVisibility(false)
+        window = nil
+        controller = nil
+    }
+
+    private func announceVisibility(_ visible: Bool) {
+        NotificationCenter.default.post(
+            name: .faeCoworkWindowVisibilityChanged,
+            object: nil,
+            userInfo: ["visible": visible]
+        )
     }
 }

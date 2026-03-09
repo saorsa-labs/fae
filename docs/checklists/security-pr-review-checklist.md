@@ -68,6 +68,7 @@ Use this checklist for any PR that adds or changes:
 - [ ] User-visible behavior docs updated in the same PR when product behavior changed
 - [ ] Confirmation/review copy docs updated when approval or export-review text changed
 - [ ] Adversarial/security test plan docs updated when a new boundary or bypass surface was added
+- [ ] [app-release-validation.md](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md) updated when a new live-flow, popup, model path, or remote boundary was added
 - [ ] Docs clearly distinguish `planned`, `implemented baseline`, and `shipped` states
 
 ## Reviewer decision

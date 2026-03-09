@@ -12,6 +12,12 @@ Work with Fae treats each workspace like a conversation/thread:
 - center = active conversation surface
 - details rail = optional workspace context and controls
 - utilities = secondary sheets/menus, not the primary surface
+- the main screen should stay conversation-first: model switching is primary, while agent management, tools, scheduler, and settings stay in quieter secondary menus or drawers
+- the active conversation surface should stay visually centered and calm rather than stretching every status/control across the full window
+- workspace metadata should read as quiet supporting text, not as a wall of badges or provider labels
+- the details rail should feel like an optional inspector, not a second dashboard competing with the thread
+- the left-rail brand should carry the visual identity: an animated Fae ember orb and quiet title treatment, not a generic utility label
+- send should remain the single dominant call to action; compare is secondary and should read as an optional multi-agent step or lightweight status when auto-compare is enabled
 
 ## Core capabilities
 
@@ -21,7 +27,7 @@ Work with Fae has its own visible conversation session and window.
 
 That means:
 
-- the main Fae window does not visually take over the workspace conversation
+- the main Fae window stays available as its own conversation surface when cowork opens; opening Work with Fae should not silently collapse main Fae into the tiny orb
 - approvals for cowork-routed Fae Local turns prefer the Work with Fae window
 - Fae still sees the work for memory, later assistance, and local supervision
 
@@ -59,9 +65,26 @@ Work with Fae supports provider-aware model setup:
 
 - provider/backend presets for Fae Local, OpenAI, OpenRouter, custom OpenAI-compatible endpoints, and Anthropic
 - searchable model pickers in provider setup surfaces
-- current model stays visible in the active conversation surface
-- selecting a different model updates the attached agent without resetting the thread
+- a conversation-level model browser that keeps model names primary and provider details secondary
+- the active conversation surface shows the selected model name instead of provider-heavy route labels
+- the active conversation chrome and conversation list should make `On-device` vs `Remote` obvious without surfacing provider clutter in the resting UI
+- selecting a different model can switch the attached route/provider without resetting the thread
 - local model switches continue with the full local thread; remote providers continue the thread using only the current exported shareable context
+
+### Keyboard and accessibility
+
+Work with Fae should feel native on macOS, not like a web tool inside a shell.
+
+Current interaction contract:
+
+- Return sends from the cowork composer
+- Shift-Return inserts a new line in the cowork composer
+- the composer, send button, compare button, model picker, agent picker, and workspace rows expose explicit accessibility labels and hints
+- drag/drop remains available, but every core action also has a keyboard- and menu-reachable path
+- the main window input bar and Work with Fae use the same plain-language accessibility naming for sending, thinking level, and opening cowork
+- voice capture should not turn typing into a separate mode: users must be able to keep listening active while typing and sending text
+- cowork should expose explicit `Listening` and `Read reply` controls in the composer footer so voice-in and read-aloud are available regardless of selected model
+- startup should land on the main conversation surface rather than opening an auxiliary canvas window automatically
 
 ### Thinking levels
 
@@ -77,6 +100,8 @@ These levels are conversation-safe to change mid-thread:
 - the new level applies to the next turn
 - Fae Local uses a real local behavior change
 - remote providers receive best-effort reasoning/effort hints when the selected backend supports them
+
+The resting UI should present this as a user-facing response-style choice rather than as an internal/debug control.
 
 ## Local, remote, and compare behavior
 
@@ -179,6 +204,7 @@ Important Work with Fae behavior is covered in automated tests, including:
 - workspace registry normalization and persistence
 - fork behavior and trimmed fork histories
 - controller-level fork/restore stability
+- conversation-level model browser and provider switching
 - remote provider request building and streaming
 - shareable vs local-only prompt egress
 - multi-agent selection and strict-local filtering

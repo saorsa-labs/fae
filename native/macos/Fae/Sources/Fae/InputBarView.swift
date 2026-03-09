@@ -77,8 +77,14 @@ struct InputBarView: View {
 
     private var micToggleButton: some View {
         Button(action: {
+            let shouldRestoreFocus = isTextFieldFocused || !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             conversation.toggleListening()
             windowState.noteActivity()
+            if shouldRestoreFocus {
+                DispatchQueue.main.async {
+                    isTextFieldFocused = true
+                }
+            }
         }) {
             Image(systemName: "mic.fill")
                 .font(.system(size: 15, weight: .medium))
@@ -108,6 +114,7 @@ struct InputBarView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(conversation.isListening ? "Listening — tap to mute" : "Muted — tap to listen")
+        .accessibilityHint("Voice capture and typing can stay active at the same time.")
         .animation(.easeInOut(duration: 0.2), value: conversation.isListening)
     }
 
@@ -134,6 +141,7 @@ struct InputBarView: View {
                 submitMessage()
             }
             .accessibilityLabel("Message input")
+            .accessibilityHint("Type a message for Fae while listening stays on, then press Return to send.")
     }
 
     // MARK: - Send Button
@@ -237,6 +245,9 @@ struct InputBarView: View {
         }
         .menuStyle(.borderlessButton)
         .animation(.easeInOut(duration: 0.2), value: faeCore.thinkingLevel)
+        .accessibilityLabel("Thinking level")
+        .accessibilityValue(faeCore.thinkingLevel.displayName)
+        .accessibilityHint("Choose how much deliberate reasoning Fae should use on the next reply.")
     }
 
     private var thinkingLevelColor: Color {
@@ -277,6 +288,8 @@ struct InputBarView: View {
         }
         .buttonStyle(.plain)
         .help("Open Work with Fae")
+        .accessibilityLabel("Open Work with Fae")
+        .accessibilityHint("Open the focused cowork workspace window.")
     }
 
     // MARK: - Submit

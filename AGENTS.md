@@ -180,3 +180,19 @@ swift test
   - `native/macos/Fae/Tests/IntegrationTests/`
 
 - Keep tests deterministic and avoid network dependencies unless explicitly marked live.
+
+### Release validation is mandatory
+
+For any change to models, prompting, routing, voice, approvals, tools, memory, scheduler, skills, Cowork, remote-provider behavior, or other user-visible app flows, treat
+`docs/checklists/app-release-validation.md` as a required release gate.
+
+Minimum expectations:
+
+- update that checklist when a new capability or boundary is added
+- run the relevant `tests/comprehensive/specs/*.yaml` phases through `scripts/test-comprehensive.sh`
+- run the real app via `just run-native` or `just rebuild`
+- run the test server via `just test-serve`
+- validate real audio input/output where voice is involved
+- capture screenshots for startup, onboarding, permissions, main window, Cowork, and any failure state
+
+Do not claim the app is production-ready if the scripted phases pass but the live app validation contract has not been completed.

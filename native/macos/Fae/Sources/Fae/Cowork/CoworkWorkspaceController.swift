@@ -815,6 +815,148 @@ final class CoworkWorkspaceController: ObservableObject {
         prependActivity(title: "Model updated", detail: "\(selectedAgent.name) → \(trimmed)", tone: .success)
     }
 
+    func availableConversationModelOptions() -> [CoworkModelOption] {
+        var optionsByID: [String: CoworkModelOption] = [:]
+
+        func insert(_ option: CoworkModelOption?) {
+            guard let option else { return }
+            optionsByID[option.id] = option
+        }
+
+        for preset in backendPresets {
+            let presetAgents = agents.filter {
+                ($0.backendPreset ?? $0.providerKind.defaultPreset).id == preset.id
+            }
+
+            let isConfigured = preset.providerKind == .faeLocalhost
+                || presetAgents.contains(where: { hasCredentialForModelSelection($0, preset: preset) })
+                || (preset.id == "openrouter" && globalCredentialForPreset(preset) != nil)
+            let defaultBaseURL = CoworkProviderConnectionTester.normalizedBaseURL(nil, fallback: preset.defaultBaseURL)
+
+            for suggested in preset.suggestedModels {
+                insert(modelOption(for: suggested, preset: preset, baseURL: defaultBaseURL, isConfigured: isConfigured))
+            }
+
+            for entry in remoteModelCatalog.entries.values where entry.providerPresetID == preset.id {
+                for model in entry.models {
+                    insert(modelOption(for: model, preset: preset, baseURL: entry.baseURL, isConfigured: isConfigured))
+                }
+            }
+
+            for agent in presetAgents {
+                let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(agent.baseURL, fallback: preset.defaultBaseURL)
+                let configured = hasCredentialForModelSelection(agent, preset: preset)
+                insert(modelOption(for: agent.modelIdentifier, preset: preset, baseURL: baseURL, isConfigured: configured))
+                for model in cachedModels(for: agent, maxAge: CoworkRemoteModelCatalog.defaultFreshnessTTL) {
+                    insert(modelOption(for: model, preset: preset, baseURL: baseURL, isConfigured: configured))
+                }
+            }
+        }
+
+        if let selectedAgent {
+            let preset = selectedAgent.backendPreset ?? selectedAgent.providerKind.defaultPreset
+            let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(selectedAgent.baseURL, fallback: preset.defaultBaseURL)
+            insert(
+                modelOption(
+                    for: selectedAgent.modelIdentifier,
+                    preset: preset,
+                    baseURL: baseURL,
+                    isConfigured: hasCredentialForModelSelection(selectedAgent, preset: preset)
+                )
+            )
+        }
+
+        return optionsByID.values.sorted { lhs, rhs in
+            let lhsRank = lhs.providerSortRank
+            let rhsRank = rhs.providerSortRank
+            if lhsRank != rhsRank {
+                return lhsRank < rhsRank
+            }
+            if lhs.providerDisplayName != rhs.providerDisplayName {
+                return lhs.providerDisplayName.localizedCaseInsensitiveCompare(rhs.providerDisplayName) == .orderedAscending
+            }
+            if lhs.isConfigured != rhs.isConfigured {
+                return lhs.isConfigured && !rhs.isConfigured
+            }
+            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+        }
+    }
+
+    func applyConversationModelSelection(_ option: CoworkModelOption) {
+        guard let selectedWorkspace,
+              let workspaceIndex = workspaceRegistry.workspaces.firstIndex(where: { $0.id == selectedWorkspace.id })
+        else {
+            return
+        }
+
+        let preset = CoworkBackendPresetCatalog.preset(id: option.providerPresetID) ?? option.providerKind.defaultPreset
+        let normalizedBaseURL = CoworkProviderConnectionTester.normalizedBaseURL(option.baseURL, fallback: preset.defaultBaseURL)
+        let existingIndex = workspaceRegistry.agents.firstIndex { agent in
+            let agentPreset = agent.backendPreset ?? agent.providerKind.defaultPreset
+            let agentBaseURL = CoworkProviderConnectionTester.normalizedBaseURL(agent.baseURL, fallback: agentPreset.defaultBaseURL)
+            return agentPreset.id == preset.id && agentBaseURL == normalizedBaseURL
+        }
+
+        let agentID: String
+        if let existingIndex {
+            var agent = workspaceRegistry.agents[existingIndex]
+            agent.modelIdentifier = option.modelIdentifier
+            workspaceRegistry.agents[existingIndex] = agent
+            agentID = agent.id
+        } else {
+            let credentialKey = preset.requiresAPIKey
+                ? "agents.\(option.providerKind.rawValue).\(UUID().uuidString.lowercased()).api_key"
+                : nil
+            if let credentialKey, let credential = globalCredentialForPreset(preset) {
+                do {
+                    try CredentialManager.store(key: credentialKey, value: credential)
+                } catch {
+                    prependActivity(title: "Credential save failed", detail: error.localizedDescription, tone: .warning)
+                }
+            }
+
+            let createdAgent = WorkWithFaeAgentProfile(
+                id: option.providerKind == .faeLocalhost ? WorkWithFaeAgentProfile.faeLocal.id : "agent-\(UUID().uuidString.lowercased())",
+                name: preset.displayName,
+                providerKind: option.providerKind,
+                backendPresetID: preset.id,
+                modelIdentifier: option.modelIdentifier,
+                baseURL: normalizedBaseURL,
+                credentialKey: credentialKey,
+                notes: preset.setupHint,
+                createdAt: Date()
+            )
+            workspaceRegistry = WorkWithFaeWorkspaceStore.registryByUpsertingAgent(
+                createdAgent,
+                assignToSelectedWorkspace: false,
+                in: workspaceRegistry
+            )
+            agentID = createdAgent.id
+        }
+
+        workspaceRegistry.workspaces[workspaceIndex].agentID = agentID
+        workspaceRegistry.workspaces[workspaceIndex].updatedAt = Date()
+        persistWorkspaceRegistry()
+        applySelectedWorkspaceState()
+
+        prependActivity(
+            title: "Conversation model updated",
+            detail: "\(selectedWorkspace.name) → \(option.displayTitle)",
+            tone: .success
+        )
+
+        if option.requiresCredential,
+           let selectedAgent,
+           !hasCredentialForModelSelection(selectedAgent, preset: preset)
+        {
+            prependActivity(
+                title: "API key needed",
+                detail: "Add a key for \(preset.displayName) before sending with \(option.displayTitle).",
+                tone: .warning
+            )
+        }
+    }
+
     func testConnection(for agent: WorkWithFaeAgentProfile) async throws -> CoworkProviderConnectionReport {
         let report = try await testConnection(
             providerKind: agent.providerKind,
@@ -1093,6 +1235,27 @@ final class CoworkWorkspaceController: ObservableObject {
         let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
         let baseURL = CoworkProviderConnectionTester.normalizedBaseURL(agent.baseURL, fallback: preset.defaultBaseURL)
         remoteModelCatalog.update(providerPresetID: preset.id, baseURL: baseURL, models: models)
+    }
+
+    private func hasCredentialForModelSelection(_ agent: WorkWithFaeAgentProfile, preset: CoworkBackendPreset) -> Bool {
+        guard preset.requiresAPIKey else { return true }
+        if let credentialKey = agent.credentialKey,
+           let value = CredentialManager.retrieve(key: credentialKey),
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return true
+        }
+        return globalCredentialForPreset(preset) != nil
+    }
+
+    private func globalCredentialForPreset(_ preset: CoworkBackendPreset) -> String? {
+        guard preset.id == "openrouter",
+              let value = CredentialManager.retrieve(key: "llm.openrouter.api_key"),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return value
     }
 
     private func bindConversationPersistence() {

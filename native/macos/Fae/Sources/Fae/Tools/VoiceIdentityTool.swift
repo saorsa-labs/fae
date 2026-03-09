@@ -135,6 +135,11 @@ struct VoiceIdentityTool: Tool {
             return .error("Captured audio too short — please speak for at least 2 seconds after the beep.")
         }
 
+        let captureQuality = AudioCaptureManager.analyzeSegment(samples)
+        guard captureQuality.hasUsableSpeech else {
+            return .error("I didn't hear enough clear speech in that sample. Please move closer to the microphone and try again.")
+        }
+
         // 3. Compute embedding.
         let embedding: [Float]
         do {

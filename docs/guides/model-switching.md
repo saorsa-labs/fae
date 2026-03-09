@@ -14,7 +14,7 @@ Examples:
 
 You can switch the preset used by local inference:
 
-- `auto` (current default — presently resolves to `qwen3_5_2b` on all machines while benchmarking settles)
+- `auto` (current default — favors the benchmark-backed fast operator tier)
 - `qwen3_5_35b_a3b`
 - `qwen3_5_27b`
 - `qwen3_5_9b`
@@ -39,7 +39,10 @@ UI path:
 - Changing the preset updates config immediately.
 - Model swap takes effect on next pipeline/model load.
 - In current app UX, restart is recommended after changing preset.
-- `auto` is currently pinned by benchmark policy to Qwen3.5-2B for the operator model on every machine tier; this overrides the older RAM-tiered auto-selection behavior until benchmarking settles.
+- `auto` now follows the benchmark-backed operator policy:
+  - 12+ GB: `qwen3_5_2b` at 16K context
+  - below 12 GB: `qwen3_5_0_8b` at 8K context
+- The heavier `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_27b`, and `qwen3_5_35b_a3b` presets remain manual opt-in choices for users who prefer more local depth over faster startup and foreground responsiveness.
 - When dual-model local mode is enabled on 32+ GB systems, the current concierge default is `LiquidAI/LFM2-24B-A2B-MLX-4bit`.
 - Premium local mode now targets a **worker-backed** split: operator and concierge inference run in dedicated LLM worker processes while Kokoro remains in the main app process.
 - Inference priority is explicitly ordered as **operator > Kokoro > concierge**.

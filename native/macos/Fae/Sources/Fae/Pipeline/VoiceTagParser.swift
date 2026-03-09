@@ -8,6 +8,91 @@ struct VoiceSegment: Sendable {
     let character: String?
 }
 
+/// A buffered roleplay speech chunk ready for UI/TTS emission.
+struct RoleplaySpeechChunk: Sendable {
+    let text: String
+    let character: String?
+}
+
+/// Buffers roleplay voice segments into sentence-sized chunks so streaming
+/// TTS does not speak every token fragment as it arrives.
+struct RoleplaySpeechChunker {
+    private static let maxCharsBeforeClauseFlush = 220
+
+    private var buffer: String = ""
+    private var activeCharacter: String?
+
+    mutating func process(_ segments: [VoiceSegment], isFinal: Bool = false) -> [RoleplaySpeechChunk] {
+        var ready: [RoleplaySpeechChunk] = []
+
+        for segment in segments {
+            ready.append(contentsOf: absorb(segment))
+        }
+
+        if isFinal {
+            ready.append(contentsOf: flush(forceAll: true, clearCharacter: true))
+        }
+
+        return ready
+    }
+
+    mutating func flush() -> [RoleplaySpeechChunk] {
+        flush(forceAll: true, clearCharacter: true)
+    }
+
+    private mutating func absorb(_ segment: VoiceSegment) -> [RoleplaySpeechChunk] {
+        guard !segment.text.isEmpty else { return [] }
+
+        var ready: [RoleplaySpeechChunk] = []
+        if activeCharacter != segment.character, !buffer.isEmpty {
+            ready.append(contentsOf: flush(forceAll: true, clearCharacter: false))
+        }
+
+        activeCharacter = segment.character
+        buffer += segment.text
+        ready.append(contentsOf: flush(forceAll: false, clearCharacter: false))
+        return ready
+    }
+
+    private mutating func flush(forceAll: Bool, clearCharacter: Bool) -> [RoleplaySpeechChunk] {
+        var ready: [RoleplaySpeechChunk] = []
+
+        while !buffer.isEmpty {
+            if let boundary = TextProcessing.findSentenceBoundary(in: buffer) {
+                let chunk = String(buffer[..<boundary])
+                ready.append(RoleplaySpeechChunk(text: chunk, character: activeCharacter))
+                buffer = String(buffer[boundary...])
+                continue
+            }
+
+            if !forceAll,
+               buffer.count >= Self.maxCharsBeforeClauseFlush,
+               let clause = TextProcessing.findClauseBoundary(in: buffer)
+            {
+                let chunk = String(buffer[..<clause])
+                ready.append(RoleplaySpeechChunk(text: chunk, character: activeCharacter))
+                buffer = String(buffer[clause...])
+                continue
+            }
+
+            break
+        }
+
+        if forceAll {
+            let trimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                ready.append(RoleplaySpeechChunk(text: buffer, character: activeCharacter))
+            }
+            buffer = ""
+            if clearCharacter {
+                activeCharacter = nil
+            }
+        }
+
+        return ready
+    }
+}
+
 /// Streaming parser for `<voice character="Name">dialog</voice>` tags.
 ///
 /// Processes tokens incrementally as they arrive from the LLM, extracting

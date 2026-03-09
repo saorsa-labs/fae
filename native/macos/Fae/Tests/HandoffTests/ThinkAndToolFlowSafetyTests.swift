@@ -73,6 +73,36 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertEqual(calls[0].arguments["path"] as? String, "/tmp/x.txt")
     }
 
+    func testParseToolCallsSupportsUnterminatedQwen35XmlBlock() {
+        let response = """
+        <voice character="David"><dialog><p>I'll check that.</p></dialog></voice>
+        <tool_call>
+        <function=read>
+        <parameter=path>
+        /etc/hosts
+        </parameter>
+        <parameter=content>
+        localhost:1 localhost
+        """
+
+        let calls = PipelineCoordinator.parseToolCalls(from: response)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls[0].name, "read")
+        XCTAssertEqual(calls[0].arguments["path"] as? String, "/etc/hosts")
+        XCTAssertEqual(calls[0].arguments["content"] as? String, "localhost:1 localhost")
+    }
+
+    func testStripToolCallMarkupRemovesUnterminatedToolCallTail() {
+        let response = """
+        Sure, I'll check.
+        <tool_call>
+        <function=read>
+        <parameter=path>/etc/hosts</parameter>
+        """
+
+        XCTAssertEqual(PipelineCoordinator.stripToolCallMarkup(response), "Sure, I'll check.")
+    }
+
     func testLooksLikeNonProseDetectsToolPayloadJSON() {
         let payload = #"{"name":"web_search","arguments":{"query":"weather"}}"#
         XCTAssertTrue(TextProcessing.looksLikeNonProse(payload))

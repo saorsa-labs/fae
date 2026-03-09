@@ -165,12 +165,15 @@ final class ThinkingLevelModelSwitchContinuityTests: XCTestCase {
         )
 
         let requests = await recorder.snapshot()
-        XCTAssertEqual(requests.count, 1)
-        let json = try XCTUnwrap(jsonObject(from: requests[0]))
+        let completionRequest = try XCTUnwrap(
+            requests.last(where: {
+                $0.httpMethod == "POST"
+                    && $0.url?.path.contains("/v1/chat/completions") == true
+                    && $0.httpBody != nil
+            })
+        )
+        let json = try XCTUnwrap(jsonObject(from: completionRequest))
         XCTAssertEqual(json["model"] as? String, "openai/gpt-5")
-
-        let metadata = try XCTUnwrap(json["metadata"] as? [String: Any])
-        XCTAssertEqual(metadata["thinking_level"] as? String, FaeThinkingLevel.deep.rawValue)
 
         let reasoning = try XCTUnwrap(json["reasoning"] as? [String: Any])
         XCTAssertEqual(reasoning["effort"] as? String, "high")
@@ -179,9 +182,11 @@ final class ThinkingLevelModelSwitchContinuityTests: XCTestCase {
         let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
         let userMessage = try XCTUnwrap(messages.first(where: { ($0["role"] as? String) == "user" }))
         let promptBody = try XCTUnwrap(userMessage["content"] as? String)
-        XCTAssertTrue(promptBody.contains("Recent conversation:"))
-        XCTAssertTrue(promptBody.contains("First question"))
-        XCTAssertTrue(promptBody.contains("First answer"))
+        XCTAssertFalse(promptBody.contains("Recent conversation:"))
+        XCTAssertFalse(promptBody.contains("First question"))
+        XCTAssertFalse(promptBody.contains("First answer"))
+        XCTAssertTrue(promptBody.contains("Context kept on this Mac:"))
+        XCTAssertTrue(promptBody.contains("recent conversation history"))
         XCTAssertTrue(promptBody.contains("Continue with the migration plan."))
     }
 
