@@ -19,6 +19,7 @@ Run this full contract when any of the following changes:
 - memory capture/recall or scheduler behavior
 - skills management or Python-runtime integration
 - Cowork routing, model switching, compare/fork, or remote-provider handling
+- dual-model routing policy or concierge model changes
 - settings that affect loaded models, policy, or diagnostics
 - any release candidate build
 
@@ -77,6 +78,9 @@ These phases are the minimum scripted baseline:
 - [ ] `10-policy-profiles`
 - [ ] `11-voice-pipeline`
 - [ ] `12-onboarding`
+- [ ] `13-cowork`
+- [ ] `14-dual-model`
+- [ ] `15-cowork-voice` (requires Chatterbox)
 
 Acceptance:
 

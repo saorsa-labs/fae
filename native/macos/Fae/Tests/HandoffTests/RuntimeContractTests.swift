@@ -612,6 +612,58 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(controller.localStack.operatorRuntime, "worker_process")
     }
 
+    @MainActor
+    func testFaeCorePersistsDualModelEnabledPatch() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "llm.dual_model_enabled", "value": false]
+        )
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertFalse(reloaded.llm.dualModelEnabled)
+    }
+
+    @MainActor
+    func testFaeCorePersistsConciergeModelPresetPatch() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "llm.concierge_model_preset", "value": "auto"]
+        )
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertEqual(reloaded.llm.conciergeModelPreset, "auto")
+    }
+
     private func loadRepositoryText(relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

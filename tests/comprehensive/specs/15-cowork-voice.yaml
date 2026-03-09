@@ -1,0 +1,106 @@
+phase: "15-cowork-voice"
+name: "CoWork Voice"
+description: "Voice pipeline tests for dual-model routing — audio plays via Chatterbox, Fae processes through full pipeline"
+tests:
+  - id: "cowork-voice-001"
+    name: "Rich spoken phrase — pipeline produces response"
+    class: live_audio
+    timeout_s: 150
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      # Allow echo tail from any prior speech to clear before speaking
+      - action: "sleep"
+        duration_ms: 5000
+      - action: "speak"
+        text: "Fae, can you summarize how neural networks learn from data?"
+        voice: "jarvis"
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "wait_speech"
+        max_wait_s: 30
+      - action: "collect_events"
+    criteria:
+      - name: "transcription_event"
+        check: "events_contain_kind('STT')"
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+    pass_threshold: 1.0
+
+  - id: "cowork-voice-002"
+    name: "Tool-biased spoken phrase — pipeline produces response"
+    class: live_audio
+    timeout_s: 150
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      # Echo tail drain after previous test's TTS
+      - action: "sleep"
+        duration_ms: 5000
+      - action: "speak"
+        text: "Fae, what's the weather like today in Edinburgh?"
+        voice: "jarvis"
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "wait_speech"
+        max_wait_s: 30
+      - action: "collect_events"
+    criteria:
+      - name: "transcription_event"
+        check: "events_contain_kind('STT')"
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+    pass_threshold: 1.0
+
+  - id: "cowork-voice-003"
+    name: "Echo suppression during longer response — no self-trigger"
+    class: live_audio
+    timeout_s: 150
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      # Echo tail drain
+      - action: "sleep"
+        duration_ms: 5000
+      - action: "speak"
+        text: "Fae, tell me something interesting about space exploration"
+        voice: "jarvis"
+      - action: "wait_generation"
+        max_wait_s: 90
+      # Wait for TTS to finish playing through speakers
+      - action: "wait_speech"
+        max_wait_s: 30
+      # Wait additional time — if echo suppression fails, Fae self-triggers a new generation
+      - action: "sleep"
+        duration_ms: 8000
+      - action: "http_get"
+        url: "/conversation"
+    criteria:
+      # Should have exactly 2 messages (1 user + 1 assistant), not 4+ from self-triggering
+      - name: "no_self_trigger"
+        check: "body.count == 2"
+    pass_threshold: 1.0

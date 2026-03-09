@@ -147,6 +147,34 @@ test-voice model="claude":
 test-voice-quick:
     bash scripts/test-comprehensive.sh --skip-build --phase 11 --skip-llm
 
+# Run CoWork pipeline tests (Fae must be running)
+test-cowork model="claude":
+    bash scripts/test-comprehensive.sh --skip-build --phase 13 --model {{model}}
+
+# Run CoWork pipeline tests deterministic only (no LLM scoring)
+test-cowork-quick:
+    bash scripts/test-comprehensive.sh --skip-build --phase 13 --skip-llm
+
+# Run dual-model routing tests (Fae must be running)
+test-dual-model model="claude":
+    bash scripts/test-comprehensive.sh --skip-build --phase 14 --model {{model}}
+
+# Run dual-model routing tests deterministic only (no LLM scoring)
+test-dual-model-quick:
+    bash scripts/test-comprehensive.sh --skip-build --phase 14 --skip-llm
+
+# Run CoWork voice tests (Fae + Chatterbox must be running)
+test-cowork-voice model="claude":
+    bash scripts/test-comprehensive.sh --skip-build --phase 15 --model {{model}}
+
+# Run full E2E suite (builds + launches Fae first)
+test-e2e model="claude": test-serve
+    bash scripts/test-comprehensive.sh --model {{model}}
+
+# Run full E2E suite deterministic only (builds + launches Fae first)
+test-e2e-quick: test-serve
+    bash scripts/test-comprehensive.sh --skip-llm
+
 # Run onboarding tests (Fae must be running)
 test-onboarding model="claude":
     bash scripts/test-comprehensive.sh --skip-build --phase 12 --model {{model}}

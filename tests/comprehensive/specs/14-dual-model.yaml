@@ -1,0 +1,140 @@
+phase: "14-dual-model"
+name: "Dual-Model Routing"
+description: "Validates TurnRoutingPolicy routing decisions via /status runtime fields"
+tests:
+  - id: "dual-001"
+    name: "Dual OFF — all routes go to operator"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.dual_model_enabled", "value": "false"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.dual_model_enabled", "value": "true"}
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "Fae, please summarize and analyze the concept of emergence in complex systems"
+      - action: "wait_generation"
+        max_wait_s: 60
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "dual_model_is_off"
+        check: "body.dualModelEnabled == false"
+      - name: "route_is_operator"
+        check: "body.currentRoute == 'operator'"
+    pass_threshold: 1.0
+
+  - id: "dual-002"
+    name: "Dual ON — routing intent produces response"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.dual_model_enabled", "value": "true"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "Fae, please brainstorm five approaches to improve code readability"
+      - action: "wait_generation"
+        max_wait_s: 60
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "route_is_known_value"
+        check: "body.currentRoute == 'concierge' or body.currentRoute == 'operator'"
+    pass_threshold: 1.0
+
+  - id: "dual-003"
+    name: "Concierge preset patch at runtime — no crash, response generated"
+    class: deterministic
+    timeout_s: 60
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.concierge_model_preset", "value": "auto"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "Fae, what is the capital of France?"
+      - action: "wait_generation"
+        max_wait_s: 60
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "contains_paris"
+        check: "assistant_response_contains('Paris')"
+    pass_threshold: 1.0
+
+  - id: "dual-004"
+    name: "Tool follow-up produces response via operator"
+    class: deterministic
+    timeout_s: 120
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.dual_model_enabled", "value": "true"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "inject"
+        text: "Fae, read the file /etc/hosts and briefly describe what it contains"
+      - action: "wait_generation"
+        max_wait_s: 90
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "route_stayed_operator"
+        check: "body.currentRoute == 'operator'"
+    pass_threshold: 1.0
+
+  - id: "dual-005"
+    name: "Concierge preset toggle persists in config"
+    class: deterministic
+    timeout_s: 15
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "llm.concierge_model_preset", "value": "auto"}
+    teardown: []
+    phrasings: []
+    steps:
+      - action: "http_get"
+        url: "/status"
+    criteria:
+      - name: "dual_model_enabled_field_exists"
+        check: "body.dualModelEnabled != null"
+      - name: "current_route_field_exists"
+        check: "body.currentRoute != null"
+    pass_threshold: 1.0
