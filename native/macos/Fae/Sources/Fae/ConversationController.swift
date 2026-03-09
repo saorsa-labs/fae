@@ -215,6 +215,17 @@ extension Notification.Name {
     /// Posted by the cowork runtime to route pipeline UI updates into the Work with Fae session.
     /// userInfo: ["active": Bool]
     static let faeCoworkConversationRoutingChanged = Notification.Name("faeCoworkConversationRoutingChanged")
+    /// Posted by app commands to toggle the cowork inspector rail.
+    static let faeCoworkToggleInspectorRequested = Notification.Name("faeCoworkToggleInspectorRequested")
+    /// Posted by app commands to open the cowork conversation model picker.
+    static let faeCoworkOpenModelPickerRequested = Notification.Name("faeCoworkOpenModelPickerRequested")
+    /// Posted by app commands to open a specific cowork utility section.
+    /// userInfo: ["section": String]
+    static let faeCoworkOpenUtilityRequested = Notification.Name("faeCoworkOpenUtilityRequested")
+    /// Posted by app commands to open the cowork scheduler task creation flow.
+    static let faeCoworkNewTaskRequested = Notification.Name("faeCoworkNewTaskRequested")
+    /// Posted by app commands to open the cowork skill creation flow.
+    static let faeCoworkNewSkillRequested = Notification.Name("faeCoworkNewSkillRequested")
     /// Posted by canvas interactions or voice authority flow to request a governed settings mutation.
     /// userInfo: ["action": String, "value": String, "source": String]
     static let faeGovernanceActionRequested = Notification.Name("faeGovernanceActionRequested")

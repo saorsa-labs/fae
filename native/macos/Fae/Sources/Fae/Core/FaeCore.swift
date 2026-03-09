@@ -60,11 +60,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
             loaded.llm.maxTokens = 4096
         }
 
+        let migratedBundledFaeReferenceText = loaded.tts.referenceText == "Hello, I'm Fae."
+        if migratedBundledFaeReferenceText {
+            NSLog("FaeCore: migrating bundled fae.wav reference transcript to the actual recording text")
+            loaded.tts.referenceText = FaeConfig.TtsConfig.bundledFaeReferenceText
+        }
+
         // Channel secret migration: move legacy inline channel tokens from config
         // into Keychain, keeping read compatibility for existing installs.
         let migratedSecrets = Self.migrateChannelSecretsToKeychain(&loaded)
 
-        if migratedSecrets || migratedMaxTokens {
+        if migratedSecrets || migratedMaxTokens || migratedBundledFaeReferenceText {
             try? loaded.save()
         }
 
@@ -630,6 +636,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { await pipelineCoordinator?.previewTTSVoice(voice) }
             }
 
+        case "tts.preview_fae_wav_clone":
+            Task { await pipelineCoordinator?.previewBundledFaeWAVClone() }
+
         case "config.patch":
             if let key = payload["key"] as? String {
                 patchConfig(key: key, payload: payload)
@@ -802,6 +811,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             let requestedTools = (payload["allowedTools"] as? [String])
                 ?? (payload["allowed_tools"] as? [String])
             let allowedTools = normalizedAutonomousSchedulerTools(from: requestedTools)
+            let taskDescription = (payload["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let instructionBody = (payload["instructionBody"] as? String ?? payload["instruction_body"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let id = "user_\(UUID().uuidString.prefix(8).lowercased())"
             var task = SchedulerTask(
                 id: id,
@@ -811,6 +823,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 scheduleType: scheduleType,
                 scheduleParams: params,
                 action: action.trimmingCharacters(in: .whitespacesAndNewlines),
+                taskDescription: taskDescription?.isEmpty == true ? nil : taskDescription,
+                instructionBody: instructionBody?.isEmpty == true ? nil : instructionBody,
                 nextRun: nil,
                 allowedTools: allowedTools
             )
@@ -861,6 +875,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                !action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 tasks[index].action = action.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if payload.keys.contains("description") {
+                let description = (payload["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                tasks[index].taskDescription = description?.isEmpty == true ? nil : description
+            }
+            if payload.keys.contains("instructionBody") || payload.keys.contains("instruction_body") {
+                let instructionBody = (payload["instructionBody"] as? String ?? payload["instruction_body"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                tasks[index].instructionBody = instructionBody?.isEmpty == true ? nil : instructionBody
             }
             if payload.keys.contains("allowedTools") || payload.keys.contains("allowed_tools") {
                 let requestedTools = (payload["allowedTools"] as? [String])

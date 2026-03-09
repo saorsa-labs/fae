@@ -35,6 +35,11 @@ Use both sides of the workflow:
 
 For voice features, use real audio playback/capture, not text injection, and capture screenshots plus test-server evidence for failures.
 
+The step-by-step live scenario script is
+`docs/checklists/main-and-cowork-live-test-scenarios.md`.
+Keep it in sync with the release-validation contract whenever main-window,
+Cowork, popup, voice, scheduler, skills, or remote-provider behavior changes.
+
 ## Interaction model
 
 Fae is **not** a real-time voice chat app. The current interaction pattern is:

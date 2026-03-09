@@ -67,7 +67,6 @@ private struct FaeRootView: View {
                 .transition(.opacity)
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -415,9 +414,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.windowState.showWindow()
-                    self?.windowState.transitionToCompact()
-                    self?.coworkWindow.show()
+                    self?.openCoworkDesktop()
                 }
             }
         }
@@ -596,6 +593,22 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         debugLog(debugConsole, .governance, "Open settings managed created (\(reason))")
+    }
+
+    func openCoworkDesktop(section: CoworkWorkspaceSection? = nil) {
+        windowState.showWindow()
+        windowState.transitionToCollapsed()
+        coworkWindow.show()
+
+        guard let section else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NotificationCenter.default.post(
+                name: .faeCoworkOpenUtilityRequested,
+                object: nil,
+                userInfo: ["section": section.rawValue]
+            )
+        }
     }
 
     func startPipelineIfReady() {
@@ -796,6 +809,17 @@ struct FaeApp: App {
                     }
                 }
             }
+            CommandGroup(after: .appSettings) {
+                Button("Scheduler") {
+                    appDelegate.openCoworkDesktop(section: .scheduler)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+
+                Button("Skills") {
+                    appDelegate.openCoworkDesktop(section: .skills)
+                }
+                .keyboardShortcut("k", modifiers: [.command, .option])
+            }
             CommandMenu("Edit") {
                 Button("Edit Soul\u{2026}") {
                     appDelegate.personalityEditor.showSoulEditor()
@@ -819,6 +843,35 @@ struct FaeApp: App {
                     NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Button("Cowork Model…") {
+                    NotificationCenter.default.post(name: .faeCoworkOpenModelPickerRequested, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Button("Toggle Cowork Inspector") {
+                    NotificationCenter.default.post(name: .faeCoworkToggleInspectorRequested, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+
+                Button("Open Cowork Tools") {
+                    NotificationCenter.default.post(
+                        name: .faeCoworkOpenUtilityRequested,
+                        object: nil,
+                        userInfo: ["section": CoworkWorkspaceSection.tools.rawValue]
+                    )
+                }
+                .keyboardShortcut("t", modifiers: [.command, .option])
+
+                Button("New Cowork Task") {
+                    NotificationCenter.default.post(name: .faeCoworkNewTaskRequested, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+
+                Button("New Cowork Skill") {
+                    NotificationCenter.default.post(name: .faeCoworkNewSkillRequested, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: [.command, .control])
 
                 Button("Toggle Canvas") {
                     appDelegate.auxiliaryWindows.toggleCanvas()

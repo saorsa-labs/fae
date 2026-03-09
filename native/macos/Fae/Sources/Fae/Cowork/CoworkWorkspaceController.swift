@@ -347,6 +347,8 @@ final class CoworkWorkspaceController: ObservableObject {
         scheduleType: String,
         scheduleParams: [String: String],
         action: String,
+        description: String,
+        instructionBody: String,
         allowedTools: [String]
     ) {
         let payload: [String: Any] = [
@@ -354,6 +356,8 @@ final class CoworkWorkspaceController: ObservableObject {
             "scheduleType": scheduleType,
             "scheduleParams": scheduleParams,
             "action": action,
+            "description": description,
+            "instructionBody": instructionBody,
             "allowedTools": allowedTools,
         ]
         faeCore.sendCommand(name: "scheduler.create", payload: payload)
@@ -390,6 +394,8 @@ final class CoworkWorkspaceController: ObservableObject {
         scheduleType: String,
         scheduleParams: [String: String],
         action: String,
+        description: String,
+        instructionBody: String,
         allowedTools: [String]
     ) {
         let payload: [String: Any] = [
@@ -398,6 +404,8 @@ final class CoworkWorkspaceController: ObservableObject {
             "scheduleType": scheduleType,
             "scheduleParams": scheduleParams,
             "action": action,
+            "description": description,
+            "instructionBody": instructionBody,
             "allowedTools": allowedTools,
         ]
         faeCore.sendCommand(name: "scheduler.update", payload: payload)

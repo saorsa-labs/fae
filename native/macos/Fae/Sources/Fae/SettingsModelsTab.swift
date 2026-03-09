@@ -118,6 +118,27 @@ struct SettingsModelsTab: View {
                         voiceCard(voice)
                     }
                 }
+
+                HStack(spacing: 10) {
+                    Button {
+                        previewFaeWAVClone()
+                    } label: {
+                        Label(
+                            previewingVoice == "fae_wav_clone"
+                                ? "Previewing fae.wav Clone…"
+                                : "Compare With fae.wav Clone",
+                            systemImage: previewingVoice == "fae_wav_clone"
+                                ? "waveform"
+                                : "waveform.path.ecg"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(previewingVoice != nil)
+
+                    Text("Experimental: uses the bundled fae.wav through the CustomVoice backend.")
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.vertical, 4)
 
@@ -213,10 +234,24 @@ struct SettingsModelsTab: View {
             name: "tts.preview_voice",
             payload: ["voice": voiceID]
         )
-        // Clear the previewing indicator after a few seconds.
+        clearPreviewIndicator(for: voiceID, after: 5)
+    }
+
+    private func previewFaeWAVClone() {
+        guard previewingVoice == nil else { return }
+        let previewID = "fae_wav_clone"
+        previewingVoice = previewID
+        commandSender?.sendCommand(
+            name: "tts.preview_fae_wav_clone",
+            payload: [:]
+        )
+        clearPreviewIndicator(for: previewID, after: 12)
+    }
+
+    private func clearPreviewIndicator(for previewID: String, after seconds: UInt64) {
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if previewingVoice == voiceID { previewingVoice = nil }
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            if previewingVoice == previewID { previewingVoice = nil }
         }
     }
 

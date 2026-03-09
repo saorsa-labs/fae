@@ -140,6 +140,8 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
     let scheduleType: String
     let scheduleParams: [String: String]
     let action: String
+    let taskDescription: String?
+    let instructionBody: String?
     let allowedTools: [String]
 
     static func load(
@@ -182,6 +184,8 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
                 scheduleType: "builtin",
                 scheduleParams: [:],
                 action: id,
+                taskDescription: nil,
+                instructionBody: nil,
                 allowedTools: []
             )
         }
@@ -218,6 +222,8 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
         let scheduleType = dict["scheduleType"] as? String ?? "interval"
         let scheduleParams = (dict["scheduleParams"] as? [String: Any])?.compactMapValues { "\($0)" } ?? [:]
         let action = dict["action"] as? String ?? id
+        let taskDescription = dict["taskDescription"] as? String ?? dict["description"] as? String
+        let instructionBody = dict["instructionBody"] as? String ?? dict["instruction_body"] as? String
         let allowedTools = (dict["allowedTools"] as? [String])
             ?? (dict["allowed_tools"] as? [String])
             ?? []
@@ -241,6 +247,8 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
             scheduleType: scheduleType,
             scheduleParams: scheduleParams,
             action: action,
+            taskDescription: taskDescription,
+            instructionBody: instructionBody,
             allowedTools: allowedTools
         )
     }

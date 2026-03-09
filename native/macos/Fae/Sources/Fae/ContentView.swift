@@ -52,7 +52,6 @@ struct ContentView: View {
                 ? AnyShape(Circle())
                 : AnyShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         )
-        .preferredColorScheme(.dark)
         .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
         .background(
             NSWindowAccessor { window in

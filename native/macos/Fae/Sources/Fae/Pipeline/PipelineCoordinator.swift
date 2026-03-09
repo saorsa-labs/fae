@@ -381,7 +381,7 @@ actor PipelineCoordinator {
     /// Preview a named voice by synthesizing a short phrase and playing it once.
     func previewTTSVoice(_ voice: String) async {
         guard let kokoro = ttsEngine as? KokoroMLXTTSEngine else { return }
-        let phrase = "Hi, I'm Fae. This is what I sound like."
+        let phrase = "Hiya, I'm Fae. I've just fed the wee birdies, and I'm feeling quietly cheeky today."
         do {
             guard let buffer = try await kokoro.previewSynthesize(voice: voice, text: phrase),
                   let channelData = buffer.floatChannelData?[0]
@@ -394,6 +394,60 @@ actor PipelineCoordinator {
         }
     }
 
+    /// Preview the bundled `fae.wav` via the legacy CustomVoice cloning path.
+    ///
+    /// This is an experiment path for evaluating whether direct WAV cloning
+    /// preserves more of the Scottish character than the Kokoro style tensor.
+    func previewBundledFaeWAVClone() async {
+        let phrase = "Hiya, I'm Fae. I've just fed the wee birdies in the garden, and I'm in a quietly cheeky mood today."
+        guard let voiceURL = Bundle.faeResources.url(forResource: "fae", withExtension: "wav") else {
+            NSLog("PipelineCoordinator: bundled fae.wav missing for CustomVoice preview")
+            return
+        }
+
+        do {
+            let previewEngine: MLXTTSEngine
+            if let cached = experimentalClonePreviewEngine,
+               await cached.isLoaded,
+               await cached.isVoiceLoaded
+            {
+                previewEngine = cached
+            } else {
+                let engine = MLXTTSEngine()
+                try await engine.load(modelID: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16")
+                try await engine.loadVoice(
+                    referenceAudioURL: voiceURL,
+                    referenceText: FaeConfig.TtsConfig.bundledFaeReferenceText
+                )
+                experimentalClonePreviewEngine = engine
+                previewEngine = engine
+            }
+
+            await playback.stop()
+            let stream = await previewEngine.synthesize(text: phrase)
+            var producedAudio = false
+
+            for try await buffer in stream {
+                guard let channelData = buffer.floatChannelData?[0] else { continue }
+                let sampleRate = Int(buffer.format.sampleRate.rounded())
+                let samples = Array(
+                    UnsafeBufferPointer(start: channelData, count: Int(buffer.frameLength))
+                )
+                if !producedAudio {
+                    markAssistantSpeechStarted()
+                    producedAudio = true
+                }
+                await playback.enqueue(samples: samples, sampleRate: sampleRate, isFinal: false)
+            }
+
+            if producedAudio {
+                await playback.markEnd()
+            }
+        } catch {
+            NSLog("PipelineCoordinator: fae.wav CustomVoice preview failed: %@", error.localizedDescription)
+        }
+    }
+
     /// Update playback speed live without restarting.
     func setPlaybackSpeed(_ speed: Float) async {
         await playback.setSpeed(speed)
@@ -403,6 +457,7 @@ actor PipelineCoordinator {
 
     private var mode: PipelineMode = .conversation
     private var degradedMode: PipelineDegradedMode?
+    private var experimentalClonePreviewEngine: MLXTTSEngine?
     private var gateState: GateState = .idle
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()

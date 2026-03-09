@@ -11,6 +11,8 @@ struct SchedulerTask: Codable {
     var scheduleType: String // "interval", "daily", "weekly"
     var scheduleParams: [String: String]
     var action: String
+    var taskDescription: String?
+    var instructionBody: String?
     var nextRun: String?
     var allowedTools: [String]?
 }
@@ -155,27 +157,27 @@ func writeSchedulerTasks(_ tasks: [SchedulerTask]) throws {
 private func defaultBuiltinTasks() -> [SchedulerTask] {
     [
         SchedulerTask(id: "memory_reflect", name: "Memory Reflect", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "memory_reflect", nextRun: nil, allowedTools: nil),
+                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "memory_reflect", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_reindex", name: "Memory Reindex", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "3"], action: "memory_reindex", nextRun: nil, allowedTools: nil),
+                       scheduleType: "interval", scheduleParams: ["hours": "3"], action: "memory_reindex", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_migrate", name: "Memory Migrate", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "1"], action: "memory_migrate", nextRun: nil, allowedTools: nil),
+                       scheduleType: "interval", scheduleParams: ["hours": "1"], action: "memory_migrate", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_gc", name: "Memory GC", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "3", "minute": "30"], action: "memory_gc", nextRun: nil, allowedTools: nil),
+                       scheduleType: "daily", scheduleParams: ["hour": "3", "minute": "30"], action: "memory_gc", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "memory_backup", name: "Memory Backup", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "2", "minute": "0"], action: "memory_backup", nextRun: nil, allowedTools: nil),
+                       scheduleType: "daily", scheduleParams: ["hour": "2", "minute": "0"], action: "memory_backup", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "check_fae_update", name: "Check for Updates", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "check_fae_update", nextRun: nil, allowedTools: nil),
+                       scheduleType: "interval", scheduleParams: ["hours": "6"], action: "check_fae_update", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "noise_budget_reset", name: "Noise Budget Reset", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "0", "minute": "0"], action: "noise_budget_reset", nextRun: nil, allowedTools: nil),
+                       scheduleType: "daily", scheduleParams: ["hour": "0", "minute": "0"], action: "noise_budget_reset", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "morning_briefing", name: "Morning Briefing", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "8", "minute": "0"], action: "morning_briefing", nextRun: nil, allowedTools: nil),
+                       scheduleType: "daily", scheduleParams: ["hour": "8", "minute": "0"], action: "morning_briefing", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "skill_proposals", name: "Skill Proposals", kind: "builtin", enabled: true,
-                       scheduleType: "daily", scheduleParams: ["hour": "11", "minute": "0"], action: "skill_proposals", nextRun: nil, allowedTools: nil),
+                       scheduleType: "daily", scheduleParams: ["hour": "11", "minute": "0"], action: "skill_proposals", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "stale_relationships", name: "Stale Relationships", kind: "builtin", enabled: true,
-                       scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships", nextRun: nil, allowedTools: nil),
+                       scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "skill_health_check", name: "Skill Health Check", kind: "builtin", enabled: true,
-                       scheduleType: "interval", scheduleParams: ["minutes": "5"], action: "skill_health_check", nextRun: nil, allowedTools: nil),
+                       scheduleType: "interval", scheduleParams: ["minutes": "5"], action: "skill_health_check", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
     ]
 }
 
@@ -240,7 +242,9 @@ struct SchedulerCreateTool: Tool {
         {"name": "string (required)", \
         "schedule_type": "string (required: interval|daily|weekly)", \
         "schedule_params": "object (e.g. {hours: '6'} or {hour: '8', minute: '0'} or {day: 'monday'})", \
-        "action": "string (required: description of what to do)", \
+        "action": "string (required: concise summary of what to do)", \
+        "description": "string (optional: human-readable summary shown in the UI)", \
+        "instruction_body": "string (optional: skill-like detailed instructions for how to perform the task)", \
         "allowed_tools": "array<string> (optional: subset of autonomous scheduler tools such as activate_skill, run_skill, web_search, fetch_url, calendar, reminders, contacts, mail, notes, scheduler_list)"}
         """
     let requiresApproval = true
@@ -261,6 +265,8 @@ struct SchedulerCreateTool: Tool {
         let params = (input["schedule_params"] as? [String: Any])?.compactMapValues { "\($0)" } ?? [:]
         let requestedTools = input["allowed_tools"] as? [String]
         let allowedTools = normalizedAutonomousSchedulerTools(from: requestedTools)
+        let taskDescription = (input["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let instructionBody = (input["instruction_body"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let id = "user_\(UUID().uuidString.prefix(8).lowercased())"
         var task = SchedulerTask(
@@ -271,6 +277,8 @@ struct SchedulerCreateTool: Tool {
             scheduleType: scheduleType,
             scheduleParams: params,
             action: action,
+            taskDescription: taskDescription?.isEmpty == true ? nil : taskDescription,
+            instructionBody: instructionBody?.isEmpty == true ? nil : instructionBody,
             nextRun: nil,
             allowedTools: allowedTools
         )
@@ -302,6 +310,8 @@ struct SchedulerUpdateTool: Tool {
         "enabled": "bool (optional)", \
         "schedule_type": "string (optional)", \
         "schedule_params": "object (optional)", \
+        "description": "string (optional)", \
+        "instruction_body": "string (optional)", \
         "allowed_tools": "array<string> (optional)"}
         """
     let requiresApproval = true
@@ -335,6 +345,14 @@ struct SchedulerUpdateTool: Tool {
         }
         if let params = input["schedule_params"] as? [String: Any] {
             tasks[index].scheduleParams = params.compactMapValues { "\($0)" }
+        }
+        if let description = input["description"] as? String {
+            let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+            tasks[index].taskDescription = trimmed.isEmpty ? nil : trimmed
+        }
+        if let instructionBody = input["instruction_body"] as? String {
+            let trimmed = instructionBody.trimmingCharacters(in: .whitespacesAndNewlines)
+            tasks[index].instructionBody = trimmed.isEmpty ? nil : trimmed
         }
         if input.keys.contains("allowed_tools") {
             tasks[index].allowedTools = normalizedAutonomousSchedulerTools(from: input["allowed_tools"] as? [String])

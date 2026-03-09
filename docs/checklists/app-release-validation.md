@@ -158,6 +158,7 @@ Acceptance:
 - [ ] Fae in Cowork can receive audio input and produce audible TTS output.
 - [ ] Non-local models in Cowork can use the same audio in/out surface where supported by the product.
 - [ ] The main-window mic can be disabled or parked cleanly while Cowork voice testing runs.
+- [ ] A shared mic gate change is reflected both in `/status` and in the visible mic state on the live UI.
 
 ### Local and remote model behavior
 
@@ -173,6 +174,12 @@ Acceptance:
 - [ ] Absolute paths, workspace roots, and hidden local context are not leaked in remote-default packets.
 - [ ] Security/export states feel precise and calm rather than blunt or alarming.
 - [ ] A remote model can request helpful brokered local outputs without direct raw authority.
+
+### Cowork and main-window coexistence
+
+- [ ] Opening Cowork does not leave the main Fae window covering the workspace surface.
+- [ ] If the main window remains visible, it is intentionally docked or parked and does not steal focus during Cowork work.
+- [ ] Re-activating the app while Cowork is open preserves that intentional main-window state.
 
 ### Workspace surfaces
 

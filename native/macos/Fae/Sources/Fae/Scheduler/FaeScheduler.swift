@@ -898,10 +898,21 @@ actor FaeScheduler {
     }
 
     private func schedulerPrompt(for task: SchedulerTask) -> String {
-        """
+        let description = task.taskDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let instructions = task.instructionBody?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let renderedDescription = (description?.isEmpty == false) ? description! : task.action
+        let renderedInstructions = (instructions?.isEmpty == false) ? instructions! : task.action
+
+        return """
         [USER SCHEDULED TASK]
         Task name: \(task.name)
-        Task instructions: \(task.action)
+        Task summary: \(renderedDescription)
+
+        Skill-like task document:
+        ---
+        description: \(renderedDescription)
+        ---
+        \(renderedInstructions)
 
         Run this scheduled task on the user's behalf. Prefer relevant skills when they help, and stay within the scheduled-task tool allowlist for this run.
         """

@@ -19,6 +19,87 @@ private enum ModelPickerTarget {
     case newWorkspaceAgent
 }
 
+private struct EditableSchedulerTaskDraft: Identifiable, Equatable {
+    enum Mode: Equatable {
+        case create
+        case edit(existingID: String)
+    }
+
+    let id = UUID()
+    let mode: Mode
+    var name: String
+    var description: String
+    var body: String
+    var scheduleType: String
+    var intervalHours: String
+    var dailyHour: String
+    var dailyMinute: String
+    var weeklyDay: String
+    var weeklyHour: String
+    var weeklyMinute: String
+    var allowedTools: String
+
+    var isEditing: Bool {
+        if case .edit = mode { return true }
+        return false
+    }
+
+    var title: String {
+        isEditing ? "Edit Task" : "New Task"
+    }
+
+    var actionTitle: String {
+        isEditing ? "Save Changes" : "Create Task"
+    }
+
+    var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var trimmedDescription: String { description.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var trimmedBody: String { body.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var computedActionSummary: String {
+        if !trimmedDescription.isEmpty { return trimmedDescription }
+        if let firstLine = trimmedBody.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !firstLine.isEmpty
+        {
+            return firstLine
+        }
+        return trimmedName
+    }
+
+    static func new() -> EditableSchedulerTaskDraft {
+        EditableSchedulerTaskDraft(
+            mode: .create,
+            name: "",
+            description: "",
+            body: "",
+            scheduleType: "interval",
+            intervalHours: "6",
+            dailyHour: "9",
+            dailyMinute: "0",
+            weeklyDay: "monday",
+            weeklyHour: "9",
+            weeklyMinute: "0",
+            allowedTools: "web_search,fetch_url"
+        )
+    }
+
+    static func from(task: CoworkSchedulerTask) -> EditableSchedulerTaskDraft {
+        EditableSchedulerTaskDraft(
+            mode: .edit(existingID: task.id),
+            name: task.name,
+            description: task.taskDescription ?? task.action,
+            body: task.instructionBody ?? task.action,
+            scheduleType: task.scheduleType,
+            intervalHours: task.scheduleParams["hours"] ?? "6",
+            dailyHour: task.scheduleParams["hour"] ?? "9",
+            dailyMinute: task.scheduleParams["minute"] ?? "0",
+            weeklyDay: task.scheduleParams["day"] ?? "monday",
+            weeklyHour: task.scheduleParams["hour"] ?? "9",
+            weeklyMinute: task.scheduleParams["minute"] ?? "0",
+            allowedTools: task.allowedTools.joined(separator: ",")
+        )
+    }
+}
+
 private struct CoworkModelOptionSection: Identifiable {
     let id: String
     let title: String
@@ -187,6 +268,133 @@ private struct WorkspaceSidebarButtonView: View {
         }
         .onDrop(of: [UTType.text.identifier], isTargeted: nil) { _ in
             onMoveBefore()
+        }
+    }
+}
+
+private struct CoworkSchedulerEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var draft: EditableSchedulerTaskDraft
+    let onSave: (EditableSchedulerTaskDraft) -> Void
+
+    private static let weeklyDays = [
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    ]
+
+    init(draft: EditableSchedulerTaskDraft, onSave: @escaping (EditableSchedulerTaskDraft) -> Void) {
+        self._draft = State(initialValue: draft)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(draft.title)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Task name")
+                    .font(.headline)
+                TextField("Nightly research sweep", text: $draft.name)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Description")
+                    .font(.headline)
+                TextField("Short summary shown in the scheduler", text: $draft.description, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...4)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Instructions")
+                    .font(.headline)
+                TextEditor(text: $draft.body)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 180)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Schedule")
+                    .font(.headline)
+                Picker("Schedule type", selection: $draft.scheduleType) {
+                    Text("Every few hours").tag("interval")
+                    Text("Daily").tag("daily")
+                    Text("Weekly").tag("weekly")
+                }
+                .pickerStyle(.segmented)
+
+                switch draft.scheduleType {
+                case "daily":
+                    HStack(spacing: 12) {
+                        TextField("Hour", text: $draft.dailyHour)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Minute", text: $draft.dailyMinute)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                case "weekly":
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("Day", selection: $draft.weeklyDay) {
+                            ForEach(Self.weeklyDays, id: \.self) { day in
+                                Text(day.capitalized).tag(day)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        HStack(spacing: 12) {
+                            TextField("Hour", text: $draft.weeklyHour)
+                                .textFieldStyle(.roundedBorder)
+                            TextField("Minute", text: $draft.weeklyMinute)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                default:
+                    TextField("Interval hours", text: $draft.intervalHours)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Allowed tools (comma separated)")
+                    .font(.headline)
+                TextField("web_search,fetch_url", text: $draft.allowedTools)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button(draft.actionTitle) {
+                    onSave(draft)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isValid)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 560, minHeight: 420)
+    }
+
+    private var isValid: Bool {
+        guard !draft.trimmedName.isEmpty, !draft.trimmedBody.isEmpty else { return false }
+
+        switch draft.scheduleType {
+        case "daily":
+            return !draft.dailyHour.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !draft.dailyMinute.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case "weekly":
+            return !draft.weeklyDay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !draft.weeklyHour.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !draft.weeklyMinute.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default:
+            return !draft.intervalHours.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 }
@@ -545,6 +753,10 @@ struct CoworkWorkspaceView: View {
     @State private var showWorkspacePolicies = false
     @State private var showDetailsRail = false
     @State private var presentedUtilitySection: CoworkWorkspaceSection?
+    @State private var schedulerEditorDraft: EditableSchedulerTaskDraft?
+    @State private var pendingTaskDeletion: CoworkSchedulerTask?
+    @State private var skillEditorDraft: EditableSkillDraft?
+    @State private var pendingSkillDeletionName: String?
     @State private var showContextFolderSection = true
     @State private var showContextAttachmentsSection = false
     @State private var showContextIndexedFilesSection = false
@@ -552,6 +764,111 @@ struct CoworkWorkspaceView: View {
     @Namespace private var workspaceSelectionAnimation
 
     var body: some View {
+        presentedWorkspaceRoot
+    }
+
+    private var presentedWorkspaceRoot: some View {
+        interactiveWorkspaceRoot
+            .sheet(isPresented: $showingAddWorkspaceSheet) {
+                workspaceCreationSheet
+            }
+            .sheet(isPresented: $showingRenameWorkspaceSheet) {
+                workspaceRenameSheet
+            }
+            .sheet(isPresented: $showingAddAgentSheet) {
+                agentCreationSheet
+            }
+            .sheet(isPresented: $showingModelPickerSheet) {
+                modelPickerSheet
+            }
+            .sheet(item: $presentedUtilitySection) { section in
+                utilitySheet(for: section)
+            }
+            .sheet(item: $schedulerEditorDraft) { draft in
+                schedulerEditorSheet(draft: draft)
+            }
+            .sheet(item: $skillEditorDraft) { draft in
+                SkillEditorSheet(draft: draft) { savedDraft in
+                    persistSkillDraft(savedDraft)
+                }
+            }
+            .alert("Delete task?", isPresented: taskDeletionBinding, presenting: pendingTaskDeletion) { task in
+                Button("Delete", role: .destructive) {
+                    controller.deleteTask(task)
+                    pendingTaskDeletion = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingTaskDeletion = nil
+                }
+            } message: { task in
+                Text("Delete \(task.name)? This scheduled task will stop running.")
+            }
+            .alert("Delete skill?", isPresented: skillDeletionBinding, presenting: pendingSkillDeletionName) { name in
+                Button("Delete", role: .destructive) {
+                    controller.deleteSkill(name: name)
+                    pendingSkillDeletionName = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingSkillDeletionName = nil
+                }
+            } message: { name in
+                Text("Delete \(name)? This removes the skill from Fae.")
+            }
+            .alert("Remove agent?", isPresented: $showingDeleteAgentAlert, presenting: controller.selectedAgent) { agent in
+                Button("Remove", role: .destructive) {
+                    controller.deleteAgent(agent)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { agent in
+                Text("Remove \(agent.name)? Any workspaces using it will fall back to Fae Local.")
+            }
+            .alert("Delete conversation?", isPresented: $showingDeleteWorkspaceAlert, presenting: controller.selectedWorkspace) { workspace in
+                Button("Delete", role: .destructive) {
+                    controller.deleteSelectedWorkspace()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { workspace in
+                Text("Delete \(workspace.name)? Its folder, attachments, and compare settings will be removed from Work with Fae.")
+            }
+    }
+
+    private var interactiveWorkspaceRoot: some View {
+        workspaceRoot
+            .onAppear {
+                controller.scheduleRefresh(after: 0.05)
+            }
+            .onChange(of: controller.latestConsensusResults.count) {
+                showConsensusDetails = false
+            }
+            .onChange(of: controller.workspaces.map(\.id)) {
+                draggedWorkspaceID = nil
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .faeCoworkToggleInspectorRequested)) { _ in
+                showDetailsRail.toggle()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .faeCoworkOpenModelPickerRequested)) { _ in
+                guard controller.selectedAgent != nil else { return }
+                openModelPickerForSelectedAgent()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .faeCoworkOpenUtilityRequested)) { notification in
+                guard let rawValue = notification.userInfo?["section"] as? String,
+                      let section = CoworkWorkspaceSection(rawValue: rawValue)
+                else { return }
+                presentedUtilitySection = section
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .faeCoworkNewTaskRequested)) { _ in
+                presentSchedulerEditor(.new())
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .faeCoworkNewSkillRequested)) { _ in
+                presentSkillEditor(.new())
+            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.9), value: controller.selectedWorkspace?.id)
+            .animation(.easeInOut(duration: 0.22), value: showDetailsRail)
+            .animation(.easeInOut(duration: 0.22), value: showWorkspacePolicies)
+            .animation(.easeInOut(duration: 0.22), value: showConsensusDetails)
+    }
+
+    private var workspaceRoot: some View {
         ZStack {
             backdrop
 
@@ -597,51 +914,6 @@ struct CoworkWorkspaceView: View {
                 controller.addAttachments(from: urls)
             }
             return true
-        }
-        .preferredColorScheme(.dark)
-        .onAppear {
-            controller.scheduleRefresh(after: 0.05)
-        }
-        .onChange(of: controller.latestConsensusResults.count) {
-            showConsensusDetails = false
-        }
-        .onChange(of: controller.workspaces.map(\.id)) {
-            draggedWorkspaceID = nil
-        }
-        .animation(.spring(response: 0.32, dampingFraction: 0.9), value: controller.selectedWorkspace?.id)
-        .animation(.easeInOut(duration: 0.22), value: showDetailsRail)
-        .animation(.easeInOut(duration: 0.22), value: showWorkspacePolicies)
-        .animation(.easeInOut(duration: 0.22), value: showConsensusDetails)
-        .sheet(isPresented: $showingAddWorkspaceSheet) {
-            workspaceCreationSheet
-        }
-        .sheet(isPresented: $showingRenameWorkspaceSheet) {
-            workspaceRenameSheet
-        }
-        .sheet(isPresented: $showingAddAgentSheet) {
-            agentCreationSheet
-        }
-        .sheet(isPresented: $showingModelPickerSheet) {
-            modelPickerSheet
-        }
-        .sheet(item: $presentedUtilitySection) { section in
-            utilitySheet(for: section)
-        }
-        .alert("Remove agent?", isPresented: $showingDeleteAgentAlert, presenting: controller.selectedAgent) { agent in
-            Button("Remove", role: .destructive) {
-                controller.deleteAgent(agent)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { agent in
-            Text("Remove \(agent.name)? Any workspaces using it will fall back to Fae Local.")
-        }
-        .alert("Delete conversation?", isPresented: $showingDeleteWorkspaceAlert, presenting: controller.selectedWorkspace) { workspace in
-            Button("Delete", role: .destructive) {
-                controller.deleteSelectedWorkspace()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { workspace in
-            Text("Delete \(workspace.name)? Its folder, attachments, and compare settings will be removed from Work with Fae.")
         }
     }
 
@@ -1242,12 +1514,20 @@ struct CoworkWorkspaceView: View {
 
                     Spacer()
 
-                    workspaceActionButton(
-                        title: "Run skill health",
-                        systemImage: "stethoscope",
-                        accent: CoworkPalette.cyan,
-                        action: { controller.runTask(id: "skill_health_check") }
-                    )
+                    HStack(spacing: 10) {
+                        workspaceActionButton(
+                            title: "New task",
+                            systemImage: "plus",
+                            accent: CoworkPalette.mint,
+                            action: { presentSchedulerEditor(.new()) }
+                        )
+                        workspaceActionButton(
+                            title: "Run skill health",
+                            systemImage: "stethoscope",
+                            accent: CoworkPalette.cyan,
+                            action: { controller.runTask(id: "skill_health_check") }
+                        )
+                    }
                 }
 
                 ScrollView {
@@ -1275,9 +1555,17 @@ struct CoworkWorkspaceView: View {
                             .foregroundStyle(Color.white.opacity(0.62))
                     }
                     Spacer()
-                    Text("\(snapshot.skills.count) skills")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.70))
+                    HStack(spacing: 10) {
+                        Text("\(snapshot.skills.count) skills")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.70))
+                        workspaceActionButton(
+                            title: "New skill",
+                            systemImage: "plus",
+                            accent: CoworkPalette.mint,
+                            action: { presentSkillEditor(.new()) }
+                        )
+                    }
                 }
 
                 ScrollView {
@@ -1304,6 +1592,31 @@ struct CoworkWorkspaceView: View {
                                         capsule(text: skill.tier.capitalized, accent: CoworkPalette.rose)
                                         if !skill.isEnabled {
                                             capsule(text: "Disabled", accent: .gray)
+                                        }
+                                    }
+
+                                    if skill.tier.lowercased() != "builtin" {
+                                        HStack(spacing: 10) {
+                                            Button("Edit") {
+                                                guard let draft = EditableSkillDraft.loadPersonalSkill(named: skill.id) else { return }
+                                                presentSkillEditor(draft)
+                                            }
+                                            .buttonStyle(.plain)
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                Capsule()
+                                                    .fill(Color.white.opacity(0.05))
+                                                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                            )
+
+                                            Button("Remove") {
+                                                pendingSkillDeletionName = skill.id
+                                            }
+                                            .buttonStyle(.plain)
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(CoworkPalette.rose)
                                         }
                                     }
                                 }
@@ -1635,6 +1948,7 @@ struct CoworkWorkspaceView: View {
                 Button("Cancel") {
                     showingAddWorkspaceSheet = false
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("Create") {
                     controller.createWorkspace(
                         named: newWorkspaceName,
@@ -1644,6 +1958,7 @@ struct CoworkWorkspaceView: View {
                     )
                     showingAddWorkspaceSheet = false
                 }
+                .keyboardShortcut(.defaultAction)
                 .disabled(newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -1662,10 +1977,12 @@ struct CoworkWorkspaceView: View {
                 Button("Cancel") {
                     showingRenameWorkspaceSheet = false
                 }
+                .keyboardShortcut(.cancelAction)
                 Button("Save") {
                     controller.renameSelectedWorkspace(to: renameWorkspaceName)
                     showingRenameWorkspaceSheet = false
                 }
+                .keyboardShortcut(.defaultAction)
                 .disabled(renameWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -1772,11 +2089,13 @@ struct CoworkWorkspaceView: View {
                 Button("Done") {
                     showingModelPickerSheet = false
                 }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityLabel("Done choosing model")
+                .accessibilityHint("Close the model picker.")
             }
         }
         .padding(24)
         .frame(width: 480, height: 520)
-        .preferredColorScheme(.dark)
     }
 
     private var agentCreationSheet: some View {
@@ -2063,6 +2382,7 @@ struct CoworkWorkspaceView: View {
                 Button("Done") {
                     presentedUtilitySection = nil
                 }
+                .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 24)
             .padding(.top, 22)
@@ -2087,7 +2407,6 @@ struct CoworkWorkspaceView: View {
             VisualEffectBlur(material: .underWindowBackground, blendingMode: .behindWindow)
                 .ignoresSafeArea()
         )
-        .preferredColorScheme(.dark)
     }
 
     private var workspaceOverflowMenu: some View {
@@ -2272,6 +2591,8 @@ struct CoworkWorkspaceView: View {
             }
             .buttonStyle(.plain)
             .help("New conversation")
+            .accessibilityLabel("New conversation")
+            .accessibilityHint("Create a new cowork conversation with its own model and context.")
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
@@ -2434,6 +2755,7 @@ struct CoworkWorkspaceView: View {
         .buttonStyle(.plain)
         .help(showDetailsRail ? "Hide details" : "Show details")
         .accessibilityLabel(showDetailsRail ? "Hide inspector" : "Show inspector")
+        .accessibilityHint("Open or close the cowork inspector rail.")
     }
 
     private var thinkingLevelPill: some View {
@@ -2685,6 +3007,13 @@ struct CoworkWorkspaceView: View {
                     schedulerMeta(label: "Last", value: relativeDate(task.lastRun))
                 }
 
+                if let taskDescription = task.taskDescription, !taskDescription.isEmpty {
+                    Text(taskDescription)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.68))
+                        .lineLimit(3)
+                }
+
                 if let lastError = task.lastError {
                     Text(lastError)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -2722,7 +3051,133 @@ struct CoworkWorkspaceView: View {
                             .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
                     )
                 }
+
+                if !task.isBuiltin {
+                    HStack(spacing: 10) {
+                        Button("Edit") {
+                            presentSchedulerEditor(.from(task: task))
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.05))
+                                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        )
+
+                        Button("Delete") {
+                            pendingTaskDeletion = task
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(CoworkPalette.rose)
+                    }
+                }
             }
+        }
+    }
+
+    private var taskDeletionBinding: Binding<Bool> {
+        Binding(
+            get: { pendingTaskDeletion != nil },
+            set: { if !$0 { pendingTaskDeletion = nil } }
+        )
+    }
+
+    private var skillDeletionBinding: Binding<Bool> {
+        Binding(
+            get: { pendingSkillDeletionName != nil },
+            set: { if !$0 { pendingSkillDeletionName = nil } }
+        )
+    }
+
+    private func schedulerEditorSheet(draft: EditableSchedulerTaskDraft) -> some View {
+        CoworkSchedulerEditorSheet(draft: draft) { savedDraft in
+            persistSchedulerDraft(savedDraft)
+        }
+    }
+
+    private func persistSchedulerDraft(_ draft: EditableSchedulerTaskDraft) {
+        let allowedTools = draft.allowedTools
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let scheduleParams: [String: String]
+        switch draft.scheduleType {
+        case "daily":
+            scheduleParams = [
+                "hour": draft.dailyHour.trimmingCharacters(in: .whitespacesAndNewlines),
+                "minute": draft.dailyMinute.trimmingCharacters(in: .whitespacesAndNewlines),
+            ]
+        case "weekly":
+            scheduleParams = [
+                "day": draft.weeklyDay.trimmingCharacters(in: .whitespacesAndNewlines),
+                "hour": draft.weeklyHour.trimmingCharacters(in: .whitespacesAndNewlines),
+                "minute": draft.weeklyMinute.trimmingCharacters(in: .whitespacesAndNewlines),
+            ]
+        default:
+            scheduleParams = [
+                "hours": draft.intervalHours.trimmingCharacters(in: .whitespacesAndNewlines),
+            ]
+        }
+
+        switch draft.mode {
+        case .create:
+            controller.createTask(
+                name: draft.trimmedName,
+                scheduleType: draft.scheduleType,
+                scheduleParams: scheduleParams,
+                action: draft.computedActionSummary,
+                description: draft.trimmedDescription,
+                instructionBody: draft.trimmedBody,
+                allowedTools: allowedTools
+            )
+        case let .edit(existingID):
+            guard let task = controller.schedulerTasks.first(where: { $0.id == existingID }) else { return }
+            controller.updateTask(
+                task,
+                name: draft.trimmedName,
+                scheduleType: draft.scheduleType,
+                scheduleParams: scheduleParams,
+                action: draft.computedActionSummary,
+                description: draft.trimmedDescription,
+                instructionBody: draft.trimmedBody,
+                allowedTools: allowedTools
+            )
+        }
+    }
+
+    private func persistSkillDraft(_ draft: EditableSkillDraft) {
+        switch draft.mode {
+        case .create:
+            controller.createSkill(
+                name: draft.trimmedName,
+                description: draft.trimmedDescription,
+                body: draft.trimmedBody
+            )
+        case .edit:
+            controller.updateSkill(
+                name: draft.trimmedName,
+                description: draft.trimmedDescription,
+                body: draft.trimmedBody
+            )
+        }
+    }
+
+    private func presentSchedulerEditor(_ draft: EditableSchedulerTaskDraft) {
+        presentedUtilitySection = nil
+        DispatchQueue.main.async {
+            schedulerEditorDraft = draft
+        }
+    }
+
+    private func presentSkillEditor(_ draft: EditableSkillDraft) {
+        presentedUtilitySection = nil
+        DispatchQueue.main.async {
+            skillEditorDraft = draft
         }
     }
 

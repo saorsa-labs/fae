@@ -570,6 +570,9 @@ final class TestServer {
         }
 
         let payload = json["payload"] as? [String: Any] ?? [:]
+        if name == "conversation.gate_set", let active = payload["active"] as? Bool {
+            setListening(active)
+        }
         faeCore.sendCommand(name: name, payload: payload)
 
         sendResponse(connection: connection, status: 200, body: [

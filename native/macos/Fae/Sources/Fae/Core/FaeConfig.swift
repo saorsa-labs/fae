@@ -141,13 +141,16 @@ struct FaeConfig: Codable {
     // MARK: - TTS
 
     struct TtsConfig: Codable {
+        static let bundledFaeReferenceText =
+            "Hi David, it's Lauren, also known as Faye apparently. So, things in the garden and what's been happening, I've just fed all the wee birdies. We picked up some GDP primulas on the way down this morning and we went past Dobby's. So, I'm just going to plant them in the planters at the front."
+
         var voice: String = "fae"
         var modelId: String = "kokoro:fae"
         var speed: Float = 1.1
         var sampleRate: Int = 24_000
         /// Reference audio transcript (used by MLXTTSEngine / Qwen3-TTS ICL voice cloning).
         /// Not used by KokoroMLXTTSEngine, which uses pre-computed .bin embeddings.
-        var referenceText: String? = "Hello, I'm Fae."
+        var referenceText: String? = TtsConfig.bundledFaeReferenceText
         /// Path to a custom voice WAV file (overrides bundled fae.wav when voiceIdentityLock=false).
         var customVoicePath: String?
         /// Reference text for the custom voice WAV.
@@ -158,7 +161,7 @@ struct FaeConfig: Codable {
         /// Pass a text description like "A warm, calm female voice" and the TTS
         /// model will generate speech matching that description (no reference audio needed).
         /// Set to nil to revert to voice cloning from fae.wav.
-        var defaultVoiceInstruct: String? = "A softly spoken young Scottish woman with a very warm, gentle, and friendly tone. She speaks with a clear Scottish accent and natural warmth in every word."
+        var defaultVoiceInstruct: String? = "A softly spoken young Scottish woman with a warm, gently cheeky tone. She sounds friendly, playful, and grounded, with a clear Scottish accent and a touch of dry humour."
     }
 
     // MARK: - STT

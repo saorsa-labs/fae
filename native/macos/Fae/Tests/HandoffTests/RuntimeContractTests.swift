@@ -497,6 +497,34 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(coworkGuide.contains("voice capture should not turn typing into a separate mode"))
     }
 
+    func testCoworkKeyboardCommandsRemainExposedForModelInspectorAndUtilitySurfaces() throws {
+        let faeApp = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/FaeApp.swift")
+        let coworkView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/Cowork/CoworkWorkspaceView.swift")
+        let conversationController = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ConversationController.swift")
+
+        XCTAssertTrue(faeApp.contains("CommandGroup(after: .appSettings)"))
+        XCTAssertTrue(faeApp.contains("Button(\"Scheduler\")"))
+        XCTAssertTrue(faeApp.contains("Button(\"Skills\")"))
+        XCTAssertTrue(faeApp.contains("appDelegate.openCoworkDesktop(section: .scheduler)"))
+        XCTAssertTrue(faeApp.contains("appDelegate.openCoworkDesktop(section: .skills)"))
+        XCTAssertTrue(faeApp.contains("func openCoworkDesktop(section: CoworkWorkspaceSection? = nil)"))
+        XCTAssertTrue(faeApp.contains("Button(\"Cowork Model…\")"))
+        XCTAssertTrue(faeApp.contains("Button(\"Toggle Cowork Inspector\")"))
+        XCTAssertTrue(faeApp.contains("Button(\"Open Cowork Tools\")"))
+        XCTAssertTrue(faeApp.contains("Button(\"New Cowork Task\")"))
+        XCTAssertTrue(faeApp.contains("Button(\"New Cowork Skill\")"))
+        XCTAssertTrue(coworkView.contains(".faeCoworkOpenModelPickerRequested"))
+        XCTAssertTrue(coworkView.contains(".faeCoworkToggleInspectorRequested"))
+        XCTAssertTrue(coworkView.contains(".faeCoworkOpenUtilityRequested"))
+        XCTAssertTrue(coworkView.contains(".faeCoworkNewTaskRequested"))
+        XCTAssertTrue(coworkView.contains(".faeCoworkNewSkillRequested"))
+        XCTAssertTrue(conversationController.contains("faeCoworkOpenModelPickerRequested"))
+        XCTAssertTrue(conversationController.contains("faeCoworkToggleInspectorRequested"))
+        XCTAssertTrue(conversationController.contains("faeCoworkOpenUtilityRequested"))
+        XCTAssertTrue(conversationController.contains("faeCoworkNewTaskRequested"))
+        XCTAssertTrue(conversationController.contains("faeCoworkNewSkillRequested"))
+    }
+
     func testOnboardingBannerUsesNativeEnrollmentFlow() throws {
         let contentView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ContentView.swift")
 

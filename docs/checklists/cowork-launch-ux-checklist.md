@@ -67,4 +67,5 @@ Use it together with [app-release-validation.md](/Users/davidirvine/Desktop/Deve
 - Main-window typed turns can still stall in a persistent `Thinking...` state during live testing.
 - A full live VoiceOver pass has not been completed yet.
 - End-to-end live validation of cowork read-aloud on the packaged app remains incomplete.
-- The relationship between the main Fae window and cowork still needs one more clarity pass for launch polish.
+- The relationship between the main Fae window and cowork is improved, but app reactivation still needs one more clarity pass for launch polish.
+- The cowork utility surfaces still need a full live pass for model switching, skills, scheduler, and inspector interactions.

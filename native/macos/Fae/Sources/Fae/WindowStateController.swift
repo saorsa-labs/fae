@@ -295,6 +295,10 @@ final class WindowStateController: ObservableObject {
     // MARK: - Interaction / Inactivity
 
     func noteActivity() {
+        guard !isCoworkWindowVisible else {
+            cancelInactivityTimer()
+            return
+        }
         if mode == .collapsed {
             transitionToCompact()
         }
@@ -362,11 +366,25 @@ final class WindowStateController: ObservableObject {
                     guard let self else { return }
                     self.isCoworkWindowVisible = visible
                     if visible {
-                        self.transitionToCompact()
+                        self.showWindow()
+                        self.transitionToCollapsed()
                         self.cancelInactivityTimer()
                     } else {
+                        self.transitionToCompact()
                         self.startInactivityTimer()
                     }
+                }
+            }
+        )
+
+        observations.append(
+            center.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCoworkWindowVisible else { return }
+                    self.transitionToCollapsed()
+                    self.cancelInactivityTimer()
                 }
             }
         )

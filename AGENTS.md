@@ -186,9 +186,15 @@ swift test
 For any change to models, prompting, routing, voice, approvals, tools, memory, scheduler, skills, Cowork, remote-provider behavior, or other user-visible app flows, treat
 `docs/checklists/app-release-validation.md` as a required release gate.
 
+The step-by-step live scenario script is
+`docs/checklists/main-and-cowork-live-test-scenarios.md`.
+Update both files in the same change whenever a user-visible capability,
+validation path, or runtime boundary changes.
+
 Minimum expectations:
 
 - update that checklist when a new capability or boundary is added
+- update the live scenario script when the manual release workflow changes
 - run the relevant `tests/comprehensive/specs/*.yaml` phases through `scripts/test-comprehensive.sh`
 - run the real app via `just run-native` or `just rebuild`
 - run the test server via `just test-serve`

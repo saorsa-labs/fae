@@ -44,6 +44,7 @@ Supported behaviors:
 - fork a conversation into a sibling thread
 - preserve each workspace’s own conversation history
 - restore the correct thread when a workspace is selected again
+- user-created cowork scheduler tasks now use a skill-like authoring format: a short description plus a fuller instructions body, so the runtime sees a reviewable task document instead of a one-line action string
 
 Forks copy the conversation state into a new workspace record with parent linkage, so you can branch a line of work without losing the original thread.
 
@@ -79,12 +80,15 @@ Current interaction contract:
 
 - Return sends from the cowork composer
 - Shift-Return inserts a new line in the cowork composer
+- `Fae > Scheduler` and `Fae > Skills` should open the Cowork utility surfaces directly; users should not need to go through Settings to manage those workflows
 - the composer, send button, compare button, model picker, agent picker, and workspace rows expose explicit accessibility labels and hints
 - drag/drop remains available, but every core action also has a keyboard- and menu-reachable path
 - the main window input bar and Work with Fae use the same plain-language accessibility naming for sending, thinking level, and opening cowork
 - voice capture should not turn typing into a separate mode: users must be able to keep listening active while typing and sending text
 - cowork should expose explicit `Listening` and `Read reply` controls in the composer footer so voice-in and read-aloud are available regardless of selected model
 - startup should land on the main conversation surface rather than opening an auxiliary canvas window automatically
+- skill creation/editing should support importing a remote `SKILL.md` by URL, then reviewing the imported content locally before saving it
+- skill creation/editing should surface a local security review so prompt overrides, exfiltration language, risky shell/network patterns, and suspicious source URLs are visible before save
 
 ### Thinking levels
 
