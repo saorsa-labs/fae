@@ -625,10 +625,19 @@ actor FaeScheduler {
     ) async -> Bool {
         guard let handler = proactiveQueryHandler else { return false }
 
-        let mode = await proactiveDispatchMode(taskID: taskId, urgency: urgency)
-        guard mode != .suppress else {
-            NSLog("FaeScheduler: %@ suppressed by proactive policy", taskId)
-            return false
+        var mode = await proactiveDispatchMode(taskID: taskId, urgency: urgency)
+        if mode == .suppress {
+            // AwarenessThrottle already decided this task should run (silentOnly or normal).
+            // ProactivePolicyEngine may still say suppress due to quiet hours, but the throttle
+            // is the authoritative gate for per-task quiet-hours policy. Honour it by upgrading
+            // to digest (silent dispatch) rather than discarding the task entirely.
+            switch throttle {
+            case .silentOnly, .normal:
+                mode = .digest
+            case .skip:
+                NSLog("FaeScheduler: %@ suppressed by proactive policy", taskId)
+                return false
+            }
         }
 
         let throttleSilent = {
@@ -798,7 +807,7 @@ actor FaeScheduler {
         let dispatched = await dispatchProactiveTask(
             taskId: "enhanced_morning_briefing",
             prompt: prompt,
-            urgency: .medium,
+            urgency: .high,
             defaultSilent: false,
             throttle: throttle,
             allowedTools: ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"]
