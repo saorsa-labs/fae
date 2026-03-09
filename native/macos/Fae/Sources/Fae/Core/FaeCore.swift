@@ -636,9 +636,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { await pipelineCoordinator?.previewTTSVoice(voice) }
             }
 
-        case "tts.preview_fae_wav_clone":
-            Task { await pipelineCoordinator?.previewBundledFaeWAVClone() }
-
         case "config.patch":
             if let key = payload["key"] as? String {
                 patchConfig(key: key, payload: payload)

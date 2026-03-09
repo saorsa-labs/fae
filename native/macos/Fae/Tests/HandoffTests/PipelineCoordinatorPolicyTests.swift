@@ -98,6 +98,83 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         )
     }
 
+    func testDeterministicEasyTurnActionAnswersArithmeticWordProblems() {
+        let action = PipelineCoordinator.deterministicEasyTurnAction(
+            for: "Fae, what is seven times eight?",
+            rememberedUserName: nil
+        )
+
+        XCTAssertEqual(action, .arithmetic(reply: "56."))
+    }
+
+    func testDeterministicEasyTurnActionAnswersArithmeticDigitProblems() {
+        let action = PipelineCoordinator.deterministicEasyTurnAction(
+            for: "what is 12 + 30?",
+            rememberedUserName: nil
+        )
+
+        XCTAssertEqual(action, .arithmetic(reply: "42."))
+    }
+
+    func testDeterministicEasyTurnActionRemembersStandaloneNameDeclaration() {
+        let action = PipelineCoordinator.deterministicEasyTurnAction(
+            for: "my name is Jarvis",
+            rememberedUserName: nil
+        )
+
+        XCTAssertEqual(
+            action,
+            .rememberUserName(name: "Jarvis", reply: "Got it. I'll remember that your name is Jarvis.")
+        )
+    }
+
+    func testDeterministicEasyTurnActionRecallsRememberedName() {
+        let action = PipelineCoordinator.deterministicEasyTurnAction(
+            for: "what is my name?",
+            rememberedUserName: "Jarvis"
+        )
+
+        XCTAssertEqual(action, .recallUserName(reply: "Your name is Jarvis."))
+    }
+
+    func testDeterministicEasyTurnActionPromptsForNameWhenUnknown() {
+        let action = PipelineCoordinator.deterministicEasyTurnAction(
+            for: "who am i?",
+            rememberedUserName: nil
+        )
+
+        XCTAssertEqual(
+            action,
+            .recallUserName(reply: "I don't know your name yet. Tell me your name and I'll remember it.")
+        )
+    }
+
+    func testBatchedTTSSegmentsKeepsShortRepliesIntact() {
+        let segments = PipelineCoordinator.batchedTTSSegments(
+            from: "Local AI keeps your private data on your own machine."
+        )
+
+        XCTAssertEqual(
+            segments,
+            ["Local AI keeps your private data on your own machine."]
+        )
+    }
+
+    func testBatchedTTSSegmentsSplitsLongRepliesAtSentenceBoundaries() {
+        let text = """
+        Local AI privacy matters because your personal data stays on-device instead of being sent to a third-party service. \
+        That reduces exposure for sensitive conversations, business plans, and health information. \
+        It also makes trust easier to reason about because the authority boundary is local. \
+        Finally, it gives users stronger guarantees about what can and cannot leave the machine.
+        """
+
+        let segments = PipelineCoordinator.batchedTTSSegments(from: text, maxCharacters: 120)
+
+        XCTAssertGreaterThan(segments.count, 1)
+        XCTAssertTrue(segments.allSatisfy { $0.count <= 120 })
+        XCTAssertTrue(segments[0].hasSuffix("."))
+    }
+
     func testRepairedToolCallForSkippedWriteTurnExtractsPathAndContent() {
         guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
             "Fae, write 'hello fae test' to /tmp/fae-test-write.txt"

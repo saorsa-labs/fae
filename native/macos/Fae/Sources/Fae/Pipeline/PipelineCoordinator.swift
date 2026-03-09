@@ -11,6 +11,11 @@ import MLXLMCommon
 ///
 /// Replaces: `src/pipeline/coordinator.rs` (5,192 lines)
 actor PipelineCoordinator {
+    enum DeterministicEasyTurnAction: Equatable {
+        case arithmetic(reply: String)
+        case rememberUserName(name: String, reply: String)
+        case recallUserName(reply: String)
+    }
 
     // MARK: - Pipeline Mode
 
@@ -259,6 +264,251 @@ actor PipelineCoordinator {
         return digitCount + wordCount >= 2
     }
 
+    static func deterministicEasyTurnAction(
+        for text: String,
+        rememberedUserName: String?
+    ) -> DeterministicEasyTurnAction? {
+        let normalized = normalizeEasyTurnInput(text)
+
+        if let reply = deterministicArithmeticReply(for: normalized) {
+            return .arithmetic(reply: reply)
+        }
+
+        if let name = standaloneUserNameDeclaration(in: normalized) {
+            return .rememberUserName(
+                name: name,
+                reply: "Got it. I'll remember that your name is \(name)."
+            )
+        }
+
+        guard isSimpleUserNameRecallQuery(normalized) else { return nil }
+        if let rememberedUserName, !rememberedUserName.isEmpty {
+            return .recallUserName(reply: "Your name is \(rememberedUserName).")
+        }
+        return .recallUserName(reply: "I don't know your name yet. Tell me your name and I'll remember it.")
+    }
+
+    private static func normalizeEasyTurnInput(_ text: String) -> String {
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        normalized = normalized.replacingOccurrences(
+            of: #"^[\s,;:.-]*(hey|hi|hello)\s+fae[\s,;:.-]*"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        normalized = normalized.replacingOccurrences(
+            of: #"^fae[\s,;:.-]*"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func deterministicArithmeticReply(for text: String) -> String? {
+        guard let expression = parseArithmeticExpression(text) else { return nil }
+
+        let result: Double
+        switch expression.operatorSymbol {
+        case "+":
+            result = expression.lhs + expression.rhs
+        case "-":
+            result = expression.lhs - expression.rhs
+        case "*":
+            result = expression.lhs * expression.rhs
+        case "/":
+            guard expression.rhs != 0 else { return "Division by zero isn't defined." }
+            result = expression.lhs / expression.rhs
+        default:
+            return nil
+        }
+
+        let formatted: String
+        if result.rounded() == result {
+            formatted = String(Int(result))
+        } else {
+            formatted = String(format: "%.2f", result)
+                .replacingOccurrences(of: #"(\.\d*?[1-9])0+$"#, with: "$1", options: .regularExpression)
+                .replacingOccurrences(of: #"\.0+$"#, with: "", options: .regularExpression)
+        }
+
+        return "\(formatted)."
+    }
+
+    private static func parseArithmeticExpression(_ text: String) -> (lhs: Double, operatorSymbol: String, rhs: Double)? {
+        let normalized = text
+            .lowercased()
+            .replacingOccurrences(of: "what's", with: "what is")
+            .replacingOccurrences(of: "calculate", with: "")
+            .replacingOccurrences(of: "compute", with: "")
+            .replacingOccurrences(of: "what is", with: "")
+            .replacingOccurrences(of: "?", with: " ")
+            .replacingOccurrences(of: ",", with: " ")
+            .replacingOccurrences(of: "multiplied by", with: " * ")
+            .replacingOccurrences(of: "times", with: " * ")
+            .replacingOccurrences(of: "divided by", with: " / ")
+            .replacingOccurrences(of: "over", with: " / ")
+            .replacingOccurrences(of: "plus", with: " + ")
+            .replacingOccurrences(of: "minus", with: " - ")
+            .replacingOccurrences(of: #"(?<=\s)x(?=\s)"#, with: " * ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        for symbol in [" + ", " - ", " * ", " / "] {
+            guard let range = normalized.range(of: symbol) else { continue }
+            let lhsText = String(normalized[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let rhsText = String(normalized[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let lhs = parseArithmeticOperand(lhsText),
+                  let rhs = parseArithmeticOperand(rhsText)
+            else {
+                return nil
+            }
+            return (lhs, String(symbol.trimmingCharacters(in: .whitespaces)), rhs)
+        }
+
+        return nil
+    }
+
+    private static func parseArithmeticOperand(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let numeric = Double(trimmed) {
+            return numeric
+        }
+
+        let sanitized = trimmed
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: #"[^a-z\s]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitized.isEmpty else { return nil }
+
+        let small: [String: Int] = [
+            "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+            "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+            "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+        ]
+        let tens: [String: Int] = [
+            "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+            "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+        ]
+
+        var total = 0
+        var current = 0
+        for token in sanitized.split(separator: " ").map(String.init) {
+            if token == "and" {
+                continue
+            } else if let value = small[token] {
+                current += value
+            } else if let value = tens[token] {
+                current += value
+            } else if token == "hundred" {
+                current = max(current, 1) * 100
+            } else if token == "thousand" {
+                total += max(current, 1) * 1_000
+                current = 0
+            } else {
+                return nil
+            }
+        }
+
+        return Double(total + current)
+    }
+
+    private static func standaloneUserNameDeclaration(in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let patterns = [
+            "my name is ", "my name's ", "call me ",
+            "you can call me ", "people call me ",
+        ]
+
+        for pattern in patterns {
+            guard trimmed.lowercased().hasPrefix(pattern) else { continue }
+            let namePortion = String(trimmed.dropFirst(pattern.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?:;\""))
+            guard isLikelyStandaloneHumanName(namePortion) else { return nil }
+            return namePortion
+        }
+
+        return nil
+    }
+
+    private static func isLikelyStandaloneHumanName(_ candidate: String) -> Bool {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 50 else { return false }
+        let words = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !words.isEmpty, words.count <= 4 else { return false }
+        let blockedTokens: Set<String> = [
+            "please", "thanks", "thank", "today", "tonight", "right", "now",
+            "and", "then", "also", "help", "because",
+        ]
+
+        for word in words {
+            let lowered = word.lowercased()
+            if blockedTokens.contains(lowered) { return false }
+            if word.rangeOfCharacter(from: CharacterSet.decimalDigits) != nil { return false }
+            if word.rangeOfCharacter(from: CharacterSet.letters.inverted.subtracting(CharacterSet(charactersIn: "-'"))) != nil {
+                return false
+            }
+            if word.count < 2 { return false }
+        }
+
+        return true
+    }
+
+    private static func isSimpleUserNameRecallQuery(_ text: String) -> Bool {
+        let normalized = text
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"[\?\.\!]"#, with: "", options: .regularExpression)
+        let accepted: Set<String> = [
+            "what is my name",
+            "what's my name",
+            "do you know my name",
+            "tell me my name",
+            "who am i",
+        ]
+        return accepted.contains(normalized)
+    }
+
+    static func batchedTTSSegments(
+        from text: String,
+        maxCharacters: Int = 420
+    ) -> [String] {
+        let normalized = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return [] }
+        guard normalized.count > maxCharacters else { return [normalized] }
+
+        var segments: [String] = []
+        var remaining = normalized
+
+        while remaining.count > maxCharacters {
+            let candidate = String(remaining.prefix(maxCharacters))
+            let boundary = TextProcessing.findSentenceBoundary(in: candidate)
+                ?? TextProcessing.findClauseBoundary(in: candidate)
+
+            let splitIndex = boundary ?? candidate.endIndex
+            let segment = candidate[..<splitIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !segment.isEmpty {
+                segments.append(segment)
+            }
+
+            remaining = String(remaining[splitIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if boundary == nil, remaining == normalized {
+                break
+            }
+        }
+
+        if !remaining.isEmpty {
+            segments.append(remaining)
+        }
+
+        return segments
+    }
+
     static func shouldAcceptVoiceApprovalResponse(
         awaitingApproval: Bool,
         manualOnlyApprovalPending: Bool,
@@ -394,60 +644,6 @@ actor PipelineCoordinator {
         }
     }
 
-    /// Preview the bundled `fae.wav` via the legacy CustomVoice cloning path.
-    ///
-    /// This is an experiment path for evaluating whether direct WAV cloning
-    /// preserves more of the Scottish character than the Kokoro style tensor.
-    func previewBundledFaeWAVClone() async {
-        let phrase = "Hiya, I'm Fae. I've just fed the wee birdies in the garden, and I'm in a quietly cheeky mood today."
-        guard let voiceURL = Bundle.faeResources.url(forResource: "fae", withExtension: "wav") else {
-            NSLog("PipelineCoordinator: bundled fae.wav missing for CustomVoice preview")
-            return
-        }
-
-        do {
-            let previewEngine: MLXTTSEngine
-            if let cached = experimentalClonePreviewEngine,
-               await cached.isLoaded,
-               await cached.isVoiceLoaded
-            {
-                previewEngine = cached
-            } else {
-                let engine = MLXTTSEngine()
-                try await engine.load(modelID: "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16")
-                try await engine.loadVoice(
-                    referenceAudioURL: voiceURL,
-                    referenceText: FaeConfig.TtsConfig.bundledFaeReferenceText
-                )
-                experimentalClonePreviewEngine = engine
-                previewEngine = engine
-            }
-
-            await playback.stop()
-            let stream = await previewEngine.synthesize(text: phrase)
-            var producedAudio = false
-
-            for try await buffer in stream {
-                guard let channelData = buffer.floatChannelData?[0] else { continue }
-                let sampleRate = Int(buffer.format.sampleRate.rounded())
-                let samples = Array(
-                    UnsafeBufferPointer(start: channelData, count: Int(buffer.frameLength))
-                )
-                if !producedAudio {
-                    markAssistantSpeechStarted()
-                    producedAudio = true
-                }
-                await playback.enqueue(samples: samples, sampleRate: sampleRate, isFinal: false)
-            }
-
-            if producedAudio {
-                await playback.markEnd()
-            }
-        } catch {
-            NSLog("PipelineCoordinator: fae.wav CustomVoice preview failed: %@", error.localizedDescription)
-        }
-    }
-
     /// Update playback speed live without restarting.
     func setPlaybackSpeed(_ speed: Float) async {
         await playback.setSpeed(speed)
@@ -457,7 +653,6 @@ actor PipelineCoordinator {
 
     private var mode: PipelineMode = .conversation
     private var degradedMode: PipelineDegradedMode?
-    private var experimentalClonePreviewEngine: MLXTTSEngine?
     private var gateState: GateState = .idle
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()
@@ -648,6 +843,7 @@ actor PipelineCoordinator {
 
     /// Task-scoped capability grant consumed by the broker.
     private var activeCapabilityTicket: CapabilityTicket?
+    private var sessionDeclaredUserName: String?
 
     /// Tracks tool call signatures (name + args) already executed this user turn.
     /// Prevents the LLM looping on identical web_search / calendar calls.
@@ -1166,6 +1362,7 @@ actor PipelineCoordinator {
         await conciergeEngine?.resetSession()
         _ = await RoleplaySessionStore.shared.stop()
         currentTurnGenerationContext = nil
+        sessionDeclaredUserName = nil
         NSLog("PipelineCoordinator: conversation history cleared (test reset)")
     }
 
@@ -2889,6 +3086,17 @@ actor PipelineCoordinator {
             await userInteractionHandler?()
         }
 
+        if proactiveContext == nil,
+           await handleDeterministicEasyTurnIfNeeded(
+                originalUserText: text,
+                queryText: queryText,
+                allowsAudibleOutput: allowsAudibleOutput,
+                tag: proactiveContext?.conversationTag
+           )
+        {
+            return
+        }
+
         // Unified pipeline: LLM decides when to use tools via <tool_call> markup.
         await generateWithTools(
             userText: queryText,
@@ -2900,6 +3108,93 @@ actor PipelineCoordinator {
             playsThinkingTone: playsThinkingTone,
             allowsAudibleOutput: allowsAudibleOutput
         )
+    }
+
+    private func handleDeterministicEasyTurnIfNeeded(
+        originalUserText: String,
+        queryText: String,
+        allowsAudibleOutput: Bool,
+        tag: String?
+    ) async -> Bool {
+        let rememberedName = await resolvedRememberedUserName()
+        guard let action = Self.deterministicEasyTurnAction(
+            for: queryText,
+            rememberedUserName: rememberedName
+        ) else {
+            return false
+        }
+
+        let responseText: String
+        switch action {
+        case .arithmetic(let reply):
+            responseText = reply
+        case .rememberUserName(let name, let reply):
+            sessionDeclaredUserName = name
+            responseText = reply
+        case .recallUserName(let reply):
+            responseText = reply
+        }
+
+        assistantGenerating = true
+        eventBus.send(.assistantGenerating(true))
+        await conversationState.addUserMessage(
+            queryText,
+            speakerDisplayName: currentSpeakerDisplayName,
+            speakerId: currentSpeakerLabel,
+            tag: tag
+        )
+        lastAssistantResponseText = responseText
+        if allowsAudibleOutput {
+            await speakText(responseText, isFinal: true)
+        } else {
+            eventBus.send(.assistantText(text: responseText, isFinal: true))
+        }
+        await conversationState.addAssistantMessage(responseText, tag: tag)
+        await synchronizeLLMSession()
+
+        let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
+        if VoiceConversationPolicy.shouldPersistSpeechMemory(
+            ownerProfileExists: ownerProfileExists,
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            speakerRole: currentSpeakerRole
+        ) {
+            let turnId = newMemoryId(prefix: "turn")
+            _ = await memoryOrchestrator?.capture(
+                turnId: turnId,
+                userText: originalUserText,
+                assistantText: responseText,
+                speakerId: currentSpeakerLabel,
+                utteranceTimestamp: currentUtteranceTimestamp
+            )
+        }
+
+        endAssistantGeneration()
+        engage()
+        return true
+    }
+
+    private func resolvedRememberedUserName() async -> String? {
+        if let sessionDeclaredUserName,
+           !sessionDeclaredUserName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return sessionDeclaredUserName
+        }
+
+        if let displayName = currentSpeakerDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !displayName.isEmpty,
+           displayName.caseInsensitiveCompare("Owner") != .orderedSame
+        {
+            return displayName
+        }
+
+        if let ownerName = await speakerProfileStore?.ownerDisplayName()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !ownerName.isEmpty,
+           ownerName.caseInsensitiveCompare("Owner") != .orderedSame
+        {
+            return ownerName
+        }
+
+        return nil
     }
 
     private func shouldForceThinkingSuppression(for text: String) -> Bool {
@@ -4350,15 +4645,22 @@ actor PipelineCoordinator {
                     eventBus.send(.assistantText(text: finalText, isFinal: true))
                 }
                 if shouldSpeak {
-                    // Join all deferred sentences into a single TTS call so the model
-                    // synthesises one continuous audio stream with no inter-sentence gaps.
-                    // Sequential per-sentence calls caused audible stuttering because each
-                    // sentence had to synthesise from scratch before playback of the previous
-                    // one finished, leaving a silence gap proportional to RTF.
                     let fullText = filteredSentences.joined(separator: " ")
-                    NSLog("PipelineCoordinator: TTS full response → \"%@\" (from %d parts)", String(fullText.prefix(120)), filteredSentences.count)
-                    recordSpokenText(fullText)
-                    enqueueTTS(fullText, isFinal: true, generationID: generationID)
+                    let segments = Self.batchedTTSSegments(from: fullText)
+                    NSLog(
+                        "PipelineCoordinator: TTS full response → \"%@\" (from %d parts, batched=%d)",
+                        String(fullText.prefix(120)),
+                        filteredSentences.count,
+                        segments.count
+                    )
+                    for (index, segment) in segments.enumerated() {
+                        recordSpokenText(segment)
+                        enqueueTTS(
+                            segment,
+                            isFinal: index == segments.count - 1,
+                            generationID: generationID
+                        )
+                    }
                 }
                 // Wait for all TTS (streaming + final) to complete.
                 await awaitPendingTTS()
@@ -4928,7 +5230,18 @@ actor PipelineCoordinator {
 
         // Use cleaned text for TTS — stripping self-introductions, markup, etc.
         let ttsText = cleaned.isEmpty ? text : cleaned
-        await synthesizeSentence(ttsText, isFinal: isFinal, voiceInstruct: voiceInstruct)
+        let segments = Self.batchedTTSSegments(from: ttsText)
+        guard !segments.isEmpty else {
+            if isFinal {
+                markAssistantSpeechEnded(reason: "tts_empty_after_clean")
+            }
+            return
+        }
+
+        for (index, segment) in segments.enumerated() {
+            let segmentIsFinal = isFinal && index == segments.count - 1
+            await synthesizeSentence(segment, isFinal: segmentIsFinal, voiceInstruct: voiceInstruct)
+        }
     }
 
     /// Maximum time a single TTS synthesis call can take before we force-cancel.

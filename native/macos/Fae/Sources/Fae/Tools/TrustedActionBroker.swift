@@ -343,10 +343,14 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
     }
 
     private func shouldConfirmInAutonomousProfile(_ intent: ActionIntent) -> Bool {
-        // `full_no_approval` is the explicit autonomous mode. Owner checks,
-        // capability tickets, scheduler consent, and hard denies are enforced
-        // before we get here; this profile should not emit extra confirmation
-        // popups for otherwise-allowed actions.
+        guard !intent.explicitUserAuthorization else {
+            return false
+        }
+
+        if intent.requiresApproval || intent.riskLevel == .high {
+            return true
+        }
+
         return false
     }
 }
