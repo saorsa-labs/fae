@@ -224,18 +224,22 @@ final class FaeLocalRuntimeServer {
     }
 
     private func awaitOutcome(since: Date, baselineApprovalID: UInt64?) async -> ChatOutcome {
-        let deadline = Date().addingTimeInterval(45)
+        // Use a longer deadline to allow time for the user to respond to approval dialogs.
+        let deadline = Date().addingTimeInterval(120)
+        var lastKnownApprovalID: UInt64? = baselineApprovalID
 
         while Date() < deadline {
-            if let approval = approvalOverlay?.activeApproval,
-               approval.id != baselineApprovalID
-            {
-                return .pendingApproval(approval.toolName)
+            // Track approval state changes but don't bail out — keep waiting so the
+            // user has time to approve/deny. CoWork gets the real response after Fae
+            // finishes generating post-approval, rather than a stale "pending" message.
+            if let approval = approvalOverlay?.activeApproval {
+                lastKnownApprovalID = approval.id
             }
 
             if let conversation {
                 if !conversation.isGenerating,
                    !conversation.isStreaming,
+                   approvalOverlay?.activeApproval == nil,
                    let assistant = conversation.messages.last(where: { message in
                        message.role == .assistant && message.timestamp >= since.addingTimeInterval(-0.25)
                    })
@@ -245,6 +249,7 @@ final class FaeLocalRuntimeServer {
 
                 if !conversation.isGenerating,
                    !conversation.streamingText.isEmpty,
+                   approvalOverlay?.activeApproval == nil,
                    conversation.lastInteractionTimestamp >= since.addingTimeInterval(-0.25)
                 {
                     return .completed(conversation.streamingText)
@@ -254,6 +259,12 @@ final class FaeLocalRuntimeServer {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
 
+        // Timed out — if approval is still pending, report it so CoWork knows why.
+        if let approval = approvalOverlay?.activeApproval,
+           approval.id != baselineApprovalID
+        {
+            return .pendingApproval(approval.toolName)
+        }
         return .timedOut(conversation?.streamingText.nilIfEmpty)
     }
 

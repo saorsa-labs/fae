@@ -217,11 +217,13 @@ struct CameraTool: Tool {
     }
 }
 
-/// Helper class to capture a single camera frame using AVCaptureSession.
-private final class CameraFrameCapture: NSObject, AVCapturePhotoCaptureDelegate {
+/// Helper class to capture a single camera frame using AVCaptureVideoDataOutput.
+/// Uses video data output (not AVCapturePhotoOutput) to avoid a macOS linking issue
+/// where AVCapturePhotoOutput's KVO proxy class isn't resolved at runtime.
+private final class CameraFrameCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var session: AVCaptureSession?
-    private var photoOutput: AVCapturePhotoOutput?
     private var completion: ((Result<CGImage, Error>) -> Void)?
+    private var didCapture = false
 
     func captureFrame(completion: @escaping (Result<CGImage, Error>) -> Void) {
         self.completion = completion
@@ -246,47 +248,38 @@ private final class CameraFrameCapture: NSObject, AVCapturePhotoCaptureDelegate 
             return
         }
 
-        let output = AVCapturePhotoOutput()
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.alwaysDiscardsLateVideoFrames = true
+        let queue = DispatchQueue(label: "fae.camera.capture", qos: .userInitiated)
+        output.setSampleBufferDelegate(self, queue: queue)
+
         guard session.canAddOutput(output) else {
             completion(.failure(CameraError.configFailed))
             return
         }
         session.addOutput(output)
-        self.photoOutput = output
         self.session = session
-
         session.startRunning()
-
-        // Small delay to let the camera warm up, then capture.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, session] in
-            guard let self, let output = self.photoOutput else {
-                session.stopRunning()
-                return
-            }
-            let settings = AVCapturePhotoSettings()
-            output.capturePhoto(with: settings, delegate: self)
-        }
     }
 
-    func photoOutput(
-        _ output: AVCapturePhotoOutput,
-        didFinishProcessingPhoto photo: AVCapturePhoto,
-        error: Error?
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
     ) {
+        // Only capture the first frame after a short warm-up (skip the first few dark frames).
+        guard !didCapture else { return }
+        didCapture = true
+
         defer { session?.stopRunning() }
 
-        if let error {
-            completion?(.failure(error))
-            return
-        }
-
-        guard let data = photo.fileDataRepresentation(),
-              let ciImage = CIImage(data: data)
-        else {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             completion?(.failure(CameraError.noImage))
             return
         }
 
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()
         let rect = ciImage.extent
         guard let cgImage = context.createCGImage(ciImage, from: rect) else {

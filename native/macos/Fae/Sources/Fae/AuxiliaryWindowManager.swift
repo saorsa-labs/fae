@@ -226,10 +226,18 @@ final class AuxiliaryWindowManager: ObservableObject {
 
         let anchorFrame = anchorWindow.frame
         let panelSize = NSSize(width: 340, height: 300)
-        // Position ABOVE the active surface — orb window for main Fae, cowork window for Work with Fae.
-        let y = anchorFrame.maxY + 8
         let x = anchorFrame.midX - panelSize.width / 2
-        let frame = clampToScreen(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height))
+        // For large windows (CoWork), center the panel over the window so it's
+        // always visible regardless of where the window sits on screen.
+        // For small windows (main orb), position above as before.
+        let y: CGFloat
+        if anchorFrame.height > 400 {
+            y = anchorFrame.midY - panelSize.height / 2
+        } else {
+            y = anchorFrame.maxY + 8
+        }
+        let screen = anchorWindow.screen ?? windowState?.window?.screen
+        let frame = clampToScreenFrame(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height), screen: screen)
 
         panel.setFrame(frame, display: false)
         panel.alphaValue = 0
@@ -576,8 +584,11 @@ final class AuxiliaryWindowManager: ObservableObject {
     /// Clamp a frame to the visible area of the screen containing the orb window.
     /// Falls back to `NSScreen.main` if the orb screen can't be determined.
     private func clampToScreen(_ frame: NSRect) -> NSRect {
-        let screen = windowState?.window?.screen ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return frame }
+        clampToScreenFrame(frame, screen: windowState?.window?.screen)
+    }
+
+    private func clampToScreenFrame(_ frame: NSRect, screen: NSScreen?) -> NSRect {
+        guard let visible = (screen ?? NSScreen.main)?.visibleFrame else { return frame }
         var result = frame
         result.origin.x = max(visible.minX, min(result.origin.x, visible.maxX - result.width))
         result.origin.y = max(visible.minY, min(result.origin.y, visible.maxY - result.height))
