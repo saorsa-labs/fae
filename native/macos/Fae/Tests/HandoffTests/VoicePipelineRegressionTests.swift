@@ -484,6 +484,32 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
+    func testEchoTailRejectsSegmentContainedInsideSuppressionWindow() {
+        let suppressUntil = Date(timeIntervalSinceReferenceDate: 102)
+        let onset = Date(timeIntervalSinceReferenceDate: 100.4)
+
+        XCTAssertTrue(
+            EchoSuppressor.shouldRejectForEchoTail(
+                segmentOnset: onset,
+                durationSecs: 1.0,
+                suppressUntil: suppressUntil
+            )
+        )
+    }
+
+    func testEchoTailAcceptsPromptUserUtteranceThatContinuesPastTail() {
+        let suppressUntil = Date(timeIntervalSinceReferenceDate: 102)
+        let onset = Date(timeIntervalSinceReferenceDate: 100.4)
+
+        XCTAssertFalse(
+            EchoSuppressor.shouldRejectForEchoTail(
+                segmentOnset: onset,
+                durationSecs: 3.1,
+                suppressUntil: suppressUntil
+            )
+        )
+    }
+
     func testOnboardingTurnsSkipMemoryRecall() {
         XCTAssertFalse(
             PipelineCoordinator.shouldRecallMemoryForTurn(

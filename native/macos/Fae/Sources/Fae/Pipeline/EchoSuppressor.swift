@@ -34,6 +34,10 @@ struct EchoSuppressor {
 
     /// Minimum segment duration after playback (seconds).
     static let minPostPlaybackSegmentSecs: Float = 0.5
+    /// If speech starts inside the echo tail but continues materially beyond it,
+    /// treat it as a real user utterance rather than dropping the whole segment.
+    static let minSpeechBeyondTailSecs: TimeInterval = 0.75
+    static let minSpeechBeyondTailFraction: Double = 0.35
     /// Maximum segment duration before force-drop (seconds).
     static let maxSegmentSecs: Float = 15.0
     /// RMS ceiling — segments louder than this are likely speaker bleed.
@@ -118,8 +122,15 @@ struct EchoSuppressor {
 
         // 2. Echo tail window — check against segment ONSET time.
         //    A segment whose speech started during the echo tail is almost certainly
-        //    speaker bleedthrough, even if it finishes seconds later.
-        if let until = suppressUntil, onset < until {
+        //    speaker bleedthrough, unless it clearly continues beyond the tail and
+        //    is more likely to be the user starting promptly after Fae stops.
+        if let until = suppressUntil,
+           Self.shouldRejectForEchoTail(
+               segmentOnset: onset,
+               durationSecs: durationSecs,
+               suppressUntil: until
+           )
+        {
             return false
         }
 
@@ -151,5 +162,23 @@ struct EchoSuppressor {
         suppressUntil = nil
         shortUtteranceGuardUntil = nil
         return true
+    }
+
+    static func shouldRejectForEchoTail(
+        segmentOnset: Date,
+        durationSecs: Float,
+        suppressUntil: Date
+    ) -> Bool {
+        guard segmentOnset < suppressUntil else { return false }
+
+        let segmentEnd = segmentOnset.addingTimeInterval(TimeInterval(durationSecs))
+        let speechBeyondTailSecs = segmentEnd.timeIntervalSince(suppressUntil)
+        if speechBeyondTailSecs <= 0 {
+            return true
+        }
+
+        let beyondTailFraction = speechBeyondTailSecs / max(TimeInterval(durationSecs), 0.001)
+        return speechBeyondTailSecs < Self.minSpeechBeyondTailSecs
+            && beyondTailFraction < Self.minSpeechBeyondTailFraction
     }
 }
