@@ -215,7 +215,10 @@ final class AuxiliaryWindowManager: ObservableObject {
         guard let panel = approvalPanel else { return }
 
         let anchorWindow: NSWindow?
-        if isCoworkConversationActive, let coworkWindow = coworkWindowProvider?() {
+        // Prefer the CoWork window whenever it's open and on screen — regardless of whether
+        // the local routing flag is set. Remote agents in a Compare run don't set
+        // isCoworkConversationActive, but the approval dialog still belongs on CoWork.
+        if let coworkWindow = coworkWindowProvider?(), coworkWindow.isVisible {
             anchorWindow = coworkWindow
         } else {
             anchorWindow = windowState?.window
