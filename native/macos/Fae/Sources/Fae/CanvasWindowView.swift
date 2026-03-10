@@ -26,12 +26,12 @@ struct CanvasWindowView: View {
             Text("CANVAS")
                 .font(.system(size: 11, weight: .medium, design: .default))
                 .tracking(2)
-                .foregroundStyle(Color.white.opacity(0.45))
+                .foregroundStyle(.primary.opacity(0.45))
             Spacer()
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
-                    .foregroundStyle(Color.white.opacity(0.4))
+                    .foregroundStyle(.primary.opacity(0.4))
             }
             .buttonStyle(.plain)
             .help("Close canvas")
@@ -41,7 +41,7 @@ struct CanvasWindowView: View {
         .padding(.bottom, 14)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color.white.opacity(0.07))
+                .fill(Color.primary.opacity(0.07))
                 .frame(height: 1)
         }
     }
@@ -82,7 +82,7 @@ struct CanvasWindowView: View {
                     {
                         HStack {
                             Rectangle()
-                                .fill(Color.white.opacity(0.07))
+                                .fill(Color.primary.opacity(0.07))
                                 .frame(height: 1)
                         }
                         .padding(.vertical, 4)
@@ -118,10 +118,10 @@ struct CanvasWindowView: View {
         VStack(spacing: 12) {
             Image(systemName: "doc.richtext")
                 .font(.system(size: 32))
-                .foregroundStyle(Color.white.opacity(0.15))
+                .foregroundStyle(.primary.opacity(0.15))
             Text("No content")
                 .font(.system(size: 13, design: .serif))
-                .foregroundStyle(Color.white.opacity(0.3))
+                .foregroundStyle(.primary.opacity(0.3))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -150,17 +150,17 @@ private struct ActivityCardView: View {
                         .foregroundStyle(iconColor)
                     Text(title)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
+                        .foregroundStyle(.primary.opacity(0.85))
                     Spacer()
                     Text(timeLabel)
                         .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.3))
+                        .foregroundStyle(.primary.opacity(0.3))
                 }
 
                 if !card.detail.isEmpty {
                     Text(card.detail)
                         .font(.system(size: 11, design: isCodeCard ? .monospaced : .default))
-                        .foregroundStyle(Color.white.opacity(0.6))
+                        .foregroundStyle(.primary.opacity(0.6))
                         .lineLimit(4)
                         .truncationMode(.tail)
                 }
@@ -170,7 +170,7 @@ private struct ActivityCardView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white.opacity(cardOpacity))
+                .fill(Color.primary.opacity(cardOpacity))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(borderColor, lineWidth: 1)
@@ -186,7 +186,7 @@ private struct ActivityCardView: View {
             ProgressView()
                 .scaleEffect(0.6)
                 .progressViewStyle(.circular)
-                .tint(Color.white.opacity(0.5))
+                .tint(Color.primary.opacity(0.5))
         case .done:
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 14))
@@ -313,14 +313,14 @@ private struct ArchivedTurnRow: View {
                 HStack {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.3))
+                        .foregroundStyle(.primary.opacity(0.3))
                     Text(summary)
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.4))
+                        .foregroundStyle(.primary.opacity(0.4))
                     Spacer()
                     Text(timeLabel)
                         .font(.system(size: 10))
-                        .foregroundStyle(Color.white.opacity(0.25))
+                        .foregroundStyle(.primary.opacity(0.25))
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)

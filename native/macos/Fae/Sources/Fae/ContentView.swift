@@ -27,7 +27,7 @@ struct ContentView: View {
             // Loading placeholder
             if !viewLoaded {
                 Circle()
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.primary.opacity(0.05))
                     .frame(width: 200, height: 200)
                     .scaleEffect(0.95)
                     .opacity(0.5)
@@ -127,13 +127,13 @@ struct ContentView: View {
             .frame(height: 300)
 
             // Subtle separator
-            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
 
             // Zone 2: Conversation — scrolling, fills remaining space
             ConversationScrollView()
 
             // Subtle separator
-            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
 
             // Enrollment invitation — visible until owner voice is enrolled.
             if !ownerEnrollmentComplete {
@@ -160,7 +160,7 @@ struct ContentView: View {
                         Button(action: { auxiliaryWindows.emergencyStop() }) {
                             Label("Stop", systemImage: "xmark.circle.fill")
                                 .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(.white)
+                                .foregroundColor(.primary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
                         }

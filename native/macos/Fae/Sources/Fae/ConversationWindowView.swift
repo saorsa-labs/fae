@@ -23,7 +23,7 @@ struct ConversationWindowView: View {
             Text("CONVERSATION")
                 .font(.system(size: 11, weight: .medium, design: .default))
                 .tracking(2)
-                .foregroundStyle(Color.white.opacity(0.45))
+                .foregroundStyle(.primary.opacity(0.45))
 
             if conversationController.isBackgroundLookupActive {
                 HStack(spacing: 5) {
@@ -32,7 +32,7 @@ struct ConversationWindowView: View {
                         .frame(width: 5, height: 5)
                     Text("background lookup")
                         .font(.system(size: 10, weight: .regular, design: .default))
-                        .foregroundStyle(Color.white.opacity(0.35))
+                        .foregroundStyle(.primary.opacity(0.35))
                 }
                 .padding(.leading, 8)
                 .transition(.opacity)
@@ -42,7 +42,7 @@ struct ConversationWindowView: View {
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
-                    .foregroundStyle(Color.white.opacity(0.4))
+                    .foregroundStyle(.primary.opacity(0.4))
             }
             .buttonStyle(.plain)
             .help("Close conversation")
@@ -53,7 +53,7 @@ struct ConversationWindowView: View {
         .animation(.easeInOut(duration: 0.2), value: conversationController.isBackgroundLookupActive)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(Color.white.opacity(0.07))
+                .fill(Color.primary.opacity(0.07))
                 .frame(height: 1)
         }
     }
@@ -162,7 +162,7 @@ private struct MessageBubble: View {
         switch message.role {
         case .user: return Color(white: 0.95)
         case .assistant: return Color(white: 0.92)
-        case .tool: return Color.white.opacity(0.55)
+        case .tool: return Color.primary.opacity(0.55)
         }
     }
 
@@ -175,7 +175,7 @@ private struct MessageBubble: View {
             // Fae's lavender-grey — distinct from user
             return Color(red: 0.24, green: 0.20, blue: 0.30)
         case .tool:
-            return Color.white.opacity(0.05)
+            return Color.primary.opacity(0.05)
         }
     }
 
@@ -186,7 +186,7 @@ private struct MessageBubble: View {
         case .assistant:
             return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.25)
         case .tool:
-            return Color.white.opacity(0.07)
+            return Color.primary.opacity(0.07)
         }
     }
 }

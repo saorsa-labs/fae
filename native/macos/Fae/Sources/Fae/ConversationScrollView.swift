@@ -121,7 +121,7 @@ struct MessageBubbleView: View {
         switch message.role {
         case .user: return Color(white: 0.95)
         case .assistant: return Color(white: 0.92)
-        case .tool: return Color.white.opacity(0.55)
+        case .tool: return Color.primary.opacity(0.55)
         }
     }
 
@@ -132,7 +132,7 @@ struct MessageBubbleView: View {
         case .assistant:
             return Color(red: 0.24, green: 0.20, blue: 0.30)
         case .tool:
-            return Color.white.opacity(0.05)
+            return Color.primary.opacity(0.05)
         }
     }
 
@@ -143,7 +143,7 @@ struct MessageBubbleView: View {
         case .assistant:
             return Self.heather.opacity(0.25)
         case .tool:
-            return Color.white.opacity(0.07)
+            return Color.primary.opacity(0.07)
         }
     }
 }
@@ -254,11 +254,11 @@ struct InlineToolCardView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(toolName)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.65))
+                    .foregroundStyle(.primary.opacity(0.65))
                 if !card.detail.isEmpty {
                     Text(card.detail)
                         .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.4))
+                        .foregroundStyle(.primary.opacity(0.4))
                         .lineLimit(2)
                 }
             }
@@ -268,11 +268,11 @@ struct InlineToolCardView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(0.04))
+                .fill(Color.primary.opacity(0.06))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }

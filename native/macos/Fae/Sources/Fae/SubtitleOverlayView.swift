@@ -23,9 +23,9 @@ struct SubtitleOverlayView: View {
             if !subtitles.toolText.isEmpty {
                 subtitleBubble(
                     text: subtitles.toolText,
-                    textColor: .white.opacity(0.6),
-                    backgroundColor: .white.opacity(0.04),
-                    borderColor: .white.opacity(0.07),
+                    textColor: .primary.opacity(0.6),
+                    backgroundColor: .primary.opacity(0.04),
+                    borderColor: .primary.opacity(0.07),
                     alignment: .center
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
@@ -35,7 +35,7 @@ struct SubtitleOverlayView: View {
             if !subtitles.assistantText.isEmpty {
                 subtitleBubble(
                     text: subtitles.assistantText,
-                    textColor: .white.opacity(0.92),
+                    textColor: .primary.opacity(0.92),
                     backgroundColor: Self.heather.opacity(0.1),
                     borderColor: Self.heather.opacity(0.18),
                     alignment: .leading
@@ -48,9 +48,9 @@ struct SubtitleOverlayView: View {
             if !subtitles.userText.isEmpty {
                 subtitleBubble(
                     text: subtitles.userText,
-                    textColor: .white.opacity(subtitles.isUserPartial ? 0.5 : 0.92),
-                    backgroundColor: .white.opacity(subtitles.isUserPartial ? 0.04 : 0.1),
-                    borderColor: .white.opacity(subtitles.isUserPartial ? 0.07 : 0.14),
+                    textColor: .primary.opacity(subtitles.isUserPartial ? 0.5 : 0.92),
+                    backgroundColor: .primary.opacity(subtitles.isUserPartial ? 0.04 : 0.1),
+                    borderColor: .primary.opacity(subtitles.isUserPartial ? 0.07 : 0.14),
                     alignment: .trailing,
                     isItalic: subtitles.isUserPartial
                 )
