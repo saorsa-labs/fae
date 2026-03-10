@@ -76,6 +76,7 @@ Acceptance:
 - Fae speaks an audible reply through the configured TTS path.
 - Listening starts quickly enough to catch the intended utterance.
 - Wake-word clipping does not break normal owner follow-up speech.
+- After Fae finishes speaking, the owner can start talking promptly without their utterance being dropped.
 - A brief mid-conversation pause does not dump the user back to idle.
 - Continuation cues like `wait` or `hold on` remain in the same conversation without requiring the wake phrase again.
 - Typing remains possible while listening is active.
@@ -85,10 +86,11 @@ Steps:
 1. Trigger a short spoken prompt using real audio.
 2. Capture `/events` if the turn is missed.
 3. Trigger a second spoken prompt without a perfectly spoken wake word to confirm owner follow-up tolerance.
-4. Ask a short question, pause for about a second mid-thought, then continue speaking without repeating `hi Fae`; confirm the continuation is still accepted.
-5. During the same engaged session, say a continuation cue such as `wait, let me check` or `hold on` and confirm Fae does not snap back to idle or steal the turn.
-6. While listening is still enabled, type a short draft into the composer.
-7. Capture a screenshot showing the listening state and text composer together.
+4. Let Fae answer a short question, then begin speaking again within about a second of playback finishing; confirm the whole follow-up is heard instead of being dropped.
+5. Ask a short question, pause for about a second mid-thought, then continue speaking without repeating `hi Fae`; confirm the continuation is still accepted.
+6. During the same engaged session, say a continuation cue such as `wait, let me check` or `hold on` and confirm Fae does not snap back to idle or steal the turn.
+7. While listening is still enabled, type a short draft into the composer.
+8. Capture a screenshot showing the listening state and text composer together.
 
 ### 4. Text quality and turn handling
 

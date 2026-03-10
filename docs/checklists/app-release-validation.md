@@ -111,6 +111,7 @@ Acceptance:
 - [ ] Voice listening starts promptly enough to catch the intended utterance.
 - [ ] Wake-word clipping does not cause normal owner follow-up speech to be ignored.
 - [ ] During an active conversation, a short pause does not force the user to say the wake phrase again before continuing.
+- [ ] When Fae finishes speaking, an owner utterance that starts promptly afterward is still captured rather than being dropped in a post-playback dead zone.
 - [ ] Continuation cues such as `wait`, `hold on`, or `let me check` are treated as the same turn rather than an immediate handoff back to idle.
 - [ ] Typing can continue while listening remains active.
 - [ ] A spoken long-form request produces a substantial answer when appropriate, not an over-compressed reply.
