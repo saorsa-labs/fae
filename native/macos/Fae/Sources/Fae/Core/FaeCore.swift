@@ -98,7 +98,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     private static func isLowResidentMemoryProfileEnabled() -> Bool {
-        ProcessInfo.processInfo.environment["FAE_LOW_MEMORY_TEST_PROFILE"] == "1"
+        CommandLine.arguments.contains("--test-server")
+            || ProcessInfo.processInfo.environment["FAE_LOW_MEMORY_TEST_PROFILE"] == "1"
     }
 
     private let sttEngine = MLXSTTEngine()
