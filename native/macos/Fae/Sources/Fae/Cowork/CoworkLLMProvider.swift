@@ -118,7 +118,16 @@ enum CoworkBackendPresetCatalog {
             setupHint: "Use OpenRouter when you want broad model choice through one OpenAI-compatible endpoint.",
             defaultBaseURL: "https://openrouter.ai/api",
             apiKeyPlaceholder: "sk-or-v1-...",
-            suggestedModels: ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-4.1", "google/gemini-2.5-pro"],
+            suggestedModels: [
+                "anthropic/claude-opus-4-6",
+                "anthropic/claude-sonnet-4-6",
+                "openai/gpt-4.1",
+                "openai/o3-mini",
+                "google/gemini-2.5-pro",
+                "meta-llama/llama-4-scout",
+                "x-ai/grok-3",
+                "deepseek/deepseek-r1",
+            ],
             requiresAPIKey: true,
             allowsCustomBaseURL: true
         ),

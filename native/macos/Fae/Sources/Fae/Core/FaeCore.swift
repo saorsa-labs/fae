@@ -23,7 +23,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     let eventBus = FaeEventBus()
 
     @Published var pipelineState: FaePipelineState = .stopped
-    @Published var hasOwnerSetUp: Bool = false
+    @Published var hasOwnerSetUp: Bool = UserDefaults.standard.bool(forKey: "fae.owner.enrolled")
     @Published var isLicenseAccepted: Bool
     @Published var userName: String?
     @Published var toolMode: String = "full"
@@ -95,6 +95,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
         self.wakeWordProfileStore = WakeWordProfileStore(
             storePath: faeDir.appendingPathComponent("wake_lexicon.json")
         )
+
+        // Seed the UserDefaults enrollment cache synchronously from speakers.json if
+        // the key has never been written (first launch with this code, or migration).
+        // SpeakerProfileStore.init already loaded profiles from disk — check via the
+        // same nonisolated file read so we don't need to await the actor.
+        if !UserDefaults.standard.bool(forKey: "fae.owner.enrolled") {
+            let speakersURL = faeDir.appendingPathComponent("speakers.json")
+            if let data = try? Data(contentsOf: speakersURL),
+               let profiles = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+               profiles.contains(where: { ($0["role"] as? String) == "owner" })
+            {
+                UserDefaults.standard.set(true, forKey: "fae.owner.enrolled")
+                hasOwnerSetUp = true
+            }
+        }
     }
 
     private static func isLowResidentMemoryProfileEnabled() -> Bool {
@@ -397,6 +412,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     }
 
                     await sched.setAwarenessConfig(config.awareness)
+                    await sched.setVisionEnabled(config.vision.enabled)
+                    await sched.setSpeakerProfileStore(speakerProfileStore)
                     await sched.start()
                     self.scheduler = sched
 
@@ -445,7 +462,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: owner migration promoted label=%@", promotedLabel)
                 }
 
-                await MainActor.run { self.hasOwnerSetUp = hasOwner }
+                await MainActor.run {
+                    self.hasOwnerSetUp = hasOwner
+                    UserDefaults.standard.set(hasOwner, forKey: "fae.owner.enrolled")
+                }
                 if !hasOwner {
                     NSLog("FaeCore: no owner enrolled — waiting for native enrollment flow")
                 }
@@ -684,6 +704,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 await MainActor.run {
                     self.hasOwnerSetUp = isComplete
+                    if isComplete {
+                        UserDefaults.standard.set(true, forKey: "fae.owner.enrolled")
+                    }
                 }
                 if isComplete {
                     NSLog("FaeCore: onboarding complete (owner enrolled)")
@@ -698,6 +721,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 await speakerProfileStore.clearAllProfiles()
                 await pipelineCoordinator?.setFirstOwnerEnrollmentActive(false)
                 hasOwnerSetUp = false
+                UserDefaults.standard.set(false, forKey: "fae.owner.enrolled")
 
                 // Reset enrollment-related config to defaults.
                 var configChanged = false
@@ -1521,6 +1545,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if let coordinator = pipelineCoordinator {
                 Task { await coordinator.setVisionEnabled(enabled) }
             }
+            if let sched = scheduler {
+                Task { await sched.setVisionEnabled(enabled) }
+            }
 
         case "vision.model_preset", "vision.modelPreset":
             guard let preset = value as? String,
@@ -1639,6 +1666,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.hasOwnerSetUp = true
+                UserDefaults.standard.set(true, forKey: "fae.owner.enrolled")
                 Task { await self.pipelineCoordinator?.setFirstOwnerEnrollmentActive(false) }
                 var configChanged = false
                 if !self.config.voiceIdentity.enabled {

@@ -21,7 +21,7 @@ import KokoroSwift
 ///   3. ONNX voices dir + standalone safetensors model at app support path
 ///   4. Auto-download: safetensors from `prince-canuma/Kokoro-82M`, voices from `onnx-community/Kokoro-82M-v1.0-ONNX` → saves to location 1
 actor KokoroMLXTTSEngine: TTSEngine {
-    static let pinnedRevision = "f3ff3571791e39611d31c381e3a41a3af07b4987"
+    static let pinnedRevision = "main"
 
     // MARK: - State
 

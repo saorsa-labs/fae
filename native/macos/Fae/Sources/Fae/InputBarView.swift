@@ -51,12 +51,12 @@ struct InputBarView: View {
                 .fill(.ultraThinMaterial.opacity(0.6))
                 .overlay(
                     Rectangle()
-                        .fill(Color.white.opacity(0.04))
+                        .fill(Color.primary.opacity(0.03))
                 )
         )
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(Color.white.opacity(0.07))
+                .fill(Color.primary.opacity(0.08))
                 .frame(height: 1)
         }
         .onReceive(
@@ -91,7 +91,7 @@ struct InputBarView: View {
                 .foregroundColor(
                     conversation.isListening
                         ? Color.green
-                        : Color.white.opacity(0.4)
+                        : Color.primary.opacity(0.5)
                 )
                 .frame(width: 36, height: 36)
                 .background(
@@ -99,7 +99,7 @@ struct InputBarView: View {
                         .fill(
                             conversation.isListening
                                 ? Color.green.opacity(0.15)
-                                : Color.white.opacity(0.06)
+                                : Color.primary.opacity(0.06)
                         )
                 )
                 .overlay(
@@ -107,7 +107,7 @@ struct InputBarView: View {
                         .stroke(
                             conversation.isListening
                                 ? Color.green.opacity(0.3)
-                                : Color.white.opacity(0.1),
+                                : Color.primary.opacity(0.12),
                             lineWidth: 1
                         )
                 )
@@ -124,17 +124,17 @@ struct InputBarView: View {
         TextField("Message Fae...", text: $messageText, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.system(size: 13, weight: .regular, design: .serif))
-            .foregroundColor(.white.opacity(0.92))
+            .foregroundColor(.primary)
             .lineLimit(1...8)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(Color.primary.opacity(0.06))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
             )
             .focused($isTextFieldFocused)
             .onSubmit {
@@ -154,7 +154,7 @@ struct InputBarView: View {
                 .font(.system(size: 14, weight: .bold))
                 .foregroundColor(
                     messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? Color.white.opacity(0.2)
+                        ? Color.primary.opacity(0.25)
                         : Self.heather
                 )
                 .frame(width: 32, height: 32)
@@ -162,7 +162,7 @@ struct InputBarView: View {
                     Circle()
                         .fill(
                             messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                ? Color.white.opacity(0.04)
+                                ? Color.primary.opacity(0.05)
                                 : Self.heather.opacity(0.15)
                         )
                 )
@@ -170,7 +170,7 @@ struct InputBarView: View {
                     Circle()
                         .stroke(
                             messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                ? Color.white.opacity(0.07)
+                                ? Color.primary.opacity(0.10)
                                 : Self.heather.opacity(0.3),
                             lineWidth: 1
                         )
@@ -230,17 +230,17 @@ struct InputBarView: View {
                     .frame(width: 6, height: 6)
                 Text(faeCore.thinkingLevel.displayName)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.6))
+                    .foregroundColor(Color.primary.opacity(0.68))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.primary.opacity(0.06))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             )
         }
         .menuStyle(.borderlessButton)
@@ -270,20 +270,20 @@ struct InputBarView: View {
             HStack(spacing: 5) {
                 Image(systemName: "rectangle.3.group.bubble.left.fill")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.45))
+                    .foregroundColor(Color.primary.opacity(0.6))
                 Text("Work with Fae")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.45))
+                    .foregroundColor(Color.primary.opacity(0.6))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.primary.opacity(0.06))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

@@ -8,6 +8,8 @@ struct ConversationWindowView: View {
     @ObservedObject var conversationController: ConversationController
     var onClose: () -> Void
 
+    @State private var bubblesOpacity: Double = 1.0
+
     var body: some View {
         VStack(spacing: 0) {
             panelHeader
@@ -68,6 +70,28 @@ struct ConversationWindowView: View {
                         MessageBubble(message: message)
                             .id(message.id)
                     }
+                    .opacity(bubblesOpacity)
+                    .animation(.easeInOut(duration: 0.3), value: bubblesOpacity)
+
+                    // Thinking crawl — scrolling text during think phase
+                    if conversationController.isGenerating
+                        && !conversationController.isStreaming
+                        && !conversationController.streamingThinkText.isEmpty
+                    {
+                        ThinkingCrawlView(text: conversationController.streamingThinkText)
+                            .id("think-crawl")
+                            .transition(.opacity)
+                    }
+
+                    // Completed think trace icon — shown when reasoning finished
+                    if let trace = conversationController.completedThinkTrace,
+                       !conversationController.isGenerating
+                    {
+                        ThinkIconBubble(thinkTrace: trace)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("think-icon")
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
 
                     // Live streaming bubble — shows tokens as they arrive
                     if conversationController.isStreaming
@@ -80,6 +104,7 @@ struct ConversationWindowView: View {
                     // Typing indicator — only when generating but no text yet
                     if conversationController.isGenerating
                         && !conversationController.isStreaming
+                        && conversationController.streamingThinkText.isEmpty
                     {
                         TypingIndicator()
                             .id("typing")
@@ -92,14 +117,18 @@ struct ConversationWindowView: View {
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: conversationController.isGenerating) {
-                // Scroll both when typing indicator appears and when it disappears
-                // (new message just arrived).
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    bubblesOpacity = conversationController.isGenerating ? 0.35 : 1.0
+                }
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: conversationController.streamingText) {
                 withAnimation(.easeOut(duration: 0.1)) {
                     proxy.scrollTo("streaming", anchor: .bottom)
                 }
+            }
+            .onChange(of: conversationController.streamingThinkText) {
+                proxy.scrollTo("think-crawl", anchor: .bottom)
             }
         }
     }
@@ -129,13 +158,19 @@ private struct MessageBubble: View {
     let message: ChatMessage
 
     var body: some View {
+        let rendered = (try? AttributedString(
+            markdown: message.content,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(message.content)
+
         HStack {
             if message.role == .user { Spacer(minLength: 40) }
 
-            Text(message.content)
+            Text(rendered)
                 .font(.system(size: 13, weight: .regular, design: .serif))
                 .lineSpacing(4)
                 .foregroundStyle(textColor)
+                .textSelection(.enabled)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
                 .background(backgroundColor)
@@ -268,5 +303,78 @@ private struct TypingIndicator: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { animating = true }
+    }
+}
+
+// MARK: - ThinkingCrawlView
+
+struct ThinkingCrawlView: View {
+    let text: String
+    @State private var offset: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { _ in
+            Text(text)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .offset(y: offset)
+                .onChange(of: text) {
+                    // Let crawl continue — text grows naturally
+                }
+                .onAppear {
+                    withAnimation(.linear(duration: 90).repeatForever(autoreverses: false)) {
+                        offset = -2000
+                    }
+                }
+        }
+        .frame(height: 72)
+        .mask(
+            LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.3),
+                    .init(color: .black, location: 1)
+                ]),
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+        .clipped()
+        .padding(.horizontal, 14)
+    }
+}
+
+// MARK: - ThinkIconBubble
+
+struct ThinkIconBubble: View {
+    let thinkTrace: String
+    @State private var showTrace = false
+
+    var body: some View {
+        Button { showTrace = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "brain")
+                    .font(.system(size: 10, weight: .medium))
+                Text("Reasoning")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.7))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.08)))
+            .overlay(Capsule().stroke(Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.15), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showTrace) {
+            ScrollView {
+                Text(thinkTrace)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.primary.opacity(0.8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .frame(width: 380, height: 300)
+        }
     }
 }

@@ -212,7 +212,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         auxiliaryWindows.approvalController = approvalOverlay
         auxiliaryWindows.observeApprovalController()
         auxiliaryWindows.debugConsoleController = debugConsole
-        auxiliaryWindows.observeThinkingState()
         faeCore.setDebugConsole(debugConsole)
         debugLog(debugConsole, .qa, "Build marker: tool-mode-popup-v1")
         onboarding.onPermissionResult = { capability, state in

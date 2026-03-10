@@ -390,6 +390,7 @@ struct SettingsModelsPerformanceTab: View {
                                 Text("16K tokens").tag(16384)
                                 Text("32K tokens").tag(32768)
                                 Text("64K tokens").tag(65536)
+                                Text("128K tokens").tag(131072)
                             }
                             .pickerStyle(.menu)
                             .frame(width: 140)

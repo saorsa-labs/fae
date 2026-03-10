@@ -107,6 +107,41 @@ private struct CoworkModelOptionSection: Identifiable {
     let options: [CoworkModelOption]
 }
 
+private struct CoworkCapabilityBadge: View {
+    let capability: CoworkModelCapability
+
+    var body: some View {
+        Image(systemName: symbolName)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(badgeColor)
+            .help(helpText)
+    }
+
+    private var symbolName: String {
+        switch capability {
+        case .vision:    return "eye"
+        case .toolUse:   return "wrench.and.screwdriver"
+        case .reasoning: return "sparkles"
+        }
+    }
+
+    private var badgeColor: Color {
+        switch capability {
+        case .vision:    return .blue
+        case .toolUse:   return CoworkPalette.mint
+        case .reasoning: return .purple
+        }
+    }
+
+    private var helpText: String {
+        switch capability {
+        case .vision:    return "Supports image inputs"
+        case .toolUse:   return "Supports tool / function calling"
+        case .reasoning: return "Extended reasoning / chain-of-thought"
+        }
+    }
+}
+
 private struct WorkspaceSidebarCapsule: View {
     let text: String
     let accent: Color
@@ -742,7 +777,10 @@ struct CoworkWorkspaceView: View {
     @State private var assignNewAgentToWorkspace = true
     @State private var isTestingAgentConnection = false
     @State private var agentTestStatus: String?
+    @State private var agentConnectionOK: Bool? = nil   // nil=untested, true=ok, false=failed
     @State private var discoveredModels: [String] = []
+    @State private var agentModelSearchText = ""
+    @State private var apiKeyTestTask: Task<Void, Never>?
     @State private var showingModelPickerSheet = false
     @State private var modelPickerTarget: ModelPickerTarget = .agentEditor
     @State private var modelSearchText = ""
@@ -752,6 +790,7 @@ struct CoworkWorkspaceView: View {
     @State private var showConsensusDetails = false
     @State private var showWorkspacePolicies = false
     @State private var showDetailsRail = false
+    @State private var showCompareUnavailablePopover = false
     @State private var presentedUtilitySection: CoworkWorkspaceSection?
     @State private var schedulerEditorDraft: EditableSchedulerTaskDraft?
     @State private var pendingTaskDeletion: CoworkSchedulerTask?
@@ -1273,9 +1312,14 @@ struct CoworkWorkspaceView: View {
             VStack(alignment: .leading, spacing: 18) {
                 if conversation.isGenerating || !controller.latestConsensusResults.isEmpty {
                     HStack {
-                        Spacer()
-                        if conversation.isGenerating {
-                            Label(conversation.isStreaming ? "Replying live" : "Thinking", systemImage: conversation.isStreaming ? "waveform.badge.mic" : "ellipsis.message.fill")
+                        if conversation.isGenerating
+                            && !conversation.isStreaming
+                            && !conversation.streamingThinkText.isEmpty
+                        {
+                            ThinkingCrawlView(text: conversation.streamingThinkText)
+                                .transition(.opacity)
+                        } else if conversation.isGenerating && conversation.isStreaming {
+                            Label("Replying live", systemImage: "waveform.badge.mic")
                                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
@@ -1283,7 +1327,9 @@ struct CoworkWorkspaceView: View {
                                 .overlay(Capsule().stroke(CoworkPalette.cyan.opacity(0.26), lineWidth: 1))
                                 .transition(.opacity.combined(with: .scale(scale: 0.96)))
                         }
+                        Spacer()
                     }
+                    .animation(.easeInOut(duration: 0.2), value: conversation.streamingThinkText.isEmpty)
                 }
 
                 if !controller.latestConsensusResults.isEmpty {
@@ -1296,9 +1342,27 @@ struct CoworkWorkspaceView: View {
                             if conversation.messages.isEmpty && conversation.streamingText.isEmpty {
                                 emptyConversationState
                             } else {
-                                ForEach(Array(conversation.messages.suffix(40))) { message in
+                                ForEach(Array(conversation.messages.suffix(40).enumerated()), id: \.element.id) { offset, message in
+                                    let absoluteIndex = max(0, conversation.messages.count - 40) + offset
                                     conversationBubble(message)
                                         .transition(.move(edge: message.role == .assistant ? .leading : .trailing).combined(with: .opacity))
+                                        .contextMenu {
+                                            Button {
+                                                controller.forkWorkspace(upToMessageIndex: absoluteIndex)
+                                            } label: {
+                                                Label("Fork from here", systemImage: "arrow.branch")
+                                            }
+                                        }
+                                }
+
+                                // Completed think trace — brain icon after reasoning finishes
+                                if let trace = conversation.completedThinkTrace,
+                                   !conversation.isGenerating
+                                {
+                                    ThinkIconBubble(thinkTrace: trace)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .id("cowork-think-icon")
+                                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                                 }
 
                                 if conversation.isStreaming, !conversation.streamingText.isEmpty {
@@ -1369,11 +1433,7 @@ struct CoworkWorkspaceView: View {
                                 thinkingLevelCompactPill
 
                                 Button {
-                                    if controller.workspaceState.selectedDirectoryPath == nil {
-                                        controller.chooseWorkspaceDirectory()
-                                    } else {
-                                        showDetailsRail = true
-                                    }
+                                    controller.chooseWorkspaceDirectory()
                                 } label: {
                                     conversationControlPill(icon: "folder", title: controller.workspaceState.selectedDirectoryPath == nil ? "Add folder" : "Folder")
                                 }
@@ -1420,7 +1480,13 @@ struct CoworkWorkspaceView: View {
                                                     ? "Auto compare on send for \(controller.consensusParticipants.count) agents"
                                                     : "Auto compare on, but only one agent is available")
                             } else {
-                                Button(action: controller.compareDraftAcrossAgents) {
+                                Button(action: {
+                                    if controller.canCompareAcrossAgents {
+                                        controller.compareDraftAcrossAgents()
+                                    } else {
+                                        showCompareUnavailablePopover = true
+                                    }
+                                }) {
                                     HStack(spacing: 7) {
                                         Image(systemName: "square.stack.3d.up.fill")
                                             .font(.system(size: 11, weight: .semibold))
@@ -1437,7 +1503,25 @@ struct CoworkWorkspaceView: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
-                                .disabled(!controller.canCompareAcrossAgents)
+                                .popover(isPresented: $showCompareUnavailablePopover) {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        Label("Comparison needs 2+ agents", systemImage: "square.stack.3d.up.fill")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(.primary)
+                                        Text("Add a second agent to this workspace to compare responses side by side.")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Button("Add Agent") {
+                                            showCompareUnavailablePopover = false
+                                            showingAddAgentSheet = true
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                    }
+                                    .padding(16)
+                                    .frame(width: 260)
+                                }
                                 .help(controller.isStrictLocalWorkspace ? "This workspace is strict local only, so comparison stays disabled." : "Ask multiple agents to answer this draft and let Fae summarize the results.")
                                 .accessibilityLabel("Compare models")
                                 .accessibilityValue("\(controller.consensusParticipants.count) agents")
@@ -2035,18 +2119,32 @@ struct CoworkWorkspaceView: View {
                                     showingModelPickerSheet = false
                                 } label: {
                                     HStack(alignment: .top, spacing: 10) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(option.displayTitle)
-                                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                                .foregroundStyle(.primary)
-                                                .lineLimit(2)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            HStack(spacing: 5) {
+                                                Text(option.displayTitle)
+                                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                                    .foregroundStyle(.primary)
+                                                    .lineLimit(1)
+                                                if let ctxLabel = option.contextWindowLabel {
+                                                    Text(ctxLabel)
+                                                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                                        .foregroundStyle(.primary.opacity(0.48))
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 2)
+                                                        .background(Capsule().fill(Color.primary.opacity(0.07)))
+                                                }
+                                                let sortedCaps = Array(option.capabilities).sorted { $0.rawValue < $1.rawValue }
+                                                ForEach(sortedCaps, id: \.self) { cap in
+                                                    CoworkCapabilityBadge(capability: cap)
+                                                }
+                                            }
                                             Text(option.displaySubtitle)
                                                 .font(.system(size: 11, weight: .medium, design: .rounded))
-                                                .foregroundStyle(.primary.opacity(0.58))
-                                                .lineLimit(2)
+                                                .foregroundStyle(.primary.opacity(0.52))
+                                                .lineLimit(1)
                                             Text(option.modelIdentifier)
-                                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                                .foregroundStyle(.primary.opacity(0.40))
+                                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                .foregroundStyle(.primary.opacity(0.32))
                                                 .lineLimit(1)
                                         }
                                         Spacer()
@@ -2101,169 +2199,185 @@ struct CoworkWorkspaceView: View {
     private var agentCreationSheet: some View {
         let preset = selectedBackendPreset
         let editingAgent = editingAgent
-        return VStack(alignment: .leading, spacing: 16) {
-            Text(editingAgent == nil ? "Add agent" : "Edit agent")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-            Text(preset.setupHint)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
-            TextField("Agent name", text: $newAgentName)
-                .textFieldStyle(.roundedBorder)
+        let inlineModels = agentInlineModelOptions
+        return VStack(alignment: .leading, spacing: 0) {
 
-            Picker("Backend", selection: $newAgentBackendPresetID) {
-                ForEach(controller.backendPresets, id: \.id) { backend in
-                    Text(backend.displayName).tag(backend.id)
-                }
-            }
-            .pickerStyle(.menu)
-            .onChange(of: newAgentBackendPresetID) {
-                let updatedPreset = selectedBackendPreset
-                newAgentProvider = updatedPreset.providerKind
-                newAgentBaseURL = updatedPreset.defaultBaseURL
-                if newAgentModel.isEmpty || presetSuggestedModels.contains(newAgentModel) {
-                    newAgentModel = updatedPreset.suggestedModels.first ?? (updatedPreset.providerKind == .faeLocalhost ? "fae-agent-local" : "")
-                }
-                if !updatedPreset.requiresAPIKey {
-                    newAgentAPIKey = ""
-                    clearStoredAPIKey = false
-                }
-                discoveredModels = []
-                agentTestStatus = nil
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Provider")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Text(preset.providerKind == .openAICompatibleExternal ? "OpenAI-compatible" : preset.providerKind.displayName)
+            // ── Header ──────────────────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 4) {
+                Text(editingAgent == nil ? "Add agent" : "Edit agent")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                Text("Configure a provider and model, then save.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.primary.opacity(0.72))
+                    .foregroundStyle(.secondary)
             }
+            .padding(.bottom, 20)
 
+            // ── Name ────────────────────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                TextField("Agent name", text: $newAgentName)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .padding(.bottom, 18)
+
+            // ── Provider tabs ───────────────────────────────────────────────
             VStack(alignment: .leading, spacing: 8) {
-                Text("Model")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                HStack(spacing: 8) {
-                    TextField("Model identifier", text: $newAgentModel)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Browse") {
-                        modelPickerTarget = .agentEditor
-                        modelSearchText = ""
-                        isLoadingModelPickerOptions = true
-                        browsableModelOptions = modelOptions(from: suggestedModels, for: preset, baseURL: newAgentBaseURL)
-                        showingModelPickerSheet = true
-                        Task {
+                Text("Provider")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(controller.backendPresets, id: \.id) { backend in
+                            let isSelected = newAgentBackendPresetID == backend.id
+                            Button {
+                                newAgentBackendPresetID = backend.id
+                                let updatedPreset = CoworkBackendPresetCatalog.preset(id: backend.id) ?? backend
+                                newAgentProvider = updatedPreset.providerKind
+                                newAgentBaseURL = updatedPreset.defaultBaseURL
+                                if newAgentModel.isEmpty || presetSuggestedModels.contains(newAgentModel) {
+                                    newAgentModel = updatedPreset.suggestedModels.first
+                                        ?? (updatedPreset.providerKind == .faeLocalhost ? "fae-agent-local" : "")
+                                }
+                                if !updatedPreset.requiresAPIKey {
+                                    newAgentAPIKey = ""
+                                    clearStoredAPIKey = false
+                                }
+                                discoveredModels = []
+                                agentTestStatus = nil
+                                agentConnectionOK = nil
+                                agentModelSearchText = ""
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: providerSystemImage(for: backend.id))
+                                        .font(.system(size: 12, weight: .semibold))
+                                    Text(backend.displayName)
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                }
+                                .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.72))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(isSelected ? CoworkPalette.mint : Color.primary.opacity(0.06))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(.bottom, 18)
+
+            // ── API key (if needed) ─────────────────────────────────────────
+            if preset.requiresAPIKey {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(preset.id == "openrouter" ? "OpenRouter API key" : "API key")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if isTestingAgentConnection {
+                            ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                            Text("Checking…")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        } else if let ok = agentConnectionOK {
+                            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(ok ? CoworkPalette.mint : Color.red.opacity(0.8))
+                            Text(ok ? "Connected" : "Failed")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(ok ? CoworkPalette.mint : Color.red.opacity(0.8))
+                        }
+                    }
+                    SecureField(
+                        editingAgent == nil ? preset.apiKeyPlaceholder : "New key (blank = keep current)",
+                        text: $newAgentAPIKey
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: newAgentAPIKey) {
+                        agentConnectionOK = nil
+                        agentTestStatus = nil
+                        apiKeyTestTask?.cancel()
+                        let keyNow = newAgentAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !keyNow.isEmpty else { return }
+                        apiKeyTestTask = Task {
+                            try? await Task.sleep(for: .seconds(1.2))
+                            guard !Task.isCancelled else { return }
+                            await MainActor.run { isTestingAgentConnection = true }
                             do {
                                 let report = try await controller.testConnection(
                                     providerKind: preset.providerKind,
                                     baseURL: newAgentBaseURL,
-                                    apiKey: effectiveAPIKeyForTesting
+                                    apiKey: keyNow
                                 )
                                 await MainActor.run {
-                                    let merged = (suggestedModels + report.discoveredModels).reduce(into: [String]()) { result, item in
-                                        let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        guard !trimmed.isEmpty, !result.contains(trimmed) else { return }
-                                        result.append(trimmed)
+                                    isTestingAgentConnection = false
+                                    agentConnectionOK = report.isReachable
+                                    agentTestStatus = report.statusText
+                                    if !report.discoveredModels.isEmpty {
+                                        discoveredModels = report.discoveredModels
+                                        if newAgentModel.isEmpty || presetSuggestedModels.contains(newAgentModel) {
+                                            newAgentModel = report.discoveredModels.first ?? newAgentModel
+                                        }
                                     }
-                                    discoveredModels = report.discoveredModels
-                                    browsableModelOptions = modelOptions(from: merged, for: preset, baseURL: newAgentBaseURL)
-                                    isLoadingModelPickerOptions = false
                                 }
                             } catch {
                                 await MainActor.run {
-                                    isLoadingModelPickerOptions = false
+                                    isTestingAgentConnection = false
+                                    agentConnectionOK = false
+                                    agentTestStatus = error.localizedDescription
                                 }
                             }
                         }
                     }
-                }
-            }
-
-            TextField(preset.allowsCustomBaseURL ? "Base URL" : "Base URL (fixed)", text: $newAgentBaseURL)
-                .textFieldStyle(.roundedBorder)
-                .disabled(!preset.allowsCustomBaseURL)
-
-            if preset.requiresAPIKey {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(preset.id == "openrouter" ? "OpenRouter API key" : "API key")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    SecureField(editingAgent == nil ? preset.apiKeyPlaceholder : "New API key (leave blank to keep current)", text: $newAgentAPIKey)
-                        .textFieldStyle(.roundedBorder)
-                    Text(preset.id == "openrouter"
-                         ? "Paste your OpenRouter API key here so this conversation can call OpenRouter models. The key is stored securely in Keychain."
-                         : "Stored securely in Keychain and only used for this agent/backend.")
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.primary.opacity(0.58))
                     if let editingAgent, controller.hasStoredCredential(for: editingAgent) {
                         Toggle("Clear stored API key", isOn: $clearStoredAPIKey)
                     }
+                    if let status = agentTestStatus, agentConnectionOK == false {
+                        Text(status)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.red.opacity(0.8))
+                            .lineLimit(2)
+                    }
                 }
+                .padding(.bottom, 14)
             }
 
-            if !suggestedModels.isEmpty {
+            // ── Base URL (custom endpoint / advanced) ───────────────────────
+            if preset.allowsCustomBaseURL || preset.id == "custom-openai-compatible" {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(discoveredModels.isEmpty ? "Suggested models" : "Suggested + discovered models")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(suggestedModels, id: \.self) { model in
-                                Button(model) {
-                                    newAgentModel = model
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.primary.opacity(0.06))
-                                        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
-                                )
-                            }
-                        }
-                    }
+                    Text("Base URL")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    TextField("https://…", text: $newAgentBaseURL)
+                        .textFieldStyle(.roundedBorder)
                 }
+                .padding(.bottom, 14)
             }
 
-            if let agentTestStatus {
-                Text(agentTestStatus)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.primary.opacity(0.72))
-            }
+            // ── Model picker (inline) ───────────────────────────────────────
+            agentModelPickerSection(preset: preset, inlineModels: inlineModels)
+                .padding(.bottom, 18)
 
-            Toggle(editingAgent == nil ? "Attach to current workspace" : "Attach updated agent to current workspace", isOn: $assignNewAgentToWorkspace)
+            // ── Options ─────────────────────────────────────────────────────
+            Toggle(
+                editingAgent == nil ? "Attach to current workspace" : "Attach updated agent to current workspace",
+                isOn: $assignNewAgentToWorkspace
+            )
+            .padding(.bottom, 18)
+
+            // ── Actions ─────────────────────────────────────────────────────
             HStack {
-                Button(isTestingAgentConnection ? "Testing…" : "Test connection") {
-                    isTestingAgentConnection = true
-                    agentTestStatus = nil
-                    discoveredModels = []
-                    Task {
-                        do {
-                            let report = try await controller.testConnection(
-                                providerKind: preset.providerKind,
-                                baseURL: newAgentBaseURL,
-                                apiKey: effectiveAPIKeyForTesting
-                            )
-                            await MainActor.run {
-                                isTestingAgentConnection = false
-                                agentTestStatus = report.statusText
-                                discoveredModels = report.discoveredModels
-                                if newAgentModel.isEmpty, let first = report.discoveredModels.first {
-                                    newAgentModel = first
-                                }
-                            }
-                        } catch {
-                            await MainActor.run {
-                                isTestingAgentConnection = false
-                                agentTestStatus = error.localizedDescription
-                            }
-                        }
-                    }
-                }
-                .disabled(isTestingAgentConnection)
-
                 Spacer()
                 Button("Cancel") {
                     showingAddAgentSheet = false
+                    apiKeyTestTask?.cancel()
                 }
+                .keyboardShortcut(.cancelAction)
+
                 Button(editingAgent == nil ? "Save" : "Update") {
                     if let editingAgent {
                         controller.updateAgent(
@@ -2288,13 +2402,139 @@ struct CoworkWorkspaceView: View {
                             assignToSelectedWorkspace: assignNewAgentToWorkspace
                         )
                     }
+                    apiKeyTestTask?.cancel()
                     showingAddAgentSheet = false
                 }
+                .keyboardShortcut(.defaultAction)
                 .disabled(newAgentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(24)
         .frame(width: 520)
+    }
+
+    @ViewBuilder
+    private func agentModelPickerSection(preset: CoworkBackendPreset, inlineModels: [CoworkModelOption]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Model")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+
+            if preset.providerKind == .faeLocalhost {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(CoworkPalette.mint)
+                    Text("Fae Local")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    Text("On-device, private")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            } else {
+                TextField("Search models…", text: $agentModelSearchText)
+                    .textFieldStyle(.roundedBorder)
+
+                agentModelList(inlineModels: inlineModels)
+
+                HStack(spacing: 6) {
+                    TextField("Or type a model ID manually", text: $newAgentModel)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func agentModelList(inlineModels: [CoworkModelOption]) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 2) {
+                ForEach(inlineModels, id: \.modelIdentifier) { option in
+                    let isSelected = newAgentModel == option.modelIdentifier
+                    Button {
+                        newAgentModel = option.modelIdentifier
+                    } label: {
+                        agentModelRow(option: option, isSelected: isSelected)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if inlineModels.isEmpty {
+                    HStack {
+                        Text(agentModelSearchText.isEmpty
+                             ? "Enter an API key to discover models."
+                             : "No models match \"\(agentModelSearchText)\".")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+        .frame(height: 170)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.03))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+
+    @ViewBuilder
+    private func agentModelRow(option: CoworkModelOption, isSelected: Bool) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(option.displayTitle)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    if let ctxLabel = option.contextWindowLabel {
+                        Text(ctxLabel)
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.primary.opacity(0.07)))
+                    }
+                    let sortedCaps = Array(option.capabilities).sorted { $0.rawValue < $1.rawValue }
+                    ForEach(sortedCaps, id: \.self) { cap in
+                        CoworkCapabilityBadge(capability: cap)
+                    }
+                }
+                Text(option.modelIdentifier)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(CoworkPalette.mint)
+                    .font(.system(size: 14))
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? CoworkPalette.mint.opacity(0.10) : Color.primary.opacity(0.03))
+        )
+    }
+
+    private func providerSystemImage(for presetID: String) -> String {
+        switch presetID {
+        case "fae-local":              return "sparkles"
+        case "anthropic":              return "a.circle.fill"
+        case "openai":                 return "bolt.circle.fill"
+        case "openrouter":             return "network"
+        case "custom-openai-compatible": return "wrench.and.screwdriver.fill"
+        default:                       return "cloud"
+        }
     }
 
     private func glassCard<Content: View>(
@@ -2966,23 +3206,28 @@ struct CoworkWorkspaceView: View {
     }
 
     private func bubble(_ text: String, accent: Color, borderAccent: Color, isTrailing: Bool, isStreaming: Bool = false) -> some View {
-        Text(text)
+        let rendered = (try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(text)
+        return Text(rendered)
             .font(.system(size: 14.5, weight: .regular, design: .rounded))
             .foregroundStyle(.primary.opacity(0.94))
             .multilineTextAlignment(isTrailing ? .trailing : .leading)
             .lineSpacing(4)
-        .padding(.horizontal, 15)
-        .padding(.vertical, 13)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(accent.opacity(isStreaming ? 1 : 1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(borderAccent.opacity(isStreaming ? 1 : 1), lineWidth: 1)
-                )
-        )
-        .shadow(color: .black.opacity(isStreaming ? 0.14 : 0.06), radius: 10, y: 4)
-        .frame(maxWidth: 680, alignment: isTrailing ? .trailing : .leading)
+            .textSelection(.enabled)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 13)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(accent)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(borderAccent, lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(isStreaming ? 0.14 : 0.06), radius: 10, y: 4)
+            .frame(maxWidth: 680, alignment: isTrailing ? .trailing : .leading)
     }
 
     private func schedulerTaskCard(_ task: CoworkSchedulerTask) -> some View {
@@ -3385,6 +3630,15 @@ struct CoworkWorkspaceView: View {
         CoworkBackendPresetCatalog.preset(id: newAgentBackendPresetID) ?? CoworkLLMProviderKind.openAICompatibleExternal.defaultPreset
     }
 
+    /// Inline model list for the agent creation sheet — suggested + discovered, filtered by search text.
+    private var agentInlineModelOptions: [CoworkModelOption] {
+        let preset = selectedBackendPreset
+        let all = modelOptions(from: suggestedModels, for: preset, baseURL: newAgentBaseURL)
+        let query = agentModelSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty { return all }
+        return all.filter { $0.searchText.localizedCaseInsensitiveContains(query) }
+    }
+
     private var editingAgent: WorkWithFaeAgentProfile? {
         guard let editingAgentID else { return nil }
         return controller.agents.first(where: { $0.id == editingAgentID })
@@ -3497,30 +3751,31 @@ struct CoworkWorkspaceView: View {
 
     private var filteredModelOptionSections: [CoworkModelOptionSection] {
         let grouped = Dictionary(grouping: filteredModelOptions) { option in
-            option.providerDisplayName
+            option.sectionGroupKey
         }
 
-        return grouped.keys.sorted { lhs, rhs in
-            let lhsRank = grouped[lhs]?.first?.providerSortRank ?? Int.max
-            let rhsRank = grouped[rhs]?.first?.providerSortRank ?? Int.max
-            if lhsRank != rhsRank {
-                return lhsRank < rhsRank
-            }
-            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        return grouped.keys.sorted { lhsKey, rhsKey in
+            let lhsRank = grouped[lhsKey]?.first?.sectionSortRank ?? Int.max
+            let rhsRank = grouped[rhsKey]?.first?.sectionSortRank ?? Int.max
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            let lhsTitle = grouped[lhsKey]?.first?.sectionTitle ?? lhsKey
+            let rhsTitle = grouped[rhsKey]?.first?.sectionTitle ?? rhsKey
+            return lhsTitle.localizedCaseInsensitiveCompare(rhsTitle) == .orderedAscending
         }.compactMap { key in
-            guard let options = grouped[key] else { return nil }
+            guard let options = grouped[key], let first = options.first else { return nil }
             let configuredCount = options.filter(\.isConfigured).count
-            let subtitle = configuredCount == options.count
+            let readyText = configuredCount == options.count
                 ? "Ready"
-                : (configuredCount == 0 ? "Choose a model, then finish setup if needed" : "\(configuredCount) ready")
+                : (configuredCount == 0 ? "Needs setup" : "\(configuredCount) ready")
+            let subtitle = first.sectionSubtitleExtra.isEmpty
+                ? readyText
+                : "\(first.sectionSubtitleExtra) · \(readyText)"
             return CoworkModelOptionSection(
                 id: key,
-                title: key,
+                title: first.sectionTitle,
                 subtitle: subtitle,
                 options: options.sorted { lhs, rhs in
-                    if lhs.isConfigured != rhs.isConfigured {
-                        return lhs.isConfigured && !rhs.isConfigured
-                    }
+                    if lhs.isConfigured != rhs.isConfigured { return lhs.isConfigured && !rhs.isConfigured }
                     return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
                 }
             )

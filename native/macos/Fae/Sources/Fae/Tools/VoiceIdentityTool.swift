@@ -4,6 +4,7 @@ import Foundation
 ///
 /// Actions:
 /// - `check_status` — returns enrollment state, speaker count, confidence scores
+/// - `show_enrollment_panel` — opens the native macOS recording panel for guided enrollment
 /// - `collect_sample` — plays ready beep, captures audio, embeds, enrolls
 /// - `collect_wake_samples` — captures short "Hey Fae" samples and learns user wake aliases
 /// - `confirm_identity` — matches current speaker against all profiles
@@ -13,12 +14,12 @@ struct VoiceIdentityTool: Tool {
     let name = "voice_identity"
     let description = """
         Manage voice identity: enroll speakers, verify identity, and personalize wake name detection. \
-        Actions: check_status, collect_sample (plays beep then captures voice), \
-        collect_wake_samples, confirm_identity, rename_speaker, list_speakers.
+        Actions: check_status, show_enrollment_panel (opens native recording UI), collect_sample \
+        (plays beep then captures voice), collect_wake_samples, confirm_identity, rename_speaker, list_speakers.
         """
     let parametersSchema = #"""
         {
-            "action": "string (required) — one of: check_status, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers",
+            "action": "string (required) — one of: check_status, show_enrollment_panel, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers",
             "label": "string (optional) — speaker label for collect_sample or rename_speaker (e.g. 'alice')",
             "role": "string (optional) — speaker role for collect_sample: 'owner', 'trusted', 'guest' (default: 'guest')",
             "display_name": "string (optional) — human-readable name for collect_sample or rename_speaker",
@@ -52,6 +53,8 @@ struct VoiceIdentityTool: Tool {
         switch action {
         case "check_status":
             return await checkStatus()
+        case "show_enrollment_panel":
+            return showEnrollmentPanel()
         case "collect_sample":
             return await collectSample(input: input)
         case "collect_wake_samples":
@@ -63,11 +66,18 @@ struct VoiceIdentityTool: Tool {
         case "list_speakers":
             return await listSpeakers()
         default:
-            return .error("Unknown action: \(action). Valid actions: check_status, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers")
+            return .error("Unknown action: \(action). Valid actions: check_status, show_enrollment_panel, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers")
         }
     }
 
     // MARK: - Actions
+
+    private func showEnrollmentPanel() -> ToolResult {
+        NotificationCenter.default.post(name: .faeStartNativeEnrollmentRequested, object: nil)
+        return .success("""
+            {"status": "ok", "message": "Opening enrollment panel — follow the on-screen prompts to record your voice samples."}
+            """)
+    }
 
     private func checkStatus() async -> ToolResult {
         guard let store = speakerProfileStore else {

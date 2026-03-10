@@ -2701,7 +2701,7 @@ actor PipelineCoordinator {
             publishVoiceAttention(
                 stage: "semantic",
                 decision: "held",
-                reason: "likely_incomplete_turn",
+                reason: shouldHoldShortFollowupFragment ? "short_followup_fragment" : "likely_incomplete_turn",
                 transcript: effectiveText,
                 wakeSource: wakeSource,
                 wakeScore: effectiveAcousticWakeDetection?.similarity,
@@ -4344,16 +4344,16 @@ actor PipelineCoordinator {
                     // consumes it natively. When it exits the think block, signal thinkEndSeen
                     // so the pipeline doesn't wait for </think> in thinkAccum (which never arrives
                     // because ThinkTagStripper already consumed it).
+                    // Emit live think chunks from ThinkTagStripper (Qwen3.5 path).
+                    if !thinkTagStripper.thinkChunk.isEmpty {
+                        eventBus.send(.thinkingText(text: thinkTagStripper.thinkChunk, isActive: true))
+                        debugLog(debugConsole, .llmThink, thinkTagStripper.thinkChunk)
+                    }
                     if thinkTagStripper.hasExitedThinkBlock && !thinkEndSeen {
                         thinkEndSeen = true
                         eventBus.send(.thinkingText(text: "", isActive: false))
                     }
                     guard !visible.isEmpty else {
-                        // Qwen3.5: think-block content is consumed by ThinkTagStripper (visible="").
-                        // Still emit Think debug events so test tooling can detect thinking is active.
-                        if !thinkEndSeen && !token.isEmpty {
-                            debugLog(debugConsole, .llmThink, token)
-                        }
                         continue
                     }
 

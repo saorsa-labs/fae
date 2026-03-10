@@ -50,6 +50,12 @@ final class ConversationController: ObservableObject {
     /// Set when the LLM finishes loading; empty until then.
     @Published var loadedModelLabel: String = ""
 
+    /// Live think tokens during an active generation (inside `<think>` blocks).
+    @Published var streamingThinkText: String = ""
+
+    /// Completed reasoning trace from the last assistant turn, if thinking was active.
+    @Published var completedThinkTrace: String? = nil
+
     private let maxMessages = 200
 
     /// Set when a handoff snapshot is restored. The UI observes this to push

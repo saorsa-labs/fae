@@ -1,0 +1,10 @@
+{
+  "name": "capability-discovery",
+  "version": "1.0",
+  "description": "Warm, progressive surfacing of one unconfigured capability per session.",
+  "type": "instruction",
+  "riskTier": "low",
+  "capabilities": [],
+  "allowedTools": ["activate_skill", "self_config", "voice_identity"],
+  "checksums": {}
+}

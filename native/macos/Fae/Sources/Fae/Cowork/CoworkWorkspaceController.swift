@@ -495,6 +495,19 @@ final class CoworkWorkspaceController: ObservableObject {
         duplicateSelectedWorkspace()
     }
 
+    func forkWorkspace(upToMessageIndex index: Int) {
+        guard let selectedWorkspace else { return }
+        let sourceName = selectedWorkspace.name
+        workspaceRegistry = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
+            workspaceID: selectedWorkspace.id,
+            truncatingToMessageIndex: index,
+            in: workspaceRegistry
+        )
+        persistWorkspaceRegistry()
+        applySelectedWorkspaceState()
+        prependActivity(title: "Forked from message \(index + 1)", detail: sourceName, tone: .success)
+    }
+
     func deleteSelectedWorkspace() {
         guard let selectedWorkspace else { return }
         guard workspaceRegistry.workspaces.count > 1 else {

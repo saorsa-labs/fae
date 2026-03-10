@@ -500,6 +500,13 @@ enum TextProcessing {
         /// sets `thinkEndSeen = true` so that subsequent response tokens flow to TTS.
         private(set) var hasExitedThinkBlock: Bool = false
 
+        /// New think content captured during this `process(_:)` call.
+        ///
+        /// Populated while inside a `<think>` block; reset to `""` on each call.
+        /// The closing `</think>` tag is excluded.  Use this in `PipelineCoordinator`
+        /// to stream live think text to the UI without buffering the whole block.
+        private(set) var thinkChunk: String = ""
+
         /// Process a new token and return any visible (non-think) text.
         ///
         /// Only characters starting with `<` are buffered (as potential `<think>` tags).
@@ -508,14 +515,22 @@ enum TextProcessing {
         mutating func process(_ token: String) -> String {
             var visible = ""
             hasExitedThinkBlock = false
+            thinkChunk = ""
 
             for ch in token {
                 if insideThink {
                     tagBuffer.append(ch)
                     if tagBuffer.hasSuffix("</think>") {
+                        // Strip the closing tag from any accumulated chunk this call
+                        let closeTag = "</think>"
+                        if thinkChunk.hasSuffix(closeTag) {
+                            thinkChunk.removeLast(closeTag.count)
+                        }
                         insideThink = false
                         tagBuffer = ""
                         hasExitedThinkBlock = true
+                    } else {
+                        thinkChunk.append(ch)
                     }
                 } else if tagBuffer.isEmpty {
                     if ch == "<" {

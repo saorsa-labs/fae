@@ -146,9 +146,21 @@ struct FaeConfig: Codable {
     /// This reclaims ~1,100 tokens and gives the model more headroom for generation
     /// and conversation history without changing tool availability.
     ///
-    /// Applies to the 0.8B (8K) and 2B (16K) RAM tiers.
+    /// Applies to the 0.8B and 2B model tiers. 4B and larger receive the full prompt.
+    /// Uses the model preset to distinguish 0.8B/2B from 4B even though both share
+    /// the same 32K context window after the context maximisation update.
     var isLightweightContext: Bool {
-        llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
+        let preset = llm.voiceModelPreset.lowercased()
+        switch preset {
+        case "qwen3_5_0_8b", "qwen3_5_2b", "qwen3_0_6b", "qwen3_1_7b":
+            return true
+        case "auto":
+            // Auto always selects 0.8B or 2B — both benefit from compact guidance.
+            return true
+        default:
+            // Also honour manually configured very small contexts (e.g. developer overrides).
+            return llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
+        }
     }
 
     func applyingTestServerMemoryProfile() -> FaeConfig {
@@ -350,33 +362,41 @@ struct FaeConfig: Codable {
         case "qwen3_5_27b":
             // NexVeridian text-only conversion (vision tower stripped).
             // mlx-community versions are VL — incompatible with mlx-lm text-only loading.
-            return ("NexVeridian/Qwen3.5-27B-4bit", 65_536)
+            // Native max_position_embeddings = 262,144. Capped at 131,072 (128K) to keep
+            // KV cache RAM manageable alongside STT+TTS+concierge on 32-64 GB machines.
+            return ("NexVeridian/Qwen3.5-27B-4bit", 131_072)
         case "qwen3_5_35b_a3b":
             // NexVeridian text-only conversion. MoE: 35B total / 3B active per token.
             // 11.7 T/s in mlx-swift-lm — sufficient for chat with thinking feedback.
-            // Auto-selected on 64+ GB systems.
-            return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 65_536)
+            // Native max_position_embeddings = 262,144. Capped at 131,072 for RAM safety.
+            return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 131_072)
         case "qwen3_5_9b":
             // Qwen3.5-9B: hybrid Gated DeltaNet + Gated Attention, 4-bit.
-            return ("mlx-community/Qwen3.5-9B-4bit", 65_536)
+            // Native max_position_embeddings = 262,144. Capped at 131,072 for RAM safety.
+            return ("mlx-community/Qwen3.5-9B-4bit", 131_072)
         case "qwen3_5_4b":
             // Qwen3.5-4B: hybrid architecture, 4-bit.
+            // Native max_position_embeddings = 262,144. Capped at 32,768 — 4B quality
+            // degrades at very long contexts and KV cache would dominate available RAM.
             return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
         case "qwen3_5_2b":
             // Qwen3.5-2B: hybrid architecture, 4-bit.
-            return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
+            // Native max_position_embeddings = 262,144. Capped at 32,768 — practical
+            // limit for a 2B model where long-context quality is poor anyway.
+            return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
         case "qwen3_5_0_8b":
             // Qwen3.5-0.8B: hybrid architecture, 4-bit. Smallest Qwen3.5.
-            return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
+            // Native max_position_embeddings = 262,144. Capped at 32,768.
+            return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
         // Legacy Qwen3 presets — migrated to nearest Qwen3.5 equivalent.
         case "qwen3_8b":
-            return ("mlx-community/Qwen3.5-9B-4bit", 65_536)
+            return ("mlx-community/Qwen3.5-9B-4bit", 131_072)
         case "qwen3_4b":
             return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
         case "qwen3_1_7b":
-            return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
+            return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
         case "qwen3_0_6b":
-            return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
+            return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
         default: // "auto"
             // Auto follows the current benchmark-backed operator policy.
             // `qwen3.5-2b` is the strongest fit for Fae's operator role in the
@@ -384,9 +404,9 @@ struct FaeConfig: Codable {
             // tool-result handling all beat the larger Qwens while also keeping
             // startup and first-token latency lower.
             if totalGB >= 12 {
-                return ("mlx-community/Qwen3.5-2B-4bit", 16_384)
+                return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
             } else {
-                return ("mlx-community/Qwen3.5-0.8B-4bit", 8_192)
+                return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
             }
         }
     }
@@ -401,10 +421,12 @@ struct FaeConfig: Codable {
         case "off", "none", "disabled":
             return nil
         case "liquid_lfm2_24b_a2b", "lfm2_24b_a2b", "liquid":
-            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 16_384)
+            // MLX 4-bit export has max_position_embeddings = 131,072 (base model is 32K,
+            // but the LiquidAI MLX conversion was done at 128K).
+            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 131_072)
         default: // auto
             guard totalGB >= 32 else { return nil }
-            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 16_384)
+            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 131_072)
         }
     }
 
@@ -450,7 +472,7 @@ struct FaeConfig: Codable {
     ///
     /// Formula: available = contextSize - systemPromptBudget(~5000) - maxTokens.
     /// Each conversation turn ≈ 400 tokens (user ~100 + assistant ~300).
-    /// Clamped to [6, 50].
+    /// Clamped to [6, 100].
     static func recommendedMaxHistory(contextSize: Int, maxTokens: Int) -> Int {
         let systemBudget = 5000
         let available = contextSize - systemBudget - maxTokens

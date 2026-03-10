@@ -435,7 +435,6 @@ struct WorkWithFaeConsensusResult: Identifiable, Equatable, Sendable {
 
 enum WorkWithFaeWorkspaceStore {
     private static let maxIndexedFiles = 800
-    private static let maxPersistedConversationMessages = 120
     private static let ignoredDirectoryNames: Set<String> = [
         ".git", ".build", "build", "dist", "node_modules", ".next", ".idea", ".swiftpm", "DerivedData"
     ]
@@ -619,6 +618,37 @@ enum WorkWithFaeWorkspaceStore {
             sortOrder: sourceIndex + 1,
             policy: workspace.policy,
             state: sanitizedConversationState(workspace.state)
+        )
+        copy.workspaces.insert(duplicate, at: min(sourceIndex + 1, copy.workspaces.count))
+        copy.workspaces = reindexed(copy.workspaces)
+        copy.selectedWorkspaceID = duplicate.id
+        return normalized(copy)
+    }
+
+    static func registryByDuplicatingWorkspace(
+        workspaceID: UUID?,
+        truncatingToMessageIndex index: Int,
+        in registry: WorkWithFaeWorkspaceRegistry
+    ) -> WorkWithFaeWorkspaceRegistry {
+        var copy = normalized(registry)
+        let targetWorkspaceID = workspaceID ?? copy.selectedWorkspaceID
+        guard let targetWorkspaceID,
+              let sourceIndex = copy.workspaces.firstIndex(where: { $0.id == targetWorkspaceID })
+        else {
+            return copy
+        }
+        let workspace = copy.workspaces[sourceIndex]
+        var truncatedState = workspace.state
+        if index >= 0 && index < truncatedState.conversationMessages.count {
+            truncatedState.conversationMessages = Array(truncatedState.conversationMessages.prefix(index + 1))
+        }
+        let duplicate = WorkWithFaeWorkspaceRecord(
+            name: duplicatedWorkspaceName(from: workspace.name, existingNames: copy.workspaces.map(\.name)),
+            agentID: workspace.agentID,
+            parentWorkspaceID: workspace.id,
+            sortOrder: sourceIndex + 1,
+            policy: workspace.policy,
+            state: truncatedState
         )
         copy.workspaces.insert(duplicate, at: min(sourceIndex + 1, copy.workspaces.count))
         copy.workspaces = reindexed(copy.workspaces)
@@ -866,11 +896,7 @@ enum WorkWithFaeWorkspaceStore {
     }
 
     private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
-        var copy = state
-        if copy.conversationMessages.count > maxPersistedConversationMessages {
-            copy.conversationMessages = Array(copy.conversationMessages.suffix(maxPersistedConversationMessages))
-        }
-        return copy
+        return state
     }
 
     private static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {

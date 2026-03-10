@@ -131,17 +131,24 @@ The concierge worker is started lazily after the main pipeline starts. If loadin
 
 Key files: `Pipeline/TurnRoutingPolicy.swift`, `ML/WorkerLLMEngine.swift`, `ML/LLMWorkerProtocol.swift`, `Core/InferencePriorityController.swift`, `ML/ModelManager.swift` (`loadConciergeIfNeeded()`), `Core/FaeConfig.swift` (`recommendedConciergeModel()`, `isDualModelEligible()`, `recommendedLocalModelStack()`), `SettingsModelsPerformanceTab.swift`, `SettingsDiagnosticsTab.swift`.
 
-Auto mode selects the **operator** LLM based on system RAM (Qwen3.5 at every tier):
-- 96+ GiB → Qwen3.5-35B-A3B (65K context)
-- 80-95 GiB → Qwen3.5-35B-A3B (49K context)
-- 64-79 GiB → Qwen3.5-35B-A3B (32K context)
-- 48-63 GiB → Qwen3.5-27B (32K context)
-- 32-47 GiB → Qwen3.5-27B (16K context)
-- 24-31 GiB → Qwen3.5-9B (32K context)
-- 16-23 GiB → Qwen3.5-4B (16K context)
-- 12-15 GiB → Qwen3.5-2B (8K context)
-- 8-11 GiB → Qwen3.5-0.8B (4K context)
-- <8 GiB → Qwen3.5-0.8B (2K context) — minimal viable
+Auto mode selects the **operator** LLM (Qwen3.5). Current auto policy:
+- ≥12 GiB → Qwen3.5-2B (32K context, lightweight prompt)
+- <12 GiB → Qwen3.5-0.8B (32K context, lightweight prompt)
+
+All Qwen3.5 models have a native `max_position_embeddings` of **262,144**. Fae caps context at
+practical limits to keep KV-cache RAM manageable: 32K for 0.8B–4B, 128K for 9B–35B.
+
+**Concierge** (dual-model, ≥32 GB RAM): `LiquidAI/LFM2-24B-A2B-MLX-4bit` at **128K context**.
+The MLX 4-bit export was published at 128K (base model is 32K). Handles rich synthesis, long-form
+output, summaries, and plans. No tool use.
+
+Manual presets span the full Qwen3.5 lineup:
+- `qwen3_5_35b_a3b` → Qwen3.5-35B-A3B (128K / native 262K)
+- `qwen3_5_27b` → Qwen3.5-27B (128K / native 262K)
+- `qwen3_5_9b` → Qwen3.5-9B (128K / native 262K)
+- `qwen3_5_4b` → Qwen3.5-4B (32K / native 262K)
+- `qwen3_5_2b` → Qwen3.5-2B (32K / native 262K)
+- `qwen3_5_0_8b` → Qwen3.5-0.8B (32K / native 262K)
 
 Context window is now properly wired from model selection through to the pipeline.
 `FaeConfig.recommendedMaxHistory()` scales conversation history with context size
@@ -1346,19 +1353,28 @@ Benchmarks: `docs/benchmarks/llm-benchmarks.md`.
 
 Auto mode selects based on system RAM (Qwen3.5 at every tier):
 
-| System RAM | Model | Context | Notes |
-|------------|-------|---------|-------|
-| 96+ GB | Qwen3.5-35B-A3B | 65K | MoE, best quality + headroom |
-| 64-95 GB | Qwen3.5-35B-A3B | 32-49K | MoE, scales context with RAM |
-| 48-63 GB | Qwen3.5-27B | 32K | Dense 27B, comfortable fit |
-| 32-47 GB | Qwen3.5-27B | 16K | Good headroom for STT+TTS |
-| 24-31 GB | Qwen3.5-9B | 32K | Hybrid 9B, comfortable 32K context |
-| 16-23 GB | Qwen3.5-4B | 16K | Hybrid 4B + full STT/TTS stack |
-| 12-15 GB | Qwen3.5-2B | 8K | Compact 2B, small STT/TTS |
-| 8-11 GB | Qwen3.5-0.8B | 4K | Tiny 0.8B, minimal footprint |
-| <8 GB | Qwen3.5-0.8B | 2K | Absolute minimum viable |
+**Auto mode** (current policy — 2B/0.8B for low-latency operator role):
 
-Manual presets: `qwen3_5_35b_a3b`, `qwen3_5_27b`, `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`, `qwen3_5_0_8b`.
+| System RAM | Auto Operator | Context | Concierge |
+|------------|--------------|---------|-----------|
+| ≥32 GB | Qwen3.5-2B | 32K | LFM2-24B-A2B at 128K |
+| 12–31 GB | Qwen3.5-2B | 32K | — |
+| <12 GB | Qwen3.5-0.8B | 32K | — |
+
+All Qwen3.5 models have native `max_position_embeddings` = **262,144**. Fae caps at practical
+limits to control KV-cache RAM. LFM2-24B MLX-4bit export supports **128K** natively.
+
+**Manual presets** (full Qwen3.5 lineup):
+
+| Preset | Model | Fae Context | Native Max |
+|--------|-------|------------|-----------|
+| `qwen3_5_35b_a3b` | Qwen3.5-35B-A3B | 128K | 262K |
+| `qwen3_5_27b` | Qwen3.5-27B | 128K | 262K |
+| `qwen3_5_9b` | Qwen3.5-9B | 128K | 262K |
+| `qwen3_5_4b` | Qwen3.5-4B | 32K | 262K |
+| `qwen3_5_2b` | Qwen3.5-2B | 32K | 262K |
+| `qwen3_5_0_8b` | Qwen3.5-0.8B | 32K | 262K |
+
 Legacy Qwen3 presets (`qwen3_8b`, `qwen3_4b`, `qwen3_1_7b`, `qwen3_0_6b`) are silently migrated to the nearest Qwen3.5 equivalent.
 
 Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, answer quality.
@@ -1531,3 +1547,17 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - CoWork OpenRouter key fallback: `provider()` falls back to global `llm.openrouter.api_key` when per-agent key absent
   - Duplicate tool call guard: `seenToolCallSignatures: Set<String>` in PipelineCoordinator; blocks identical tool calls within a turn to prevent maxToolTurns loops
   - Deprecated calendar/reminders authorization APIs replaced in `OnboardingController.swift`
+- **v1.4.0** — Thinking crawl, capability discovery, enrollment UX, code quality pass
+  - **Inline thinking display**: replaced ThoughtBubbleView (floating panel) with `ThinkingCrawlView` (Star Wars text crawl inline in conversation) and `ThinkIconBubble` (brain icon after think completes). Both are `internal` so CoWork can reuse them. `ConversationBridgeController` defers `startStreaming()` to first response token so the crawl condition (`!isStreaming`) is correct during the think phase.
+  - **ThoughtBubbleView removed**: `ThoughtBubbleView.swift` deleted; `AuxiliaryWindowManager` thoughtBubblePanel + observeThinkingState() removed; `SubtitleStateController` thinking-bubble methods removed; `PipelineAuxBridgeController` thinking observer removed.
+  - **`TextProcessing.ThinkTagStripper`**: added `thinkChunk` property — accumulates think tokens per `process()` call for streaming display in `ConversationWindowView`.
+  - **Capability discovery scheduler task**: `capability_discovery` fires at 14:00, minimum 3-day cadence; builds priority queue (voice_enrollment → morning_briefing → overnight_research → vision); uses `proactiveQueryHandler` with `activate_skill` allowed; `TrustedActionBroker` allowlist added; `surfacedDiscoveryItems` reset weekly.
+  - **`capability-discovery` skill**: new built-in instruction skill. After user says yes, skill tells them the phrase to say (e.g. "Fae, set up morning briefing") — does NOT attempt setup tools directly (blocked by scheduler broker policy).
+  - **`buildDiscoveryItems` refactored**: replaced file I/O + regex config parsing with injected `visionEnabled: Bool` (updated via `setVisionEnabled()`) and `speakerProfileStore?.hasOwnerProfile()` (injected via `setSpeakerProfileStore()`). Eliminated double-gate (removed `runDailyIfNeeded` wrapper, kept 3-day `lastCapabilityDiscoveryAt` check alone).
+  - **`HEARTBEAT.md` updated**: added Capability Discovery section covering one-thing-at-a-time, grounded-in-observation, own-the-setup principles.
+  - **Wake word threshold lowered**: `acousticWakeThreshold` 0.82 → 0.65 for better "hi Fae" reliability.
+  - **Enrollment banner fix**: `hasOwnerSetUp` now initialises from `UserDefaults("fae.owner.enrolled")` so the "Let me get to know you" banner is hidden immediately on launch when already enrolled. Persisted on enrollment complete and cleared on reset.
+  - **`VoiceIdentityTool.show_enrollment_panel`**: new action opens native recording panel via `.faeStartNativeEnrollmentRequested` notification. `voice-identity` SKILL.md updated to use panel-first flow.
+  - **Unsolicited awareness tasks fixed**: `enhanced_morning_briefing` and `overnightWorkEnabled` disabled in config when `consentGrantedAt = nil` to prevent web search loop without consent.
+  - **`VoiceIdentityTool.showEnrollmentPanel`**: removed redundant `DispatchQueue.main.async` wrapper (tool execution already on main thread).
+  - **Enrollment banner persistence**: `hasOwnerSetUp` initialises from `UserDefaults("fae.owner.enrolled")` — seeded synchronously from `speakers.json` in `FaeCore.init` to avoid flash before async actor check completes. Persisted on enrollment complete, cleared on reset.

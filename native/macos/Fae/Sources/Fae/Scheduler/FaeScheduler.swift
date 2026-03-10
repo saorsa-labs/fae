@@ -36,6 +36,12 @@ actor FaeScheduler {
     /// Current awareness configuration — updated by FaeCore on config changes.
     private var awarenessConfig: FaeConfig.AwarenessConfig = FaeConfig.AwarenessConfig()
 
+    /// Whether vision is currently enabled — updated by FaeCore on config changes.
+    private var visionEnabled: Bool = false
+
+    /// Speaker profile store — used for ownership checks without file I/O.
+    private weak var speakerProfileStore: SpeakerProfileStore?
+
     /// Vault manager for backup tasks — set by FaeCore.
     private var vaultManager: GitVaultManager?
 
@@ -45,6 +51,12 @@ actor FaeScheduler {
 
     /// Tracks which interests have already had skill proposals surfaced.
     private var suggestedInterestIDs: Set<String> = []
+
+    /// Discovery items already surfaced this week (reset every Sunday at 00:00).
+    private var surfacedDiscoveryItems: Set<String> = []
+
+    /// When capability discovery last ran — used to enforce 3-day minimum cadence.
+    private var lastCapabilityDiscoveryAt: Date?
 
     // MARK: - Awareness Tracking State
 
@@ -107,6 +119,14 @@ actor FaeScheduler {
     /// Update awareness configuration (called by FaeCore on config changes).
     func setAwarenessConfig(_ config: FaeConfig.AwarenessConfig) {
         awarenessConfig = config
+    }
+
+    func setVisionEnabled(_ enabled: Bool) {
+        visionEnabled = enabled
+    }
+
+    func setSpeakerProfileStore(_ store: SpeakerProfileStore) {
+        speakerProfileStore = store
     }
 
     /// Record that the user was seen (called from camera presence observations).
@@ -460,6 +480,85 @@ actor FaeScheduler {
         } catch {
             NSLog("FaeScheduler: skill_proposals — error: %@", error.localizedDescription)
         }
+    }
+
+    private func runCapabilityDiscoveryIfDue() async {
+        if let last = lastCapabilityDiscoveryAt,
+           Date().timeIntervalSince(last) < 3 * 24 * 3600 {
+            return  // Not yet due (3-day minimum cadence)
+        }
+        await runCapabilityDiscovery()
+    }
+
+    private func runCapabilityDiscovery() async {
+        NSLog("FaeScheduler: capability_discovery — running")
+        lastCapabilityDiscoveryAt = Date()
+
+        guard let handler = proactiveQueryHandler else {
+            NSLog("FaeScheduler: capability_discovery — no proactive query handler")
+            return
+        }
+
+        let hasOwner = await speakerProfileStore?.hasOwnerProfile() ?? false
+        let items = buildDiscoveryItems(hasOwner: hasOwner)
+        guard let item = items.first(where: { !surfacedDiscoveryItems.contains($0.id) }) else {
+            NSLog("FaeScheduler: capability_discovery — all items already surfaced this week")
+            return
+        }
+
+        surfacedDiscoveryItems.insert(item.id)
+        proactiveInterjectionCount += 1
+
+        let prompt = """
+            [CAPABILITY DISCOVERY]
+            Discovery item: \(item.id)
+            Context: \(item.contextHint)
+
+            Load the capability-discovery skill (activate_skill capability-discovery) and surface this one item to the user. Be warm, brief, and specific to what you know about them from memory. 2–3 sentences maximum, then a yes/no question.
+            """
+
+        NSLog("FaeScheduler: capability_discovery — surfacing '%@'", item.id)
+        await handler(prompt, false, "capability_discovery", ["activate_skill"], true)
+    }
+
+    private func buildDiscoveryItems(hasOwner: Bool) -> [(id: String, contextHint: String)] {
+        var items: [(id: String, contextHint: String)] = []
+        let ramGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
+
+        // 1. Voice not enrolled — most important for personalisation.
+        if !hasOwner {
+            items.append((
+                id: "voice_enrollment",
+                contextHint: "User has not enrolled their voice. Voice identity enables personalised recognition, owner-gated tools, and reliably waking Fae by name."
+            ))
+        }
+
+        // 2. Morning briefing not set up.
+        let hasBriefingConsent = awarenessConfig.consentGrantedAt != nil
+        if !hasBriefingConsent || !awarenessConfig.enhancedBriefingEnabled {
+            items.append((
+                id: "morning_briefing",
+                contextHint: "Morning briefing is not active. It delivers a brief, warm summary of calendar, mail, reminders, and research findings each morning when the user first arrives."
+            ))
+        }
+
+        // 3. Overnight research not enabled.
+        if !hasBriefingConsent || !awarenessConfig.overnightWorkEnabled {
+            items.append((
+                id: "overnight_research",
+                contextHint: "Overnight research is not enabled. Fae can quietly research topics the user cares about during quiet hours and surface findings in the morning briefing."
+            ))
+        }
+
+        // 4. Vision disabled on capable hardware.
+        if ramGB >= 24, !visionEnabled {
+            items.append((
+                id: "vision",
+                contextHint: "Vision is not enabled. With \(ramGB)GB RAM, Fae can see the screen and camera to provide context-aware help, read documents, and describe what's visible."
+            ))
+        }
+
+        return items
     }
 
     private func runStaleRelationships() async {
@@ -872,6 +971,14 @@ actor FaeScheduler {
         if weekday == 1, hour == 10, minute < 2 {
             await runDailyIfNeeded("stale_relationships") { await runStaleRelationships() }
         }
+        // capability_discovery: every 3 days at 14:00 — surface one unconfigured capability.
+        if hour == 14, minute < 2 {
+            await runCapabilityDiscoveryIfDue()
+        }
+        // Reset surfaced discovery items weekly on Sunday at 00:00.
+        if weekday == 1, hour == 0, minute < 2 {
+            surfacedDiscoveryItems.removeAll()
+        }
         // embedding_reindex: weekly on Sunday at 03:00.
         if weekday == 1, hour == 3, minute < 2 {
             await runDailyIfNeeded("embedding_reindex") { await runEmbeddingReindex() }
@@ -1073,6 +1180,7 @@ actor FaeScheduler {
         case "screen_activity_check":  await runScreenActivityCheck()
         case "overnight_work":         await runOvernightWork()
         case "enhanced_morning_briefing": await runEnhancedMorningBriefing()
+        case "capability_discovery":      await runCapabilityDiscovery()
         default:
             if await runUserTaskIfExists(id: id, at: runAt, silent: true, reason: "trigger") {
                 return
@@ -1188,6 +1296,7 @@ actor FaeScheduler {
             "stale_relationships", "skill_health_check", "embedding_reindex",
             "vault_backup", "camera_presence_check", "screen_activity_check",
             "overnight_work", "enhanced_morning_briefing",
+            "capability_discovery",
         ]
         ids.formUnion(builtinIDs)
 

@@ -31,7 +31,6 @@ final class AuxiliaryWindowManager: ObservableObject {
     @Published private(set) var isCanvasVisible: Bool = false
     @Published private(set) var isApprovalVisible: Bool = false
     @Published private(set) var isDebugConsoleVisible: Bool = false
-    @Published private(set) var isThoughtBubbleVisible: Bool = false
 
     // MARK: - Private State
 
@@ -39,7 +38,6 @@ final class AuxiliaryWindowManager: ObservableObject {
     private var approvalPanel: NSPanel?
     private var debugConsolePanel: NSPanel?
     private var debugConsolePanelDelegate: PanelCloseDelegate?
-    private var thoughtBubblePanel: NSPanel?
 
     // MARK: - Debug Console Controller
 
@@ -72,7 +70,6 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     private var modeCancellable: AnyCancellable?
     private var approvalCancellable: AnyCancellable?
-    private var thoughtBubbleCancellable: AnyCancellable?
     private var coworkRoutingCancellable: AnyCancellable?
     private var canvasPanelDelegate: PanelCloseDelegate?
     private var isCoworkConversationActive: Bool = false
@@ -272,74 +269,6 @@ final class AuxiliaryWindowManager: ObservableObject {
         isApprovalVisible = false
     }
 
-    // MARK: - Thought Bubble
-
-    /// Observe subtitle state and auto-show/hide the thought bubble.
-    func observeThinkingState() {
-        guard let subtitles = subtitleState else { return }
-        thoughtBubbleCancellable = subtitles.$thinkingText
-            .receive(on: RunLoop.main)
-            .sink { [weak self] text in
-                guard let self else { return }
-                if text.isEmpty {
-                    self.hideThoughtBubble()
-                } else {
-                    self.showThoughtBubble()
-                }
-            }
-    }
-
-    func showThoughtBubble() {
-        guard let subtitles = subtitleState else { return }
-        if thoughtBubblePanel == nil {
-            thoughtBubblePanel = makeThoughtBubblePanel(subtitles: subtitles)
-        }
-        guard let panel = thoughtBubblePanel, let orbWindow = windowState?.window else { return }
-
-        // Position above-left of the orb.
-        let orbFrame = orbWindow.frame
-        let panelSize = NSSize(width: 300, height: 200)
-        let x = orbFrame.minX - panelSize.width + 60
-        let y = orbFrame.maxY - 40
-        let frame = clampToScreen(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height))
-
-        panel.setFrame(frame, display: false)
-
-        if !isThoughtBubbleVisible {
-            // Slide in from 16 px below final position while fading up.
-            var startFrame = frame
-            startFrame.origin.y -= 16
-            panel.setFrame(startFrame, display: false)
-            panel.alphaValue = 0
-            panel.orderFront(nil)
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.4
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().setFrame(frame, display: true)
-                panel.animator().alphaValue = 1
-            }
-            isThoughtBubbleVisible = true
-        }
-    }
-
-    func hideThoughtBubble() {
-        guard isThoughtBubbleVisible, let panel = thoughtBubblePanel else { return }
-        isThoughtBubbleVisible = false
-        // Float upward 20 px while fading — thought bubble drifting away.
-        var floatFrame = panel.frame
-        floatFrame.origin.y += 20
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.5
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            panel.animator().setFrame(floatFrame, display: true)
-            panel.animator().alphaValue = 0
-        }, completionHandler: {
-            Task { @MainActor in
-                panel.orderOut(nil)
-            }
-        })
-    }
-
     // MARK: - Positioning (external)
 
     /// Reposition visible panels relative to the orb (e.g. after the user
@@ -347,12 +276,6 @@ final class AuxiliaryWindowManager: ObservableObject {
     func repositionWindows(relativeTo orbFrame: NSRect) {
         if let panel = canvasPanel, isCanvasVisible {
             panel.setFrame(canvasFrame(relativeTo: orbFrame), display: true)
-        }
-        if let panel = thoughtBubblePanel, isThoughtBubbleVisible {
-            let panelSize = panel.frame.size
-            let x = orbFrame.minX - panelSize.width + 60
-            let y = orbFrame.maxY - 40
-            panel.setFrame(clampToScreen(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height)), display: true)
         }
     }
 
@@ -575,47 +498,6 @@ final class AuxiliaryWindowManager: ObservableObject {
 
         let view = ApprovalOverlayView(controller: controller)
         embedSwiftUI(view.preferredColorScheme(.dark), in: panel)
-        return panel
-    }
-
-    private func makeThoughtBubblePanel(subtitles: SubtitleStateController) -> NSPanel {
-        let size = NSSize(width: 300, height: 200)
-        let panel = InteractivePanel(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless, .utilityWindow, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Thought Bubble"
-        panel.isReleasedWhenClosed = false
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
-        panel.backgroundColor = .clear
-        panel.hasShadow = false  // macOS 26: hasShadow=true on borderless panels draws a 1px window frame; SwiftUI shadows on the shape are sufficient
-        panel.isOpaque = false
-        panel.ignoresMouseEvents = false
-
-        let hosting = NSHostingView(
-            rootView: ThoughtBubbleWindowContent()
-                .environmentObject(subtitles)
-                .preferredColorScheme(.dark)
-        )
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        hosting.wantsLayer = true
-        hosting.layer?.backgroundColor = .clear
-
-        guard let contentView = panel.contentView else { return panel }
-        contentView.wantsLayer = true
-        contentView.layer?.backgroundColor = CGColor.clear
-        contentView.addSubview(hosting)
-        NSLayoutConstraint.activate([
-            hosting.topAnchor.constraint(equalTo: contentView.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            hosting.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-        ])
-
         return panel
     }
 

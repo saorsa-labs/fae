@@ -126,6 +126,8 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "screen_activity_check": ["screenshot"],
         "overnight_work": ["web_search", "fetch_url", "activate_skill"],
         "enhanced_morning_briefing": ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"],
+        // capability_discovery: informational only — no surveillance, consent always true.
+        "capability_discovery": ["activate_skill"],
     ]
 
     /// Tools that scheduler tasks can NEVER use regardless of allowlist.

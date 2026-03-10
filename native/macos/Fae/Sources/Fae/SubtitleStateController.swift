@@ -40,18 +40,11 @@ final class SubtitleStateController: ObservableObject {
     /// Progress bar label text.
     @Published var progressLabel: String = ""
 
-    /// The currently visible thinking text (empty = hidden).
-    @Published var thinkingText: String = ""
-
-    /// Whether the LLM is actively in a thinking block.
-    @Published var isThinking: Bool = false
-
     // MARK: - Private Timers
 
     private var assistantHideTask: Task<Void, Never>?
     private var userHideTask: Task<Void, Never>?
     private var toolHideTask: Task<Void, Never>?
-    private var thinkingDismissedUntilNextTurn = false
 
     // MARK: - Subtitle Updates
 
@@ -133,92 +126,11 @@ final class SubtitleStateController: ObservableObject {
         assistantHideTask?.cancel()
         userHideTask?.cancel()
         toolHideTask?.cancel()
-        thinkHideTask?.cancel()
         assistantText = ""
         userText = ""
         toolText = ""
-        thinkingText = ""
         isAssistantStreaming = false
         isUserPartial = false
-        isThinking = false
-        thinkingDismissedUntilNextTurn = false
-    }
-
-    // MARK: - Thinking Bubble
-
-    private var thinkHideTask: Task<Void, Never>?
-
-    /// Append streaming thinking text to the thought bubble.
-    func appendThinkingText(_ text: String) {
-        guard !thinkingDismissedUntilNextTurn else { return }
-        thinkHideTask?.cancel()
-        isThinking = true
-        thinkingText += text
-        // Keep only the last ~400 characters for readability.
-        if thinkingText.count > 400 {
-            let start = thinkingText.index(thinkingText.endIndex, offsetBy: -350)
-            thinkingText = "\u{2026}" + String(thinkingText[start...])
-        }
-    }
-
-    /// Signal that thinking is complete — start fade-out timer.
-    func finalizeThinking() {
-        guard !thinkingDismissedUntilNextTurn else {
-            thinkingText = ""
-            isThinking = false
-            return
-        }
-        isThinking = false
-        thinkHideTask?.cancel()
-        thinkHideTask = Task {
-            try? await Task.sleep(for: .seconds(4.0))
-            guard !Task.isCancelled else { return }
-            thinkingText = ""
-        }
-    }
-
-    /// Append tool call activity to the thinking bubble so users see what Fae is doing.
-    ///
-    /// Resets the 10-second auto-vanish timer on each call so the bubble stays
-    /// visible while tools are actively firing and disappears 10s after the last one.
-    func appendToolActivity(_ text: String) {
-        guard !thinkingDismissedUntilNextTurn else { return }
-        thinkHideTask?.cancel()
-        isThinking = true
-        if !thinkingText.isEmpty {
-            thinkingText += "\n"
-        }
-        thinkingText += text
-        // Keep only the last ~400 characters for readability.
-        if thinkingText.count > 400 {
-            let start = thinkingText.index(thinkingText.endIndex, offsetBy: -350)
-            thinkingText = "\u{2026}" + String(thinkingText[start...])
-        }
-        // Auto-vanish 10s after the last tool event (debounced: each tool call resets the timer).
-        thinkHideTask = Task {
-            try? await Task.sleep(for: .seconds(10.0))
-            guard !Task.isCancelled else { return }
-            thinkingText = ""
-            isThinking = false
-        }
-    }
-
-    /// Clear thinking text immediately (e.g. on new turn).
-    func clearThinking() {
-        thinkHideTask?.cancel()
-        thinkHideTask = nil
-        thinkingText = ""
-        isThinking = false
-        thinkingDismissedUntilNextTurn = false
-    }
-
-    /// Hide the current thinking bubble and suppress new thinking/tool updates until the next turn.
-    func dismissThinkingUntilNextTurn() {
-        thinkHideTask?.cancel()
-        thinkHideTask = nil
-        thinkingText = ""
-        isThinking = false
-        thinkingDismissedUntilNextTurn = true
     }
 
     // MARK: - Progress Bar
