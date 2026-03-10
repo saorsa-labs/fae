@@ -666,75 +666,139 @@ tests:
     pass_threshold: 1.0
 
   # --- 27. screenshot ---
+  # Full end-to-end: enable vision, enable full tool mode, approve the tool call,
+  # check that the tool ran and the VLM returned a non-blank description.
   - id: "tool-027"
-    name: "screenshot tool invocation"
+    name: "screenshot tool — capture and describe"
     class: permission_dependent
-    timeout_s: 200
+    timeout_s: 300
     setup:
       - action: "http_post"
+        url: "/config"
+        body: {"key": "vision.enabled", "value": "true"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
         url: "/reset"
-    teardown: []
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "vision.enabled", "value": "false"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
     phrasings:
-      - "Fae, take a screenshot of the screen"
-      - "Fae, capture my screen"
-      - "Fae, screenshot what's on my display"
+      - "Fae, take a screenshot of the screen and tell me what you see"
+      - "Fae, capture my screen and describe what's visible"
+      - "Fae, use the screenshot tool and describe the screen"
     steps:
       - action: "inject"
         phrasing: "random"
+      # Approve the tool call when the permission dialog appears.
+      - action: "wait_approval"
+        max_wait_s: 60
+        decision: "yes"
       - action: "wait_generation"
-        max_wait_s: 180
+        max_wait_s: 240
       - action: "collect_events"
     criteria:
       - name: "tool_invoked"
         check: "events_contain_kind('Tool', 'screenshot')"
-    pass_threshold: 1.0
+      # The response should describe something — not just report an error.
+      - name: "no_capture_failure"
+        check: "not assistant_response_contains('Screenshot failed') and not assistant_response_contains('Screen Recording permission') and not assistant_response_contains('vision model could not')"
+      - name: "describes_something"
+        check: "llm_judge: Fae's response describes visual content visible on the screen (not just an error message or apology). Score 1 if she mentions any visual element (app, window, text, colour, icon, desktop). Score 0 if she reports a failure or says nothing about what she sees."
+    pass_threshold: 0.67
 
   # --- 28. camera ---
+  # Full end-to-end: enable vision, approve the camera tool call, verify the
+  # returned frame is non-blank (VLM produces a real description, not "blank" or
+  # an error).
   - id: "tool-028"
-    name: "camera tool invocation"
+    name: "camera tool — capture and describe"
     class: permission_dependent
-    timeout_s: 200
+    timeout_s: 300
     setup:
       - action: "http_post"
+        url: "/config"
+        body: {"key": "vision.enabled", "value": "true"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
         url: "/reset"
-    teardown: []
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "vision.enabled", "value": "false"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
     phrasings:
-      - "Fae, take a photo with the camera"
-      - "Fae, capture from the webcam"
-      - "Fae, snap a picture"
+      - "Fae, take a photo with the camera and tell me what you see"
+      - "Fae, use the camera tool and describe who or what you see"
+      - "Fae, snap a picture and describe the image"
     steps:
       - action: "inject"
         phrasing: "random"
+      # Approve the camera tool call.
+      - action: "wait_approval"
+        max_wait_s: 60
+        decision: "yes"
       - action: "wait_generation"
-        max_wait_s: 180
+        max_wait_s: 240
       - action: "collect_events"
     criteria:
       - name: "tool_invoked"
         check: "events_contain_kind('Tool', 'camera')"
-    pass_threshold: 1.0
+      # The frame must be non-blank — no "blank", "black", or capture failure.
+      - name: "no_capture_failure"
+        check: "not assistant_response_contains('Camera capture failed') and not assistant_response_contains('blank') and not assistant_response_contains('Camera permission') and not assistant_response_contains('vision model could not')"
+      - name: "describes_something"
+        check: "llm_judge: Fae's response describes visual content captured by the camera (not an error or apology). Score 1 if she mentions any visual element (person, object, room, light, background, colour). Score 0 if she reports a failure or says she cannot see anything."
+    pass_threshold: 0.67
 
   # --- 29. read_screen ---
   - id: "tool-029"
-    name: "read_screen tool invocation"
+    name: "read_screen tool — capture, OCR, and list elements"
     class: permission_dependent
-    timeout_s: 200
+    timeout_s: 300
     setup:
       - action: "http_post"
+        url: "/config"
+        body: {"key": "vision.enabled", "value": "true"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
         url: "/reset"
-    teardown: []
+    teardown:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "vision.enabled", "value": "false"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "off"}
     phrasings:
-      - "Fae, read what's on the screen right now"
-      - "Fae, describe what you see on my screen"
-      - "Fae, what's currently displayed on the screen?"
+      - "Fae, read what's on the screen right now and list interactive elements"
+      - "Fae, describe what you see on my screen and what I can click"
+      - "Fae, use read_screen to tell me what's on the display"
     steps:
       - action: "inject"
         phrasing: "random"
+      - action: "wait_approval"
+        max_wait_s: 60
+        decision: "yes"
       - action: "wait_generation"
-        max_wait_s: 180
+        max_wait_s: 240
       - action: "collect_events"
     criteria:
       - name: "tool_invoked"
         check: "events_contain_kind('Tool', 'read_screen')"
+      - name: "no_capture_failure"
+        check: "not assistant_response_contains('Screenshot failed') and not assistant_response_contains('Screen Recording permission') and not assistant_response_contains('vision model could not')"
     pass_threshold: 1.0
 
   # --- 30. click ---

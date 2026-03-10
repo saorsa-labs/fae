@@ -223,7 +223,10 @@ struct CameraTool: Tool {
 private final class CameraFrameCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var session: AVCaptureSession?
     private var completion: ((Result<CGImage, Error>) -> Void)?
-    private var didCapture = false
+    private var frameCount = 0
+    // How many frames to skip while the sensor auto-exposes. Cameras typically
+    // need 5-10 frames (~200-400ms at 30fps) before the image is bright enough.
+    private static let warmUpFrames = 8
 
     func captureFrame(completion: @escaping (Result<CGImage, Error>) -> Void) {
         self.completion = completion
@@ -268,9 +271,12 @@ private final class CameraFrameCapture: NSObject, AVCaptureVideoDataOutputSample
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        // Only capture the first frame after a short warm-up (skip the first few dark frames).
-        guard !didCapture else { return }
-        didCapture = true
+        frameCount += 1
+        // Skip the first N frames while the sensor warms up and auto-exposes.
+        // Frame 0 is nearly always black; 8 frames at 30fps ≈ 270ms warm-up.
+        guard frameCount > Self.warmUpFrames else { return }
+        // Only convert and deliver once.
+        guard frameCount == Self.warmUpFrames + 1 else { return }
 
         defer { session?.stopRunning() }
 
