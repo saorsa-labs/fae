@@ -115,6 +115,79 @@ final class ConversationBridgeControllerTests: XCTestCase {
         XCTAssertEqual(coworkConversation.loadedModelLabel, "Qwen3 4B · 4bit")
     }
 
+    func testThinkingTraceFollowsActiveRouteAndFinalizesWhenThinkingEnds() async throws {
+        let bridge = ConversationBridgeController()
+        let mainConversation = ConversationController()
+        let coworkConversation = ConversationController()
+        bridge.conversationController = mainConversation
+        bridge.coworkConversationController = coworkConversation
+
+        NotificationCenter.default.post(
+            name: .faeCoworkConversationRoutingChanged,
+            object: nil,
+            userInfo: ["active": true]
+        )
+        try await flushNotifications()
+
+        NotificationCenter.default.post(
+            name: .faeAssistantGenerating,
+            object: nil,
+            userInfo: ["active": true]
+        )
+        try await flushNotifications()
+
+        NotificationCenter.default.post(
+            name: .faeThinkingText,
+            object: nil,
+            userInfo: ["text": "Remote trace", "is_active": true]
+        )
+        try await flushNotifications()
+
+        NotificationCenter.default.post(
+            name: .faeThinkingText,
+            object: nil,
+            userInfo: ["text": "", "is_active": false]
+        )
+        try await flushNotifications()
+
+        XCTAssertEqual(coworkConversation.completedThinkTrace, "Remote trace")
+        XCTAssertTrue(mainConversation.completedThinkTrace == nil)
+    }
+
+    func testFirstAssistantTokenPromotesLiveThinkingTraceToReplayState() async throws {
+        let bridge = ConversationBridgeController()
+        let mainConversation = ConversationController()
+        let coworkConversation = ConversationController()
+        bridge.conversationController = mainConversation
+        bridge.coworkConversationController = coworkConversation
+
+        NotificationCenter.default.post(
+            name: .faeAssistantGenerating,
+            object: nil,
+            userInfo: ["active": true]
+        )
+        try await flushNotifications()
+
+        NotificationCenter.default.post(
+            name: .faeThinkingText,
+            object: nil,
+            userInfo: ["text": "Local reasoning trace", "is_active": true]
+        )
+        try await flushNotifications()
+
+        NotificationCenter.default.post(
+            name: .faeAssistantMessage,
+            object: nil,
+            userInfo: ["text": "Visible reply", "is_final": false]
+        )
+        try await flushNotifications()
+
+        XCTAssertTrue(mainConversation.isStreaming)
+        XCTAssertEqual(mainConversation.completedThinkTrace, "Local reasoning trace")
+        XCTAssertEqual(mainConversation.streamingThinkText, "")
+        XCTAssertEqual(mainConversation.streamingText, "Visible reply")
+    }
+
     func testRapidRouteSwitchDeliversToLatestConversationOnly() async throws {
         let bridge = ConversationBridgeController()
         let mainConversation = ConversationController()

@@ -800,6 +800,7 @@ struct CoworkWorkspaceView: View {
     @State private var showContextAttachmentsSection = false
     @State private var showContextIndexedFilesSection = false
     @State private var showContextPreviewSection = true
+    @State private var conversationBubblesOpacity: Double = 1.0
     @Namespace private var workspaceSelectionAnimation
 
     var body: some View {
@@ -1354,6 +1355,8 @@ struct CoworkWorkspaceView: View {
                                             }
                                         }
                                 }
+                                .opacity(conversationBubblesOpacity)
+                                .animation(.easeInOut(duration: 0.3), value: conversationBubblesOpacity)
 
                                 // Completed think trace — brain icon after reasoning finishes
                                 if let trace = conversation.completedThinkTrace,
@@ -1392,7 +1395,16 @@ struct CoworkWorkspaceView: View {
                             proxy.scrollTo("cowork-bottom", anchor: .bottom)
                         }
                     }
+                    .onChange(of: conversation.isGenerating) {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            conversationBubblesOpacity = conversation.isGenerating ? 0.35 : 1.0
+                        }
+                        proxy.scrollTo("cowork-bottom", anchor: .bottom)
+                    }
                     .onChange(of: conversation.streamingText) {
+                        proxy.scrollTo("cowork-bottom", anchor: .bottom)
+                    }
+                    .onChange(of: conversation.streamingThinkText) {
                         proxy.scrollTo("cowork-bottom", anchor: .bottom)
                     }
                 }

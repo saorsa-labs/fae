@@ -7,6 +7,7 @@ import SwiftUI
 struct ConversationScrollView: View {
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var canvas: CanvasController
+    @State private var bubblesOpacity: Double = 1.0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -16,11 +17,31 @@ struct ConversationScrollView: View {
                         MessageBubbleView(message: message)
                             .id(message.id)
                     }
+                    .opacity(bubblesOpacity)
+                    .animation(.easeInOut(duration: 0.3), value: bubblesOpacity)
 
                     // Inline tool activity cards (from canvas controller).
                     ForEach(canvas.activityCards) { card in
                         InlineToolCardView(card: card)
                             .id("tool-\(card.id)")
+                    }
+
+                    if conversation.isGenerating,
+                       !conversation.isStreaming,
+                       !conversation.streamingThinkText.isEmpty
+                    {
+                        ThinkingCrawlView(text: conversation.streamingThinkText)
+                            .id("think-crawl")
+                            .transition(.opacity)
+                    }
+
+                    if let trace = conversation.completedThinkTrace,
+                       !conversation.isGenerating
+                    {
+                        ThinkIconBubble(thinkTrace: trace)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("think-icon")
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
 
                     // Live streaming bubble — shows tokens as they arrive.
@@ -33,7 +54,8 @@ struct ConversationScrollView: View {
 
                     // Typing indicator — only when generating but no text yet.
                     if conversation.isGenerating,
-                       !conversation.isStreaming
+                       !conversation.isStreaming,
+                       conversation.streamingThinkText.isEmpty
                     {
                         TypingIndicatorView()
                             .id("typing")
@@ -46,11 +68,19 @@ struct ConversationScrollView: View {
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: conversation.isGenerating) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    bubblesOpacity = conversation.isGenerating ? 0.35 : 1.0
+                }
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: conversation.streamingText) {
                 withAnimation(.easeOut(duration: 0.1)) {
                     proxy.scrollTo("streaming", anchor: .bottom)
+                }
+            }
+            .onChange(of: conversation.streamingThinkText) {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    proxy.scrollTo("think-crawl", anchor: .bottom)
                 }
             }
         }

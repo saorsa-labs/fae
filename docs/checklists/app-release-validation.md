@@ -121,6 +121,8 @@ Acceptance:
 - [ ] A trivial typed prompt gets a timely, relevant answer.
 - [ ] A longer essay-style request gets a comprehensive answer when asked.
 - [ ] Overlapping turns are handled cleanly without silent drops or permanent `Thinking...`.
+- [ ] When a turn enters a thinking phase, the conversation surface shows the crawl panel before reply streaming begins.
+- [ ] When a thinking phase finishes, the crawl collapses cleanly and leaves a replayable thinking icon tied to that turn.
 - [ ] Main-window replies remain reliable while Cowork is open.
 
 ### Tools, approvals, and popups
@@ -173,6 +175,7 @@ Acceptance:
 - [ ] Remote models can answer normally through configured providers.
 - [ ] Model switching works across local, direct API, and OpenRouter-backed models.
 - [ ] Thinking level / response style switching works and remains understandable.
+- [ ] Main and Cowork both show the thinking crawl during deliberate reasoning and preserve the replay icon after the answer arrives.
 - [ ] Compare and fork preserve the right conversation state.
 
 ### Security and privacy

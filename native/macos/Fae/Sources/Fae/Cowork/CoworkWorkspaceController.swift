@@ -1407,9 +1407,16 @@ final class CoworkWorkspaceController: ObservableObject {
 
             do {
                 let provider = try CoworkProviderFactory.provider(for: executionAgent, runtimeDescriptor: self.runtimeDescriptor)
+                let usesWebSearch = provider is any CoworkWebSearchProvider
                 await MainActor.run {
                     self.conversation.appendMessage(role: .user, content: prompt)
-                    self.conversation.isGenerating = true
+                    self.conversation.beginThinkingTurn(
+                        placeholderTrace: Self.remoteThinkingTrace(
+                            for: executionAgent,
+                            thinkingLevel: thinkingLevel,
+                            usesWebSearch: usesWebSearch
+                        )
+                    )
                     self.prependActivity(
                         title: "Prompt sent to \(executionAgent.backendDisplayName)",
                         detail: CoworkPromptEgressPolicy.statusText(for: providerRequest),
@@ -1423,15 +1430,15 @@ final class CoworkWorkspaceController: ObservableObject {
                     // the external model to call web_search up to 3 times before replying.
                     response = try await searchProvider.submitWithWebSearch(request: providerRequest)
                     await MainActor.run {
-                        self.conversation.startStreaming()
+                        self.conversation.startStreamingReply()
                         self.conversation.updateStreaming(text: response.content)
                     }
                 } else if let streamingProvider = provider as? any CoworkStreamingProvider {
-                    await MainActor.run {
-                        self.conversation.startStreaming()
-                    }
                     response = try await streamingProvider.stream(request: providerRequest) { partialText in
                         await MainActor.run {
+                            if !self.conversation.isStreaming {
+                                self.conversation.startStreamingReply()
+                            }
                             self.conversation.updateStreaming(text: partialText)
                         }
                     }
@@ -1444,6 +1451,7 @@ final class CoworkWorkspaceController: ObservableObject {
                     if self.conversation.isStreaming {
                         self.conversation.finalizeStreaming()
                     } else {
+                        self.conversation.finalizeThinkingTrace()
                         self.conversation.appendMessage(role: .assistant, content: response.content)
                     }
                     self.providerStatus = "\(executionAgent.backendDisplayName) replied"
@@ -1465,6 +1473,7 @@ final class CoworkWorkspaceController: ObservableObject {
                     if self.conversation.isStreaming {
                         self.conversation.cancelStreaming()
                     }
+                    self.conversation.clearThinkingTrace()
                     if !hadPartial {
                         self.conversation.appendMessage(
                             role: .assistant,
@@ -1761,6 +1770,25 @@ final class CoworkWorkspaceController: ObservableObject {
         if activityItems.count > 18 {
             activityItems.removeLast(activityItems.count - 18)
         }
+    }
+
+    private static func remoteThinkingTrace(
+        for agent: WorkWithFaeAgentProfile,
+        thinkingLevel: FaeThinkingLevel,
+        usesWebSearch: Bool
+    ) -> String {
+        var lines = [
+            "Preparing shareable workspace context for \(agent.backendDisplayName).",
+            "Applying \(thinkingLevel.displayName.lowercased()) reasoning profile to \(agent.modelIdentifier).",
+        ]
+
+        if usesWebSearch {
+            lines.append("Web search is available for this turn if the provider decides it needs current information.")
+        } else {
+            lines.append("Waiting for the first reply tokens from \(agent.backendDisplayName).")
+        }
+
+        return lines.joined(separator: "\n\n")
     }
 
     private func truncate(_ value: String, limit: Int = 160) -> String {

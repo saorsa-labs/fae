@@ -99,13 +99,17 @@ Acceptance:
 - A trivial typed prompt gets a relevant answer promptly.
 - A long-form request gets a substantial answer when explicitly requested.
 - Overlapping turns do not leave the UI stuck in `Thinking...`.
+- The main conversation surface shows the thinking crawl before live reply text appears when thinking is active.
+- The replayable thinking icon remains available after the reply finishes.
 
 Steps:
 
 1. Type a trivial prompt.
 2. Type a longer request asking explicitly for a detailed answer or essay.
 3. If the first turn is still live, attempt a second turn and verify the UI handles the overlap cleanly.
-4. Capture screenshots for both a short answer and long-form answer.
+4. Run one prompt with thinking enabled and capture the crawl state before the first visible reply token arrives.
+5. After the reply finishes, click the thinking icon and confirm the stored trace opens again.
+6. Capture screenshots for both a short answer and long-form answer.
 
 ### 5. Tools, popups, and approvals
 
@@ -197,13 +201,16 @@ Acceptance:
 - Remote providers answer normally.
 - Local vs remote is obvious in the UI.
 - Model switching does not corrupt the thread.
+- Cowork shows the thinking crawl before a remote or local reply begins streaming, then leaves the replay icon afterward.
 
 Steps:
 
 1. With a local-capable Cowork route, test one safe brokered local request.
 2. With a remote route, test one normal query and one secret-containing query.
 3. Confirm the secret path is blocked or reviewed according to current policy.
-4. Capture screenshots for successful remote send and guarded send.
+4. With thinking enabled, capture the Cowork crawl state before the first reply token for both a local and a remote turn if available.
+5. After each reply completes, click the thinking icon and confirm the stored trace reopens.
+6. Capture screenshots for successful remote send and guarded send.
 
 ### 11. Cowork utility surfaces
 

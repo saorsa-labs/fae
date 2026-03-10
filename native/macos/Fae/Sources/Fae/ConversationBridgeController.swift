@@ -221,7 +221,7 @@ final class ConversationBridgeController: ObservableObject {
 
         // Transition from think phase → streaming phase on first response token.
         if activeConversationController?.isStreaming == false {
-            activeConversationController?.startStreaming()
+            activeConversationController?.startStreamingReply()
         }
 
         // Update live streaming bubble in conversation window
@@ -239,8 +239,6 @@ final class ConversationBridgeController: ObservableObject {
     }
 
     private func handleGenerating(active: Bool) {
-        // Native generating state — the ConversationWindowView observes this directly.
-        activeConversationController?.isGenerating = active
         if active {
             subtitleState?.showPersistentToolMessage("Thinking…")
             // Flush the buffered user transcription — coordinator confirmed it was accepted.
@@ -248,17 +246,14 @@ final class ConversationBridgeController: ObservableObject {
                 activeConversationController?.appendMessage(role: .user, content: pending)
                 pendingUserTranscription = nil
             }
-            // Reset streaming buffer — do NOT start streaming yet.
-            // isStreaming stays false during the think phase so ThinkingCrawlView can show.
-            // startStreaming() is called on the first response token in handleAssistantSentence.
+            // Reset streaming + thinking state for the new turn. isStreaming stays false
+            // during the think phase so the crawl can remain visible until the first token.
             streamingAssistantText = ""
             isStreamingAssistant = false
-            // Clear previous think trace at start of new turn
-            activeConversationController?.streamingThinkText = ""
-            activeConversationController?.completedThinkTrace = nil
-            activeConversationController?.streamingText = ""
-            activeConversationController?.isStreaming = false
+            activeConversationController?.beginThinkingTurn()
         } else {
+            // Native generating state — the conversation surfaces observe this directly.
+            activeConversationController?.isGenerating = false
             // Generation stopped — clear the thinking bubble if still showing.
             subtitleState?.clearToolMessage()
             // If there's partial streamed text that never got an isFinal sentence
@@ -278,17 +273,13 @@ final class ConversationBridgeController: ObservableObject {
         if isActive {
             if text.isEmpty {
                 // Start of a new think block
-                controller?.streamingThinkText = ""
+                controller?.replaceThinkingTrace(with: "")
             } else {
-                controller?.streamingThinkText += text
+                controller?.appendThinkingTrace(text)
             }
         } else {
             // Think block ended — finalize trace
-            let trace = controller?.streamingThinkText ?? ""
-            if !trace.isEmpty {
-                controller?.completedThinkTrace = trace
-            }
-            controller?.streamingThinkText = ""
+            controller?.finalizeThinkingTrace()
         }
     }
 

@@ -40,6 +40,8 @@ final class ConversationControllerTests: XCTestCase {
         controller.isGenerating = true
         controller.startStreaming()
         controller.updateStreaming(text: "partial")
+        controller.appendThinkingTrace("trace")
+        controller.completedThinkTrace = "previous trace"
 
         let messages = (0..<220).map { index in
             ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant, content: "replacement-\(index)")
@@ -52,6 +54,8 @@ final class ConversationControllerTests: XCTestCase {
         XCTAssertFalse(controller.isGenerating)
         XCTAssertFalse(controller.isStreaming)
         XCTAssertEqual(controller.streamingText, "")
+        XCTAssertEqual(controller.streamingThinkText, "")
+        XCTAssertNil(controller.completedThinkTrace)
     }
 
     func testFinalizeStreamingCommitsAssistantMessageAndClearsState() {
@@ -78,6 +82,37 @@ final class ConversationControllerTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.content, "partial answer")
         XCTAssertFalse(controller.isStreaming)
         XCTAssertEqual(controller.streamingText, "")
+    }
+
+    func testStartStreamingReplyFinalizesThinkingTraceIntoReplayState() {
+        let controller = ConversationController()
+        controller.beginThinkingTurn(placeholderTrace: "Preparing context")
+        controller.appendThinkingTrace("\nWaiting for first tokens")
+
+        controller.startStreamingReply()
+
+        XCTAssertTrue(controller.isGenerating)
+        XCTAssertTrue(controller.isStreaming)
+        XCTAssertEqual(controller.streamingThinkText, "")
+        XCTAssertEqual(
+            controller.completedThinkTrace,
+            "Preparing context\nWaiting for first tokens"
+        )
+    }
+
+    func testBeginThinkingTurnClearsPreviousTraceAndStreamingState() {
+        let controller = ConversationController()
+        controller.completedThinkTrace = "previous trace"
+        controller.startStreaming()
+        controller.updateStreaming(text: "partial reply")
+
+        controller.beginThinkingTurn(placeholderTrace: "Fresh trace")
+
+        XCTAssertTrue(controller.isGenerating)
+        XCTAssertFalse(controller.isStreaming)
+        XCTAssertEqual(controller.streamingText, "")
+        XCTAssertEqual(controller.streamingThinkText, "Fresh trace")
+        XCTAssertNil(controller.completedThinkTrace)
     }
 
     func testRestoreAndClearSnapshotRoundTrip() {

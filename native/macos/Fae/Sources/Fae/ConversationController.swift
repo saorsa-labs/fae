@@ -129,6 +129,8 @@ final class ConversationController: ObservableObject {
         streamingText = ""
         isStreaming = false
         isGenerating = false
+        streamingThinkText = ""
+        completedThinkTrace = nil
     }
 
     // MARK: - Background Tool Activity
@@ -154,6 +156,41 @@ final class ConversationController: ObservableObject {
     func startStreaming() {
         streamingText = ""
         isStreaming = true
+    }
+
+    func beginThinkingTurn(placeholderTrace: String? = nil) {
+        isGenerating = true
+        streamingText = ""
+        isStreaming = false
+        streamingThinkText = placeholderTrace ?? ""
+        completedThinkTrace = nil
+    }
+
+    func replaceThinkingTrace(with text: String) {
+        streamingThinkText = text
+    }
+
+    func appendThinkingTrace(_ text: String) {
+        guard !text.isEmpty else { return }
+        streamingThinkText += text
+    }
+
+    func finalizeThinkingTrace() {
+        let trace = streamingThinkText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trace.isEmpty {
+            completedThinkTrace = trace
+        }
+        streamingThinkText = ""
+    }
+
+    func clearThinkingTrace() {
+        streamingThinkText = ""
+        completedThinkTrace = nil
+    }
+
+    func startStreamingReply() {
+        finalizeThinkingTrace()
+        startStreaming()
     }
 
     func updateStreaming(text: String) {

@@ -3,25 +3,16 @@ import XCTest
 
 @MainActor
 final class SubtitleStateControllerTests: XCTestCase {
-    func testDismissThinkingSuppressesFurtherUpdatesUntilNextTurn() {
+    func testPersistentToolMessagesCanBeClearedAndReplaced() {
         let controller = SubtitleStateController()
 
-        controller.appendToolActivity("Running calendar lookup")
-        XCTAssertEqual(controller.thinkingText, "Running calendar lookup")
-        XCTAssertTrue(controller.isThinking)
+        controller.showPersistentToolMessage("Running calendar lookup")
+        XCTAssertEqual(controller.toolText, "Running calendar lookup")
 
-        controller.dismissThinkingUntilNextTurn()
-        XCTAssertEqual(controller.thinkingText, "")
-        XCTAssertFalse(controller.isThinking)
+        controller.clearToolMessage()
+        XCTAssertEqual(controller.toolText, "")
 
-        controller.appendToolActivity("Still running")
-        controller.appendThinkingText("Thinking...")
-        XCTAssertEqual(controller.thinkingText, "")
-        XCTAssertFalse(controller.isThinking)
-
-        controller.clearThinking()
-        controller.appendToolActivity("Next turn activity")
-        XCTAssertEqual(controller.thinkingText, "Next turn activity")
-        XCTAssertTrue(controller.isThinking)
+        controller.showPersistentToolMessage("Next turn activity")
+        XCTAssertEqual(controller.toolText, "Next turn activity")
     }
 }
