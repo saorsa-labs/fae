@@ -203,6 +203,21 @@ final class TestServer {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+
+            // Reject concurrent injection — two test processes hitting the same Fae
+            // instance simultaneously causes the LLM worker to be cancelled and
+            // restarted mid-inference, briefly doubling model RAM usage and OOM.
+            let alreadyGenerating = self.conversation?.isGenerating ?? false
+            let alreadySpeaking = await faeCore.isSpeaking()
+            if alreadyGenerating || alreadySpeaking {
+                self.sendResponse(connection: connection, status: 409, body: [
+                    "error": "Fae is already generating — wait for the current turn to finish",
+                    "isGenerating": alreadyGenerating,
+                    "isSpeaking": alreadySpeaking,
+                ] as [String: Any])
+                return
+            }
+
             await self.beginInjectedTurnIsolation()
 
             // Add to conversation panel (mimics ConversationController.handleUserSent)

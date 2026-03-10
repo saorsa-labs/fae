@@ -101,6 +101,18 @@ done
 
 # ── Post-parse initialization ──────────────────────────────────────────────
 
+# Exclusive lockfile — prevents concurrent test runs that would fight over
+# the same Fae instance, causing /reset cancellations to kill each other's
+# LLM worker, leading to duplicate model copies in RAM and OOM crashes.
+LOCK_FILE="/tmp/fae-test-comprehensive.lock"
+if ! ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
+    existing_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "unknown")
+    red "ERROR: another test-comprehensive.sh is already running (PID $existing_pid)."
+    red "Kill it first, or remove $LOCK_FILE if it is stale."
+    exit 1
+fi
+trap 'rm -f "$LOCK_FILE"' EXIT
+
 RESULTS_FILE=$(mktemp /tmp/fae-test-results-XXXXXXXXXX)
 echo "[]" > "$RESULTS_FILE"
 RUN_TIMESTAMP=$(date +"%Y-%m-%d-%H%M%S")
@@ -178,15 +190,27 @@ fae_reset() {
 }
 
 # POST /inject with text. Returns turn_id via INJECT_TURN_ID global.
+# Retries up to 5 times on 409 (Fae already generating) with a 3s back-off.
 fae_inject() {
     local text="$1"
     local escaped
     escaped=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
-    fae_post "/inject" "{\"text\":${escaped}}"
     INJECT_TURN_ID=""
-    if [ "$HTTP_STATUS" = "200" ]; then
-        INJECT_TURN_ID=$(echo "$HTTP_BODY" | jq -r '.turn_id // empty' 2>/dev/null || echo "")
-    fi
+    local attempts=0
+    while [ "$attempts" -lt 6 ]; do
+        fae_post "/inject" "{\"text\":${escaped}}"
+        if [ "$HTTP_STATUS" = "200" ]; then
+            INJECT_TURN_ID=$(echo "$HTTP_BODY" | jq -r '.turn_id // empty' 2>/dev/null || echo "")
+            return
+        elif [ "$HTTP_STATUS" = "409" ]; then
+            attempts=$((attempts + 1))
+            yellow "  Warning: /inject returned 409 (already generating), retry $attempts/5 in 3s..."
+            sleep 3
+        else
+            return
+        fi
+    done
+    yellow "  Warning: /inject still returning 409 after 5 retries — proceeding anyway"
 }
 
 # Poll /conversation until isGenerating==false AND isSpeaking==false, max N seconds.
@@ -217,9 +241,10 @@ fae_wait_generation() {
         # must not count as completion.
         local non_user_count
         local streaming_text
-        non_user_count=$(echo "$HTTP_BODY" | jq -r '[.messages[]? | select(.role != "user")] | length' 2>/dev/null || echo "0")
+        non_user_count=$(echo "$HTTP_BODY" | jq -r '[.messages[]? | select(.role != "user")] | length' 2>/dev/null)
+        non_user_count="${non_user_count:-0}"
         streaming_text=$(echo "$HTTP_BODY" | jq -r '.streamingText // ""' 2>/dev/null || echo "")
-        if [ "$non_user_count" -gt 0 ] || [ -n "$streaming_text" ]; then
+        if [ "${non_user_count:-0}" -gt 0 ] || [ -n "$streaming_text" ]; then
             return 0  # Response exists
         fi
         return 1  # Timed out waiting for generation to start
@@ -494,6 +519,25 @@ def eval_atom(expr):
         field = m.group(1)
         actual = body.get(field)
         return (actual is not None, f"body.{field} = {actual!r}")
+
+    # body.FIELD (>=|<=|>|<) NUMBER  — numeric comparison
+    m = re.match(r'body\.(\w+)\s*(>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)$', expr)
+    if m:
+        field, op, threshold_str = m.group(1), m.group(2), m.group(3)
+        threshold = float(threshold_str) if '.' in threshold_str else int(threshold_str)
+        actual = body.get(field)
+        try:
+            n = float(actual) if actual is not None else None
+        except (TypeError, ValueError):
+            n = None
+        if n is None:
+            return (False, f"body.{field} = {actual!r} (not numeric)")
+        if op == ">=": ok = n >= threshold
+        elif op == "<=": ok = n <= threshold
+        elif op == ">":  ok = n > threshold
+        elif op == "<":  ok = n < threshold
+        else:            ok = False
+        return (ok, f"body.{field} = {actual!r} ({op} {threshold})")
 
     # body.FIELD == VALUE
     m = re.match(r'body\.(\w+)\s*==\s*(.+)$', expr)
@@ -830,7 +874,7 @@ execute_step() {
             fi
             ;;
         record_audio_start)
-            # Start recording system audio via screencapture
+            # Start recording system audio only (not full screen video).
             local output_path
             output_path=$(echo "$step_json" | jq -r '.path // "/tmp/fae-test-audio.mov"')
             if [ -n "$RECORDING_PID" ]; then
@@ -838,7 +882,7 @@ execute_step() {
                 return
             fi
             if $VERBOSE; then dim "  record_audio_start: $output_path"; fi
-            screencapture -v "$output_path" &
+            screencapture -V "$output_path" &
             RECORDING_PID=$!
             RECORDING_FILE="$output_path"
             sleep 1  # Let recording initialize
@@ -909,8 +953,9 @@ execute_step() {
             while [ "$elapsed" -lt "$max_wait" ]; do
                 fae_get "/approvals"
                 local pending_count
-                pending_count=$(echo "$HTTP_BODY" | jq '.pending | length' 2>/dev/null || echo "0")
-                if [ "$pending_count" -gt "0" ]; then
+                pending_count=$(echo "$HTTP_BODY" | jq '.pending | length' 2>/dev/null)
+                pending_count="${pending_count:-0}"
+                if [ "${pending_count:-0}" -gt "0" ]; then
                     found=true
                     break
                 fi
