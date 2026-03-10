@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: March 9, 2026
+Last updated: March 10, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae.
 
@@ -110,6 +110,8 @@ Acceptance:
 - [ ] Fae speaks replies audibly through the configured TTS path.
 - [ ] Voice listening starts promptly enough to catch the intended utterance.
 - [ ] Wake-word clipping does not cause normal owner follow-up speech to be ignored.
+- [ ] During an active conversation, a short pause does not force the user to say the wake phrase again before continuing.
+- [ ] Continuation cues such as `wait`, `hold on`, or `let me check` are treated as the same turn rather than an immediate handoff back to idle.
 - [ ] Typing can continue while listening remains active.
 - [ ] A spoken long-form request produces a substantial answer when appropriate, not an over-compressed reply.
 

@@ -803,6 +803,7 @@ actor PipelineCoordinator {
     private var pendingSemanticTurn: PendingSemanticTurn?
     private var pendingSemanticTurnTask: Task<Void, Never>?
     private static let semanticTurnHoldMs: Int = 1200
+    private static let conversationalSilenceFloorMs: Int = 1400
 
     private var streamingWakeSamples: [Float] = []
     private var streamingWakeLastEvaluatedSamples: Int = 0
@@ -1587,9 +1588,29 @@ actor PipelineCoordinator {
         directAddressFollowupS: Int
     ) -> Int {
         if requireDirectAddress {
-            return max(directAddressFollowupS, 5)
+            return max(max(directAddressFollowupS, idleTimeoutS), 5)
         }
         return max(idleTimeoutS, 0)
+    }
+
+    static func silenceThresholdMs(
+        assistantSpeaking: Bool,
+        gateState: GateState,
+        inFollowup: Bool,
+        hasPendingSemanticTurn: Bool,
+        configMinSilenceMs: Int,
+        bargeInSilenceMs: Int
+    ) -> Int {
+        if assistantSpeaking {
+            return bargeInSilenceMs
+        }
+
+        let conversationalTurnActive = gateState == .active && (inFollowup || hasPendingSemanticTurn)
+        if conversationalTurnActive {
+            return max(configMinSilenceMs, Self.conversationalSilenceFloorMs)
+        }
+
+        return configMinSilenceMs
     }
 
     static func shouldSkipSTTAfterSpeakerVerification(
@@ -2355,9 +2376,19 @@ actor PipelineCoordinator {
                 pendingBargeIn = nil
             }
 
-            // Adjust VAD silence threshold based on assistant state.
+            // Be more patient during an active conversation so short hesitations
+            // do not prematurely cut the user turn.
+            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+            let silenceThresholdMs = Self.silenceThresholdMs(
+                assistantSpeaking: assistantSpeaking,
+                gateState: gateState,
+                inFollowup: inFollowup,
+                hasPendingSemanticTurn: pendingSemanticTurn != nil,
+                configMinSilenceMs: config.vad.minSilenceDurationMs,
+                bargeInSilenceMs: config.bargeIn.bargeInSilenceMs
+            )
+            vad.setSilenceThresholdMs(silenceThresholdMs)
             if assistantSpeaking {
-                vad.setSilenceThresholdMs(config.bargeIn.bargeInSilenceMs)
 
                 // Watchdog: if assistantSpeaking has been true for an unreasonably
                 // long time (>60s), the TTS pipeline is stuck. Force-clear so the
@@ -2373,8 +2404,6 @@ actor PipelineCoordinator {
                     markAssistantSpeechEnded(reason: "watchdog_timeout")
                     await playback.stop()
                 }
-            } else {
-                vad.setSilenceThresholdMs(config.vad.minSilenceDurationMs)
             }
 
             // Process completed speech segment via bounded queue.
@@ -2637,6 +2666,10 @@ actor PipelineCoordinator {
         }
 
         let inFollowup = engagedUntil.map { Date() < $0 } ?? false
+        let shouldHoldShortFollowupFragment = allowSemanticHold
+            && !addressedToFae
+            && inFollowup
+            && TextProcessing.isLikelyContinuationCue(effectiveText)
         if allowSemanticHold,
            Self.shouldDeferSemanticTurn(
                 text: effectiveText,
@@ -2646,6 +2679,7 @@ actor PipelineCoordinator {
                 hasPendingGovernanceAction: pendingGovernanceAction != nil,
                 firstOwnerEnrollmentActive: firstOwnerEnrollmentActive
            )
+            || shouldHoldShortFollowupFragment
         {
             let pending = PendingSemanticTurn(
                 rawText: effectiveRawText,

@@ -589,13 +589,24 @@ enum TextProcessing {
     /// their turn yet and the pipeline should briefly wait for continuation.
     ///
     /// This is intentionally conservative: it only fires for clearly unfinished
-    /// phrasing such as trailing conjunctions / prepositions.
+    /// phrasing, hesitations, or clipped follow-up fragments.
     static func isLikelyIncompleteTurn(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
         if let last = trimmed.last, [".", "!", "?"].contains(last) {
             return false
+        }
+
+        if trimmed.hasSuffix("...")
+            || trimmed.hasSuffix(",")
+            || trimmed.hasSuffix(":")
+            || trimmed.hasSuffix(";")
+            || trimmed.hasSuffix(" -")
+            || trimmed.hasSuffix(" —")
+            || trimmed.hasSuffix(" –")
+        {
+            return true
         }
 
         let normalized = normalizeWakeAlias(trimmed)
@@ -610,7 +621,81 @@ enum TextProcessing {
             "around", "through", "over", "under", "between", "during", "per",
             "plus", "minus", "versus", "vs", "uh", "um"
         ]
-        return trailingFunctionWords.contains(lastToken)
+        if trailingFunctionWords.contains(lastToken) {
+            return true
+        }
+
+        let trailingDeterminers: Set<String> = [
+            "a", "an", "the", "this", "that", "these", "those",
+            "my", "your", "our", "his", "her", "their"
+        ]
+        if trailingDeterminers.contains(lastToken) {
+            return true
+        }
+
+        let continuationPhrases: Set<String> = [
+            "wait",
+            "hang on",
+            "hold on",
+            "one sec",
+            "one second",
+            "just a sec",
+            "just a second",
+            "give me a sec",
+            "give me a second",
+            "let me think",
+            "let me check",
+            "i mean",
+            "you know",
+        ]
+        if continuationPhrases.contains(normalized) {
+            return true
+        }
+
+        if tokens.count >= 2 {
+            let trailingBigram = tokens.suffix(2).joined(separator: " ")
+            let trailingContinuationBigrams: Set<String> = [
+                "kind of",
+                "sort of",
+                "let me",
+                "hold on",
+                "hang on",
+                "you know",
+                "i mean",
+            ]
+            if trailingContinuationBigrams.contains(trailingBigram) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Returns true for short conversational cues that usually mean
+    /// "don't take the turn yet, I'm continuing".
+    static func isLikelyContinuationCue(_ text: String) -> Bool {
+        let normalized = normalizeWakeAlias(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !normalized.isEmpty else { return false }
+
+        let cues: Set<String> = [
+            "wait",
+            "no wait",
+            "hang on",
+            "hold on",
+            "one sec",
+            "one second",
+            "just a sec",
+            "just a second",
+            "give me a sec",
+            "give me a second",
+            "let me think",
+            "let me check",
+            "and then",
+            "okay so",
+            "go on",
+            "carry on",
+        ]
+        return cues.contains(normalized)
     }
 
     /// Correct common ASR misrecognitions of "Fae" in transcribed text.

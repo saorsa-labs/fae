@@ -315,6 +315,15 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
+    func testIncompleteTurnDetectorHandlesHesitationFragments() {
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("hold on"))
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("let me check"))
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("can you set a timer for the"))
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("set a timer for ten minutes"))
+        XCTAssertTrue(TextProcessing.isLikelyContinuationCue("no wait"))
+        XCTAssertFalse(TextProcessing.isLikelyContinuationCue("what time is it"))
+    }
+
     func testSemanticTurnDoesNotDeferDuringOnboarding() {
         XCTAssertFalse(
             PipelineCoordinator.shouldDeferSemanticTurn(
@@ -431,14 +440,14 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
-    func testDirectAddressUsesFollowupWindowInsteadOfIdleTimeout() {
+    func testDirectAddressLingerUsesLongestConversationWindow() {
         XCTAssertEqual(
             PipelineCoordinator.idleRearmSeconds(
                 requireDirectAddress: true,
                 idleTimeoutS: 45,
                 directAddressFollowupS: 12
             ),
-            12
+            45
         )
         XCTAssertEqual(
             PipelineCoordinator.idleRearmSeconds(
@@ -447,6 +456,31 @@ final class VoicePipelineRegressionTests: XCTestCase {
                 directAddressFollowupS: 12
             ),
             45
+        )
+    }
+
+    func testConversationalSilenceThresholdStaysPatientDuringFollowup() {
+        XCTAssertEqual(
+            PipelineCoordinator.silenceThresholdMs(
+                assistantSpeaking: false,
+                gateState: .active,
+                inFollowup: true,
+                hasPendingSemanticTurn: false,
+                configMinSilenceMs: 1000,
+                bargeInSilenceMs: 600
+            ),
+            1400
+        )
+        XCTAssertEqual(
+            PipelineCoordinator.silenceThresholdMs(
+                assistantSpeaking: true,
+                gateState: .active,
+                inFollowup: true,
+                hasPendingSemanticTurn: true,
+                configMinSilenceMs: 1000,
+                bargeInSilenceMs: 600
+            ),
+            600
         )
     }
 
