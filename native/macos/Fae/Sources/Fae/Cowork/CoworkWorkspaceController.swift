@@ -1843,7 +1843,7 @@ final class CoworkWorkspaceController: ObservableObject {
         }
         let persistedMessages = Array(
             conversation.messages
-                .suffix(120)
+                .suffix(WorkWithFaeWorkspaceStore.maxConversationMessages)
                 .map(Self.workspaceConversationMessage(from:))
         )
         guard workspaceRegistry.workspaces[index].state.conversationMessages != persistedMessages else {

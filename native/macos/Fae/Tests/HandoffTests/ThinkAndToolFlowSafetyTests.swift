@@ -243,7 +243,9 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
     }
 
     func testKokoroDownloadRevisionIsPinned() {
-        XCTAssertEqual(KokoroMLXTTSEngine.pinnedRevision, "f3ff3571791e39611d31c381e3a41a3af07b4987")
-        XCTAssertEqual(KokoroMLXTTSEngine.pinnedRevision.count, 40)
+        XCTAssertEqual(KokoroMLXTTSEngine.pinnedModelRevision, "14b74f4")
+        XCTAssertEqual(KokoroMLXTTSEngine.pinnedVoicesRevision, "4685882")
+        XCTAssertNotEqual(KokoroMLXTTSEngine.pinnedModelRevision, "main")
+        XCTAssertNotEqual(KokoroMLXTTSEngine.pinnedVoicesRevision, "main")
     }
 }

@@ -21,7 +21,8 @@ import KokoroSwift
 ///   3. ONNX voices dir + standalone safetensors model at app support path
 ///   4. Auto-download: safetensors from `prince-canuma/Kokoro-82M`, voices from `onnx-community/Kokoro-82M-v1.0-ONNX` → saves to location 1
 actor KokoroMLXTTSEngine: TTSEngine {
-    static let pinnedRevision = "main"
+    static let pinnedModelRevision = "14b74f4"
+    static let pinnedVoicesRevision = "4685882"
 
     // MARK: - State
 
@@ -280,14 +281,14 @@ actor KokoroMLXTTSEngine: TTSEngine {
         // not safetensors. prince-canuma/Kokoro-82M provides the safetensors conversion.
         let modelDest = base.appendingPathComponent("kokoro-v1_0.safetensors")
         try await downloadFile(
-            from: URL(string: "https://huggingface.co/prince-canuma/Kokoro-82M/resolve/\(pinnedRevision)/kokoro-v1_0.safetensors")!,
+            from: URL(string: "https://huggingface.co/prince-canuma/Kokoro-82M/resolve/\(pinnedModelRevision)/kokoro-v1_0.safetensors")!,
             to: modelDest,
             label: "kokoro-v1_0.safetensors"
         )
 
         // Voice embeddings (~512 KB each, raw float32 [510×1×256]).
         // onnx-community publishes these in the .bin format KokoroSwift expects.
-        let onnxVoiceBase = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/\(pinnedRevision)/voices/"
+        let onnxVoiceBase = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/\(pinnedVoicesRevision)/voices/"
         let knownVoices = [
             "af_aoede", "af_bella", "af_heart", "af_nicole", "af_sky",
             "bf_emma", "bf_isabella", "am_adam", "am_echo", "bm_daniel",

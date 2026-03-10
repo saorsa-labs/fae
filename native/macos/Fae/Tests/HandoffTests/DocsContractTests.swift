@@ -63,11 +63,11 @@ final class DocsContractTests: XCTestCase {
         let readme = try loadRepositoryText(relativePath: "README.md")
         let modelSwitchingGuide = try loadRepositoryText(relativePath: "docs/guides/model-switching.md")
         let expectations: [(Int, String, Int)] = [
-            (8, "mlx-community/Qwen3.5-0.8B-4bit", 8_192),
-            (16, "mlx-community/Qwen3.5-2B-4bit", 16_384),
-            (32, "mlx-community/Qwen3.5-2B-4bit", 16_384),
-            (64, "mlx-community/Qwen3.5-2B-4bit", 16_384),
-            (128, "mlx-community/Qwen3.5-2B-4bit", 16_384),
+            (8, "mlx-community/Qwen3.5-0.8B-4bit", 32_768),
+            (16, "mlx-community/Qwen3.5-2B-4bit", 32_768),
+            (32, "mlx-community/Qwen3.5-2B-4bit", 32_768),
+            (64, "mlx-community/Qwen3.5-2B-4bit", 32_768),
+            (128, "mlx-community/Qwen3.5-2B-4bit", 32_768),
         ]
 
         for (ramGB, modelId, contextSize) in expectations {
@@ -85,8 +85,8 @@ final class DocsContractTests: XCTestCase {
         XCTAssertTrue(readme.contains("below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit`"))
 
         XCTAssertTrue(modelSwitchingGuide.contains("benchmark-backed operator policy"))
-        XCTAssertTrue(modelSwitchingGuide.contains("12+ GB: `qwen3_5_2b` at 16K context"))
-        XCTAssertTrue(modelSwitchingGuide.contains("below 12 GB: `qwen3_5_0_8b` at 8K context"))
+        XCTAssertTrue(modelSwitchingGuide.contains("12+ GB: `qwen3_5_2b` at 32K context"))
+        XCTAssertTrue(modelSwitchingGuide.contains("below 12 GB: `qwen3_5_0_8b` at 32K context"))
         XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_35b_a3b`"))
         XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_27b`"))
         XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_9b`"))

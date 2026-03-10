@@ -239,8 +239,8 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 
 Current benchmark-backed default:
 - `auto` now follows the benchmark-backed operator policy:
-  - 12+ GB: `mlx-community/Qwen3.5-2B-4bit`
-  - below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit`
+  - 12+ GB: `mlx-community/Qwen3.5-2B-4bit` at 32K context
+  - below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit` at 32K context
 - `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_27b`, and `qwen3_5_35b_a3b` remain manual opt-in presets for users who want more local depth over faster startup and stricter tool behavior
 - this benchmark-backed default policy lives in `FaeConfig.recommendedModel(...)`
 

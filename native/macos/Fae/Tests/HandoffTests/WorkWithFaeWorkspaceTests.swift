@@ -534,9 +534,9 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(option.displayTitle, "claude-sonnet-4.6")
+        XCTAssertEqual(option.displayTitle, "Claude Sonnet 4.6")
         XCTAssertEqual(option.displaySubtitle, "Anthropic via OpenRouter")
-        XCTAssertEqual(option.accessibilityLabel, "claude-sonnet-4.6, Anthropic via OpenRouter")
+        XCTAssertEqual(option.accessibilityLabel, "Claude Sonnet 4.6, Anthropic via OpenRouter")
     }
 
     func testControllerThinkingLevelControlsDelegateToFaeCore() async throws {

@@ -435,6 +435,7 @@ struct WorkWithFaeConsensusResult: Identifiable, Equatable, Sendable {
 
 enum WorkWithFaeWorkspaceStore {
     private static let maxIndexedFiles = 800
+    static let maxConversationMessages = 120
     private static let ignoredDirectoryNames: Set<String> = [
         ".git", ".build", "build", "dist", "node_modules", ".next", ".idea", ".swiftpm", "DerivedData"
     ]
@@ -465,11 +466,11 @@ enum WorkWithFaeWorkspaceStore {
         if let legacyState = try? decoder.decode(WorkWithFaeWorkspaceState.self, from: data) {
             let localAgent = WorkWithFaeAgentProfile.faeLocal
             let workspace = WorkWithFaeWorkspaceRecord(name: "Main workspace", agentID: localAgent.id, sortOrder: 0, state: legacyState)
-            return WorkWithFaeWorkspaceRegistry(
+            return normalized(WorkWithFaeWorkspaceRegistry(
                 selectedWorkspaceID: workspace.id,
                 workspaces: [workspace],
                 agents: [localAgent]
-            )
+            ))
         }
         return .default
     }
@@ -896,7 +897,9 @@ enum WorkWithFaeWorkspaceStore {
     }
 
     private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
-        return state
+        var sanitized = state
+        sanitized.conversationMessages = Array(sanitized.conversationMessages.suffix(maxConversationMessages))
+        return sanitized
     }
 
     private static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {
