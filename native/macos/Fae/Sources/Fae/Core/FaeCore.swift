@@ -96,6 +96,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
             storePath: faeDir.appendingPathComponent("wake_lexicon.json")
         )
     }
+
+    private static func isLowResidentMemoryProfileEnabled() -> Bool {
+        ProcessInfo.processInfo.environment["FAE_LOW_MEMORY_TEST_PROFILE"] == "1"
+    }
+
     private let sttEngine = MLXSTTEngine()
     private let llmEngine: any LLMEngine = WorkerLLMEngine(role: .operatorModel)
     private let conciergeLLMEngine: any LLMEngine = WorkerLLMEngine(role: .conciergeModel)
@@ -160,13 +165,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Load models and start pipeline asynchronously.
         Task {
             do {
+                let lowResidentMemoryProfileActive = Self.isLowResidentMemoryProfileEnabled()
+                var runtimeConfig = config
+                if lowResidentMemoryProfileActive {
+                    runtimeConfig = runtimeConfig.applyingTestServerMemoryProfile()
+                    NSLog("FaeCore: low-resident-memory profile active")
+                }
+
                 try await modelManager.loadAll(
                     stt: sttEngine,
                     llm: llmEngine,
                     tts: ttsEngine,
                     speaker: speakerEncoder,
                     speakerProfileStore: speakerProfileStore,
-                    config: config
+                    config: runtimeConfig
                 )
 
                 UserDefaults.standard.set("worker_process", forKey: "fae.runtime.operator_runtime")
@@ -179,7 +191,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 // Neural embedding engine — load tier in background, non-blocking.
                 let neuralEmbedder = NeuralEmbeddingEngine()
                 let ramGB = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
-                let embeddingTier = EmbeddingModelTier.recommendedTier(ramGB: ramGB)
+                let prefersLowResidentMemory = lowResidentMemoryProfileActive
+                    || (
+                        runtimeConfig.llm.dualModelEnabled
+                            && runtimeConfig.llm.keepConciergeHot
+                            && FaeConfig.isDualModelEligible(
+                                minimumSystemRAMGB: runtimeConfig.llm.dualModelMinSystemRAMGB
+                            )
+                    )
+                let embeddingTier = EmbeddingModelTier.recommendedTier(
+                    ramGB: ramGB,
+                    prefersLowResidentMemory: prefersLowResidentMemory
+                )
                 Task.detached(priority: .background) {
                     await neuralEmbedder.loadTier(embeddingTier)
                 }
@@ -258,7 +281,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let isRescue = self.rescueMode?.isActive ?? false
 
                 // In rescue mode, override tool mode to read_only.
-                var pipelineConfig = config
+                var pipelineConfig = runtimeConfig
                 if isRescue {
                     pipelineConfig.toolMode = "read_only"
                     NSLog("FaeCore: rescue mode — tool mode forced to read_only")
@@ -301,7 +324,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
-                if pipelineConfig.llm.dualModelEnabled {
+                if pipelineConfig.llm.dualModelEnabled && pipelineConfig.llm.keepConciergeHot {
                     Task.detached(priority: .utility) { [weak self] in
                         guard let self else { return }
                         await self.modelManager.loadConciergeIfNeeded(
@@ -309,6 +332,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                             config: pipelineConfig
                         )
                     }
+                } else if pipelineConfig.llm.dualModelEnabled {
+                    NSLog("FaeCore: concierge hot-load disabled — leaving concierge cold until explicitly enabled")
                 }
 
                 // Sync barge-in setting from AppStorage on startup.

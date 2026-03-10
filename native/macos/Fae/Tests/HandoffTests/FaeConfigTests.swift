@@ -176,6 +176,34 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(plan.ttsModelId, "hexgrad/Kokoro-82M")
     }
 
+    func testApplyingTestServerMemoryProfileDisablesHotConcierge() {
+        var config = FaeConfig()
+        config.llm.dualModelEnabled = true
+        config.llm.keepConciergeHot = true
+        config.llm.allowConciergeDuringVoiceTurns = true
+
+        let adjusted = config.applyingTestServerMemoryProfile()
+
+        XCTAssertFalse(adjusted.llm.dualModelEnabled)
+        XCTAssertFalse(adjusted.llm.keepConciergeHot)
+        XCTAssertFalse(adjusted.llm.allowConciergeDuringVoiceTurns)
+    }
+
+    func testRecommendedEmbeddingTierPrefersLowerResidentMemory() {
+        XCTAssertEqual(
+            EmbeddingModelTier.recommendedTier(ramGB: 96, prefersLowResidentMemory: false),
+            .medium
+        )
+        XCTAssertEqual(
+            EmbeddingModelTier.recommendedTier(ramGB: 96, prefersLowResidentMemory: true),
+            .small
+        )
+        XCTAssertEqual(
+            EmbeddingModelTier.recommendedTier(ramGB: 8, prefersLowResidentMemory: true),
+            .hash
+        )
+    }
+
     func testVisionModelPresetParsesSnakeCaseKey() throws {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)

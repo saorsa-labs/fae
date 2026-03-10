@@ -19,9 +19,16 @@ enum EmbeddingModelTier: String, Sendable {
         }
     }
 
-    static func recommendedTier(ramGB: Int) -> EmbeddingModelTier {
-        if ramGB >= 64 { return .large }
-        if ramGB >= 32 { return .medium }
+    static func recommendedTier(
+        ramGB: Int,
+        prefersLowResidentMemory: Bool = false
+    ) -> EmbeddingModelTier {
+        if prefersLowResidentMemory {
+            if ramGB >= 16 { return .small }
+            return .hash
+        }
+        if ramGB >= 64 { return .medium }
+        if ramGB >= 32 { return .small }
         if ramGB >= 16 { return .small }
         return .hash
     }

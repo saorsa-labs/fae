@@ -59,9 +59,9 @@ screencapture -x "$SCREENSHOT_DIR/01-before-tests.png" 2>/dev/null || true
 if $RECORD; then
     echo "Starting system audio recording: $RECORDING_FILE"
     echo "(Recording captures all system audio — Fae's TTS output + any Chatterbox speech)"
-    # screencapture -v records screen video with audio; -V limits to audio
-    # Use timeout to prevent infinite recording if tests crash
-    screencapture -v "$RECORDING_FILE" &
+    # Record audio only. Full screen video capture adds a large, unnecessary
+    # resident footprint during long voice runs and has been a test-time RAM spike.
+    screencapture -V "$RECORDING_FILE" &
     RECORDING_PID=$!
     sleep 1  # Let recording initialize
     echo "Recording started (PID: $RECORDING_PID)"

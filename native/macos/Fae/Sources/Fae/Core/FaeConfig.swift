@@ -138,6 +138,14 @@ struct FaeConfig: Codable {
         let visionModelId: String?
     }
 
+    func applyingTestServerMemoryProfile() -> FaeConfig {
+        var copy = self
+        copy.llm.dualModelEnabled = false
+        copy.llm.keepConciergeHot = false
+        copy.llm.allowConciergeDuringVoiceTurns = false
+        return copy
+    }
+
     // MARK: - TTS
 
     struct TtsConfig: Codable {
