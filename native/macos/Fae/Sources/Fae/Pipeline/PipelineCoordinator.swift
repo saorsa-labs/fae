@@ -3951,7 +3951,8 @@ actor PipelineCoordinator {
                 toolSchemas: toolSchemas,
                 installedSkills: legacySkills,
                 skillDescriptions: skillDescs,
-                includeEphemeralContext: false
+                includeEphemeralContext: false,
+                lightweight: config.isLightweightContext
             )
             // Inject activated skill instructions into the stable prompt.
             if let activatedCtx = await skillManager?.activatedContext() {

@@ -138,6 +138,19 @@ struct FaeConfig: Codable {
         let visionModelId: String?
     }
 
+    /// True when the effective LLM context window is at or below 16K tokens.
+    ///
+    /// In lightweight mode the system prompt strips sections the small models cannot
+    /// reliably act on (Python scripting, detailed self-modification menu, roleplay,
+    /// proactive behaviour), and replaces them with compact, direct tool examples.
+    /// This reclaims ~1,100 tokens and gives the model more headroom for generation
+    /// and conversation history without changing tool availability.
+    ///
+    /// Applies to the 0.8B (8K) and 2B (16K) RAM tiers.
+    var isLightweightContext: Bool {
+        llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
+    }
+
     func applyingTestServerMemoryProfile() -> FaeConfig {
         var copy = self
         copy.llm.dualModelEnabled = false

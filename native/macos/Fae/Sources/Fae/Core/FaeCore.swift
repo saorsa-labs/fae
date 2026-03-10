@@ -1250,11 +1250,40 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let enabled = value as? Bool else { return }
             config.llm.dualModelEnabled = enabled
             persistConfig(reason: "config.patch.llm.dual_model_enabled")
+            // Reactively stop or start the concierge worker so the change takes
+            // effect immediately — no app restart required.
+            Task { [weak self] in
+                guard let self else { return }
+                if enabled {
+                    await self.modelManager.loadConciergeIfNeeded(
+                        llm: self.conciergeLLMEngine,
+                        config: self.config
+                    )
+                } else {
+                    await self.conciergeLLMEngine.shutdown()
+                    UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
+                    UserDefaults.standard.set("dual_model_disabled", forKey: "fae.runtime.fallback_reason")
+                    await self.modelManager.publishLocalStackStatus(currentRoute: nil)
+                }
+            }
 
         case "llm.concierge_model_preset":
             guard let value = sanitizedString(value), !value.isEmpty else { return }
+            let presetChanged = value != config.llm.conciergeModelPreset
             config.llm.conciergeModelPreset = value
             persistConfig(reason: "config.patch.llm.concierge_model_preset")
+            // When the preset changes while dual-model is active, reload the
+            // concierge worker with the new model — no restart required.
+            if presetChanged && config.llm.dualModelEnabled {
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.conciergeLLMEngine.shutdown()
+                    await self.modelManager.loadConciergeIfNeeded(
+                        llm: self.conciergeLLMEngine,
+                        config: self.config
+                    )
+                }
+            }
 
         case "llm.remote_provider_preset":
             guard let value = sanitizedString(value), !value.isEmpty else { return }

@@ -184,6 +184,33 @@ enum PersonalityManager {
         to speak naturally after they hear the beep.
         """
 
+    // MARK: - Lightweight Tool Guidance (for small context models: 0.8B / 2B)
+
+    /// Compact tool-invocation guidance used in place of pythonCapabilityPrompt,
+    /// selfModificationPrompt, proactiveBehaviorPrompt, and roleplayPrompt when
+    /// the model's context window is at or below 16K tokens.
+    ///
+    /// Saves ~1,100 tokens versus the full sections while giving the 2B model
+    /// direct, concrete mappings from natural language to tool calls.
+    static let lightweightToolGuidancePrompt = """
+        Tool invocation:
+        - When the user explicitly names a tool, call that tool immediately.
+        - Common natural-language → tool mappings:
+          - "speak faster/slower" → self_config adjust_setting tts.speed (1.3 fast / 0.9 slow)
+          - "be more creative/precise" → self_config adjust_setting llm.temperature (0.9 / 0.3)
+          - "enable/disable thinking" → self_config adjust_setting llm.thinking_enabled true/false
+          - "set your directive to X" → self_config set_directive X
+          - "search for X" / "look up X" → web_search
+          - "what's on my calendar" → calendar list
+          - "list my tasks" / "show scheduled tasks" → scheduler_list
+          - "schedule X daily at 9am" → scheduler_create with interval_type=daily, time=09:00
+          - "read the file X" → read
+          - "save a note" → notes create
+          - "who is X" / "contact for X" → contacts search
+        - After a tool returns results, confirm the action in 1-2 spoken sentences.
+        - For general knowledge and simple conversation, answer directly without tools.
+        """
+
     static let proactiveBehaviorPrompt = """
         Proactive intelligence:
         - You are genuinely interested in your user's life, work, and interests.
@@ -328,7 +355,8 @@ enum PersonalityManager {
         toolSchemas: String? = nil,
         installedSkills: [String] = [],
         skillDescriptions: [(name: String, description: String, type: SkillType)] = [],
-        includeEphemeralContext: Bool = true
+        includeEphemeralContext: Bool = true,
+        lightweight: Bool = false
     ) -> String {
         var parts: [String] = []
         let toolsActive = nativeToolsAvailable || (toolSchemas != nil && !toolSchemas!.isEmpty)
@@ -379,15 +407,24 @@ enum PersonalityManager {
                 """)
         }
 
-        // 10. Python / uv capability + self-modification + proactive behavior + roleplay + multi-speaker (only when tools are available).
+        // 10. Capability and behaviour fragments (only when tools are available).
+        //
+        // lightweight=true (0.8B / 2B, ≤16K context): replace the full Python,
+        // self-modification, proactive, and roleplay blocks with a single compact
+        // tool-guidance section that saves ~1,100 tokens while giving the small
+        // model direct, concrete mappings it can actually act on.
         if toolsActive {
-            parts.append(pythonCapabilityPrompt)
-            parts.append(selfModificationPrompt)
-            parts.append(proactiveBehaviorPrompt)
+            if lightweight {
+                parts.append(lightweightToolGuidancePrompt)
+            } else {
+                parts.append(pythonCapabilityPrompt)
+                parts.append(selfModificationPrompt)
+                parts.append(proactiveBehaviorPrompt)
+                parts.append(roleplayPrompt)
+            }
             parts.append(progressivePermissionPrompt)
             parts.append(multiSpeakerPrompt)
             parts.append(voiceIdentityPrompt)
-            parts.append(roleplayPrompt)
 
             // 10b. Skill inventory with progressive disclosure.
             if !skillDescriptions.isEmpty {
