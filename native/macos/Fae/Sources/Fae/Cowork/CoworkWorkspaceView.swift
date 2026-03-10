@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 private enum CoworkPalette {
     static let ink = Color.black.opacity(0.12)
-    static let panel = Color.white.opacity(0.035)
-    static let outline = Color.white.opacity(0.075)
+    static let panel = Color.primary.opacity(0.035)
+    static let outline = Color.primary.opacity(0.075)
     static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
     static let amber = Color(red: 204 / 255, green: 163 / 255, blue: 92 / 255)
     static let cyan = Color(red: 138 / 255, green: 154 / 255, blue: 181 / 255)
@@ -114,7 +114,7 @@ private struct WorkspaceSidebarCapsule: View {
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(
@@ -169,7 +169,7 @@ private struct WorkspaceSidebarRow: View {
                     HStack(spacing: 4) {
                         ForEach(0 ..< depth, id: \.self) { _ in
                             Rectangle()
-                                .fill(Color.white.opacity(0.12))
+                                .fill(Color.primary.opacity(0.12))
                                 .frame(width: 6, height: 1)
                         }
                     }
@@ -179,7 +179,7 @@ private struct WorkspaceSidebarRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(workspaceName)
                         .font(.system(size: isSelected ? 13.5 : 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(metadataFragments.joined(separator: "  ·  "))
@@ -204,10 +204,10 @@ private struct WorkspaceSidebarRow: View {
         .padding(.vertical, 11)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.025))
+                .fill(isSelected ? Color.primary.opacity(0.12) : Color.primary.opacity(0.025))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(isSelected ? Color.white.opacity(0.16) : Color.white.opacity(0.05), lineWidth: 1)
+                        .stroke(isSelected ? Color.primary.opacity(0.16) : Color.primary.opacity(0.05), lineWidth: 1)
                 )
                 .matchedGeometryEffect(id: "workspace-row-\(workspaceID.uuidString)", in: namespace)
         )
@@ -621,8 +621,8 @@ private struct CoworkComposerTextView: NSViewRepresentable {
         textView.isRichText = false
         textView.allowsUndo = true
         textView.font = NSFont.systemFont(ofSize: 15, weight: .medium)
-        textView.textColor = NSColor.white.withAlphaComponent(0.92)
-        textView.insertionPointColor = .white
+        textView.textColor = NSColor.labelColor.withAlphaComponent(0.92)
+        textView.insertionPointColor = .labelColor
         textView.textContainerInset = NSSize(width: 0, height: 8)
         textView.textContainer?.widthTracksTextView = true
         textView.isHorizontallyResizable = false
@@ -891,7 +891,7 @@ struct CoworkWorkspaceView: View {
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
                 .ignoresSafeArea()
         }
         .overlay {
@@ -902,7 +902,7 @@ struct CoworkWorkspaceView: View {
                     .overlay {
                         Text("Drop files or images to add them to Work with Fae")
                             .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(.horizontal, 18)
                             .padding(.vertical, 12)
                             .background(.ultraThinMaterial, in: Capsule())
@@ -953,7 +953,7 @@ struct CoworkWorkspaceView: View {
                 HStack(spacing: 10) {
                     Text(controller.selectedWorkspace?.name ?? "Conversation")
                         .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     if controller.isStrictLocalWorkspace {
@@ -963,13 +963,13 @@ struct CoworkWorkspaceView: View {
 
                 Text(workspaceHeaderCaption)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.62))
+                    .foregroundStyle(.primary.opacity(0.62))
                     .lineLimit(2)
 
                 if let workspaceHeaderMetaLine, !workspaceHeaderMetaLine.isEmpty {
                     Text(workspaceHeaderMetaLine)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.46))
+                        .foregroundStyle(.primary.opacity(0.46))
                         .lineLimit(2)
                 }
             }
@@ -1024,10 +1024,10 @@ struct CoworkWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Context")
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Text(detailsRailCaption)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.54))
+                            .foregroundStyle(.primary.opacity(0.54))
                     }
 
                     DisclosureGroup(isExpanded: $showWorkspacePolicies) {
@@ -1086,7 +1086,7 @@ struct CoworkWorkspaceView: View {
                     } label: {
                         contextSectionLabel(title: "Workspace rules", subtitle: controller.selectedWorkspacePolicy.compareBehavior.displayName)
                     }
-                    .tint(.white)
+                    .tint(.primary)
 
                     DisclosureGroup(isExpanded: $showContextFolderSection) {
                         VStack(alignment: .leading, spacing: 8) {
@@ -1096,25 +1096,25 @@ struct CoworkWorkspaceView: View {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(directoryURL.lastPathComponent)
                                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.white)
+                                        .foregroundStyle(.primary)
                                         .lineLimit(2)
 
                                     Text("Connected locally and used for grounded file lookups.")
                                         .font(.system(size: 11, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.52))
+                                        .foregroundStyle(.primary.opacity(0.52))
 
                                     Button {
                                         NSWorkspace.shared.activateFileViewerSelecting([directoryURL])
                                     } label: {
                                         Label("Reveal in Finder", systemImage: "arrow.up.forward.app")
                                             .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(.primary)
                                             .padding(.horizontal, 10)
                                             .padding(.vertical, 7)
                                             .background(
                                                 Capsule()
-                                                    .fill(Color.white.opacity(0.05))
-                                                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                                    .fill(Color.primary.opacity(0.05))
+                                                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                                             )
                                     }
                                     .buttonStyle(.plain)
@@ -1122,21 +1122,21 @@ struct CoworkWorkspaceView: View {
                             } else {
                                 Text("Choose a folder to let Fae ground answers in local files.")
                                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.55))
+                                    .foregroundStyle(.primary.opacity(0.55))
                             }
                         }
                         .padding(.top, 8)
                     } label: {
                         contextSectionLabel(title: "Folder & grounding", subtitle: controller.workspaceState.selectedDirectoryPath == nil ? "Not connected" : "Connected")
                     }
-                    .tint(.white)
+                    .tint(.primary)
 
                     DisclosureGroup(isExpanded: $showContextAttachmentsSection) {
                         VStack(alignment: .leading, spacing: 8) {
                             if controller.workspaceState.attachments.isEmpty {
                                 Text("Add files, pasted text, or screenshots when you want more focused context.")
                                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.55))
+                                    .foregroundStyle(.primary.opacity(0.55))
                             } else {
                                 ForEach(controller.workspaceState.attachments.prefix(8)) { attachment in
                                     HStack(alignment: .top, spacing: 8) {
@@ -1145,11 +1145,11 @@ struct CoworkWorkspaceView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(attachment.displayName)
                                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                                .foregroundStyle(.white)
+                                                .foregroundStyle(.primary)
                                                 .lineLimit(2)
                                             Text(attachmentMetadataLabel(for: attachment))
                                                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                                                .foregroundStyle(Color.white.opacity(0.42))
+                                                .foregroundStyle(.primary.opacity(0.42))
                                                 .lineLimit(2)
                                         }
                                         Spacer()
@@ -1157,7 +1157,7 @@ struct CoworkWorkspaceView: View {
                                     .padding(8)
                                     .background(
                                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .fill(controller.selectedAttachment?.id == attachment.id ? CoworkPalette.heather.opacity(0.14) : Color.white.opacity(0.03))
+                                            .fill(controller.selectedAttachment?.id == attachment.id ? CoworkPalette.heather.opacity(0.14) : Color.primary.opacity(0.03))
                                     )
                                     .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                     .onTapGesture {
@@ -1170,7 +1170,7 @@ struct CoworkWorkspaceView: View {
                     } label: {
                         contextSectionLabel(title: "Attachments", subtitle: controller.workspaceState.attachments.isEmpty ? "Nothing attached" : "\(controller.workspaceState.attachments.count) attached")
                     }
-                    .tint(.white)
+                    .tint(.primary)
 
                     DisclosureGroup(isExpanded: $showContextIndexedFilesSection) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -1181,17 +1181,17 @@ struct CoworkWorkspaceView: View {
                                 .padding(.vertical, 10)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Color.white.opacity(0.05))
+                                        .fill(Color.primary.opacity(0.05))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                                                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
                                         )
                                 )
 
                             if controller.workspaceState.indexedFiles.isEmpty {
                                 Text("No indexed files yet.")
                                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.55))
+                                    .foregroundStyle(.primary.opacity(0.55))
                             } else {
                                 ForEach(controller.filteredWorkspaceFiles.prefix(20)) { file in
                                     Button {
@@ -1203,11 +1203,11 @@ struct CoworkWorkspaceView: View {
                                             VStack(alignment: .leading, spacing: 2) {
                                                 Text(file.relativePath)
                                                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                                    .foregroundStyle(.white)
+                                                    .foregroundStyle(.primary)
                                                     .lineLimit(2)
                                                 Text(file.kind.capitalized)
                                                     .font(.system(size: 10, weight: .medium, design: .rounded))
-                                                    .foregroundStyle(Color.white.opacity(0.42))
+                                                    .foregroundStyle(.primary.opacity(0.42))
                                             }
                                             Spacer()
                                         }
@@ -1226,14 +1226,14 @@ struct CoworkWorkspaceView: View {
                     } label: {
                         contextSectionLabel(title: "Indexed files", subtitle: controller.workspaceState.indexedFiles.isEmpty ? "No files indexed" : "\(controller.filteredWorkspaceFiles.count)/\(controller.workspaceState.indexedFiles.count) visible")
                     }
-                    .tint(.white)
+                    .tint(.primary)
 
                     if let focusedPreview = controller.focusedPreview {
                         DisclosureGroup(isExpanded: $showContextPreviewSection) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(focusedPreview.title)
                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(.primary)
                                     .textSelection(.enabled)
 
                                 if focusedPreview.kind == "image", let path = focusedPreview.path,
@@ -1247,13 +1247,13 @@ struct CoworkWorkspaceView: View {
                                 } else if let textPreview = focusedPreview.textPreview, !textPreview.isEmpty {
                                     Text(textPreview)
                                         .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(Color.white.opacity(0.74))
+                                        .foregroundStyle(.primary.opacity(0.74))
                                         .lineLimit(10)
                                         .textSelection(.enabled)
                                         .padding(10)
                                         .background(
                                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                .fill(Color.white.opacity(0.04))
+                                                .fill(Color.primary.opacity(0.04))
                                         )
                                 }
                             }
@@ -1261,7 +1261,7 @@ struct CoworkWorkspaceView: View {
                         } label: {
                             contextSectionLabel(title: "Focused preview", subtitle: focusedPreview.subtitle ?? focusedPreview.kind.capitalized)
                         }
-                        .tint(.white)
+                        .tint(.primary)
                     }
                 }
             }
@@ -1344,7 +1344,7 @@ struct CoworkWorkspaceView: View {
                                 if controller.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     Text("Ask Fae to work with this folder, these files, or what you want her to inspect…")
                                         .font(.system(size: 15, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.34))
+                                        .foregroundStyle(.primary.opacity(0.34))
                                         .padding(.top, 11)
                                         .padding(.leading, 2)
                                 }
@@ -1387,7 +1387,7 @@ struct CoworkWorkspaceView: View {
 
                                 Text(conversation.isGenerating ? (conversation.isStreaming ? "Replying live" : "Thinking") : "Ready")
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.48))
+                                    .foregroundStyle(.primary.opacity(0.48))
                                     .contentTransition(.interpolate)
                             }
                         }
@@ -1395,10 +1395,10 @@ struct CoworkWorkspaceView: View {
                         .padding(.vertical, 14)
                         .background(
                             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(Color.white.opacity(0.045))
+                                .fill(Color.primary.opacity(0.045))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                        .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                                        .stroke(Color.primary.opacity(0.07), lineWidth: 1)
                                 )
                         )
 
@@ -1412,7 +1412,7 @@ struct CoworkWorkspaceView: View {
                                          ? "Auto compare on send for \(controller.consensusParticipants.count) agents"
                                          : "Auto compare is on, but only one agent is available")
                                         .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.58))
+                                        .foregroundStyle(.primary.opacity(0.58))
                                         .lineLimit(2)
                                 }
                                 .accessibilityElement(children: .combine)
@@ -1427,13 +1427,13 @@ struct CoworkWorkspaceView: View {
                                         Text("Compare \(controller.consensusParticipants.count)")
                                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     }
-                                    .foregroundStyle(.white.opacity(controller.canCompareAcrossAgents ? 0.84 : 0.42))
+                                    .foregroundStyle(.primary.opacity(controller.canCompareAcrossAgents ? 0.84 : 0.42))
                                     .padding(.horizontal, 11)
                                     .padding(.vertical, 8)
                                     .background(
                                         Capsule()
-                                            .fill(Color.white.opacity(0.05))
-                                            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                            .fill(Color.primary.opacity(0.05))
+                                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -1481,14 +1481,14 @@ struct CoworkWorkspaceView: View {
         return VStack(alignment: .center, spacing: 14) {
             Text(setupState.isFreshWorkspace ? "Start working in this conversation." : "Pick up where you left off.")
                 .font(.system(size: 28, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
 
             Text(setupState.isFreshWorkspace
                  ? "Choose a folder or add a few files, then ask Fae what you need."
                  : "This thread keeps its own model, context, and branch history.")
                 .font(.system(size: 14, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.62))
+                .foregroundStyle(.primary.opacity(0.62))
                 .multilineTextAlignment(.center)
 
             compactWorkspaceSetupStrip
@@ -1506,10 +1506,10 @@ struct CoworkWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Scheduler board")
                             .font(.system(size: 19, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Text("Live view across Fae's persistent automations and built-ins.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.62))
+                            .foregroundStyle(.primary.opacity(0.62))
                     }
 
                     Spacer()
@@ -1549,16 +1549,16 @@ struct CoworkWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Skills surface")
                             .font(.system(size: 19, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Text("Installed and active Fae skills, ready for cowork use.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.62))
+                            .foregroundStyle(.primary.opacity(0.62))
                     }
                     Spacer()
                     HStack(spacing: 10) {
                         Text("\(snapshot.skills.count) skills")
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.70))
+                            .foregroundStyle(.primary.opacity(0.70))
                         workspaceActionButton(
                             title: "New skill",
                             systemImage: "plus",
@@ -1576,7 +1576,7 @@ struct CoworkWorkspaceView: View {
                                     HStack {
                                         Text(skill.id)
                                             .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(.primary)
                                             .lineLimit(1)
                                         Spacer()
                                         capsule(text: skill.isActive ? "Active" : "Installed", accent: skill.isActive ? CoworkPalette.mint : CoworkPalette.cyan)
@@ -1584,7 +1584,7 @@ struct CoworkWorkspaceView: View {
 
                                     Text(skill.description)
                                         .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.68))
+                                        .foregroundStyle(.primary.opacity(0.68))
                                         .lineLimit(4)
 
                                     HStack(spacing: 8) {
@@ -1607,8 +1607,8 @@ struct CoworkWorkspaceView: View {
                                             .padding(.vertical, 8)
                                             .background(
                                                 Capsule()
-                                                    .fill(Color.white.opacity(0.05))
-                                                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                                    .fill(Color.primary.opacity(0.05))
+                                                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                                             )
 
                                             Button("Remove") {
@@ -1636,15 +1636,15 @@ struct CoworkWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Tool deck")
                             .font(.system(size: 19, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                         Text("Filtered to the current tool mode so the cowork surface matches Fae's runtime permissions.")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.62))
+                            .foregroundStyle(.primary.opacity(0.62))
                     }
                     Spacer()
                     Text(snapshot.toolMode.replacingOccurrences(of: "_", with: " ").capitalized)
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.70))
+                        .foregroundStyle(.primary.opacity(0.70))
                 }
 
                 ScrollView {
@@ -1655,7 +1655,7 @@ struct CoworkWorkspaceView: View {
                                     HStack {
                                         Text(tool.displayName)
                                             .font(.system(size: 16, weight: .semibold, design: .rounded))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(.primary)
                                             .lineLimit(1)
                                         Spacer()
                                         capsule(text: tool.riskLevel.capitalized, accent: riskAccent(tool.riskLevel))
@@ -1663,7 +1663,7 @@ struct CoworkWorkspaceView: View {
 
                                     Text(tool.description)
                                         .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.white.opacity(0.68))
+                                        .foregroundStyle(.primary.opacity(0.68))
                                         .lineLimit(4)
 
                                     capsule(text: tool.category, accent: CoworkPalette.cyan)
@@ -1706,10 +1706,10 @@ struct CoworkWorkspaceView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(setupState.nextStep?.title ?? "Workspace ready")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text(setupState.nextStep?.detail ?? "Grounded context is ready.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.52))
+                    .foregroundStyle(.primary.opacity(0.52))
                     .lineLimit(2)
             }
 
@@ -1730,17 +1730,17 @@ struct CoworkWorkspaceView: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.04))
+                .fill(Color.primary.opacity(0.04))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                        .stroke(Color.primary.opacity(0.07), lineWidth: 1)
                 )
         )
     }
 
     private var workspaceDropTail: some View {
         RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(Color.white.opacity(0.035))
+            .fill(Color.primary.opacity(0.035))
             .frame(height: 28)
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1748,7 +1748,7 @@ struct CoworkWorkspaceView: View {
                     .overlay {
                         Text("Drop to move to the end")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.6))
+                            .foregroundStyle(.primary.opacity(0.6))
                     }
             }
             .onDrop(of: [UTType.text.identifier], isTargeted: nil) { _ in
@@ -1825,26 +1825,26 @@ struct CoworkWorkspaceView: View {
             HStack(spacing: 12) {
                 Image(systemName: section.systemImage)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.72))
+                    .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.72))
 
                 Text(section.title)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(isSelected ? .white : Color.white.opacity(0.72))
+                    .foregroundStyle(isSelected ? .white : Color.primary.opacity(0.72))
 
                 Spacer()
 
                 Text("\(count)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundStyle(isSelected ? .white : Color.white.opacity(0.56))
+                    .foregroundStyle(isSelected ? .white : Color.primary.opacity(0.56))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.03))
+                    .fill(isSelected ? Color.primary.opacity(0.12) : Color.primary.opacity(0.03))
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(isSelected ? Color.white.opacity(0.16) : Color.white.opacity(0.06), lineWidth: 1)
+                            .stroke(isSelected ? Color.primary.opacity(0.16) : Color.primary.opacity(0.06), lineWidth: 1)
                     )
             )
             .scaleEffect(isSelected ? 1.0 : 0.985)
@@ -1879,7 +1879,7 @@ struct CoworkWorkspaceView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                 Text(newWorkspaceBackendSummary)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
+                    .foregroundStyle(.primary.opacity(0.72))
                     .lineLimit(1)
             }
 
@@ -1891,7 +1891,7 @@ struct CoworkWorkspaceView: View {
                     HStack(spacing: 8) {
                         Text(newWorkspaceModelDisplayValue)
                             .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(newWorkspaceModelDisplayValue == "No model selected" ? Color.white.opacity(0.55) : Color.white.opacity(0.82))
+                            .foregroundStyle(newWorkspaceModelDisplayValue == "No model selected" ? Color.primary.opacity(0.55) : Color.primary.opacity(0.82))
                             .lineLimit(1)
 
                         Spacer()
@@ -1907,7 +1907,7 @@ struct CoworkWorkspaceView: View {
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.white.opacity(0.04))
+                            .fill(Color.primary.opacity(0.04))
                     )
                 }
             }
@@ -1918,7 +1918,7 @@ struct CoworkWorkspaceView: View {
                 HStack(spacing: 8) {
                     Text(newWorkspaceDirectoryURL?.path ?? "No folder selected")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.72))
+                        .foregroundStyle(.primary.opacity(0.72))
                         .lineLimit(2)
 
                     Spacer()
@@ -1998,7 +1998,7 @@ struct CoworkWorkspaceView: View {
                  ? "Switch between local and remote models without losing the conversation. Model names stay primary; provider details are secondary."
                  : "Pick the model this agent should use.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.64))
+                .foregroundStyle(.primary.opacity(0.64))
                 .fixedSize(horizontal: false, vertical: true)
             TextField("Search models", text: $modelSearchText)
                 .textFieldStyle(.roundedBorder)
@@ -2006,7 +2006,7 @@ struct CoworkWorkspaceView: View {
 
             if isLoadingModelPickerOptions {
                 ProgressView("Loading models…")
-                    .tint(.white)
+                    .tint(.primary)
             }
 
             ScrollView {
@@ -2016,10 +2016,10 @@ struct CoworkWorkspaceView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Text(section.title)
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(.primary)
                                 Text(section.subtitle)
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.44))
+                                    .foregroundStyle(.primary.opacity(0.44))
                             }
 
                             ForEach(section.options) { option in
@@ -2038,15 +2038,15 @@ struct CoworkWorkspaceView: View {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(option.displayTitle)
                                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                                .foregroundStyle(.white)
+                                                .foregroundStyle(.primary)
                                                 .lineLimit(2)
                                             Text(option.displaySubtitle)
                                                 .font(.system(size: 11, weight: .medium, design: .rounded))
-                                                .foregroundStyle(Color.white.opacity(0.58))
+                                                .foregroundStyle(.primary.opacity(0.58))
                                                 .lineLimit(2)
                                             Text(option.modelIdentifier)
                                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                                .foregroundStyle(Color.white.opacity(0.40))
+                                                .foregroundStyle(.primary.opacity(0.40))
                                                 .lineLimit(1)
                                         }
                                         Spacer()
@@ -2066,10 +2066,10 @@ struct CoworkWorkspaceView: View {
                                     .padding(.vertical, 10)
                                     .background(
                                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .fill(Color.white.opacity(0.04))
+                                            .fill(Color.primary.opacity(0.04))
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                                             )
                                     )
                                 }
@@ -2136,7 +2136,7 @@ struct CoworkWorkspaceView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                 Text(preset.providerKind == .openAICompatibleExternal ? "OpenAI-compatible" : preset.providerKind.displayName)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
+                    .foregroundStyle(.primary.opacity(0.72))
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -2192,7 +2192,7 @@ struct CoworkWorkspaceView: View {
                          ? "Paste your OpenRouter API key here so this conversation can call OpenRouter models. The key is stored securely in Keychain."
                          : "Stored securely in Keychain and only used for this agent/backend.")
                         .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.58))
+                        .foregroundStyle(.primary.opacity(0.58))
                     if let editingAgent, controller.hasStoredCredential(for: editingAgent) {
                         Toggle("Clear stored API key", isOn: $clearStoredAPIKey)
                     }
@@ -2214,8 +2214,8 @@ struct CoworkWorkspaceView: View {
                                 .padding(.vertical, 6)
                                 .background(
                                     Capsule()
-                                        .fill(Color.white.opacity(0.06))
-                                        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                        .fill(Color.primary.opacity(0.06))
+                                        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                                 )
                             }
                         }
@@ -2226,7 +2226,7 @@ struct CoworkWorkspaceView: View {
             if let agentTestStatus {
                 Text(agentTestStatus)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
+                    .foregroundStyle(.primary.opacity(0.72))
             }
 
             Toggle(editingAgent == nil ? "Attach to current workspace" : "Attach updated agent to current workspace", isOn: $assignNewAgentToWorkspace)
@@ -2325,14 +2325,14 @@ struct CoworkWorkspaceView: View {
     ) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(Color.white.opacity(0.02))
+                .fill(Color.primary.opacity(0.02))
                 .background(
                     VisualEffectBlur(material: .underWindowBackground, blendingMode: .withinWindow)
                         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
                 )
 
             RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(Color.white.opacity(0.045), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
 
             content()
                 .padding(padding)
@@ -2344,10 +2344,10 @@ struct CoworkWorkspaceView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             Text(subtitle)
                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.46))
+                .foregroundStyle(.primary.opacity(0.46))
         }
     }
 
@@ -2359,8 +2359,8 @@ struct CoworkWorkspaceView: View {
                 .padding(.vertical, 8)
                 .background(
                     Capsule()
-                        .fill(Color.white.opacity(0.05))
-                        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        .fill(Color.primary.opacity(0.05))
+                        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                 )
         }
         .buttonStyle(.plain)
@@ -2373,10 +2373,10 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(section.title)
                         .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text("Additional power, kept out of the main conversation surface.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.58))
+                        .foregroundStyle(.primary.opacity(0.58))
                 }
                 Spacer()
                 Button("Done") {
@@ -2471,12 +2471,12 @@ struct CoworkWorkspaceView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.72))
+                .foregroundStyle(.primary.opacity(0.72))
                 .frame(width: 34, height: 34)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity(0.05))
-                        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        .fill(Color.primary.opacity(0.05))
+                        .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                 )
         }
         .menuStyle(.borderlessButton)
@@ -2496,13 +2496,13 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(selectedAgentModelLabel ?? "Model")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
 
                     Text(selectedAgentLocalityCaption)
                         .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.48))
+                        .foregroundStyle(.primary.opacity(0.48))
                         .lineLimit(1)
                 }
             }
@@ -2510,10 +2510,10 @@ struct CoworkWorkspaceView: View {
             .padding(.vertical, 9)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.primary.opacity(0.05))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                     )
             )
         }
@@ -2534,7 +2534,7 @@ struct CoworkWorkspaceView: View {
                     .foregroundStyle(selectedAgentLocalityAccent.opacity(0.92))
                 Text(selectedAgentModelLabel ?? "Model")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
             }
@@ -2542,8 +2542,8 @@ struct CoworkWorkspaceView: View {
             .padding(.vertical, 8)
             .background(
                 Capsule()
-                    .fill(Color.white.opacity(0.05))
-                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    .fill(Color.primary.opacity(0.05))
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
             )
         }
         .buttonStyle(.plain)
@@ -2560,13 +2560,13 @@ struct CoworkWorkspaceView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Work with Fae")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text("Private cowork on your Mac")
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.46).opacity(0.78))
                 Text("\(controller.workspaces.count) conversation\(controller.workspaces.count == 1 ? "" : "s")")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.52))
+                    .foregroundStyle(.primary.opacity(0.52))
             }
 
             Spacer()
@@ -2581,12 +2581,12 @@ struct CoworkWorkspaceView: View {
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .frame(width: 30, height: 30)
                     .background(
                         Circle()
-                            .fill(Color.white.opacity(0.06))
-                            .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                            .fill(Color.primary.opacity(0.06))
+                            .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     )
             }
             .buttonStyle(.plain)
@@ -2626,12 +2626,12 @@ struct CoworkWorkspaceView: View {
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .frame(width: 38, height: 38)
                 .background(
                     Circle()
-                        .fill(Color.white.opacity(0.06))
-                        .overlay(Circle().stroke(Color.white.opacity(0.09), lineWidth: 1))
+                        .fill(Color.primary.opacity(0.06))
+                        .overlay(Circle().stroke(Color.primary.opacity(0.09), lineWidth: 1))
                 )
         }
         .menuStyle(.borderlessButton)
@@ -2684,7 +2684,7 @@ struct CoworkWorkspaceView: View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
@@ -2705,7 +2705,7 @@ struct CoworkWorkspaceView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .frame(width: 34, height: 34)
                 .background(
                     Circle()
@@ -2731,7 +2731,7 @@ struct CoworkWorkspaceView: View {
                 case .iconOnly:
                     Image(systemName: "sidebar.right")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .frame(width: 34, height: 34)
                         .background(
                             Circle()
@@ -2741,7 +2741,7 @@ struct CoworkWorkspaceView: View {
                 case .titleAndIcon:
                     Label(showDetailsRail ? "Hide inspector" : "Inspector", systemImage: "sidebar.right")
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
                         .background(
@@ -2780,20 +2780,20 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(faeCore.thinkingLevel.displayName)
                         .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text("Response style")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.48))
+                        .foregroundStyle(.primary.opacity(0.48))
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+                    .fill(Color.primary.opacity(0.05))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                     )
             )
         }
@@ -2831,10 +2831,10 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Fae consensus")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text(controller.selectedConsensusParticipantsSummary)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.58))
+                        .foregroundStyle(.primary.opacity(0.58))
                         .lineLimit(2)
                 }
 
@@ -2850,13 +2850,13 @@ struct CoworkWorkspaceView: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .background(
                         Capsule()
-                            .fill(Color.white.opacity(0.06))
-                            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                            .fill(Color.primary.opacity(0.06))
+                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     )
                 }
             }
@@ -2885,10 +2885,10 @@ struct CoworkWorkspaceView: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.04))
+                .fill(Color.primary.opacity(0.04))
                 .overlay(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                        .stroke(Color.primary.opacity(0.07), lineWidth: 1)
                 )
         )
         .shadow(color: showConsensusDetails ? CoworkPalette.heather.opacity(0.12) : .clear, radius: 16, y: 10)
@@ -2900,11 +2900,11 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(result.agentName)
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(result.providerLabel)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.56))
+                        .foregroundStyle(.primary.opacity(0.56))
                         .lineLimit(2)
                 }
                 Spacer()
@@ -2914,13 +2914,13 @@ struct CoworkWorkspaceView: View {
                 )
             }
 
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(Color.primary.opacity(0.08))
 
             ScrollView(.vertical, showsIndicators: true) {
                 if let responseText = result.responseText {
                     Text(responseText)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.90))
+                        .foregroundStyle(.primary.opacity(0.90))
                         .lineSpacing(3)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2938,10 +2938,10 @@ struct CoworkWorkspaceView: View {
         .frame(width: 280, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.white.opacity(0.045))
+                .fill(Color.primary.opacity(0.045))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                 )
         )
     }
@@ -2949,7 +2949,7 @@ struct CoworkWorkspaceView: View {
     private func conversationBubble(_ message: ChatMessage) -> some View {
         HStack {
             if message.role == .assistant {
-                bubble(message.content, accent: Color.white.opacity(0.10), borderAccent: Color.white.opacity(0.10), isTrailing: false)
+                bubble(message.content, accent: Color.primary.opacity(0.10), borderAccent: Color.primary.opacity(0.10), isTrailing: false)
                 Spacer(minLength: 60)
             } else {
                 Spacer(minLength: 60)
@@ -2960,7 +2960,7 @@ struct CoworkWorkspaceView: View {
 
     private func streamingBubble(_ text: String) -> some View {
         HStack {
-            bubble(text, accent: Color.white.opacity(0.10), borderAccent: CoworkPalette.heather.opacity(0.34), isTrailing: false, isStreaming: true)
+            bubble(text, accent: Color.primary.opacity(0.10), borderAccent: CoworkPalette.heather.opacity(0.34), isTrailing: false, isStreaming: true)
             Spacer(minLength: 60)
         }
     }
@@ -2968,7 +2968,7 @@ struct CoworkWorkspaceView: View {
     private func bubble(_ text: String, accent: Color, borderAccent: Color, isTrailing: Bool, isStreaming: Bool = false) -> some View {
         Text(text)
             .font(.system(size: 14.5, weight: .regular, design: .rounded))
-            .foregroundStyle(.white.opacity(0.94))
+            .foregroundStyle(.primary.opacity(0.94))
             .multilineTextAlignment(isTrailing ? .trailing : .leading)
             .lineSpacing(4)
         .padding(.horizontal, 15)
@@ -2992,11 +2992,11 @@ struct CoworkWorkspaceView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(task.name)
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .lineLimit(2)
                         Text(task.scheduleDescription)
                             .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.62))
+                            .foregroundStyle(.primary.opacity(0.62))
                     }
                     Spacer()
                     capsule(text: task.isBuiltin ? "Built-in" : "Custom", accent: task.isBuiltin ? CoworkPalette.amber : CoworkPalette.cyan)
@@ -3010,7 +3010,7 @@ struct CoworkWorkspaceView: View {
                 if let taskDescription = task.taskDescription, !taskDescription.isEmpty {
                     Text(taskDescription)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.68))
+                        .foregroundStyle(.primary.opacity(0.68))
                         .lineLimit(3)
                 }
 
@@ -3034,7 +3034,7 @@ struct CoworkWorkspaceView: View {
 
                     Text(task.enabled ? "Enabled" : "Paused")
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(task.enabled ? CoworkPalette.mint : Color.white.opacity(0.52))
+                        .foregroundStyle(task.enabled ? CoworkPalette.mint : Color.primary.opacity(0.52))
 
                     Spacer()
 
@@ -3047,8 +3047,8 @@ struct CoworkWorkspaceView: View {
                     .padding(.vertical, 8)
                     .background(
                         Capsule()
-                            .fill(Color.white.opacity(0.05))
-                            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                            .fill(Color.primary.opacity(0.05))
+                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     )
                 }
 
@@ -3063,8 +3063,8 @@ struct CoworkWorkspaceView: View {
                         .padding(.vertical, 8)
                         .background(
                             Capsule()
-                                .fill(Color.white.opacity(0.05))
-                                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                .fill(Color.primary.opacity(0.05))
+                                .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                         )
 
                         Button("Delete") {
@@ -3185,10 +3185,10 @@ struct CoworkWorkspaceView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.45))
+                .foregroundStyle(.primary.opacity(0.45))
             Text(value)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -3225,24 +3225,24 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.52))
+                        .foregroundStyle(.primary.opacity(0.52))
                     Text(value)
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                 }
                 Spacer()
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.46))
+                    .foregroundStyle(.primary.opacity(0.46))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white.opacity(0.04))
+                    .fill(Color.primary.opacity(0.04))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                     )
             )
         }
@@ -3259,10 +3259,10 @@ struct CoworkWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Possible secret detected")
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text("Fae kept this request on your Mac because it may contain a password, API key, token, or other secret. Nothing was sent to \(blocked.destinationList) yet. If this is a false positive, you can choose Send anyway.")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.72))
+                        .foregroundStyle(.primary.opacity(0.72))
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -3299,15 +3299,15 @@ struct CoworkWorkspaceView: View {
                 .foregroundStyle(accent)
             Text(title)
                 .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.82))
+                .foregroundStyle(.primary.opacity(0.82))
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
             Capsule()
-                .fill(Color.white.opacity(0.04))
-                .overlay(Capsule().stroke(Color.white.opacity(0.065), lineWidth: 1))
+                .fill(Color.primary.opacity(0.04))
+                .overlay(Capsule().stroke(Color.primary.opacity(0.065), lineWidth: 1))
         )
     }
 
@@ -3315,10 +3315,10 @@ struct CoworkWorkspaceView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
                 .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.38))
+                .foregroundStyle(.primary.opacity(0.38))
             Text(value)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.84))
+                .foregroundStyle(.primary.opacity(0.84))
                 .lineLimit(2)
                 .contentTransition(.interpolate)
         }
@@ -3330,7 +3330,7 @@ struct CoworkWorkspaceView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
@@ -3345,7 +3345,7 @@ struct CoworkWorkspaceView: View {
     private func capsule(text: String, accent: Color) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
