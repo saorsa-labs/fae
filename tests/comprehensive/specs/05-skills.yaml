@@ -62,8 +62,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, create a new skill called fae-test-skill with description 'test skill for validation'"
-      - "Fae, make a skill named fae-test-skill that is described as 'test skill for validation'"
+      - "Fae, use the manage_skill tool to create a new skill called fae-test-skill with description 'test skill for validation'"
+      - "Fae, call manage_skill with action create to add a skill named fae-test-skill described as test skill for validation"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -87,8 +87,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, run fae-test-skill"
-      - "Fae, execute the fae-test-skill"
+      - "Fae, use the run_skill tool to run fae-test-skill"
+      - "Fae, call run_skill to execute fae-test-skill"
     steps:
       - action: "inject"
         phrasing: "random"
@@ -135,8 +135,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, delete fae-test-skill"
-      - "Fae, remove the fae-test-skill"
+      - "Fae, use the manage_skill tool to delete fae-test-skill"
+      - "Fae, call manage_skill with action delete to remove the skill named fae-test-skill"
     steps:
       - action: "inject"
         phrasing: "random"

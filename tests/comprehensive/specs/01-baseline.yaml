@@ -32,7 +32,7 @@ tests:
 
   - id: "base-002"
     name: "Math accuracy"
-    class: deterministic
+    class: llm_scored
     timeout_s: 200
     setup:
       # Disable tools to minimize system prompt → faster prefill

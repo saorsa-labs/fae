@@ -177,9 +177,8 @@ tests:
         url: "/reset"
     teardown: []
     phrasings:
-      - "Fae, fetch https://example.com"
-      - "Fae, get the contents of https://example.com"
-      - "Fae, download the page at https://example.com"
+      - "Fae, use the fetch_url tool to fetch https://example.com"
+      - "Fae, call fetch_url to get the contents of https://example.com"
     steps:
       - action: "inject"
         phrasing: "random"

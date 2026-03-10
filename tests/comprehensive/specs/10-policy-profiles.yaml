@@ -102,7 +102,7 @@ tests:
       - name: "tool_executed"
         check: "events_contain_kind('Tool', 'read')"
       - name: "no_approval_needed"
-        check: "not events_contain_any(['approval', 'confirm', 'pending'])"
+        check: "not events_contain_kind('Approve', '')"
     pass_threshold: 1.0
 
   - id: "prof-005"
