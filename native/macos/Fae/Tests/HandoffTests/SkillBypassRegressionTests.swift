@@ -298,6 +298,9 @@ final class SkillBypassRegressionTests: XCTestCase {
     }
 
     func testExecutableSkillWithRawNetworkImportsIsRejectedWithoutManifestAllowance() async throws {
+        guard await UVRuntime.shared.isAvailable() else {
+            throw XCTSkip("uv is not installed on this system")
+        }
         let manager = SkillManager()
         let skillName = "network_guard_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
 
@@ -331,6 +334,9 @@ final class SkillBypassRegressionTests: XCTestCase {
     }
 
     func testCreateSkillSupportsCustomScriptNameAndManifestJSON() async throws {
+        guard await UVRuntime.shared.isAvailable() else {
+            throw XCTSkip("uv is not installed on this system")
+        }
         let manager = SkillManager()
         let skillName = "network_ok_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
 
@@ -373,6 +379,9 @@ final class SkillBypassRegressionTests: XCTestCase {
     }
 
     func testRunSkillToolForwardsStructuredParamsAndSecretBindings() async throws {
+        guard await UVRuntime.shared.isAvailable() else {
+            throw XCTSkip("uv is not installed on this system")
+        }
         let manager = SkillManager()
         let tool = RunSkillTool(skillManager: manager)
         let skillName = "exec_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
