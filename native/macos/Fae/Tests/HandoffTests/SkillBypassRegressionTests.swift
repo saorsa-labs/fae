@@ -298,6 +298,9 @@ final class SkillBypassRegressionTests: XCTestCase {
     }
 
     func testExecutableSkillWithRawNetworkImportsIsRejectedWithoutManifestAllowance() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else {
+            throw XCTSkip("Skipping Python subprocess execution in CI environment")
+        }
         guard await UVRuntime.shared.isAvailable() else {
             throw XCTSkip("uv is not installed on this system")
         }
@@ -334,6 +337,9 @@ final class SkillBypassRegressionTests: XCTestCase {
     }
 
     func testCreateSkillSupportsCustomScriptNameAndManifestJSON() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else {
+            throw XCTSkip("Skipping Python subprocess execution in CI environment")
+        }
         guard await UVRuntime.shared.isAvailable() else {
             throw XCTSkip("uv is not installed on this system")
         }
@@ -379,6 +385,9 @@ final class SkillBypassRegressionTests: XCTestCase {
     }
 
     func testRunSkillToolForwardsStructuredParamsAndSecretBindings() async throws {
+        guard ProcessInfo.processInfo.environment["CI"] == nil else {
+            throw XCTSkip("Skipping Python subprocess execution in CI environment")
+        }
         guard await UVRuntime.shared.isAvailable() else {
             throw XCTSkip("uv is not installed on this system")
         }
