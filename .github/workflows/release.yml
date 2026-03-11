@@ -38,7 +38,7 @@ jobs:
     name: Tests
     needs: preflight
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,12 +47,14 @@ jobs:
       - name: Select Xcode 26.2
         run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
 
-      - name: Clear stale SPM cache
-        run: rm -rf ~/Library/Caches/org.swift.swiftpm/repositories
+      - name: Resolve SPM dependencies
+        run: swift package resolve
+        working-directory: native/macos/Fae
+        timeout-minutes: 10
 
       - name: Run tests
         run: swift test --package-path native/macos/Fae
-        timeout-minutes: 18
+        timeout-minutes: 25
 
   # ── Build macOS app bundle (Apple Silicon) ────────────────────────
   build-macos:
