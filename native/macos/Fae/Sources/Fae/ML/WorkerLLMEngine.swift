@@ -60,6 +60,26 @@ struct WorkerStreamWatchdogPolicy {
     }
 }
 
+enum WorkerCommandTimeoutPolicy {
+    // Control-plane commands should still fail fast when the worker is wedged.
+    static let defaultTimeoutNanoseconds: UInt64 = 30_000_000_000
+    // First-run local model loads may spend minutes resolving repo metadata,
+    // downloading multi-GB weights, and compiling kernels before the worker can ack.
+    static let loadTimeoutNanoseconds: UInt64 = 900_000_000_000
+    static let warmupTimeoutNanoseconds: UInt64 = 180_000_000_000
+
+    static func timeout(for command: String) -> UInt64 {
+        switch command {
+        case "load":
+            return loadTimeoutNanoseconds
+        case "warmup":
+            return warmupTimeoutNanoseconds
+        default:
+            return defaultTimeoutNanoseconds
+        }
+    }
+}
+
 actor WorkerLLMEngine: LLMEngine {
     private let role: WorkerProcessRole
     private var process: Process?
@@ -74,7 +94,6 @@ actor WorkerLLMEngine: LLMEngine {
     private var lastLoadedModelID: String?
     private var restartCount: Int = 0
     private var launchGeneration: UInt64 = 0
-    private let commandTimeoutNanoseconds: UInt64 = 30_000_000_000
 
     private(set) var isLoaded: Bool = false
     private(set) var loadState: MLEngineLoadState = .notStarted
@@ -355,8 +374,9 @@ actor WorkerLLMEngine: LLMEngine {
     private func sendAwaitingAck(_ request: LLMWorkerRequest) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             commandContinuations[request.requestID] = continuation
+            let timeout = WorkerCommandTimeoutPolicy.timeout(for: request.command)
             pendingCommandTimeouts[request.requestID] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: self?.commandTimeoutNanoseconds ?? 30_000_000_000)
+                try? await Task.sleep(nanoseconds: timeout)
                 await self?.timeoutCommand(requestID: request.requestID, command: request.command)
             }
             do {

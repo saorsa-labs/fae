@@ -53,11 +53,20 @@ final class OrbStateController: ObservableObject {
 /// inside the AppKit-hosted NSWindow.
 private struct FaeRootView: View {
     @ObservedObject var faeCore: FaeCore
+    @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     var onAcceptLicense: () -> Void
 
     var body: some View {
         ZStack {
             ContentView()
+
+            if faeCore.isLicenseAccepted,
+               faeCore.shouldShowStartupIntro,
+               !pipelineAux.isPipelineReady
+            {
+                StartupIntroOverlay()
+                    .transition(.opacity)
+            }
 
             if !faeCore.isLicenseAccepted {
                 LicenseAcceptanceView(
@@ -67,6 +76,35 @@ private struct FaeRootView: View {
                 .transition(.opacity)
             }
         }
+        .onChange(of: pipelineAux.isPipelineReady) {
+            if pipelineAux.isPipelineReady && faeCore.shouldShowStartupIntro {
+                faeCore.markStartupIntroSeen()
+            }
+        }
+    }
+}
+
+private struct StartupIntroOverlay: View {
+    private let html = LoadingCanvasContent.crawlExperience()
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+
+            CanvasHTMLView(htmlContent: html)
+                .background(Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .ignoresSafeArea()
+        }
+        .overlay(alignment: .bottom) {
+            Text("Fae is loading her local brain, voice, and startup context.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .padding(.bottom, 18)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -285,19 +323,15 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         hostBridge.debugConsole = debugConsole
         hostBridge.faeCore = faeCore
 
-        // Direct Combine observation for pipeline readiness.
-        // Bypasses the NotificationCenter event chain (FaeEventBus → GCD →
-        // BackendEventRouter → PipelineAuxBridgeController) which can have
-        // timing issues with Swift concurrency / GCD interleaving.
+        // Direct Combine observation for final startup readiness.
+        // This tracks FaeCore's authoritative "running" state, which is only
+        // set after model load and LLM warmup complete.
         faeCore.$pipelineState
             .receive(on: RunLoop.main)
-            .sink { [weak pipelineAux, weak subtitles] state in
+            .sink { [weak pipelineAux] state in
                 guard let pipelineAux else { return }
                 if state == .running, !pipelineAux.isPipelineReady {
-                    NSLog("FaeAppDelegate: pipelineState → running, setting isPipelineReady")
-                    pipelineAux.isPipelineReady = true
-                    pipelineAux.status = "Running"
-                    subtitles?.hideProgress()
+                    pipelineAux.markPipelineReady(source: "pipelineState.running")
                 }
             }
             .store(in: &cancellables)

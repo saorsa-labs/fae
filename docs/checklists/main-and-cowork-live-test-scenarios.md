@@ -1,6 +1,6 @@
 # Main And Cowork Live Test Scenarios
 
-Last updated: March 10, 2026
+Last updated: March 11, 2026
 
 This document is the step-by-step live validation companion to
 [`docs/checklists/app-release-validation.md`](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md).
@@ -42,7 +42,12 @@ Acceptance:
 - One Fae app instance launches.
 - No empty canvas appears on startup.
 - The main surface is visually coherent within 3 seconds.
+- On a true first run, the intro crawl appears after license acceptance and before the live conversation surface unlocks.
 - The loaded local model is visible in the runtime or settings and matches expectations.
+- On a clean-install or cache-cleared run, local operator startup can wait through first-download latency without tripping a worker load timeout.
+- The startup progress bar stays visible through download, model load, verification, and warmup.
+- The live text composer stays unavailable until Fae is actually ready to answer.
+- On the next launch after that first run completes, the intro crawl no longer appears.
 
 Steps:
 
@@ -50,6 +55,9 @@ Steps:
 2. Capture startup screenshot.
 3. Confirm `/status` reports the expected operator model and pipeline state.
 4. Resize and move the main window once to confirm the surface remains stable.
+5. Repeat once on a cache-cleared or clean-install path and confirm the app waits for local model download instead of failing with `Worker command timed out: load`.
+6. During that first-run path, confirm the progress label keeps updating through warmup and the text composer only appears after readiness completes.
+7. Relaunch once more without clearing state and confirm the intro crawl does not return.
 
 ### 2. Onboarding and voice enrollment
 

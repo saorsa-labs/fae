@@ -13,6 +13,8 @@ final class FaeConfigTests: XCTestCase {
 
         XCTAssertNil(config.userName)
         XCTAssertEqual(config.audio.inputSampleRate, 16_000)
+        XCTAssertFalse(config.startupIntroSeen)
+        XCTAssertFalse(config.startupIntroSeenConfigured)
         XCTAssertEqual(config.llm.voiceModelPreset, "auto")
         XCTAssertTrue(config.llm.dualModelEnabled)
         XCTAssertEqual(config.llm.conciergeModelPreset, "auto")
@@ -69,6 +71,8 @@ final class FaeConfigTests: XCTestCase {
 
         var original = FaeConfig()
         original.userName = "Ada"
+        original.startupIntroSeen = true
+        original.startupIntroSeenConfigured = true
 
         original.audio.inputSampleRate = 22_050
         original.audio.bufferSize = 256
@@ -111,6 +115,8 @@ final class FaeConfigTests: XCTestCase {
         let loaded = FaeConfig.load(from: fileURL)
 
         XCTAssertEqual(loaded.userName, "Ada")
+        XCTAssertTrue(loaded.startupIntroSeen)
+        XCTAssertTrue(loaded.startupIntroSeenConfigured)
 
         XCTAssertEqual(loaded.audio.inputSampleRate, 22_050)
         XCTAssertEqual(loaded.audio.bufferSize, 256)
@@ -316,5 +322,23 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(config.llm.resolvedThinkingLevel, .balanced)
         XCTAssertEqual(config.llm.thinkingLevel, FaeThinkingLevel.balanced.rawValue)
         XCTAssertTrue(config.llm.thinkingEnabled)
+    }
+
+    func testStartupIntroSeenParsesFromConfig() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        licenseAccepted = true
+        startupIntroSeen = false
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertTrue(config.licenseAccepted)
+        XCTAssertFalse(config.startupIntroSeen)
+        XCTAssertTrue(config.startupIntroSeenConfigured)
     }
 }

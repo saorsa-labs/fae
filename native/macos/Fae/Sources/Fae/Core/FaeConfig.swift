@@ -23,6 +23,8 @@ struct FaeConfig: Codable {
     var privacy: PrivacyConfig = PrivacyConfig()
     var userName: String?
     var licenseAccepted: Bool = false
+    var startupIntroSeen: Bool = false
+    var startupIntroSeenConfigured: Bool = false
     var toolMode: String = "full"
 
     // MARK: - Audio
@@ -671,6 +673,12 @@ struct FaeConfig: Codable {
                         throw ParseError.malformedValue(key: key, value: rawValue)
                     }
                     config.licenseAccepted = v
+                case "startupIntroSeen":
+                    guard let v = parseBool(rawValue) else {
+                        throw ParseError.malformedValue(key: key, value: rawValue)
+                    }
+                    config.startupIntroSeen = v
+                    config.startupIntroSeenConfigured = true
                 case "toolMode":
                     guard let v = parseString(rawValue) else {
                         throw ParseError.malformedValue(key: key, value: rawValue)
@@ -1020,6 +1028,7 @@ struct FaeConfig: Codable {
 
         lines.append("userName = \(encodeStringOrNil(userName))")
         lines.append("licenseAccepted = \(licenseAccepted ? "true" : "false")")
+        lines.append("startupIntroSeen = \(startupIntroSeen ? "true" : "false")")
         lines.append("toolMode = \(encodeString(toolMode))")
         lines.append("")
 

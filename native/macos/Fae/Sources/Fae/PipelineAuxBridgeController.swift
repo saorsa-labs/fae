@@ -18,8 +18,9 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Current pipeline status string for display in SettingsView.
     @Published var status: String = "Not started"
 
-    /// Whether the pipeline has fully started (models loaded, ready for conversation).
-    /// Drives UI gating — e.g. the input bar is hidden until this becomes `true`.
+    /// Whether the pipeline has fully started and is responsive for conversation.
+    /// Drives UI gating — the main conversation surface stays in startup mode
+    /// until this becomes `true`.
     @Published var isPipelineReady: Bool = false
 
     struct VoiceAttentionEvent: Identifiable, Sendable {
@@ -83,14 +84,13 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Set by `FaeApp` during wiring.
     weak var auxiliaryWindows: AuxiliaryWindowManager?
 
-    /// Subtitle/progress bar controller — used to hide the progress bar
-    /// once all models have finished loading.
+    /// Subtitle/progress bar controller — used to hide the progress bar once
+    /// startup fully completes.
     /// Set by `FaeApp` during wiring.
     weak var subtitleState: SubtitleStateController?
 
-    /// Tracks how many `load_complete` progress events we have received.
-    /// The pipeline loads 3 models: STT, LLM, TTS. After all 3 complete,
-    /// `isPipelineReady` is set to `true`.
+    /// Tracks how many `load_complete` progress events we have received so we
+    /// can report startup status without guessing readiness from a timer.
     private var loadCompleteCount: Int = 0
 
     /// Whether the loading canvas (Star Wars crawl + info) has been shown.
@@ -100,11 +100,6 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// When true, voice enrollment is in progress. Startup should continue to
     /// stay on the main conversation surface without auxiliary canvas windows.
     private var enrollmentModeActive: Bool = false
-
-    /// Retained for compatibility with older releases that tracked whether the
-    /// startup canvas had already been shown. Startup now goes directly to the
-    /// main conversation surface and keeps auxiliary windows closed.
-    private static let hasShownStartupCanvasKey = "fae.hasShownStartupCanvas"
 
     private var observations: [NSObjectProtocol] = []
 
@@ -152,7 +147,7 @@ final class PipelineAuxBridgeController: ObservableObject {
             }
         )
 
-        // Runtime lifecycle events (stop/error → reset isPipelineReady)
+        // Runtime lifecycle events (final ready + teardown reset)
         observations.append(
             center.addObserver(
                 forName: .faeRuntimeState, object: nil, queue: .main
@@ -164,9 +159,7 @@ final class PipelineAuxBridgeController: ObservableObject {
             }
         )
 
-        // Runtime progress events (model download/load stages)
-        // This is the reliable signal for pipeline readiness — we track
-        // individual `load_complete` events until all 3 models are loaded.
+        // Runtime progress events (model download/load stages).
         observations.append(
             center.addObserver(
                 forName: .faeRuntimeProgress, object: nil, queue: .main
@@ -224,22 +217,9 @@ final class PipelineAuxBridgeController: ObservableObject {
     private func handleRuntimeLifecycle(event: String) {
         switch event {
         case "runtime.started":
-            // In the new Swift pipeline, runtime.started fires AFTER all models
-            // are loaded and the pipeline coordinator is running. Use it as a
-            // backup readiness signal alongside the Combine observation in
-            // FaeAppDelegate and the load_complete count.
-            if !isPipelineReady {
-                NSLog("PipelineAuxBridgeController: runtime.started → setting isPipelineReady")
-                isPipelineReady = true
-                status = "Running"
-                subtitleState?.hideProgress()
-            } else {
-                status = "Running"
-            }
+            markPipelineReady(source: "runtime.started")
         case "runtime.stopped", "runtime.error":
-            isPipelineReady = false
-            loadCompleteCount = 0
-            hasShownLoadingCanvas = false
+            resetStartupState()
         default:
             break
         }
@@ -268,23 +248,16 @@ final class PipelineAuxBridgeController: ObservableObject {
             status = "Loading voice synthesis…"
 
         case "ready":
-            // "ready" is sent by ModelManager after all 3 models complete
-            // (success or degraded). Use as another backup readiness signal.
-            if !isPipelineReady {
-                NSLog("PipelineAuxBridgeController: ready stage → setting isPipelineReady")
-                isPipelineReady = true
-                status = "Running"
-                subtitleState?.hideProgress()
-                transitionToReadyCanvas()
-            } else {
-                status = "Finalizing startup…"
-            }
+            // ModelManager emits "ready" once model downloads, loads, and
+            // verification have finished. Fae still performs LLM warmup after
+            // this, so keep the UI in startup mode until runtime.started.
+            status = "Warming up Fae…"
 
         case "verify_started":
             status = "Verifying model readiness…"
 
         case "verify_complete":
-            status = "Verification complete"
+            status = "Models loaded — preparing first response…"
 
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
@@ -294,23 +267,8 @@ final class PipelineAuxBridgeController: ObservableObject {
             loadCompleteCount += 1
             let model = userInfo["model_name"] as? String ?? "model"
             status = "Loaded \(model)"
-
-            // Fae loads 3 models: STT, LLM, TTS. After all 3 complete,
-            // show a brief "personality" loading stage, then mark ready.
             if loadCompleteCount >= 3 && !isPipelineReady {
-                status = "Loading personality…"
-                subtitleState?.showProgress(
-                    label: "Loading personality, memories and relationships…",
-                    percent: 97
-                )
-                // Brief pause so users see the final stage, then mark ready.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                    guard let self, !self.isPipelineReady else { return }
-                    self.isPipelineReady = true
-                    self.status = "Running"
-                    self.subtitleState?.hideProgress()
-                    self.transitionToReadyCanvas()
-                }
+                status = "All core models loaded — verifying startup…"
             }
 
         case "download_started", "download_progress", "download_complete", "cached":
@@ -357,7 +315,6 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// owner setup path. In that state the startup canvas should step aside instead
     /// of lingering on the frozen "First Contact" page.
     func finishStartupCanvasTransition(force: Bool = false) {
-        UserDefaults.standard.set(true, forKey: Self.hasShownStartupCanvasKey)
         guard hasShownLoadingCanvas || force || enrollmentModeActive else { return }
         canvasController?.clear()
         auxiliaryWindows?.hideCanvas()
@@ -461,15 +418,7 @@ final class PipelineAuxBridgeController: ObservableObject {
 
         case "pipeline.mic_status":
             let active = payload["active"] as? Bool ?? false
-            // Also use mic_status as a fallback readiness signal.
-            if !isPipelineReady {
-                isPipelineReady = true
-                status = "Running"
-                subtitleState?.hideProgress()
-                transitionToReadyCanvas()
-            } else {
-                status = "Mic: \(active ? "active" : "inactive")"
-            }
+            status = "Mic: \(active ? "active" : "inactive")"
 
         case "pipeline.voice_attention":
             handleVoiceAttention(payload: payload)
@@ -533,6 +482,22 @@ final class PipelineAuxBridgeController: ObservableObject {
         diagnostics.recentEvents.insert(event, at: 0)
         diagnostics.recentEvents = Array(diagnostics.recentEvents.prefix(20))
         voiceAttention = diagnostics
+    }
+
+    func markPipelineReady(source: String) {
+        if !isPipelineReady {
+            NSLog("PipelineAuxBridgeController: %@ → setting isPipelineReady", source)
+            isPipelineReady = true
+            subtitleState?.hideProgress()
+            transitionToReadyCanvas()
+        }
+        status = "Running"
+    }
+
+    private func resetStartupState() {
+        isPipelineReady = false
+        loadCompleteCount = 0
+        hasShownLoadingCanvas = false
     }
 
     private func handleLocalStackStatus(payload: [String: Any]) {

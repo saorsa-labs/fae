@@ -6,6 +6,7 @@ struct ContentView: View {
     @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var orbAnimation: OrbAnimationState
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
+    @EnvironmentObject private var subtitles: SubtitleStateController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
@@ -129,25 +130,29 @@ struct ContentView: View {
             // Subtle separator
             Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
 
-            // Zone 2: Conversation — scrolling, fills remaining space
-            ConversationScrollView()
+            if pipelineAux.isPipelineReady {
+                // Zone 2: Conversation — scrolling, fills remaining space
+                ConversationScrollView()
 
-            // Subtle separator
-            Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
+                // Subtle separator
+                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
 
-            // Enrollment invitation — visible until owner voice is enrolled.
-            if !ownerEnrollmentComplete {
-                EnrollmentInvitationBanner {
-                    windowState.transitionToCompact()
-                    beginNativeEnrollment()
+                // Enrollment invitation — visible until owner voice is enrolled.
+                if !ownerEnrollmentComplete {
+                    EnrollmentInvitationBanner {
+                        windowState.transitionToCompact()
+                        beginNativeEnrollment()
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
 
-            // Zone 3: Input — pinned at bottom, always visible so users
-            // can type while models load. Text is queued until pipeline starts.
-            InputBarView()
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                // Zone 3: Input — pinned at bottom once startup fully completes.
+                InputBarView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                startupHoldingView
+                    .transition(.opacity)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .opacity(viewLoaded ? 1 : 0)
@@ -183,6 +188,48 @@ struct ContentView: View {
 
     private var ownerEnrollmentComplete: Bool {
         onboarding.isComplete || faeCore.hasOwnerSetUp
+    }
+
+    private var startupHoldingView: some View {
+        VStack(spacing: 12) {
+            Spacer()
+
+            Image(systemName: "hourglass.bottomhalf.filled")
+                .font(.system(size: 24, weight: .medium))
+                .foregroundColor(Color.primary.opacity(0.45))
+
+            Text("Fae is starting")
+                .font(.system(size: 18, weight: .semibold, design: .serif))
+                .foregroundColor(.primary.opacity(0.88))
+
+            Text(startupDetailText)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.primary.opacity(0.55))
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .frame(maxWidth: 320)
+
+            Text("The conversation surface unlocks when downloads, model loading, and warmup are complete.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundColor(.primary.opacity(0.42))
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .frame(maxWidth: 360)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+    }
+
+    private var startupDetailText: String {
+        if !subtitles.progressLabel.isEmpty {
+            return subtitles.progressLabel
+        }
+        if !pipelineAux.status.isEmpty {
+            return pipelineAux.status
+        }
+        return "Loading local components…"
     }
 
     private func beginNativeEnrollment() {

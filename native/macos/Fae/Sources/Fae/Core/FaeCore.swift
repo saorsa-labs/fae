@@ -10,6 +10,8 @@ import Foundation
 /// to the appropriate subsystem.
 @MainActor
 final class FaeCore: ObservableObject, HostCommandSender {
+    private static let legacyStartupCanvasKey = "fae.hasShownStartupCanvas"
+
     private struct PendingTextInjection {
         enum Mode {
             case standard
@@ -25,6 +27,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var pipelineState: FaePipelineState = .stopped
     @Published var hasOwnerSetUp: Bool = UserDefaults.standard.bool(forKey: "fae.owner.enrolled")
     @Published var isLicenseAccepted: Bool
+    @Published var shouldShowStartupIntro: Bool
     @Published var userName: String?
     @Published var toolMode: String = "full"
     @Published var thinkingEnabled: Bool = false
@@ -69,8 +72,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Channel secret migration: move legacy inline channel tokens from config
         // into Keychain, keeping read compatibility for existing installs.
         let migratedSecrets = Self.migrateChannelSecretsToKeychain(&loaded)
+        let migratedStartupIntro = Self.migrateStartupIntroState(&loaded)
 
-        if migratedSecrets || migratedMaxTokens || migratedBundledFaeReferenceText {
+        if migratedSecrets || migratedMaxTokens || migratedBundledFaeReferenceText || migratedStartupIntro {
             try? loaded.save()
         }
 
@@ -78,6 +82,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         let initialThinkingLevel = loaded.llm.resolvedThinkingLevel
         self.config = loaded
         self.isLicenseAccepted = loaded.licenseAccepted
+        self.shouldShowStartupIntro = loaded.licenseAccepted
+            && loaded.startupIntroSeenConfigured
+            && !loaded.startupIntroSeen
         self.userName = loaded.userName
         self.toolMode = loaded.toolMode
         self.thinkingLevel = initialThinkingLevel
@@ -1692,8 +1699,22 @@ final class FaeCore: ObservableObject, HostCommandSender {
     func acceptLicense() {
         isLicenseAccepted = true
         config.licenseAccepted = true
+        if !config.startupIntroSeenConfigured {
+            config.startupIntroSeen = false
+            config.startupIntroSeenConfigured = true
+        }
+        shouldShowStartupIntro = !config.startupIntroSeen
         persistConfig(reason: "license.accept")
         NSLog("FaeCore: AGPL-3.0 license accepted")
+    }
+
+    func markStartupIntroSeen() {
+        guard shouldShowStartupIntro else { return }
+        shouldShowStartupIntro = false
+        config.startupIntroSeen = true
+        config.startupIntroSeenConfigured = true
+        persistConfig(reason: "startup_intro.seen")
+        NSLog("FaeCore: startup intro marked seen")
     }
 
     /// Listen for voice enrollment completion to update hasOwnerSetUp.
@@ -1894,6 +1915,31 @@ final class FaeCore: ObservableObject, HostCommandSender {
         return raw
     }
 
+    private static func migrateStartupIntroState(_ config: inout FaeConfig) -> Bool {
+        guard !config.startupIntroSeenConfigured else { return false }
+
+        let defaults = UserDefaults.standard
+        let hasLegacyKey = defaults.object(forKey: legacyStartupCanvasKey) != nil
+
+        if config.licenseAccepted {
+            // Older installs accepted the license before the startup intro moved
+            // into config-backed state. Treat those installs as already seen so
+            // the crawl remains first-run only.
+            config.startupIntroSeen = true
+            config.startupIntroSeenConfigured = true
+            if hasLegacyKey {
+                defaults.removeObject(forKey: legacyStartupCanvasKey)
+            }
+            return true
+        }
+
+        if hasLegacyKey {
+            defaults.removeObject(forKey: legacyStartupCanvasKey)
+        }
+
+        return false
+    }
+
     private static func migrateChannelSecretsToKeychain(_ config: inout FaeConfig) -> Bool {
         var migrated = false
 
@@ -2032,6 +2078,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config = FaeConfig()
             hasOwnerSetUp = false
             isLicenseAccepted = false
+            shouldShowStartupIntro = false
             userName = nil
             toolMode = config.toolMode
             try config.save()

@@ -578,6 +578,101 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
+    func testFaeCoreMigratesLegacyAcceptedInstallToSeenStartupIntro() throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+        let defaults = UserDefaults.standard
+        let legacyValue = defaults.object(forKey: "fae.hasShownStartupCanvas")
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+            if let legacyValue {
+                defaults.set(legacyValue, forKey: "fae.hasShownStartupCanvas")
+            } else {
+                defaults.removeObject(forKey: "fae.hasShownStartupCanvas")
+            }
+        }
+
+        let content = """
+        licenseAccepted = true
+        toolMode = "full"
+        """
+        try fm.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        defaults.removeObject(forKey: "fae.hasShownStartupCanvas")
+
+        let core = FaeCore()
+        let reloaded = FaeConfig.load()
+
+        XCTAssertTrue(core.isLicenseAccepted)
+        XCTAssertFalse(core.shouldShowStartupIntro)
+        XCTAssertTrue(reloaded.startupIntroSeen)
+        XCTAssertTrue(reloaded.startupIntroSeenConfigured)
+    }
+
+    @MainActor
+    func testFaeCoreShowsStartupIntroOnceAfterFreshLicenseAcceptance() throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+        let defaults = UserDefaults.standard
+        let legacyValue = defaults.object(forKey: "fae.hasShownStartupCanvas")
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+            if let legacyValue {
+                defaults.set(legacyValue, forKey: "fae.hasShownStartupCanvas")
+            } else {
+                defaults.removeObject(forKey: "fae.hasShownStartupCanvas")
+            }
+        }
+
+        let content = """
+        licenseAccepted = false
+        toolMode = "full"
+        """
+        try fm.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        defaults.removeObject(forKey: "fae.hasShownStartupCanvas")
+
+        let core = FaeCore()
+        XCTAssertFalse(core.shouldShowStartupIntro)
+
+        core.acceptLicense()
+
+        var reloaded = FaeConfig.load()
+        XCTAssertTrue(core.isLicenseAccepted)
+        XCTAssertTrue(core.shouldShowStartupIntro)
+        XCTAssertTrue(reloaded.licenseAccepted)
+        XCTAssertFalse(reloaded.startupIntroSeen)
+        XCTAssertTrue(reloaded.startupIntroSeenConfigured)
+
+        core.markStartupIntroSeen()
+
+        reloaded = FaeConfig.load()
+        XCTAssertFalse(core.shouldShowStartupIntro)
+        XCTAssertTrue(reloaded.startupIntroSeen)
+        XCTAssertTrue(reloaded.startupIntroSeenConfigured)
+    }
+
+    @MainActor
     func testPipelineAuxBridgeTracksLocalModelStackDiagnostics() {
         let controller = PipelineAuxBridgeController()
 

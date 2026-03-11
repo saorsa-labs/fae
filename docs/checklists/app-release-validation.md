@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: March 10, 2026
+Last updated: March 11, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae.
 
@@ -59,6 +59,7 @@ Suggested screenshot root:
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
 - [ ] Loaded operator and concierge models are visible in Settings without truncation.
 - [ ] The runtime reports the expected operator model, context size, and tool mode.
+- [ ] On a cache-cleared or clean-install machine, first local operator load completes without `Worker command timed out: load` while model download is in progress.
 - [ ] Any stale onboarding, memory, scheduler, or approval state needed for the scenario is reset intentionally through the test server.
 
 ## Scripted harness phases
@@ -94,8 +95,13 @@ Acceptance:
 
 - [ ] Startup lands on one coherent main surface, not a stray empty canvas.
 - [ ] The screen tells a new user what Fae is for within 3 seconds.
+- [ ] On a true first run after license acceptance, the startup intro/crawl appears exactly once while Fae finishes loading.
 - [ ] The orb/visual focus feels calm and intentional rather than blurry or noisy.
 - [ ] The main window can be resized and moved without layout breakage.
+- [ ] A clean-install or cache-cleared first launch can wait through local model download without failing the pipeline or dropping worker/concierge diagnostics into an error state.
+- [ ] On subsequent launches of an already-initialized install, the startup intro does not reappear.
+- [ ] Startup progress remains visible through download, model load, verification, and first-response warmup instead of disappearing on a timer.
+- [ ] The live conversation surface does not unlock early; input becomes available only after the pipeline is actually ready to respond.
 
 ### Onboarding and enrollment
 

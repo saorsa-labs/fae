@@ -398,6 +398,18 @@ final class ConversationBridgeController: ObservableObject {
                 coworkConversationController?.loadedModelLabel = llmLabel
             }
 
+        case "verify_started":
+            subtitleState?.showProgress(label: "Verifying model readiness…", percent: 97)
+
+        case "verify_complete":
+            subtitleState?.showProgress(label: "Models loaded — preparing first response…", percent: 98)
+
+        case "ready":
+            subtitleState?.showProgress(
+                label: "Warming up Fae for the first conversation…",
+                percent: 99
+            )
+
         case "error":
             let message = userInfo["message"] as? String ?? "unknown error"
             appendStatusMessage("Something went wrong: \(message)")
@@ -497,10 +509,9 @@ final class ConversationBridgeController: ObservableObject {
             // the user sees loading feedback before the first progress event.
             subtitleState?.showProgress(label: "Fae is waking up…", percent: 2)
         case "runtime.started":
-            // NOTE: runtime.started fires immediately after spawning the async
-            // pipeline task — models are NOT loaded yet. Do NOT hide progress
-            // here. Progress is hidden when all models finish loading
-            // (see load_complete handling above, and PipelineAuxBridgeController).
+            // runtime.started is emitted once startup is actually complete,
+            // including the initial LLM warmup. Progress is hidden by the
+            // final readiness gate in PipelineAuxBridgeController / FaeApp.
             break
         case "runtime.stopped":
             subtitleState?.hideProgress()

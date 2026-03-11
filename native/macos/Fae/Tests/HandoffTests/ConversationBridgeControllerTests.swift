@@ -275,6 +275,39 @@ final class ConversationBridgeControllerTests: XCTestCase {
         }
     }
 
+    func testStartupWarmupStagesKeepProgressVisible() async throws {
+        let bridge = ConversationBridgeController()
+        let subtitle = SubtitleStateController()
+        bridge.subtitleState = subtitle
+
+        NotificationCenter.default.post(
+            name: .faeRuntimeProgress,
+            object: nil,
+            userInfo: ["stage": "verify_started"]
+        )
+        try await flushNotifications()
+        XCTAssertEqual(subtitle.progressPercent, 97)
+        XCTAssertEqual(subtitle.progressLabel, "Verifying model readiness…")
+
+        NotificationCenter.default.post(
+            name: .faeRuntimeProgress,
+            object: nil,
+            userInfo: ["stage": "verify_complete"]
+        )
+        try await flushNotifications()
+        XCTAssertEqual(subtitle.progressPercent, 98)
+        XCTAssertEqual(subtitle.progressLabel, "Models loaded — preparing first response…")
+
+        NotificationCenter.default.post(
+            name: .faeRuntimeProgress,
+            object: nil,
+            userInfo: ["stage": "ready"]
+        )
+        try await flushNotifications()
+        XCTAssertEqual(subtitle.progressPercent, 99)
+        XCTAssertEqual(subtitle.progressLabel, "Warming up Fae for the first conversation…")
+    }
+
     private func flushNotifications() async throws {
         try await Task.sleep(nanoseconds: 50_000_000)
     }
