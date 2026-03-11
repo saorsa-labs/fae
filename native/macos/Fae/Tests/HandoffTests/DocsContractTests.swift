@@ -49,6 +49,7 @@ final class DocsContractTests: XCTestCase {
 
         let builtinTaskIDs = [
             "memory_reflect", "memory_reindex", "memory_migrate", "memory_gc", "memory_backup",
+            "memory_inbox_ingest", "memory_digest",
             "check_fae_update", "noise_budget_reset", "stale_relationships", "morning_briefing",
             "skill_proposals", "skill_health_check", "vault_backup", "camera_presence_check",
             "screen_activity_check", "overnight_work", "embedding_reindex", "enhanced_morning_briefing",
@@ -63,11 +64,11 @@ final class DocsContractTests: XCTestCase {
         let readme = try loadRepositoryText(relativePath: "README.md")
         let modelSwitchingGuide = try loadRepositoryText(relativePath: "docs/guides/model-switching.md")
         let expectations: [(Int, String, Int)] = [
-            (8, "mlx-community/Qwen3.5-0.8B-4bit", 32_768),
-            (16, "mlx-community/Qwen3.5-2B-4bit", 32_768),
-            (32, "mlx-community/Qwen3.5-2B-4bit", 32_768),
-            (64, "mlx-community/Qwen3.5-2B-4bit", 32_768),
-            (128, "mlx-community/Qwen3.5-2B-4bit", 32_768),
+            (8, "saorsa-labs/saorsa1-tiny-pre-release", 32_768),
+            (16, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
+            (32, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
+            (64, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
+            (128, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
         ]
 
         for (ramGB, modelId, contextSize) in expectations {
@@ -79,20 +80,18 @@ final class DocsContractTests: XCTestCase {
             XCTAssertEqual(selection.contextSize, contextSize)
         }
 
-        XCTAssertTrue(readme.contains("Benchmark-backed Qwen3.5 operator"))
-        XCTAssertTrue(readme.contains("benchmark-backed operator policy"))
-        XCTAssertTrue(readme.contains("12+ GB: `mlx-community/Qwen3.5-2B-4bit`"))
-        XCTAssertTrue(readme.contains("below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit`"))
+        XCTAssertTrue(readme.contains("saorsa1 local stack"))
+        XCTAssertTrue(readme.contains("saorsa1 operator policy"))
+        XCTAssertTrue(readme.contains("12+ GB: `saorsa-labs/saorsa1-worker-pre-release`"))
+        XCTAssertTrue(readme.contains("below 12 GB: `saorsa-labs/saorsa1-tiny-pre-release`"))
+        XCTAssertTrue(readme.contains("`saorsa-labs/saorsa1-concierge-pre-release`"))
 
-        XCTAssertTrue(modelSwitchingGuide.contains("benchmark-backed operator policy"))
-        XCTAssertTrue(modelSwitchingGuide.contains("12+ GB: `qwen3_5_2b` at 32K context"))
-        XCTAssertTrue(modelSwitchingGuide.contains("below 12 GB: `qwen3_5_0_8b` at 32K context"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_35b_a3b`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_27b`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_9b`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_4b`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_2b`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`qwen3_5_0_8b`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("saorsa1 operator policy"))
+        XCTAssertTrue(modelSwitchingGuide.contains("12+ GB: `saorsa1-worker` at 32K context"))
+        XCTAssertTrue(modelSwitchingGuide.contains("below 12 GB: `saorsa1-tiny` at 32K context"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`saorsa1-worker`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`saorsa1-tiny`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`saorsa-labs/saorsa1-concierge-pre-release`"))
     }
 
     func testAdversarialSecurityPlanKeepsCriticalCoverageAreasDocumented() throws {

@@ -1,26 +1,24 @@
+import AppKit
 import SwiftUI
 
-/// Two-step workflow for importing memories from another AI assistant.
-///
-/// Step 1: Copy the export prompt to paste into ChatGPT, Gemini, etc.
-/// Step 2: Paste the response and send it to Fae for memory extraction.
 struct MemoryImportWindowView: View {
-
-    let conversation: ConversationController
-    let auxiliaryWindows: AuxiliaryWindowManager
+    let memoryInboxServiceProvider: () -> MemoryInboxService?
+    let focusMainWindow: () -> Void
     let dismissAction: () -> Void
 
+    @State private var pastedTitle: String = ""
     @State private var pastedText: String = ""
+    @State private var urlText: String = ""
     @State private var promptCopied: Bool = false
+    @State private var statusMessage: String = "Import text, files, or URLs directly into Fae's memory inbox."
+    @State private var statusColor: Color = .secondary
+    @State private var isWorking: Bool = false
 
-    /// Heather accent colour — matches InputBarView.
     private static let heather = Color(
         red: 180.0 / 255.0,
         green: 168.0 / 255.0,
         blue: 196.0 / 255.0
     )
-
-    // MARK: - Prompts
 
     private static let exportPrompt = """
         I'm moving to another service and need to export my data. List every memory you \
@@ -29,7 +27,7 @@ struct MemoryImportWindowView: View {
 
         Format each entry as: [date saved, if available] - memory content.
 
-        Make sure to cover all of the following — preserve my words verbatim where possible:
+        Make sure to cover all of the following - preserve my words verbatim where possible:
         - Instructions I've given you about how to respond (tone, format, style, \
         'always do X', 'never do Y').
         - Personal details: name, location, job, family, interests.
@@ -42,26 +40,19 @@ struct MemoryImportWindowView: View {
         After the code block, confirm whether that is the complete set or if any remain.
         """
 
-    private static let instructionPrefix = """
-        I'm importing my memories from another AI assistant. Below is everything they had \
-        stored about me. Please read through all of it carefully and remember every detail \
-        — my name, preferences, interests, projects, relationships, instructions, and \
-        anything else mentioned. Don't summarize or skip anything. After reading, confirm \
-        what you've learned.
-
-        ---
-
-        """
-
-    // MARK: - Body
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    stepOneSection
+                    migrationSection
                     Divider()
-                    stepTwoSection
+                    pasteSection
+                    Divider()
+                    urlSection
+                    Divider()
+                    fileSection
+                    Divider()
+                    dropFolderSection
                 }
                 .padding(24)
             }
@@ -69,18 +60,16 @@ struct MemoryImportWindowView: View {
             Divider()
             actionBar
         }
-        .frame(minWidth: 460, minHeight: 480)
+        .frame(minWidth: 520, minHeight: 620)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    // MARK: - Step 1
-
-    private var stepOneSection: some View {
+    private var migrationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Copy the Export Prompt", systemImage: "1.circle.fill")
+            Label("Migrate from Another Assistant", systemImage: "tray.and.arrow.down.fill")
                 .font(.system(size: 14, weight: .semibold))
 
-            Text("Paste this into ChatGPT, Gemini, or any other AI assistant to export your memories.")
+            Text("Use this prompt when you want ChatGPT, Gemini, or another assistant to dump everything it remembers before you paste it here.")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
 
@@ -101,29 +90,27 @@ struct MemoryImportWindowView: View {
             Button(action: copyPrompt) {
                 HStack(spacing: 5) {
                     Image(systemName: promptCopied ? "checkmark" : "doc.on.doc")
-                    Text(promptCopied ? "Copied" : "Copy Prompt")
+                    Text(promptCopied ? "Copied" : "Copy Migration Prompt")
                 }
                 .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(.borderedProminent)
             .tint(promptCopied ? .green : Self.heather)
+            .disabled(isWorking)
         }
     }
 
-    // MARK: - Step 2
-
-    private var stepTwoSection: some View {
+    private var pasteSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Paste the Response", systemImage: "2.circle.fill")
+            Label("Paste Text", systemImage: "doc.text.fill")
                 .font(.system(size: 14, weight: .semibold))
 
-            Text("Paste the exported memories below, then send them to Fae.")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
+            TextField("Optional title", text: $pastedTitle)
+                .textFieldStyle(.roundedBorder)
 
             TextEditor(text: $pastedText)
                 .font(.system(size: 12, design: .monospaced))
-                .frame(minHeight: 160)
+                .frame(minHeight: 150)
                 .scrollContentBackground(.hidden)
                 .padding(8)
                 .background(
@@ -136,14 +123,11 @@ struct MemoryImportWindowView: View {
                 )
 
             HStack {
-                Button(action: pasteFromClipboard) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "clipboard")
-                        Text("Paste from Clipboard")
-                    }
-                    .font(.system(size: 11, weight: .medium))
+                Button("Paste from Clipboard") {
+                    pasteFromClipboard()
                 }
                 .buttonStyle(.bordered)
+                .disabled(isWorking)
 
                 Spacer()
 
@@ -152,46 +136,105 @@ struct MemoryImportWindowView: View {
                     .foregroundColor(.secondary)
             }
 
-            if pastedText.count > 30_000 {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
-                    Text("Large import — Fae may need multiple conversations to absorb everything.")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+            Button("Import Pasted Text") {
+                importPastedText()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Self.heather)
+            .disabled(isWorking || pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private var urlSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Import URL", systemImage: "link")
+                .font(.system(size: 14, weight: .semibold))
+
+            Text("Fetch a page, extract readable text, and store it as a first-class memory artifact.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                TextField("https://example.com/article", text: $urlText)
+                    .textFieldStyle(.roundedBorder)
+
+                Button("Import URL") {
+                    importURL()
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(Self.heather)
+                .disabled(isWorking || urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
 
-    // MARK: - Action Bar
+    private var fileSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Import Files", systemImage: "paperclip")
+                .font(.system(size: 14, weight: .semibold))
+
+            Text("Supports plain text, code, markdown, HTML, RTF, JSON, YAML, and PDF files.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Choose Files...") {
+                    chooseFiles()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Self.heather)
+                .disabled(isWorking)
+
+                Button("Close") {
+                    dismissAction()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var dropFolderSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Drop Folder", systemImage: "folder.fill.badge.plus")
+                .font(.system(size: 14, weight: .semibold))
+
+            Text("Testers can also drop files into the pending inbox folder and let the background ingest task sweep them up every five minutes.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Open Pending Folder") {
+                    openPendingFolder()
+                }
+                .buttonStyle(.bordered)
+                .disabled(isWorking)
+
+                Button("Ingest Pending Now") {
+                    ingestPendingFiles()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Self.heather)
+                .disabled(isWorking)
+            }
+        }
+    }
 
     private var actionBar: some View {
         HStack {
-            Button("Cancel") {
-                dismissAction()
-            }
-            .keyboardShortcut(.cancelAction)
+            Text(statusMessage)
+                .font(.system(size: 12))
+                .foregroundColor(statusColor)
 
             Spacer()
 
-            Button(action: sendToFae) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.circle.fill")
-                    Text("Send to Fae")
-                }
-                .font(.system(size: 13, weight: .medium))
+            if isWorking {
+                ProgressView()
+                    .controlSize(.small)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Self.heather)
-            .disabled(pastedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
     }
-
-    // MARK: - Actions
 
     private func copyPrompt() {
         NSPasteboard.general.clearContents()
@@ -209,13 +252,138 @@ struct MemoryImportWindowView: View {
         }
     }
 
-    private func sendToFae() {
+    private func importPastedText() {
         let trimmed = pastedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        let fullMessage = Self.instructionPrefix + trimmed
-        conversation.handleUserSent(fullMessage)
-        auxiliaryWindows.focusMainWindow()
-        dismissAction()
+        runImportTask {
+            let service = try requireService()
+            let result = try await service.importText(
+                title: emptyToNil(pastedTitle),
+                text: trimmed
+            )
+            pastedText = ""
+            pastedTitle = ""
+            focusMainWindow()
+            setStatus(
+                result.wasDuplicate
+                    ? "That text was already in the memory inbox."
+                    : "Imported pasted text into Fae's memory inbox.",
+                color: result.wasDuplicate ? .secondary : .green
+            )
+        }
+    }
+
+    private func importURL() {
+        let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        runImportTask {
+            let service = try requireService()
+            let result = try await service.importURL(trimmed)
+            urlText = ""
+            focusMainWindow()
+            setStatus(
+                result.wasDuplicate
+                    ? "That URL was already imported."
+                    : "Imported URL content into Fae's memory inbox.",
+                color: result.wasDuplicate ? .secondary : .green
+            )
+        }
+    }
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Import"
+        panel.title = "Import files into Fae memory"
+        if panel.runModal() == .OK {
+            let urls = panel.urls
+            runImportTask {
+                let service = try requireService()
+                let results = try await service.importFiles(at: urls)
+                focusMainWindow()
+                let duplicates = results.filter(\.wasDuplicate).count
+                let imported = results.count - duplicates
+                if imported > 0 {
+                    setStatus(
+                        "Imported \(imported) file(s) into Fae's memory inbox." + (duplicates > 0 ? " Skipped \(duplicates) duplicate(s)." : ""),
+                        color: .green
+                    )
+                } else {
+                    setStatus("All selected files were already imported.", color: .secondary)
+                }
+            }
+        }
+    }
+
+    private func openPendingFolder() {
+        runImportTask(showProgress: false) {
+            let service = try requireService()
+            let pendingURL = try await service.pendingDirectory()
+            NSWorkspace.shared.open(pendingURL)
+            setStatus("Opened the pending inbox folder.", color: .secondary)
+        }
+    }
+
+    private func ingestPendingFiles() {
+        runImportTask {
+            let service = try requireService()
+            let results = try await service.ingestPendingFiles()
+            focusMainWindow()
+            if results.isEmpty {
+                setStatus("No new files were waiting in the pending inbox folder.", color: .secondary)
+            } else {
+                let duplicates = results.filter(\.wasDuplicate).count
+                let imported = results.count - duplicates
+                setStatus(
+                    "Processed \(results.count) pending file(s)." + (imported > 0 ? " Imported \(imported)." : "") + (duplicates > 0 ? " Skipped \(duplicates) duplicate(s)." : ""),
+                    color: .green
+                )
+            }
+        }
+    }
+
+    private func requireService() throws -> MemoryInboxService {
+        if let service = memoryInboxServiceProvider() {
+            return service
+        }
+        throw NSError(
+            domain: "MemoryImportWindowView",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Memory inbox is not available until the runtime finishes starting."]
+        )
+    }
+
+    private func runImportTask(
+        showProgress: Bool = true,
+        operation: @escaping () async throws -> Void
+    ) {
+        if showProgress {
+            isWorking = true
+        }
+        Task { @MainActor in
+            defer {
+                if showProgress {
+                    isWorking = false
+                }
+            }
+            do {
+                try await operation()
+            } catch {
+                setStatus(error.localizedDescription, color: .red)
+            }
+        }
+    }
+
+    private func setStatus(_ message: String, color: Color) {
+        statusMessage = message
+        statusColor = color
+    }
+
+    private func emptyToNil(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

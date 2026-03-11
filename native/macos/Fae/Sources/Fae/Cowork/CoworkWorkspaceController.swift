@@ -791,7 +791,8 @@ final class CoworkWorkspaceController: ObservableObject {
         guard let credentialKey = agent.credentialKey else {
             return agent.isTrustedLocal ? "No API key needed" : "No credential configured"
         }
-        return CredentialManager.retrieve(key: credentialKey) == nil ? "API key needed" : "API key stored securely"
+        // Avoid synchronous keychain reads during workspace/controller startup.
+        return credentialKey.isEmpty ? "API key needed" : "API key managed in Settings"
     }
 
     func testConnection(

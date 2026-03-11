@@ -8,8 +8,8 @@ final class MemoryImportWindowController {
     private var window: NSWindow?
 
     /// Dependencies — set by FaeAppDelegate before first use.
-    var conversation: ConversationController?
     var auxiliaryWindows: AuxiliaryWindowManager?
+    var memoryInboxServiceProvider: (() -> MemoryInboxService?)?
 
     func show() {
         if let existing = window, existing.isVisible {
@@ -17,14 +17,13 @@ final class MemoryImportWindowController {
             return
         }
 
-        guard let conversation, let auxiliaryWindows else {
-            NSLog("MemoryImportWindowController: dependencies not wired — cannot show")
-            return
-        }
-
         let view = MemoryImportWindowView(
-            conversation: conversation,
-            auxiliaryWindows: auxiliaryWindows,
+            memoryInboxServiceProvider: { [weak self] in
+                self?.memoryInboxServiceProvider?()
+            },
+            focusMainWindow: { [weak self] in
+                self?.auxiliaryWindows?.focusMainWindow()
+            },
             dismissAction: { [weak self] in
                 self?.window?.close()
             }
@@ -38,7 +37,7 @@ final class MemoryImportWindowController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Import Memories"
+        panel.title = "Memory Inbox"
         panel.contentViewController = hostingController
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 480, height: 500)

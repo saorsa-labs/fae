@@ -261,8 +261,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         aboutWindow.conversation = conversation
         aboutWindow.sparkleUpdater = sparkleUpdater
         aboutWindow.faeCore = faeCore
-        memoryImport.conversation = conversation
         memoryImport.auxiliaryWindows = auxiliaryWindows
+        memoryImport.memoryInboxServiceProvider = { [weak faeCore] in
+            faeCore?.memoryInboxService
+        }
         coworkWindow.faeCore = faeCore
         coworkWindow.conversation = coworkConversation
         coworkWindow.orbAnimation = orbAnimation
@@ -427,9 +429,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Test harness: start localhost HTTP server for programmatic control.
-        if CommandLine.arguments.contains("--test-server")
+        let isTestServerMode = CommandLine.arguments.contains("--test-server")
             || ProcessInfo.processInfo.environment["FAE_TEST_SERVER"] == "1"
-        {
+
+        if isTestServerMode {
             let logger = DebugFileLogger()
             debugFileLogger = logger
             debugConsole.fileLoggerCallback = { event, seq in
@@ -440,6 +443,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             testServer = server
             server.start()
             debugLog(debugConsole, .qa, "Test server started on 127.0.0.1:7433")
+        }
+
+        if isTestServerMode && !faeCore.isLicenseAccepted {
+            faeCore.acceptLicense()
         }
 
         // Start pipeline if license already accepted.
@@ -906,7 +913,7 @@ struct FaeApp: App {
 
                 Divider()
 
-                Button("Import Memories\u{2026}") {
+                Button("Memory Inbox...") {
                     appDelegate.memoryImport.show()
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])

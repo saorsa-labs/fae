@@ -63,17 +63,13 @@ struct SettingsModelsPerformanceTab: View {
 
     private let voiceModelOptions: [(label: String, value: String, ram: String)] = [
         ("Auto (Recommended)", "auto", "12+ GB"),
-        ("Qwen3.5-35B-A3B", "qwen3_5_35b_a3b", "64+ GB"),
-        ("Qwen3.5-27B", "qwen3_5_27b", "32+ GB"),
-        ("Qwen3.5-9B", "qwen3_5_9b", "24+ GB"),
-        ("Qwen3.5-4B", "qwen3_5_4b", "16+ GB"),
-        ("Qwen3.5-2B", "qwen3_5_2b", "12+ GB"),
-        ("Qwen3.5-0.8B", "qwen3_5_0_8b", "8+ GB"),
+        ("saorsa1-worker", "saorsa1-worker", "12+ GB"),
+        ("saorsa1-tiny", "saorsa1-tiny", "8+ GB"),
     ]
 
     private let conciergeModelOptions: [(label: String, value: String, ram: String)] = [
         ("Auto (Recommended)", "auto", "32+ GB"),
-        ("Liquid LFM2-24B-A2B", "liquid_lfm2_24b_a2b", "32+ GB"),
+        ("saorsa1-concierge", "saorsa1-concierge", "32+ GB"),
     ]
 
     private let visionModelOptions: [(label: String, value: String)] = [
@@ -205,7 +201,7 @@ struct SettingsModelsPerformanceTab: View {
                     }
 
                     Text(dualModelEnabled
-                         ? "Operator stays on the fast Qwen control path. Concierge uses Liquid for richer synthesis when RAM allows."
+                         ? "Operator uses the saorsa1 local companion weights. Concierge uses saorsa1-concierge for richer synthesis when RAM allows."
                          : "Single-model mode uses only the operator model.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -647,13 +643,13 @@ struct SettingsModelsPerformanceTab: View {
                let llm = payload["llm"] as? [String: Any]
             {
                 if let preset = llm["voice_model_preset"] as? String {
-                    voiceModelPreset = preset
+                    voiceModelPreset = normalizedVoiceModelPreset(preset)
                 }
                 if let dualEnabled = llm["dual_model_enabled"] as? Bool {
                     dualModelEnabled = dualEnabled
                 }
                 if let conciergePreset = llm["concierge_model_preset"] as? String {
-                    conciergeModelPreset = conciergePreset
+                    conciergeModelPreset = normalizedConciergeModelPreset(conciergePreset)
                 }
                 if let levelRaw = llm["thinking_level"] as? String,
                    let level = FaeThinkingLevel(rawValue: levelRaw)
@@ -743,6 +739,16 @@ struct SettingsModelsPerformanceTab: View {
         }
 
         loadSystemInfo()
+    }
+
+    private func normalizedVoiceModelPreset(_ preset: String) -> String {
+        let canonical = FaeConfig.canonicalVoiceModelPreset(preset)
+        return voiceModelOptions.contains(where: { $0.value == canonical }) ? canonical : "auto"
+    }
+
+    private func normalizedConciergeModelPreset(_ preset: String) -> String {
+        let canonical = FaeConfig.canonicalConciergeModelPreset(preset)
+        return conciergeModelOptions.contains(where: { $0.value == canonical }) ? canonical : "auto"
     }
 }
 

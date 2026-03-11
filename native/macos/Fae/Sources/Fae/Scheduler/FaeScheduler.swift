@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-/// Background task scheduler with 11 built-in tasks.
+/// Background task scheduler with memory, maintenance, and awareness built-ins.
 ///
 /// Uses `DispatchSourceTimer` for periodic tasks and `Calendar`-based
 /// scheduling for daily tasks at specific times.
@@ -11,10 +11,13 @@ actor FaeScheduler {
     private let eventBus: FaeEventBus
     private let memoryOrchestrator: MemoryOrchestrator?
     private let memoryStore: SQLiteMemoryStore?
+    private let memoryInboxService: MemoryInboxService?
+    private let memoryDigestService: MemoryDigestService?
     private let entityStore: EntityStore?
     private let vectorStore: VectorStore?
     private let embeddingEngine: NeuralEmbeddingEngine?
     private var config: FaeConfig.SchedulerConfig
+    private var memoryConfig: FaeConfig.MemoryConfig = FaeConfig.MemoryConfig()
     private var timers: [String: DispatchSourceTimer] = [:]
     private var isRunning = false
     private var disabledTaskIDs: Set<String> = []
@@ -85,18 +88,24 @@ actor FaeScheduler {
         eventBus: FaeEventBus,
         memoryOrchestrator: MemoryOrchestrator? = nil,
         memoryStore: SQLiteMemoryStore? = nil,
+        memoryInboxService: MemoryInboxService? = nil,
+        memoryDigestService: MemoryDigestService? = nil,
         entityStore: EntityStore? = nil,
         vectorStore: VectorStore? = nil,
         embeddingEngine: NeuralEmbeddingEngine? = nil,
-        config: FaeConfig.SchedulerConfig = FaeConfig.SchedulerConfig()
+        config: FaeConfig.SchedulerConfig = FaeConfig.SchedulerConfig(),
+        memoryConfig: FaeConfig.MemoryConfig = FaeConfig.MemoryConfig()
     ) {
         self.eventBus = eventBus
         self.memoryOrchestrator = memoryOrchestrator
         self.memoryStore = memoryStore
+        self.memoryInboxService = memoryInboxService
+        self.memoryDigestService = memoryDigestService
         self.entityStore = entityStore
         self.vectorStore = vectorStore
         self.embeddingEngine = embeddingEngine
         self.config = config
+        self.memoryConfig = memoryConfig
     }
 
     /// Set the speak handler (must be called before start for morning briefings to work).
@@ -123,6 +132,10 @@ actor FaeScheduler {
 
     func setVisionEnabled(_ enabled: Bool) {
         visionEnabled = enabled
+    }
+
+    func setMemoryConfig(_ config: FaeConfig.MemoryConfig) {
+        memoryConfig = config
     }
 
     func setSpeakerProfileStore(_ store: SpeakerProfileStore) {
@@ -187,6 +200,12 @@ actor FaeScheduler {
         }
         scheduleRepeating("memory_migrate", interval: 3600) { [weak self] in
             await self?.runMemoryMigrate()
+        }
+        scheduleRepeating("memory_inbox_ingest", interval: 300) { [weak self] in
+            await self?.runMemoryInboxIngest()
+        }
+        scheduleRepeating("memory_digest", interval: 6 * 3600) { [weak self] in
+            await self?.runMemoryDigest()
         }
         scheduleRepeating("check_fae_update", interval: 6 * 3600) { [weak self] in
             await self?.runCheckUpdate()
@@ -303,6 +322,35 @@ actor FaeScheduler {
             NSLog("FaeScheduler: memory_reindex — integrity check passed")
         } catch {
             NSLog("FaeScheduler: memory_reindex — integrity error: %@", error.localizedDescription)
+        }
+    }
+
+    private func runMemoryInboxIngest() async {
+        guard memoryConfig.enabled, memoryConfig.autoIngestInbox else { return }
+        guard let memoryInboxService else { return }
+        NSLog("FaeScheduler: memory_inbox_ingest — running")
+        do {
+            let imported = try await memoryInboxService.ingestPendingFiles()
+            if !imported.isEmpty {
+                NSLog("FaeScheduler: memory_inbox_ingest — imported %d item(s)", imported.count)
+            }
+        } catch {
+            NSLog("FaeScheduler: memory_inbox_ingest — error: %@", error.localizedDescription)
+        }
+    }
+
+    private func runMemoryDigest() async {
+        guard memoryConfig.enabled, memoryConfig.generateDigests else { return }
+        guard let memoryDigestService else { return }
+        NSLog("FaeScheduler: memory_digest — running")
+        do {
+            if let digest = try await memoryDigestService.generateDigest() {
+                NSLog("FaeScheduler: memory_digest — created %@", digest.id)
+            } else {
+                NSLog("FaeScheduler: memory_digest — nothing new to summarize")
+            }
+        } catch {
+            NSLog("FaeScheduler: memory_digest — error: %@", error.localizedDescription)
         }
     }
 
@@ -1166,6 +1214,8 @@ actor FaeScheduler {
         case "memory_reflect":    await runMemoryReflect()
         case "memory_reindex":    await runMemoryReindex()
         case "memory_migrate":    await runMemoryMigrate()
+        case "memory_inbox_ingest": await runMemoryInboxIngest()
+        case "memory_digest":     await runMemoryDigest()
         case "memory_gc":         await runMemoryGC()
         case "memory_backup":     await runMemoryBackup()
         case "check_fae_update":  await runCheckUpdate()
@@ -1291,6 +1341,7 @@ actor FaeScheduler {
         // Include all known task IDs from the builtin list
         let builtinIDs = [
             "memory_reflect", "memory_reindex", "memory_migrate",
+            "memory_inbox_ingest", "memory_digest",
             "memory_gc", "memory_backup", "check_fae_update",
             "morning_briefing", "noise_budget_reset", "skill_proposals",
             "stale_relationships", "skill_health_check", "embedding_reindex",

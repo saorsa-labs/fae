@@ -215,7 +215,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  ML Engines (all MLX, on-device):                             │
 │  ┌───────────┐ ┌────────────┐ ┌───────────┐ ┌─────────────┐  │
 │  │ STT       │ │ LLM        │ │ TTS       │ │ Speaker     │  │
-│  │ Qwen3-ASR │ │ Qwen3.5    │ │ Qwen3-TTS │ │ ECAPA-TDNN  │  │
+│  │ Qwen3-ASR │ │ saorsa1    │ │ Qwen3-TTS │ │ ECAPA-TDNN  │  │
 │  │ 1.7B 4bit │ │ MLX 4bit   │ │ 1.7B bf16 │ │ Core ML     │  │
 │  └───────────┘ └────────────┘ └───────────┘ └─────────────┘  │
 │  ┌───────────┐                                                │
@@ -231,18 +231,19 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Benchmark-backed Qwen3.5 operator (2B by default on 12+ GB, 0.8B fallback) with optional larger manual presets | MLX | 4-bit | Conversation, reasoning, tool use |
+| LLM | saorsa1 local stack: worker (2B) on 12+ GB, tiny (0.8B) below 12 GB, plus optional concierge (24B) on 32+ GB | MLX | 4-bit | Conversation, reasoning, tool use |
 | TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
 | VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit | Vision — screen/camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Current benchmark-backed default:
-- `auto` now follows the benchmark-backed operator policy:
-  - 12+ GB: `mlx-community/Qwen3.5-2B-4bit` at 32K context
-  - below 12 GB: `mlx-community/Qwen3.5-0.8B-4bit` at 32K context
-- `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_27b`, and `qwen3_5_35b_a3b` remain manual opt-in presets for users who want more local depth over faster startup and stricter tool behavior
-- this benchmark-backed default policy lives in `FaeConfig.recommendedModel(...)`
+Current local default:
+- `auto` now follows the saorsa1 operator policy:
+  - 12+ GB: `saorsa-labs/saorsa1-worker-pre-release` at 32K context
+  - below 12 GB: `saorsa-labs/saorsa1-tiny-pre-release` at 32K context
+- on 32+ GB systems with dual-model local mode enabled, concierge defaults to `saorsa-labs/saorsa1-concierge-pre-release` at 128K context
+- legacy Qwen/Liquid preset keys are still accepted for backward compatibility, but they resolve onto the `saorsa1` weights
+- this local model policy lives in `FaeConfig.recommendedModel(...)` and `FaeConfig.recommendedConciergeModel(...)`
 
 ### Benchmark reports
 

@@ -9,10 +9,12 @@ Memory lives in:
 - `~/Library/Application Support/fae/fae.db` (SQLite via GRDB)
 - `~/Library/Application Support/fae/backups/` (rotating backups)
 
-### Schema v6 tables
+### Schema v9 tables
 
 | Table | Purpose |
 |-------|---------|
+| `memory_artifacts` | Raw imported artifacts from paste, file, PDF, URL, and attachment flows |
+| `memory_record_sources` | Provenance links from any memory record back to artifacts or source records |
 | `memory_records` | Core episodic/factual/profile records |
 | `memory_audit` | Edit history and supersession lineage |
 | `entities` | Persons, organisations, locations (typed) |
@@ -27,7 +29,7 @@ Memory lives in:
 
 Kinds:
 
-- `profile`, `fact`, `episode`, `event`, `person`, `interest`, `commitment`
+- `profile`, `fact`, `episode`, `event`, `person`, `interest`, `commitment`, `digest`
 
 Lifecycle status:
 
@@ -38,10 +40,20 @@ Lifecycle status:
 Per completed turn:
 
 1. Recall relevant memory before generation (ANN + FTS5 hybrid)
-2. Inject bounded `<memory_context>` including entity profiles
-3. Capture episode + durable candidates
-4. Resolve conflicts through supersession lineage
-5. Apply retention cleanup for episodic records
+2. Prefer recent `digest` records first, then durable records, then episodes
+3. Inject bounded `<memory_context>` including entity profiles and provenance labels
+4. Capture episode + durable candidates
+5. Resolve conflicts through supersession lineage
+6. Apply retention cleanup for episodic records
+
+Imported artifacts follow a parallel path:
+
+1. `MemoryInboxService` stores the raw artifact in `memory_artifacts`
+2. Fae creates or reuses a linked seed memory record tagged `imported`
+3. `MemoryDigestService` periodically synthesizes digest records from recent imported/proactive memories
+4. Digest records link back to their supporting records through `memory_record_sources`
+
+When two imports share the same content but come from different origins, Fae now keeps separate artifact rows so recall can cite both provenance sources while still reusing the same imported memory record.
 
 ## Retrieval
 
@@ -51,6 +63,7 @@ Hybrid scoring: **60% ANN (cosine via sqlite-vec) + 40% FTS5 (lexical)**
 - Lexical search uses FTS5 in `SQLiteMemoryStore.search`
 - Scores blended: `annScore = 1.0 - distance/2.0` (cosine in [0,2]), then weighted average
 - Falls back to lexical-only if embedding engine not yet loaded
+- `digest` records receive a freshness/importance boost so "what have you learned recently?" style queries surface synthesized context first
 
 ## Entity knowledge graph
 
@@ -101,6 +114,14 @@ On model change, `EmbeddingBackfillRunner` drops and rebuilds the vec0 tables, t
 
 Episode embeddings are stored non-blocking after each capture via `VectorStore.upsertRecordEmbedding`.
 
+`MemoryInboxService` additionally supports:
+
+- pasted text
+- local text-like files
+- PDFs via `PDFKit` text extraction
+- URLs via fetched page content
+- watched inbox folder ingestion from `~/Library/Application Support/fae/memory-inbox/pending/`
+
 ## Maintenance tasks
 
 `FaeScheduler` runs:
@@ -108,7 +129,9 @@ Episode embeddings are stored non-blocking after each capture via `VectorStore.u
 | Task | Schedule | Purpose |
 |------|----------|---------|
 | `memory_migrate` | hourly | Schema migration checks |
+| `memory_inbox_ingest` | every 5m | Import queued files from the inbox pending folder |
 | `memory_reindex` | every 3h | Health check + integrity verification |
+| `memory_digest` | every 6h | Synthesize recent imported/proactive records into digest memories |
 | `memory_reflect` | every 6h | Consolidate duplicate memories |
 | `memory_gc` | daily 03:30 | Retention cleanup (episode expiry) |
 | `memory_backup` | daily 02:00 | Atomic backup with rotation |
@@ -126,6 +149,8 @@ Memory config in `config.toml`:
 [memory]
 enabled = true
 maxRecallResults = 6
+autoIngestInbox = true
+generateDigests = true
 ```
 
 The embedding model tier is selected automatically by RAM. To override, see `EmbeddingModelTier.recommendedTier(ramGB:)` in `NeuralEmbeddingEngine.swift`.
@@ -137,6 +162,8 @@ The embedding model tier is selected automatically by RAM. To override, see `Emb
 | `Memory/MemoryOrchestrator.swift` | Recall (ANN+FTS5 hybrid), capture, GC, graph context |
 | `Memory/SQLiteMemoryStore.swift` | GRDB-backed SQLite: insert, search, supersede, retain |
 | `Memory/MemoryTypes.swift` | MemoryRecord, MemoryKind, MemoryStatus, constants |
+| `Memory/MemoryInboxService.swift` | Artifact intake from paste/file/PDF/URL and watched inbox folder |
+| `Memory/MemoryDigestService.swift` | Periodic digest generation with record-to-record provenance links |
 | `Memory/MemoryBackup.swift` | Database backup and rotation |
 | `Memory/VectorStore.swift` | sqlite-vec ANN tables (`memory_vec`, `fact_vec`) |
 | `Memory/EntityStore.swift` | Entity graph: persons, orgs, locations, typed relationships |

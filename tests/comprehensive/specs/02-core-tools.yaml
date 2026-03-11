@@ -380,16 +380,13 @@ tests:
       # Step 1: Create a task so scheduler_update has something to work with.
       # scheduler_create assigns a UUID-based ID — the LLM must list tasks to find it.
       - action: "inject"
-        text: "Fae, create a new scheduler task called fae-update-test that runs every 5 minutes with prompt 'echo update-test'"
+        text: "Fae, create a task called fae-update-test that runs every 5 minutes"
       - action: "wait_generation"
         max_wait_s: 180
       # Step 2: Ask LLM to list tasks to find the ID, then update the task.
-      # scheduler_update requires approval — send yes when prompted.
+      # In full_no_approval mode, this should proceed without an approval detour.
       - action: "inject"
         text: "Fae, use scheduler_list to find fae-update-test, then use scheduler_update to change its interval to every 10 minutes"
-      - action: "wait_approval"
-        max_wait_s: 120
-        decision: "yes"
       - action: "wait_generation"
         max_wait_s: 180
       - action: "collect_events"
@@ -607,8 +604,8 @@ tests:
     steps:
       - action: "inject"
         phrasing: "random"
-      - action: "wait_generation"
-        max_wait_s: 180
+      - action: "wait_input"
+        max_wait_s: 120
       - action: "collect_events"
     criteria:
       - name: "tool_invoked"
@@ -808,6 +805,9 @@ tests:
     timeout_s: 200
     setup:
       - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
         url: "/reset"
     teardown: []
     phrasings:
@@ -831,6 +831,9 @@ tests:
     timeout_s: 200
     setup:
       - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
         url: "/reset"
     teardown: []
     phrasings:
@@ -853,6 +856,9 @@ tests:
     class: permission_dependent
     timeout_s: 200
     setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
       - action: "http_post"
         url: "/reset"
     teardown: []

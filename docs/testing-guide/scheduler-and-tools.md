@@ -11,14 +11,16 @@ This guide covers testing the Fae scheduler and tool system, including scheduler
 ### Architecture
 
 - **Type**: Actor-based scheduler using `DispatchSourceTimer` for periodic tasks and `Calendar`-based scheduling for daily tasks
-- **Location**: `Scheduler/FaeScheduler.swift` (1,115 lines)
+- **Location**: `Scheduler/FaeScheduler.swift`
 - **Task Persistence**: `~/Library/Application Support/fae/scheduler.json`
 - **State Management**: Built-in task ledger with run history and idempotency tracking
 
-### 17 Built-in Tasks
+### 19 Built-in Tasks
 
 | Task ID | Name | Schedule | Purpose | Handler |
 |---------|------|----------|---------|---------|
+| `memory_inbox_ingest` | Memory Inbox Ingest | Every 5 minutes | Import queued files from the inbox pending folder | `runMemoryInboxIngest()` |
+| `memory_digest` | Memory Digest | Every 6 hours | Synthesize recent imported/proactive memories into a digest record | `runMemoryDigest()` |
 | `memory_reflect` | Memory Reflect | Every 6 hours | Consolidate duplicate memories | `runMemoryReflect()` |
 | `memory_reindex` | Memory Reindex | Every 3 hours | Health check + integrity verification | `runMemoryReindex()` |
 | `memory_migrate` | Memory Migrate | Every 1 hour | Schema migration checks | `runMemoryMigrate()` |
@@ -75,6 +77,8 @@ Implementation in `SchedulerTriggerTool`:
 
 - [ ] **Task Scheduling**: Verify periodic tasks fire at correct intervals (check `runHistory` via debugger or logs)
 - [ ] **Daily Tasks**: Test fixed-time tasks (memory_gc at 03:30, morning_briefing at 08:00)
+- [ ] **Inbox Intake**: Drop a supported file into `~/Library/Application Support/fae/memory-inbox/pending/` and verify `memory_inbox_ingest` imports it
+- [ ] **Digest Generation**: Trigger `memory_digest` manually and verify it writes a derived digest record linked to source memories
 - [ ] **Task Disabling**: Disable a task via `scheduler_update`, verify it doesn't run
 - [ ] **Manual Trigger**: Call `scheduler_trigger` with `task_id` parameter, verify execution
 - [ ] **Handler Wiring**: Speak handler fires for legacy tasks; proactive handler fires for awareness tasks

@@ -75,6 +75,19 @@ enum TextProcessing {
         return nil
     }
 
+    private static func firstSentenceBoundary(in text: String) -> String.Index {
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            if sentenceTerminators.contains(text[index]) {
+                return text.index(after: index)
+            }
+            index = text.index(after: index)
+        }
+
+        return text.endIndex
+    }
+
     // MARK: - Meta-Commentary Detection
 
     /// Returns true if the text looks like the model is narrating/describing what the user
@@ -120,6 +133,63 @@ enum TextProcessing {
             "looking at my interface",
         ]
         return patterns.contains { lower.hasPrefix($0) || lower.contains($0) }
+    }
+
+    /// Removes leading reasoning-preface sentences that should stay in the
+    /// thinking crawl instead of becoming visible assistant speech.
+    static func stripReasoningPreface(_ text: String) -> String {
+        var remaining = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remaining.isEmpty else { return remaining }
+
+        while !remaining.isEmpty {
+            let boundary = firstSentenceBoundary(in: remaining)
+            let sentence = String(remaining[..<boundary]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sentence.isEmpty else { break }
+            guard isReasoningPreface(sentence) || isMetaCommentary(sentence) else { break }
+            remaining = String(remaining[boundary...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return remaining
+    }
+
+    static func isReasoningPreface(_ text: String) -> Bool {
+        let lower = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        let prefixPatterns = [
+            "let me think",
+            "let's think",
+            "let me break this down",
+            "let me walk through",
+            "let me work through",
+            "i'll analyze",
+            "i will analyze",
+            "i'm going to analyze",
+            "i need to think",
+            "i'm going to think",
+            "first, i need to",
+            "let me compare",
+        ]
+        if prefixPatterns.contains(where: { lower.hasPrefix($0) }) {
+            return true
+        }
+
+        if (lower.hasPrefix("i'll compare") || lower.hasPrefix("i will compare"))
+            && (lower.contains("deliberately") || lower.contains("systematically"))
+        {
+            return true
+        }
+
+        let containedPatterns = [
+            "the user's request",
+            "let me think through",
+            "break this down systematically",
+            "walk through this systematically",
+            "think this through",
+            "reason through this",
+        ]
+        return containedPatterns.contains(where: { lower.contains($0) })
     }
 
     /// Returns true if the text contains UI self-narration — the model describing

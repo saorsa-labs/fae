@@ -265,6 +265,89 @@ actor SQLiteMemoryStore {
             )
         }
 
+        // Migration: v7 -> v8 - artifact storage and record provenance links.
+        let tableNamesV8 = try Row.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type='table'")
+            .compactMap { $0["name"] as? String }
+        if !tableNamesV8.contains("memory_artifacts") {
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS memory_artifacts (
+                    id           TEXT PRIMARY KEY,
+                    source_type  TEXT NOT NULL,
+                    title        TEXT,
+                    origin       TEXT,
+                    mime_type    TEXT,
+                    raw_text     TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    created_at   INTEGER NOT NULL DEFAULT 0,
+                    updated_at   INTEGER NOT NULL DEFAULT 0,
+                    metadata     TEXT
+                )
+                """)
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_artifacts_hash ON memory_artifacts(content_hash)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_artifacts_created_at ON memory_artifacts(created_at)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_artifacts_source_type ON memory_artifacts(source_type)"
+            )
+            try db.execute(
+                sql: """
+                    CREATE INDEX IF NOT EXISTS idx_memory_artifacts_lookup
+                    ON memory_artifacts(content_hash, source_type, origin, title)
+                    """
+            )
+
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS memory_record_sources (
+                    id               TEXT PRIMARY KEY,
+                    record_id        TEXT NOT NULL REFERENCES memory_records(id) ON DELETE CASCADE,
+                    artifact_id      TEXT REFERENCES memory_artifacts(id) ON DELETE CASCADE,
+                    source_record_id TEXT REFERENCES memory_records(id) ON DELETE CASCADE,
+                    role             TEXT NOT NULL,
+                    created_at       INTEGER NOT NULL DEFAULT 0
+                )
+                """)
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_record_sources_record ON memory_record_sources(record_id)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_record_sources_artifact ON memory_record_sources(artifact_id)"
+            )
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_record_sources_source_record ON memory_record_sources(source_record_id)"
+            )
+
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '8')"
+            )
+        }
+
+        // Migration: v8 -> v9 - provenance-preserving artifact dedupe.
+        if tableNamesV8.contains("memory_artifacts") {
+            let artifactIndexes = try Row.fetchAll(db, sql: "PRAGMA index_list(memory_artifacts)")
+            let hashIndexIsUnique = artifactIndexes.contains { row in
+                (row["name"] as String?) == "idx_memory_artifacts_hash"
+                    && (row["unique"] as Int64?) == 1
+            }
+            if hashIndexIsUnique {
+                try db.execute(sql: "DROP INDEX IF EXISTS idx_memory_artifacts_hash")
+            }
+            try db.execute(
+                sql: "CREATE INDEX IF NOT EXISTS idx_memory_artifacts_hash ON memory_artifacts(content_hash)"
+            )
+            try db.execute(
+                sql: """
+                    CREATE INDEX IF NOT EXISTS idx_memory_artifacts_lookup
+                    ON memory_artifacts(content_hash, source_type, origin, title)
+                    """
+            )
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '9')"
+            )
+        }
+
         // vec0 virtual tables are created lazily by VectorStore after embedding dimension is known.
     }
 
@@ -345,6 +428,108 @@ actor SQLiteMemoryStore {
         }
 
         return record
+    }
+
+    func upsertArtifact(
+        sourceType: MemoryArtifactSourceType,
+        title: String?,
+        origin: String?,
+        mimeType: String?,
+        rawText: String,
+        contentHash: String,
+        metadata: String? = nil
+    ) throws -> MemoryArtifactUpsertResult {
+        let now = UInt64(Date().timeIntervalSince1970)
+        let normalizedText = String(rawText.prefix(MemoryConstants.maxArtifactTextLen))
+
+        return try dbQueue.write { db in
+            if let existing = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT * FROM memory_artifacts
+                    WHERE content_hash = ?
+                      AND source_type = ?
+                      AND ((origin IS NULL AND ? IS NULL) OR origin = ?)
+                      AND ((title IS NULL AND ? IS NULL) OR title = ?)
+                    LIMIT 1
+                    """,
+                arguments: [contentHash, sourceType.rawValue, origin, origin, title, title]
+            ) {
+                return MemoryArtifactUpsertResult(
+                    artifact: Self.artifactFromRow(existing),
+                    inserted: false
+                )
+            }
+
+            let artifact = MemoryArtifact(
+                id: newMemoryId(prefix: "artifact"),
+                sourceType: sourceType,
+                title: title,
+                origin: origin,
+                mimeType: mimeType,
+                rawText: normalizedText,
+                contentHash: contentHash,
+                createdAt: now,
+                updatedAt: now,
+                metadata: metadata
+            )
+
+            try db.execute(
+                sql: """
+                    INSERT INTO memory_artifacts
+                        (id, source_type, title, origin, mime_type, raw_text, content_hash,
+                         created_at, updated_at, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    artifact.id, artifact.sourceType.rawValue, artifact.title, artifact.origin,
+                    artifact.mimeType, artifact.rawText, artifact.contentHash,
+                    artifact.createdAt, artifact.updatedAt, artifact.metadata,
+                ]
+            )
+            try Self.insertAudit(
+                db: db,
+                op: .insert,
+                targetId: artifact.id,
+                note: "inserted artifact \(artifact.sourceType.rawValue)"
+            )
+            return MemoryArtifactUpsertResult(artifact: artifact, inserted: true)
+        }
+    }
+
+    func linkRecordSource(
+        recordId: String,
+        artifactId: String? = nil,
+        sourceRecordId: String? = nil,
+        role: MemoryRecordSourceRole
+    ) throws {
+        guard artifactId != nil || sourceRecordId != nil else { return }
+        let now = UInt64(Date().timeIntervalSince1970)
+
+        try dbQueue.write { db in
+            let existing = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id FROM memory_record_sources
+                    WHERE record_id = ?
+                      AND role = ?
+                      AND ((artifact_id IS NULL AND ? IS NULL) OR artifact_id = ?)
+                      AND ((source_record_id IS NULL AND ? IS NULL) OR source_record_id = ?)
+                    LIMIT 1
+                    """,
+                arguments: [recordId, role.rawValue, artifactId, artifactId, sourceRecordId, sourceRecordId]
+            )
+            guard existing == nil else { return }
+
+            try db.execute(
+                sql: """
+                    INSERT INTO memory_record_sources
+                        (id, record_id, artifact_id, source_record_id, role, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [newMemoryId(prefix: "source"), recordId, artifactId, sourceRecordId, role.rawValue, now]
+            )
+        }
     }
 
     // MARK: - Supersede
@@ -465,10 +650,11 @@ actor SQLiteMemoryStore {
             candidates = []
         }
 
-        // Fall back to full scan if FTS returned too few results or query is empty.
+        // Fall back to a bounded recent-records window when FTS returned too few results or query is empty.
+        // Using listRecords() (unbounded) was O(N) on the whole table; cap at a sensible window instead.
         let records: [MemoryRecord]
         if candidates.count < limit {
-            records = try listRecords(includeInactive: includeInactive)
+            records = try recentRecords(limit: max(limit * 6, 60))
         } else {
             records = candidates
         }
@@ -520,6 +706,79 @@ actor SQLiteMemoryStore {
             }
             let rows = try Row.fetchAll(db, sql: sql)
             return rows.map { Self.recordFromRow($0) }
+        }
+    }
+
+    func fetchRecord(id: String, includeInactive: Bool = true) throws -> MemoryRecord? {
+        try dbQueue.read { db in
+            let sql = includeInactive
+                ? "SELECT * FROM memory_records WHERE id = ? LIMIT 1"
+                : "SELECT * FROM memory_records WHERE id = ? AND status = 'active' LIMIT 1"
+            let row = try Row.fetchOne(db, sql: sql, arguments: [id])
+            return row.map { Self.recordFromRow($0) }
+        }
+    }
+
+    func fetchArtifact(id: String) throws -> MemoryArtifact? {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM memory_artifacts WHERE id = ? LIMIT 1",
+                arguments: [id]
+            )
+            return row.map { Self.artifactFromRow($0) }
+        }
+    }
+
+    func sourceLinks(recordID: String) throws -> [MemoryRecordSourceLink] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM memory_record_sources
+                    WHERE record_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                arguments: [recordID]
+            )
+            return rows.map { Self.recordSourceLinkFromRow($0) }
+        }
+    }
+
+    func linkedRecordForArtifact(id artifactId: String) throws -> MemoryRecord? {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT r.* FROM memory_records r
+                    INNER JOIN memory_record_sources s ON s.record_id = r.id
+                    WHERE s.artifact_id = ? AND s.role = ? AND r.status = 'active'
+                    ORDER BY r.updated_at DESC
+                    LIMIT 1
+                    """,
+                arguments: [artifactId, MemoryRecordSourceRole.artifact.rawValue]
+            )
+            return row.map { Self.recordFromRow($0) }
+        }
+    }
+
+    func linkedRecordForContentHash(_ contentHash: String) throws -> MemoryRecord? {
+        try dbQueue.read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT r.* FROM memory_records r
+                    INNER JOIN memory_record_sources s ON s.record_id = r.id
+                    INNER JOIN memory_artifacts a ON a.id = s.artifact_id
+                    WHERE a.content_hash = ?
+                      AND s.role = ?
+                      AND r.status = 'active'
+                    ORDER BY r.updated_at DESC
+                    LIMIT 1
+                    """,
+                arguments: [contentHash, MemoryRecordSourceRole.artifact.rawValue]
+            )
+            return row.map { Self.recordFromRow($0) }
         }
     }
 
@@ -740,6 +999,32 @@ actor SQLiteMemoryStore {
         )
         record.speakerId = row["speaker_id"]
         return record
+    }
+
+    private static func artifactFromRow(_ row: Row) -> MemoryArtifact {
+        MemoryArtifact(
+            id: row["id"],
+            sourceType: MemoryArtifactSourceType(rawValue: row["source_type"] as String) ?? .file,
+            title: row["title"],
+            origin: row["origin"],
+            mimeType: row["mime_type"],
+            rawText: row["raw_text"],
+            contentHash: row["content_hash"],
+            createdAt: UInt64(row["created_at"] as Int64),
+            updatedAt: UInt64(row["updated_at"] as Int64),
+            metadata: row["metadata"]
+        )
+    }
+
+    private static func recordSourceLinkFromRow(_ row: Row) -> MemoryRecordSourceLink {
+        MemoryRecordSourceLink(
+            id: row["id"],
+            recordId: row["record_id"],
+            artifactId: row["artifact_id"],
+            sourceRecordId: row["source_record_id"],
+            role: MemoryRecordSourceRole(rawValue: row["role"] as String) ?? .artifact,
+            createdAt: UInt64(row["created_at"] as Int64)
+        )
     }
 
     private static func encodeTags(_ tags: [String]) -> String {

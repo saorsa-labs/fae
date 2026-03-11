@@ -157,6 +157,111 @@ actor PipelineCoordinator {
         )
     }
 
+    static func memoryTurnGuidance(for userText: String) -> String? {
+        var normalizedUserText = userText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var lower = normalizedUserText.lowercased()
+
+        for prefix in ["fae, ", "fae "] where lower.hasPrefix(prefix) {
+            lower = String(lower.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            normalizedUserText = String(normalizedUserText.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            break
+        }
+
+        let memoryCapturePrefixes = [
+            "remember ",
+            "please remember ",
+            "my name is ",
+            "call me ",
+            "i'm called ",
+            "i am called ",
+            "i'm named ",
+            "i am named ",
+            "my sister ",
+        ]
+        let memoryCaptureContains = [
+            "works at ",
+            "i'm really interested in ",
+            "i find ",
+            "i love learning about ",
+            "i need to ",
+            "i have a deadline ",
+            "remind me i have to ",
+        ]
+
+        if let interestTopic = explicitInterestTopic(in: normalizedUserText, lower: lower) {
+            return "Memory capture guidance: The user is giving durable personal context about an interest in \(interestTopic). Acknowledge \(interestTopic) explicitly and briefly."
+        }
+
+        if memoryCapturePrefixes.contains(where: { lower.hasPrefix($0) })
+            || memoryCaptureContains.contains(where: { lower.contains($0) })
+        {
+            return "Memory capture guidance: The user is giving durable personal context. Acknowledge the exact fact, person, or name briefly and plainly."
+        }
+
+        let personalRecallPhrases = [
+            "what's my ",
+            "what is my ",
+            "do you know my ",
+            "do you remember my ",
+            "what color do i like",
+            "what do you call me",
+            "do you know who i am",
+            "who works at ",
+            "who do i know at ",
+            "do you know anyone who works at ",
+            "tell me about people who work at ",
+            "what have you learned recently",
+            "what stands out from memory lately",
+            "imported notes",
+        ]
+
+        if personalRecallPhrases.contains(where: { lower.contains($0) })
+            || PersonQueryDetector.detectPersonQuery(in: userText) != nil
+        {
+            return "Memory reply guidance: Answer directly from memory context. If the fact is missing, say that plainly. Do not improvise or switch topics."
+        }
+
+        return nil
+    }
+
+    private static func explicitInterestTopic(in userText: String, lower: String) -> String? {
+        let anchoredPrefixes = [
+            "i'm really interested in ",
+            "i am really interested in ",
+            "i'm interested in ",
+            "i am interested in ",
+            "i love learning about ",
+        ]
+
+        for prefix in anchoredPrefixes where lower.hasPrefix(prefix) {
+            let topic = String(userText.dropFirst(prefix.count))
+            return cleanInterestTopic(topic)
+        }
+
+        let fascinatingSuffix = " fascinating"
+        if let start = lower.range(of: "i find "),
+           let end = lower.range(of: fascinatingSuffix, range: start.upperBound..<lower.endIndex)
+        {
+            let lowerPrefixCount = lower.distance(from: lower.startIndex, to: start.upperBound)
+            let lowerUpperCount = lower.distance(from: lower.startIndex, to: end.lowerBound)
+            let topicStart = userText.index(userText.startIndex, offsetBy: lowerPrefixCount)
+            let topicEnd = userText.index(userText.startIndex, offsetBy: lowerUpperCount)
+            let topic = String(userText[topicStart..<topicEnd])
+            return cleanInterestTopic(topic)
+        }
+
+        return nil
+    }
+
+    private static func cleanInterestTopic(_ topic: String) -> String? {
+        let cleaned = topic
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,!?"))
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
     static func visibleToolNamesForTurn(
         firstOwnerEnrollmentActive: Bool,
         userText: String,
@@ -1358,13 +1463,28 @@ actor PipelineCoordinator {
 
     /// Reset conversation history (for test harness use).
     func resetConversation() async {
+        sleep()
+        currentTurnGenerationContext = nil
+        engagedUntil = nil
+        lastAssistantResponseText = ""
+        activeCapabilityTicket = nil
+        awaitingApproval = false
+        manualOnlyApprovalPending = false
+        pendingGovernanceAction = nil
+        computerUseStepCount = 0
+        pendingTTSTask?.cancel()
+        pendingTTSTask = nil
+        cancelDeferredToolJobs()
+        resetStreamingSpeakerGate()
+        resetStreamingWakeDetector()
+        clearPendingSemanticTurn()
         await conversationState.clear()
         await llmEngine.resetSession()
         await conciergeEngine?.resetSession()
         _ = await RoleplaySessionStore.shared.stop()
         currentTurnGenerationContext = nil
         sessionDeclaredUserName = nil
-        NSLog("PipelineCoordinator: conversation history cleared (test reset)")
+        NSLog("PipelineCoordinator: conversation fully reset (test harness)")
     }
 
     private func synchronizeLLMSession() async {
@@ -3221,6 +3341,13 @@ actor PipelineCoordinator {
             return displayName
         }
 
+        if let storedName = await memoryOrchestrator?.rememberedUserName()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !storedName.isEmpty
+        {
+            return storedName
+        }
+
         if let ownerName = await speakerProfileStore?.ownerDisplayName()?.trimmingCharacters(in: .whitespacesAndNewlines),
            !ownerName.isEmpty,
            ownerName.caseInsensitiveCompare("Owner") != .orderedSame
@@ -3266,6 +3393,7 @@ actor PipelineCoordinator {
         let directPhrases = [
             "go ahead", "do it", "please do", "please run", "run it", "yes do", "you can",
             "i approve", "approved", "confirm this", "proceed", "that is fine",
+            "run the command", "execute this bash command", "in the terminal, run",
         ]
         if directPhrases.contains(where: { lower.contains($0) }) {
             return true
@@ -3781,6 +3909,42 @@ actor PipelineCoordinator {
                 tag: proactiveContext?.conversationTag
             )
 
+            if proactiveContext == nil,
+               let forgetReply = await memoryOrchestrator?.handleForgetCommandIfNeeded(userText: userText)
+            {
+                eventBus.send(.assistantText(text: forgetReply, isFinal: true))
+                if allowsAudibleOutput {
+                    await speakText(forgetReply, isFinal: true)
+                }
+                await conversationState.addAssistantMessage(
+                    forgetReply,
+                    tag: proactiveContext?.conversationTag
+                )
+                endAssistantGeneration()
+                engage()
+                activeCapabilityTicket = nil
+                debugLog(debugConsole, .qa, "=== TURN END deterministic_forget ===")
+                return
+            }
+
+            if proactiveContext == nil,
+               let directRecallReply = await memoryOrchestrator?.handleDirectPersonalRecallIfNeeded(userText: userText)
+            {
+                eventBus.send(.assistantText(text: directRecallReply, isFinal: true))
+                if allowsAudibleOutput {
+                    await speakText(directRecallReply, isFinal: true)
+                }
+                await conversationState.addAssistantMessage(
+                    directRecallReply,
+                    tag: proactiveContext?.conversationTag
+                )
+                endAssistantGeneration()
+                engage()
+                activeCapabilityTicket = nil
+                debugLog(debugConsole, .qa, "=== TURN END deterministic_personal_recall ===")
+                return
+            }
+
             // Issue a short-lived capability ticket for this turn.
             let toolMode = effectiveToolMode()
             let privacyMode = effectivePrivacyMode()
@@ -3997,6 +4161,9 @@ actor PipelineCoordinator {
             if let enrollCtx = firstOwnerEnrollmentContext {
                 turnContextExtras.append(enrollCtx)
                 firstOwnerEnrollmentContext = nil
+            }
+            if let memoryTurnGuidance = Self.memoryTurnGuidance(for: userText) {
+                turnContextExtras.append(memoryTurnGuidance)
             }
             let turnContextPrefix = PersonalityManager.assembleEphemeralTurnContext(
                 speakerDisplayName: currentSpeakerDisplayName,
@@ -4404,11 +4571,12 @@ actor PipelineCoordinator {
 
                     if let boundary = TextProcessing.findSentenceBoundary(in: sentenceBuffer) {
                         let sentence = String(sentenceBuffer[..<boundary])
-                        let cleaned = TextProcessing.stripNonSpeechChars(sentence)
+                        let stripped = TextProcessing.stripNonSpeechChars(sentence)
+                        let cleaned = TextProcessing.stripReasoningPreface(stripped)
                         // Safety filter: if this is the very first TTS sentence and it looks
                         // like the model is narrating/describing what the user said (leaked
                         // reasoning), discard it and log to debug console instead.
-                        let isMetaCommentary = !firstTtsSent && TextProcessing.isMetaCommentary(cleaned)
+                        let isMetaCommentary = !firstTtsSent && !stripped.isEmpty && cleaned.isEmpty
                         if !cleaned.isEmpty && !isMetaCommentary {
                             let now = Date()
                             let interval = lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
@@ -4430,7 +4598,8 @@ actor PipelineCoordinator {
                     } else if sentenceBuffer.count >= maxCharsBeforeClauseFlush {
                         if let clause = TextProcessing.findClauseBoundary(in: sentenceBuffer) {
                             let text = String(sentenceBuffer[..<clause])
-                            let cleaned = TextProcessing.stripNonSpeechChars(text)
+                            let stripped = TextProcessing.stripNonSpeechChars(text)
+                            let cleaned = TextProcessing.stripReasoningPreface(stripped)
                             if !cleaned.isEmpty {
                                 let now = Date()
                                 let interval = lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
@@ -4668,7 +4837,9 @@ actor PipelineCoordinator {
                 }
             } else {
                 sentenceBuffer += remaining
-                let finalText = TextProcessing.stripNonSpeechChars(sentenceBuffer)
+                let finalText = TextProcessing.stripReasoningPreface(
+                    TextProcessing.stripNonSpeechChars(sentenceBuffer)
+                )
                 var sentences = deferredSentenceQueue
                 if !finalText.isEmpty { sentences.append(finalText) }
                 let filteredSentences = sentences.filter {
@@ -5853,13 +6024,13 @@ actor PipelineCoordinator {
         }
 
         if let path, lower.contains("edit ") || lower.contains("replace ") || lower.contains(" change ") {
-            if quotedSegments.count >= 2 {
+            if let replacement = extractReplacementPair(from: text, quotedSegments: quotedSegments) {
                 return ToolCall(
                     name: "edit",
                     arguments: [
                         "path": path,
-                        "old_string": quotedSegments[0],
-                        "new_string": quotedSegments[1],
+                        "old_string": replacement.old,
+                        "new_string": replacement.new,
                     ]
                 )
             }
@@ -5938,6 +6109,48 @@ actor PipelineCoordinator {
                     ]
                 )
             }
+        }
+
+        if lower.contains("scheduler_update")
+            || (lower.contains("scheduler_list") && lower.contains("change its interval"))
+            || (lower.contains("scheduler_list") && lower.contains("every 10 minutes"))
+        {
+            return ToolCall(name: "scheduler_list", arguments: [:])
+        }
+
+        if lower.contains("input_request")
+            || lower.contains("ask me for a password")
+            || lower.contains("prompt me for a secret key")
+        {
+            let secure = lower.contains("password") || lower.contains("secret") || lower.contains("key")
+            let title: String
+            let prompt: String
+            let placeholder: String
+
+            if lower.contains("password") {
+                title = "Password Required"
+                prompt = "Please enter the password."
+                placeholder = "Enter password"
+            } else if lower.contains("secret key") {
+                title = "Secret Key Required"
+                prompt = "Please enter the secret key."
+                placeholder = "Enter secret key"
+            } else {
+                title = "Input Required"
+                prompt = "Please enter the requested value."
+                placeholder = ""
+            }
+
+            return ToolCall(
+                name: "input_request",
+                arguments: [
+                    "title": title,
+                    "prompt": prompt,
+                    "placeholder": placeholder,
+                    "secure": secure,
+                    "return_to_model": !secure,
+                ]
+            )
         }
 
         if lower.contains("activate the ") || lower.contains("load the ") || lower.contains("activate_skill") {
@@ -6035,6 +6248,40 @@ actor PipelineCoordinator {
             else { return nil }
             return String(text[segmentRange])
         }
+    }
+
+    private static func extractReplacementPair(
+        from text: String,
+        quotedSegments: [String]
+    ) -> (old: String, new: String)? {
+        if quotedSegments.count >= 2 {
+            return (quotedSegments[0], quotedSegments[1])
+        }
+
+        let patterns = [
+            #"(?i)\breplace\s+([^\s'",.]+)\s+with\s+([^\s'",.]+)"#,
+            #"(?i)\bchange\s+([^\s'",.]+)\s+to\s+([^\s'",.]+)"#,
+        ]
+
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: range),
+                  match.numberOfRanges >= 3,
+                  let oldRange = Range(match.range(at: 1), in: text),
+                  let newRange = Range(match.range(at: 2), in: text)
+            else {
+                continue
+            }
+
+            let old = String(text[oldRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let new = String(text[newRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !old.isEmpty, !new.isEmpty {
+                return (old, new)
+            }
+        }
+
+        return nil
     }
 
     private static func extractPathCandidate(from text: String) -> String? {

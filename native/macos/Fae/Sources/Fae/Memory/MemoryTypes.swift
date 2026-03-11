@@ -11,6 +11,7 @@ enum MemoryKind: String, Sendable, Codable, CaseIterable {
     case person = "person"
     case interest = "interest"
     case commitment = "commitment"
+    case digest = "digest"
 }
 
 /// Memory record lifecycle status.
@@ -30,6 +31,20 @@ enum MemoryAuditOp: String, Sendable, Codable {
     case forgetSoft = "forget_soft"
     case forgetHard = "forget_hard"
     case migrate = "migrate"
+}
+
+enum MemoryArtifactSourceType: String, Sendable, Codable, CaseIterable {
+    case pastedText = "pasted_text"
+    case file = "file"
+    case pdf = "pdf"
+    case url = "url"
+    case coworkAttachment = "cowork_attachment"
+    case proactive = "proactive"
+}
+
+enum MemoryRecordSourceRole: String, Sendable, Codable {
+    case artifact = "artifact"
+    case digestSupport = "digest_support"
 }
 
 // MARK: - Structs
@@ -72,6 +87,33 @@ struct MemoryAuditEntry: Sendable {
     var at: UInt64 = 0
 }
 
+struct MemoryArtifact: Sendable {
+    var id: String
+    var sourceType: MemoryArtifactSourceType
+    var title: String?
+    var origin: String?
+    var mimeType: String?
+    var rawText: String
+    var contentHash: String
+    var createdAt: UInt64 = 0
+    var updatedAt: UInt64 = 0
+    var metadata: String?
+}
+
+struct MemoryArtifactUpsertResult: Sendable {
+    var artifact: MemoryArtifact
+    var inserted: Bool
+}
+
+struct MemoryRecordSourceLink: Sendable {
+    var id: String
+    var recordId: String
+    var artifactId: String?
+    var sourceRecordId: String?
+    var role: MemoryRecordSourceRole
+    var createdAt: UInt64 = 0
+}
+
 struct MemorySearchHit: Sendable {
     var record: MemoryRecord
     var score: Float
@@ -87,8 +129,9 @@ struct MemoryCaptureReport: Sendable {
 // MARK: - Constants
 
 enum MemoryConstants {
-    static let schemaVersion: UInt32 = 7
+    static let schemaVersion: UInt32 = 9
     static let maxRecordTextLen: Int = 32_768
+    static let maxArtifactTextLen: Int = 200_000
     static let truncationSuffix: String = " [truncated]"
 
     // Confidence thresholds
@@ -105,6 +148,7 @@ enum MemoryConstants {
     static let scoreFreshnessWeight: Float = 0.10
     static let scoreKindBonusProfile: Float = 0.05
     static let scoreKindBonusFact: Float = 0.03
+    static let scoreKindBonusDigest: Float = 0.07
 
     // Hybrid scoring
     static let hybridSemanticWeight: Float = 0.60
@@ -112,6 +156,7 @@ enum MemoryConstants {
     static let hybridFreshnessWeight: Float = 0.10
     static let hybridKindBonusProfile: Float = 0.10
     static let hybridKindBonusFact: Float = 0.06
+    static let hybridKindBonusDigest: Float = 0.12
 
     // Episode relevance
     static let episodeThresholdHybrid: Float = 0.40
@@ -171,6 +216,7 @@ func scoreRecord(_ record: MemoryRecord, queryTokens: [String]) -> Float {
         let halfLife: Float = switch record.kind {
         case .episode: 30
         case .fact, .interest, .commitment, .event, .person: 180
+        case .digest: 14
         case .profile: 365
         }
         let decay = exp(-0.693 * ageDays / halfLife)
@@ -181,6 +227,8 @@ func scoreRecord(_ record: MemoryRecord, queryTokens: [String]) -> Float {
     switch record.kind {
     case .profile:
         score += MemoryConstants.scoreKindBonusProfile
+    case .digest:
+        score += MemoryConstants.scoreKindBonusDigest
     case .fact, .event, .commitment, .person, .interest:
         score += MemoryConstants.scoreKindBonusFact
     case .episode:
@@ -192,10 +240,14 @@ func scoreRecord(_ record: MemoryRecord, queryTokens: [String]) -> Float {
 
 // MARK: - ID Generation
 
-private var idCounter: UInt64 = 0
+private let _idCounterLock = NSLock()
+private var _idCounter: UInt64 = 0
 
 func newMemoryId(prefix: String) -> String {
     let nanos = UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
-    idCounter += 1
-    return "\(prefix)-\(nanos)-\(idCounter)"
+    _idCounterLock.lock()
+    _idCounter += 1
+    let count = _idCounter
+    _idCounterLock.unlock()
+    return "\(prefix)-\(nanos)-\(count)"
 }

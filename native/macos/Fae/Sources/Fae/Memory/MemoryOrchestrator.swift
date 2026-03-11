@@ -26,7 +26,7 @@ actor MemoryOrchestrator {
     ]
 
     private let store: SQLiteMemoryStore
-    private let config: FaeConfig.MemoryConfig
+    private var config: FaeConfig.MemoryConfig
     private let embeddingEngine: NeuralEmbeddingEngine?
     private let vectorStore: VectorStore?
     private let entityLinker: EntityLinker?
@@ -48,34 +48,51 @@ actor MemoryOrchestrator {
         self.entityStore = entityStore
     }
 
+    func setConfig(_ config: FaeConfig.MemoryConfig) {
+        self.config = config
+    }
+
     // MARK: - Recall
 
     /// Build a memory context string for injection into the LLM system prompt.
     func recall(query: String, proactiveTaskId: String? = nil) async -> String? {
         guard config.enabled else { return nil }
 
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowerQuery = normalizedQuery.lowercased()
+        let groundingInstructions = groundingInstructions(for: lowerQuery)
+        let wantsRecentSummary = isRecentMemorySummaryQuery(lowerQuery)
+        let wantsPersonalRecall = isPersonalMemoryQuery(lowerQuery)
+
         do {
             // Entity-enriched recall: detect person-centric queries first.
-            let entityContext = await buildEntityContext(for: query)
+            let entityContext = await buildEntityContext(for: normalizedQuery)
             let proactiveContext = try await buildProactiveContext(
                 taskId: proactiveTaskId,
-                query: query
+                query: normalizedQuery
             )
 
             let limit = max(config.maxRecallResults, 1)
-            let hits = try await store.search(query: query, limit: limit)
-            let rerankedHits = await rerankHitsIfPossible(query: query, hits: hits)
+            let hits = try await store.search(query: normalizedQuery, limit: limit)
+            let rerankedHits = await rerankHitsIfPossible(query: normalizedQuery, hits: hits)
+            let recallHits = try await supplementedRecallHits(
+                query: normalizedQuery,
+                lowerQuery: lowerQuery,
+                baseHits: rerankedHits
+            )
 
-            if rerankedHits.isEmpty {
-                guard entityContext != nil || proactiveContext != nil else { return nil }
-
-                var fallbackParts: [String] = []
+            if recallHits.isEmpty {
+                var fallbackParts = groundingInstructions
                 if let entityContext {
                     fallbackParts.append(entityContext)
                 }
                 if let proactiveContext {
                     fallbackParts.append(proactiveContext)
                 }
+                if let noMatchContext = noMatchMemoryContext(for: lowerQuery) {
+                    fallbackParts.append(noMatchContext)
+                }
+                guard !fallbackParts.isEmpty else { return nil }
                 return "<memory_context>\n" + fallbackParts.joined(separator: "\n") + "\n</memory_context>"
             }
 
@@ -83,58 +100,459 @@ actor MemoryOrchestrator {
             let now = UInt64(Date().timeIntervalSince1970)
 
             // Filter out stale records (past their staleAfterSecs expiry).
-            let freshHits = rerankedHits.filter { hit in
+            let freshHits = recallHits.filter { hit in
                 guard let staleSecs = hit.record.staleAfterSecs,
                       hit.record.createdAt > 0
                 else { return true }
                 return (hit.record.createdAt + staleSecs) > now
             }
 
-            // Split durable vs episode hits.
+            // Split digest, durable, and episode hits.
+            let digestHits = wantsRecentSummary ? freshHits.filter {
+                $0.record.kind == .digest && $0.record.confidence >= minConfidence
+            } : []
             let durableHits = freshHits.filter {
-                $0.record.kind != .episode && $0.record.confidence >= minConfidence
+                $0.record.kind != .episode
+                    && $0.record.kind != .digest
+                    && $0.record.confidence >= minConfidence
             }
-            let episodeHits = freshHits.filter {
-                $0.record.kind == .episode
-                    && $0.score >= MemoryConstants.episodeThresholdLexical
+            let episodeHits: [MemorySearchHit] = if wantsPersonalRecall || wantsRecentSummary {
+                []
+            } else {
+                freshHits.filter {
+                    $0.record.kind == .episode
+                        && $0.score >= MemoryConstants.episodeThresholdLexical
+                }
             }
 
-            guard !durableHits.isEmpty || !episodeHits.isEmpty else { return nil }
+            guard !digestHits.isEmpty || !durableHits.isEmpty || !episodeHits.isEmpty
+                || entityContext != nil || proactiveContext != nil
+            else {
+                return nil
+            }
 
-            var lines: [String] = []
+            var insightLines: [String] = []
+            var supportingLines: [String] = []
             let maxChars = 2000
 
-            // Durable records first.
+            for hit in digestHits.prefix(2) {
+                guard let line = await formattedRecallLine(for: hit) else { continue }
+                let projected = insightLines.joined(separator: "\n").count + line.count
+                if projected > maxChars { break }
+                insightLines.append(line)
+            }
+
             for hit in durableHits {
-                let line = "- [\(hit.record.kind.rawValue) \(String(format: "%.2f", hit.record.confidence))] \(hit.record.text)"
-                if lines.joined(separator: "\n").count + line.count > maxChars { break }
-                lines.append(line)
+                guard let line = await formattedRecallLine(for: hit) else { continue }
+                let projected = supportingLines.joined(separator: "\n").count
+                    + insightLines.joined(separator: "\n").count
+                    + line.count
+                if projected > maxChars { break }
+                supportingLines.append(line)
             }
 
-            // Then episodes (max 3).
             for hit in episodeHits.prefix(3) {
-                let line = "- [episode \(String(format: "%.2f", hit.record.confidence))] \(hit.record.text)"
-                if lines.joined(separator: "\n").count + line.count > maxChars { break }
-                lines.append(line)
+                let line = "- [episode \(String(format: "%.2f", hit.record.confidence))] \(compactMemoryText(hit.record.text, maxLength: 220))"
+                let projected = supportingLines.joined(separator: "\n").count
+                    + insightLines.joined(separator: "\n").count
+                    + line.count
+                if projected > maxChars { break }
+                supportingLines.append(line)
             }
 
-            guard !lines.isEmpty || entityContext != nil || proactiveContext != nil else { return nil }
-
-            var contextParts: [String] = []
+            var contextParts = groundingInstructions
             if let entitySection = entityContext {
                 contextParts.append(entitySection)
             }
             if let proactiveContext {
                 contextParts.append(proactiveContext)
             }
-            if !lines.isEmpty {
-                contextParts.append(lines.joined(separator: "\n"))
+            if !insightLines.isEmpty {
+                contextParts.append("Memory insights:\n" + insightLines.joined(separator: "\n"))
+            }
+            if !supportingLines.isEmpty {
+                contextParts.append("Supporting memories:\n" + supportingLines.joined(separator: "\n"))
             }
             return "<memory_context>\n" + contextParts.joined(separator: "\n") + "\n</memory_context>"
         } catch {
             NSLog("MemoryOrchestrator: recall error: %@", error.localizedDescription)
             return nil
         }
+    }
+
+    func handleForgetCommandIfNeeded(userText: String) async -> String? {
+        let normalizedUserText = Self.stripWakePrefix(userText)
+        guard let query = Self.extractForgetQuery(from: normalizedUserText) else { return nil }
+
+        do {
+            let forgotCount = try await forgetMatching(query: query)
+            if forgotCount > 0 {
+                return "Okay — I'll forget that and stop relying on it."
+            }
+            return "I don't have a stored memory for that right now, so I won't rely on it."
+        } catch {
+            NSLog("MemoryOrchestrator: deterministic forget failed: %@", error.localizedDescription)
+            return "I hit a problem forgetting that, so I haven't changed memory yet."
+        }
+    }
+
+    func handleDirectPersonalRecallIfNeeded(userText: String) async -> String? {
+        let normalizedUserText = Self.stripWakePrefix(userText)
+        let lowerQuery = normalizedUserText.lowercased()
+
+        do {
+            if isNameRecallQuery(lowerQuery) {
+                if let name = try await primaryStoredUserName() {
+                    return "Your name is \(name)."
+                }
+                return "I don't have your name stored yet."
+            }
+
+            if isFavoriteColorQuery(lowerQuery) {
+                if let color = try await storedFavoriteColor() {
+                    return "Your favorite color is \(color)."
+                }
+                return "I don't have your favorite color stored right now."
+            }
+
+            if isRecentMemorySummaryQuery(lowerQuery) {
+                return try await recentLearningReply()
+            }
+
+            return nil
+        } catch {
+            NSLog("MemoryOrchestrator: deterministic personal recall failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    func rememberedUserName() async -> String? {
+        do {
+            return try await primaryStoredUserName()
+        } catch {
+            NSLog("MemoryOrchestrator: rememberedUserName lookup failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func groundingInstructions(for lowerQuery: String) -> [String] {
+        var instructions = [
+            "Grounding: Use only the memory records below. Do not invent details that are not present here.",
+        ]
+        if isPersonalMemoryQuery(lowerQuery) {
+            instructions.append(
+                "For direct personal-memory questions, prefer durable profile, fact, person, or commitment records over prior question-and-answer episodes."
+            )
+        }
+        if isNameRecallQuery(lowerQuery) {
+            instructions.append("For name questions, answer with the stored name directly if it is present.")
+        }
+        if isRecentMemorySummaryQuery(lowerQuery) {
+            instructions.append(
+                "For recent-learning questions, summarize Memory insights first and mention imported source labels when helpful."
+            )
+            instructions.append(
+                "Keep the answer focused on imported or proactively gathered material. Do not switch to unrelated preferences, relationships, or commitments."
+            )
+        }
+        return instructions
+    }
+
+    private func supplementedRecallHits(
+        query: String,
+        lowerQuery: String,
+        baseHits: [MemorySearchHit]
+    ) async throws -> [MemorySearchHit] {
+        let wantsRecentSummary = isRecentMemorySummaryQuery(lowerQuery)
+        var merged: [MemorySearchHit] = []
+        var seenIDs = Set<String>()
+
+        func append(_ hit: MemorySearchHit) {
+            guard seenIDs.insert(hit.record.id).inserted else { return }
+            merged.append(hit)
+        }
+
+        if wantsRecentSummary {
+            let recentDigests = try await store.findActiveByKind(.digest, limit: 3)
+            for digest in recentDigests {
+                append(MemorySearchHit(record: digest, score: max(digest.confidence, 0.95)))
+            }
+        }
+
+        if isNameRecallQuery(lowerQuery) {
+            let nameProfiles = try await store.findActiveByTag("name")
+            for profile in nameProfiles {
+                append(MemorySearchHit(record: profile, score: max(profile.confidence, 0.99)))
+            }
+        }
+
+        if isFavoriteColorQuery(lowerQuery) {
+            let colorHits = try await store.search(query: "favorite color", limit: max(config.maxRecallResults, 4))
+            for hit in colorHits where hit.record.kind != .episode && hit.record.status == .active {
+                append(MemorySearchHit(record: hit.record, score: max(hit.score, max(hit.record.confidence, 0.92))))
+            }
+        }
+
+        for hit in baseHits {
+            if wantsRecentSummary,
+               hit.record.kind != .digest,
+               !isRecentMemorySummarySupportCandidate(hit.record)
+            {
+                continue
+            }
+            append(hit)
+        }
+
+        if wantsRecentSummary {
+            let recentRecords = try await store.recentRecords(limit: max(config.maxRecallResults * 3, 12))
+            for record in recentRecords where isRecentMemorySummarySupportCandidate(record) {
+                append(MemorySearchHit(record: record, score: max(record.confidence, 0.75)))
+            }
+        }
+
+        return merged
+    }
+
+    private func noMatchMemoryContext(for lowerQuery: String) -> String? {
+        guard isPersonalMemoryQuery(lowerQuery) else { return nil }
+        return "No matching stored memory found for this personal question. Do not guess or restate forgotten details; answer that you do not know from memory yet."
+    }
+
+    private static func extractForgetQuery(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+
+        if lower.hasPrefix("forget ") {
+            return normalizeForgetQuery(String(trimmed.dropFirst(7)))
+        }
+        if lower.hasPrefix("please forget ") {
+            return normalizeForgetQuery(String(trimmed.dropFirst(14)))
+        }
+        if let range = lower.range(of: "don't want you to remember ") {
+            let query = substring(in: trimmed, matchingLowerRange: range.upperBound..<lower.endIndex)
+            return normalizeForgetQuery(query)
+        }
+        if let range = lower.range(of: "do not want you to remember ") {
+            let query = substring(in: trimmed, matchingLowerRange: range.upperBound..<lower.endIndex)
+            return normalizeForgetQuery(query)
+        }
+        if let range = lower.range(of: "want you to forget ") {
+            let query = substring(in: trimmed, matchingLowerRange: range.upperBound..<lower.endIndex)
+            return normalizeForgetQuery(query)
+        }
+
+        return nil
+    }
+
+    private static func extractRememberFact(from text: String) -> String? {
+        let trimmed = stripWakePrefix(text)
+        let lower = trimmed.lowercased()
+
+        if lower.hasPrefix("remember ") {
+            return normalizeRememberFact(String(trimmed.dropFirst(9)))
+        }
+        if lower.hasPrefix("please remember ") {
+            return normalizeRememberFact(String(trimmed.dropFirst(16)))
+        }
+        if let range = lower.range(of: "want you to remember ") {
+            let fact = substring(in: trimmed, matchingLowerRange: range.upperBound..<lower.endIndex)
+            return normalizeRememberFact(fact)
+        }
+
+        return nil
+    }
+
+    private static func substring(
+        in original: String,
+        matchingLowerRange range: Range<String.Index>
+    ) -> String {
+        let lowerPrefixCount = original.lowercased().distance(from: original.lowercased().startIndex, to: range.lowerBound)
+        let lowerUpperCount = original.lowercased().distance(from: original.lowercased().startIndex, to: range.upperBound)
+        let start = original.index(original.startIndex, offsetBy: lowerPrefixCount)
+        let end = original.index(original.startIndex, offsetBy: lowerUpperCount)
+        return String(original[start..<end])
+    }
+
+    private static func normalizeForgetQuery(_ text: String) -> String? {
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?"))
+
+        if normalized.lowercased().hasPrefix("what ") {
+            normalized = String(normalized.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if normalized.lowercased().hasPrefix("that ") {
+            normalized = String(normalized.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if normalized.lowercased().hasSuffix(" anymore") {
+            normalized = String(normalized.dropLast(8)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if normalized.lowercased().hasSuffix(" is") {
+            normalized = String(normalized.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func normalizeRememberFact(_ text: String) -> String? {
+        var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?"))
+        if normalized.lowercased().hasPrefix("that ") {
+            normalized = String(normalized.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func stripWakePrefix(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        for prefix in ["fae, ", "fae "] where lower.hasPrefix(prefix) {
+            return String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
+    private func isPersonalMemoryQuery(_ lowerQuery: String) -> Bool {
+        let directPhrases = [
+            "what's my ",
+            "what is my ",
+            "do you know my ",
+            "do you remember my ",
+            "what do you call me",
+            "do you know who i am",
+            "what color do i like",
+            "what do i like",
+            "who am i",
+            "what have you learned about me",
+            "tell me about me",
+        ]
+        if directPhrases.contains(where: { lowerQuery.contains($0) }) {
+            return true
+        }
+
+        let hasPersonalMarker = lowerQuery.contains(" my ") || lowerQuery.hasPrefix("my ")
+        let hasMemoryIntent = ["remember", "know", "favorite", "name", "birthday", "like"]
+            .contains { lowerQuery.contains($0) }
+        return hasPersonalMarker && hasMemoryIntent
+    }
+
+    private func isNameRecallQuery(_ lowerQuery: String) -> Bool {
+        let phrases = [
+            "what's my name",
+            "what is my name",
+            "what do you call me",
+            "do you know who i am",
+            "who am i",
+        ]
+        return phrases.contains { lowerQuery.contains($0) }
+    }
+
+    private func isFavoriteColorQuery(_ lowerQuery: String) -> Bool {
+        let phrases = [
+            "what's my favorite color",
+            "what is my favorite color",
+            "do you remember my favorite color",
+            "do you know my favorite color",
+            "what color do i like",
+        ]
+        return phrases.contains { lowerQuery.contains($0) }
+    }
+
+    private func isRecentMemorySummaryQuery(_ lowerQuery: String) -> Bool {
+        let explicitPhrases = [
+            "what have you learned recently",
+            "what have you learned lately",
+            "learned recently",
+            "memory lately",
+            "stands out from memory",
+            "imported notes",
+            "recent digest",
+            "recently from my imported notes",
+        ]
+        if explicitPhrases.contains(where: { lowerQuery.contains($0) }) {
+            return true
+        }
+
+        let mentionsLearning = lowerQuery.contains("learned") || lowerQuery.contains("learning")
+        let mentionsRecency = lowerQuery.contains("recent") || lowerQuery.contains("lately")
+        let mentionsMemory = lowerQuery.contains("memory") || lowerQuery.contains("import")
+        return mentionsLearning && (mentionsRecency || mentionsMemory)
+    }
+
+    private func isRecentMemorySummarySupportCandidate(_ record: MemoryRecord) -> Bool {
+        if record.kind == .digest {
+            return false
+        }
+        if record.tags.contains("imported") || record.tags.contains("proactive") {
+            return true
+        }
+        if metadataValue(for: record, key: "source_type") != nil {
+            return true
+        }
+        if metadataValue(for: record, key: "artifact_id") != nil {
+            return true
+        }
+        if let source = metadataValue(for: record, key: "source"), !source.isEmpty {
+            return source != "conversation"
+        }
+        return false
+    }
+
+    private func primaryStoredUserName() async throws -> String? {
+        let profiles = try await store.findActiveByTag("name")
+        for profile in profiles {
+            if let name = Self.extractStoredName(from: profile.text) {
+                return name
+            }
+        }
+        return nil
+    }
+
+    private static func extractStoredName(from text: String) -> String? {
+        let prefix = "Primary user name is "
+        guard text.hasPrefix(prefix) else { return nil }
+        let remainder = text.dropFirst(prefix.count)
+        return remainder
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+    }
+
+    private func storedFavoriteColor() async throws -> String? {
+        let hits = try await store.search(query: "favorite color", limit: 8)
+        for hit in hits where hit.record.status == .active && hit.record.kind != .episode {
+            if let color = Self.extractFavoriteColor(from: hit.record.text) {
+                return color
+            }
+        }
+        return nil
+    }
+
+    private static func extractFavoriteColor(from text: String) -> String? {
+        let lower = text.lowercased()
+        guard let range = lower.range(of: "favorite color is ") else { return nil }
+        let original = text[range.upperBound...]
+        let candidate = original
+            .prefix(while: { $0.isLetter || $0 == " " || $0 == "-" })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return candidate.isEmpty ? nil : candidate
+    }
+
+    private func recentLearningReply() async throws -> String {
+        let recentRecords = try await store.recentRecords(limit: max(config.maxRecallResults * 4, 16))
+        let relevant = recentRecords.filter { isRecentMemorySummarySupportCandidate($0) }
+        let importedRecords = relevant.filter { $0.tags.contains("imported") || metadataValue(for: $0, key: "source_type") != nil }
+
+        if !importedRecords.isEmpty {
+            let snippets = importedRecords.prefix(2).map { compactMemoryText($0.text, maxLength: 180) }
+            return "From your imported notes: " + snippets.joined(separator: " ")
+        }
+
+        let digests = try await store.findActiveByKind(.digest, limit: 1)
+        if let digest = digests.first {
+            return "Recently in memory: " + compactMemoryText(digest.text, maxLength: 220)
+        }
+
+        return "I don't have recent imported learning stored right now."
     }
 
     // MARK: - Capture
@@ -210,28 +628,28 @@ actor MemoryOrchestrator {
             }
 
             // 2. Parse forget commands.
-            if !shouldSuppressStructuredExtraction, lower.hasPrefix("forget ") {
-                let query = String(sanitizedUserText.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+            if !shouldSuppressStructuredExtraction,
+               let query = Self.extractForgetQuery(from: sanitizedUserText)
+            {
                 let forgotCount = try await forgetMatching(query: query)
                 report.forgottenCount += forgotCount
             }
 
             // 3. Parse "remember ..." commands.
-            if !shouldSuppressStructuredExtraction, lower.hasPrefix("remember ") {
-                let fact = String(sanitizedUserText.dropFirst(9)).trimmingCharacters(in: .whitespaces)
-                if !fact.isEmpty {
-                    _ = try await store.insertRecord(
-                        kind: .fact,
-                        text: fact,
-                        confidence: MemoryConstants.factRememberConfidence,
-                        sourceTurnId: turnId,
-                        tags: ["remembered"],
-                        importanceScore: 0.80,
-                        speakerId: speakerId,
-                        metadata: timestampMetadata
-                    )
-                    report.extractedCount += 1
-                }
+            if !shouldSuppressStructuredExtraction,
+               let fact = Self.extractRememberFact(from: sanitizedUserText)
+            {
+                _ = try await store.insertRecord(
+                    kind: .fact,
+                    text: fact,
+                    confidence: MemoryConstants.factRememberConfidence,
+                    sourceTurnId: turnId,
+                    tags: ["remembered"],
+                    importanceScore: 0.80,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
+                )
+                report.extractedCount += 1
             }
 
             // 4. Parse name statements.
@@ -555,6 +973,132 @@ actor MemoryOrchestrator {
             + "\n</proactive_memory_context>"
     }
 
+    private func formattedRecallLine(for hit: MemorySearchHit) async -> String? {
+        let snippet = compactMemoryText(
+            hit.record.text,
+            maxLength: hit.record.kind == .digest ? 260 : 180
+        )
+        let provenance = await provenanceSummary(for: hit.record)
+        if let provenance, !provenance.isEmpty {
+            return "- [\(hit.record.kind.rawValue) \(String(format: "%.2f", hit.record.confidence))] \(snippet) (sources: \(provenance))"
+        }
+        return "- [\(hit.record.kind.rawValue) \(String(format: "%.2f", hit.record.confidence))] \(snippet)"
+    }
+
+    private func provenanceSummary(for record: MemoryRecord) async -> String? {
+        do {
+            let links = try await store.sourceLinks(recordID: record.id)
+            guard !links.isEmpty else {
+                if let source = metadataValue(for: record, key: "source"), !source.isEmpty {
+                    return source.replacingOccurrences(of: "_", with: " ")
+                }
+                return metadataProvenanceLabel(for: record)
+            }
+
+            var labels: [String] = []
+            for link in links {
+                if let artifactId = link.artifactId,
+                   let artifact = try await store.fetchArtifact(id: artifactId)
+                {
+                    labels.append(Self.artifactLabel(for: artifact))
+                } else if let sourceRecordId = link.sourceRecordId,
+                          let sourceRecord = try await store.fetchRecord(id: sourceRecordId)
+                {
+                    if let label = try await provenanceLabel(forSourceRecord: sourceRecord) {
+                        labels.append(label)
+                    }
+                }
+                if labels.count >= 3 { break }
+            }
+
+            let uniqueLabels = Array(NSOrderedSet(array: labels)) as? [String] ?? labels
+            guard !uniqueLabels.isEmpty else { return nil }
+            return uniqueLabels.prefix(3).joined(separator: ", ")
+        } catch {
+            NSLog("MemoryOrchestrator: provenance lookup failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func provenanceLabel(forSourceRecord record: MemoryRecord) async throws -> String? {
+        if let direct = metadataProvenanceLabel(for: record) {
+            return direct
+        }
+        let links = try await store.sourceLinks(recordID: record.id)
+        for link in links {
+            if let artifactId = link.artifactId,
+               let artifact = try await store.fetchArtifact(id: artifactId)
+            {
+                return Self.artifactLabel(for: artifact)
+            }
+        }
+        if let source = metadataValue(for: record, key: "source"), !source.isEmpty {
+            return source.replacingOccurrences(of: "_", with: " ")
+        }
+        return record.kind.rawValue
+    }
+
+    private func metadataProvenanceLabel(for record: MemoryRecord) -> String? {
+        guard let sourceTypeRaw = metadataValue(for: record, key: "source_type"),
+              let sourceType = MemoryArtifactSourceType(rawValue: sourceTypeRaw)
+        else {
+            return nil
+        }
+        let title = metadataValue(for: record, key: "title")
+        let origin = metadataValue(for: record, key: "origin")
+        return Self.sourceLabel(sourceType: sourceType, title: title, origin: origin)
+    }
+
+    private static func artifactLabel(for artifact: MemoryArtifact) -> String {
+        sourceLabel(sourceType: artifact.sourceType, title: artifact.title, origin: artifact.origin)
+    }
+
+    private static func sourceLabel(
+        sourceType: MemoryArtifactSourceType,
+        title: String?,
+        origin: String?
+    ) -> String {
+        switch sourceType {
+        case .url:
+            if let origin,
+               let host = URL(string: origin)?.host,
+               !host.isEmpty
+            {
+                return "url \(host)"
+            }
+            return "url"
+        case .pdf:
+            if let title, !title.isEmpty {
+                return "pdf \(title)"
+            }
+            if let origin {
+                return "pdf \((origin as NSString).lastPathComponent)"
+            }
+            return "pdf"
+        case .file, .coworkAttachment:
+            if let title, !title.isEmpty {
+                return "\(sourceType == .coworkAttachment ? "cowork attachment" : "file") \(title)"
+            }
+            if let origin {
+                return "\(sourceType == .coworkAttachment ? "cowork attachment" : "file") \((origin as NSString).lastPathComponent)"
+            }
+            return sourceType == .coworkAttachment ? "cowork attachment" : "file"
+        case .pastedText:
+            return "pasted text"
+        case .proactive:
+            return "proactive"
+        }
+    }
+
+    private func compactMemoryText(_ text: String, maxLength: Int) -> String {
+        let collapsed = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard collapsed.count > maxLength else { return collapsed }
+        return String(collapsed.prefix(maxLength - 4)).trimmingCharacters(in: .whitespaces) + " ..."
+    }
+
     private func proactiveRecallScore(record: MemoryRecord, queryTokens: Set<String>) -> Int {
         guard !queryTokens.isEmpty else { return 0 }
         let recordTokens = Set(tokenizeForSearch(record.text))
@@ -763,14 +1307,13 @@ actor MemoryOrchestrator {
         }
     }
 
-    /// Extract a name from statements like "my name is X", "call me X".
-    ///
-    /// Deliberately avoids generic patterns like "I'm X" which create frequent
-    /// false positives during normal conversation.
+    /// Extract a name from explicit self-identification statements.
     private func extractName(from lower: String, fullText: String) -> String? {
         let patterns = [
             "my name is ", "my name's ", "call me ",
             "you can call me ", "people call me ",
+            "i'm called ", "i am called ",
+            "i'm named ", "i am named ",
         ]
         for pattern in patterns {
             if let range = lower.range(of: pattern) {

@@ -138,6 +138,10 @@ Acceptance:
 ### Memory, scheduler, and skills
 
 - [ ] Memory capture and recall work from the main window.
+- [ ] Memory Inbox supports pasted text, file import, and URL import in the real app.
+- [ ] Files dropped into `~/Library/Application Support/fae/memory-inbox/pending/` can be ingested by the scheduler or manual trigger path.
+- [ ] Asking Fae what she learned recently surfaces digest-first recall before raw supporting memories.
+- [ ] Recall output shows trustworthy provenance labels for imported artifacts or derived digests.
 - [ ] Scheduler list/create/update/delete/trigger flows work.
 - [ ] Skills list/add/edit/remove/execute flows work.
 - [ ] Any generated or edited artifacts appear where the UI says they will.

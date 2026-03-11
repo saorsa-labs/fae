@@ -314,13 +314,13 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
 
     private static func defaultScheduleDescription(for id: String) -> String {
         switch id {
-        case "memory_reflect", "check_fae_update":
+        case "memory_reflect", "memory_digest", "check_fae_update":
             return "Every 6 hours"
         case "memory_reindex":
             return "Every 3 hours"
         case "memory_migrate":
             return "Hourly"
-        case "skill_health_check":
+        case "skill_health_check", "memory_inbox_ingest":
             return "Every 5 minutes"
         case "memory_gc":
             return "Daily at 03:30"

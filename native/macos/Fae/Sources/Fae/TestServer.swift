@@ -16,8 +16,14 @@ import Network
 /// - `POST /config`        — `{"key":"...","value":"..."}` → FaeCore.patchConfig()
 /// - `POST /approve`       — `{"approved":true}` → resolve pending tool approval
 /// - `GET  /approvals`     — List pending approval requests
+/// - `GET  /inputs`        — List pending secure input requests
 /// - `POST /reset`         — Clear conversation, events, and pipeline history
+/// - `POST /memory/import-text`     — Import a raw artifact into memory inbox
+/// - `POST /memory/ingest-pending`  — Ingest pending files from memory inbox folder
+/// - `POST /memory/generate-digest` — Generate a digest from recent imported memories
+/// - `POST /memory/recall`          — Return raw memory recall context for a query
 /// - `POST /command`       — `{"name":"...","payload":{...}}` → FaeCore.sendCommand()
+/// - `POST /input-response`— Resolve a pending secure input request
 /// - `POST /test-input`    — Trigger input-required overlay (testing only)
 @MainActor
 final class TestServer {
@@ -163,10 +169,22 @@ final class TestServer {
             handleApprove(body: body, connection: connection)
         case ("GET", "/approvals"):
             handleApprovals(connection: connection)
+        case ("GET", "/inputs"):
+            handleInputs(connection: connection)
         case ("POST", "/reset"):
             handleReset(connection: connection)
+        case ("POST", "/memory/import-text"):
+            handleMemoryImportText(body: body, connection: connection)
+        case ("POST", "/memory/ingest-pending"):
+            handleMemoryIngestPending(body: body, connection: connection)
+        case ("POST", "/memory/generate-digest"):
+            handleMemoryGenerateDigest(connection: connection)
+        case ("POST", "/memory/recall"):
+            handleMemoryRecall(body: body, connection: connection)
         case ("POST", "/command"):
             handleCommand(body: body, connection: connection)
+        case ("POST", "/input-response"):
+            handleInputResponse(body: body, connection: connection)
         case ("POST", "/test-input"):
             handleTestInput(body: body, connection: connection)
         default:
@@ -330,12 +348,16 @@ final class TestServer {
         Task { @MainActor [weak self] in
             let isSpeaking = await self?.faeCore?.isSpeaking() ?? false
             let hasDeferredTools = await self?.faeCore?.hasPendingDeferredTools() ?? false
+            let activeInput = self?.approvalOverlay?.activeInput
             self?.sendResponse(connection: connection, status: 200, body: [
                 "messages": serialized,
                 "isGenerating": isGenerating,
                 "isBackgroundLookupActive": backgroundLookupActive,
                 "isSpeaking": isSpeaking,
                 "hasDeferredTools": hasDeferredTools,
+                "hasActiveInput": activeInput != nil,
+                "activeInputId": activeInput?.id ?? "",
+                "activeInputTitle": activeInput?.title ?? "",
                 "isListening": self?.conversation?.isListening ?? false,
                 "streamingText": streamingText,
                 "count": messages.count,
@@ -539,6 +561,13 @@ final class TestServer {
         }
     }
 
+    private func handleInputs(connection: NWConnection) {
+        let pending = approvalOverlay?.activeInput.map(Self.serializeInputRequest(_:)).map { [$0] } ?? []
+        sendResponse(connection: connection, status: 200, body: [
+            "pending": pending,
+        ])
+    }
+
     // MARK: - Reset Endpoint
 
     private func handleReset(connection: NWConnection) {
@@ -562,10 +591,159 @@ final class TestServer {
             await self.faeCore?.clearPendingApprovalsForTest()
             await self.faeCore?.clearAllToolApprovalsForTest()
             await self.faeCore?.clearUserSchedulerTasksForTest()
+            self.approvalOverlay?.cancelInput()
 
             self.sendResponse(connection: connection, status: 200, body: [
                 "ok": true,
-                "cleared": ["conversation", "events", "history", "approvals", "tool_grants", "scheduler_tasks"],
+                "cleared": ["conversation", "events", "history", "approvals", "inputs", "tool_grants", "scheduler_tasks"],
+            ])
+        }
+    }
+
+    // MARK: - Memory Test Endpoints
+
+    private func handleMemoryImportText(body: Data?, connection: NWConnection) {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let rawText = json["text"] as? String,
+              !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            sendResponse(connection: connection, status: 400, body: ["error": "missing or empty 'text' field"])
+            return
+        }
+
+        guard let service = faeCore?.memoryInboxService else {
+            sendResponse(connection: connection, status: 503, body: ["error": "memory inbox service not available"])
+            return
+        }
+
+        let sourceType = (json["source_type"] as? String)
+            .flatMap(MemoryArtifactSourceType.init(rawValue:))
+            ?? .pastedText
+        let nonceEnabled = json["dedupe_nonce"] as? Bool ?? false
+        let nonce = nonceEnabled ? UUID().uuidString.lowercased() : nil
+        let title = Self.appendNonce(value: json["title"] as? String, nonce: nonce)
+        let origin = Self.appendNonce(value: json["origin"] as? String, nonce: nonce)
+        let text = Self.appendNonceToText(rawText, nonce: nonce)
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await service.importText(
+                    title: title,
+                    text: text,
+                    origin: origin,
+                    sourceType: sourceType
+                )
+                self.sendResponse(connection: connection, status: 200, body: [
+                    "ok": true,
+                    "artifact_id": result.artifact.id,
+                    "record_id": result.record.id,
+                    "source_type": result.artifact.sourceType.rawValue,
+                    "was_duplicate": result.wasDuplicate,
+                ])
+            } catch {
+                self.sendResponse(connection: connection, status: 500, body: [
+                    "error": error.localizedDescription,
+                ])
+            }
+        }
+    }
+
+    private func handleMemoryIngestPending(body: Data?, connection: NWConnection) {
+        guard let service = faeCore?.memoryInboxService else {
+            sendResponse(connection: connection, status: 503, body: ["error": "memory inbox service not available"])
+            return
+        }
+
+        let json = (body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        let limit = max(1, json["limit"] as? Int ?? 16)
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let results = try await service.ingestPendingFiles(limit: limit)
+                self.sendResponse(connection: connection, status: 200, body: [
+                    "ok": true,
+                    "imported_count": results.count,
+                    "duplicate_count": results.filter(\.wasDuplicate).count,
+                ])
+            } catch {
+                self.sendResponse(connection: connection, status: 500, body: [
+                    "error": error.localizedDescription,
+                ])
+            }
+        }
+    }
+
+    private func handleMemoryGenerateDigest(connection: NWConnection) {
+        guard let service = faeCore?.memoryDigestService else {
+            sendResponse(connection: connection, status: 503, body: ["error": "memory digest service not available"])
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if let digest = try await service.generateDigest() {
+                    self.sendResponse(connection: connection, status: 200, body: [
+                        "ok": true,
+                        "created": true,
+                        "digest_id": digest.id,
+                        "kind": digest.kind.rawValue,
+                        "source_count": Self.digestSourceCount(from: digest.metadata),
+                    ])
+                } else {
+                    self.sendResponse(connection: connection, status: 200, body: [
+                        "ok": true,
+                        "created": false,
+                        "source_count": 0,
+                    ])
+                }
+            } catch {
+                self.sendResponse(connection: connection, status: 500, body: [
+                    "error": error.localizedDescription,
+                ])
+            }
+        }
+    }
+
+    private func handleMemoryRecall(body: Data?, connection: NWConnection) {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let query = json["query"] as? String,
+              !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            sendResponse(connection: connection, status: 400, body: ["error": "missing or empty 'query' field"])
+            return
+        }
+
+        guard let faeCore else {
+            sendResponse(connection: connection, status: 503, body: ["error": "faeCore not available"])
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let context = await faeCore.recallMemoryContextForTest(query: query) ?? ""
+            let normalized = context.lowercased()
+            let hasProvenance = normalized.contains("pasted text")
+                || normalized.contains("file")
+                || normalized.contains("pdf")
+                || normalized.contains("url")
+                || normalized.contains("cowork attachment")
+                || normalized.contains("proactive")
+
+            self.sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "has_context": !context.isEmpty,
+                "context_length": context.count,
+                "has_memory_insights": context.contains("Memory insights:"),
+                "has_supporting_memories": context.contains("Supporting memories:"),
+                "has_provenance_labels": hasProvenance,
+                "mentions_pasted_text": normalized.contains("pasted text"),
+                "mentions_file": normalized.contains("file"),
+                "context": context,
             ])
         }
     }
@@ -602,6 +780,55 @@ final class TestServer {
             "ok": true,
             "name": name,
             "payload_keys": payload.keys.sorted(),
+        ])
+    }
+
+    private func handleInputResponse(body: Data?, connection: NWConnection) {
+        guard let request = approvalOverlay?.activeInput else {
+            sendResponse(connection: connection, status: 404, body: ["error": "no active input request"])
+            return
+        }
+
+        let json = (body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        let requestID = json["request_id"] as? String ?? request.id
+        guard requestID == request.id else {
+            sendResponse(connection: connection, status: 400, body: ["error": "request_id does not match active input"])
+            return
+        }
+
+        if let rawFormValues = json["form_values"] as? [String: Any] {
+            let values = rawFormValues.reduce(into: [String: String]()) { partial, entry in
+                partial[entry.key] = "\(entry.value)"
+            }
+            approvalOverlay?.submitForm(values: values)
+            sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "request_id": requestID,
+                "submitted": true,
+                "mode": "form",
+            ])
+            return
+        }
+
+        let text = json["text"] as? String ?? ""
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            approvalOverlay?.cancelInput()
+            sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "request_id": requestID,
+                "submitted": false,
+                "cancelled": true,
+                "mode": "text",
+            ])
+            return
+        }
+
+        approvalOverlay?.submitInput(text: text)
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "request_id": requestID,
+            "submitted": true,
+            "mode": "text",
         ])
     }
 
@@ -684,6 +911,57 @@ final class TestServer {
         connection.send(content: responseData, completion: .contentProcessed { _ in
             connection.cancel()
         })
+    }
+
+    private static func appendNonce(value: String?, nonce: String?) -> String? {
+        guard let value, !value.isEmpty else { return value }
+        guard let nonce, !nonce.isEmpty else { return value }
+        return "\(value) [\(String(nonce.prefix(8)))]"
+    }
+
+    private static func appendNonceToText(_ value: String, nonce: String?) -> String {
+        guard let nonce, !nonce.isEmpty else { return value }
+        return value + "\n\nTest nonce: \(nonce)"
+    }
+
+    private static func digestSourceCount(from metadata: String?) -> Int {
+        guard let metadata,
+              let data = metadata.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ids = dict["source_record_ids"] as? [String]
+        else {
+            return 0
+        }
+        return ids.count
+    }
+
+    private static func serializeInputRequest(_ request: ApprovalOverlayController.InputRequest) -> [String: Any] {
+        let fields: [[String: Any]] = request.fields.map { field in
+            var payload: [String: Any] = [
+                "id": field.id,
+                "label": field.label,
+                "placeholder": field.placeholder,
+                "is_secure": field.isSecure,
+                "required": field.required,
+                "is_multiline": field.isMultiline,
+                "must_be_https": field.mustBeHttps,
+            ]
+            if let minLength = field.minLength { payload["min_length"] = minLength }
+            if let maxLength = field.maxLength { payload["max_length"] = maxLength }
+            if let regex = field.regex, !regex.isEmpty { payload["regex"] = regex }
+            if let allowedValues = field.allowedValues, !allowedValues.isEmpty {
+                payload["allowed_values"] = allowedValues
+            }
+            return payload
+        }
+
+        return [
+            "id": request.id,
+            "title": request.title,
+            "prompt": request.prompt,
+            "mode": request.isForm ? "form" : "text",
+            "fields": fields,
+        ]
     }
 
     // MARK: - Query Parsing

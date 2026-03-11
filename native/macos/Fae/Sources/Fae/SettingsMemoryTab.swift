@@ -2,7 +2,9 @@ import SwiftUI
 
 struct SettingsMemoryTab: View {
     @AppStorage("fae.memory.enabled") private var memoryEnabled: Bool = true
-    @AppStorage("fae.memory.maxRecallResults") private var maxRecallResults: Int = 8
+    @AppStorage("fae.memory.maxRecallResults") private var maxRecallResults: Int = 5
+    @AppStorage("fae.memory.autoIngestInbox") private var autoIngestInbox: Bool = true
+    @AppStorage("fae.memory.generateDigests") private var generateDigests: Bool = true
 
     var commandSender: HostCommandSender?
 
@@ -30,7 +32,25 @@ struct SettingsMemoryTab: View {
                             )
                         }
 
-                        Text("Fae automatically captures important context and retrieves it during conversation. Increase recall depth for richer context, decrease it for tighter responses.")
+                        Toggle("Auto-ingest inbox folder", isOn: $autoIngestInbox)
+                            .toggleStyle(.switch)
+                            .onChange(of: autoIngestInbox) { _, value in
+                                commandSender?.sendCommand(
+                                    name: "config.patch",
+                                    payload: ["key": "memory.auto_ingest_inbox", "value": value]
+                                )
+                            }
+
+                        Toggle("Generate memory digests", isOn: $generateDigests)
+                            .toggleStyle(.switch)
+                            .onChange(of: generateDigests) { _, value in
+                                commandSender?.sendCommand(
+                                    name: "config.patch",
+                                    payload: ["key": "memory.generate_digests", "value": value]
+                                )
+                            }
+
+                        Text("Fae automatically captures important context, ingests queued artifacts, and creates digest records for higher-level recall. Increase recall depth for richer context, decrease it for tighter responses.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

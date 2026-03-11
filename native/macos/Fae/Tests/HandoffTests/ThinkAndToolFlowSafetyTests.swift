@@ -46,6 +46,20 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertTrue(cleaned.contains("March 4, 2026"))
     }
 
+    func testStripReasoningPrefaceRemovesThinkingStyleLeadIn() {
+        let text = "I'll analyze the user's request carefully. Let me think through each option systematically. Option 1 is a local database."
+        let cleaned = TextProcessing.stripReasoningPreface(text)
+
+        XCTAssertEqual(cleaned, "Option 1 is a local database.")
+    }
+
+    func testStripReasoningPrefacePreservesDirectAnswerContent() {
+        let text = "Option 1 is a local database with strong privacy and low operational overhead."
+        let cleaned = TextProcessing.stripReasoningPreface(text)
+
+        XCTAssertEqual(cleaned, text)
+    }
+
     func testParseToolCallsSupportsQwen35XmlFormat() {
         let response = """
         Sure — doing it now.

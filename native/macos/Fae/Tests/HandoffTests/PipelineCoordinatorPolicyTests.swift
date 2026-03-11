@@ -149,6 +149,52 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         )
     }
 
+    func testMemoryTurnGuidanceFlagsCaptureTurns() {
+        let guidance = PipelineCoordinator.memoryTurnGuidance(for: "Fae, I'm called TestUser")
+
+        XCTAssertEqual(
+            guidance,
+            "Memory capture guidance: The user is giving durable personal context. Acknowledge the exact fact, person, or name briefly and plainly."
+        )
+    }
+
+    func testMemoryTurnGuidanceIgnoresGenericImStatusTurns() {
+        let guidance = PipelineCoordinator.memoryTurnGuidance(for: "Fae, I'm exhausted")
+
+        XCTAssertNil(guidance)
+    }
+
+    func testMemoryTurnGuidanceFlagsGroundedRecallTurns() {
+        let guidance = PipelineCoordinator.memoryTurnGuidance(
+            for: "Fae, what have you learned recently from my imported notes?"
+        )
+
+        XCTAssertEqual(
+            guidance,
+            "Memory reply guidance: Answer directly from memory context. If the fact is missing, say that plainly. Do not improvise or switch topics."
+        )
+    }
+
+    func testMemoryTurnGuidanceIncludesExplicitInterestTopic() {
+        let guidance = PipelineCoordinator.memoryTurnGuidance(
+            for: "Fae, I love learning about quantum computing"
+        )
+
+        XCTAssertEqual(
+            guidance,
+            "Memory capture guidance: The user is giving durable personal context about an interest in quantum computing. Acknowledge quantum computing explicitly and briefly."
+        )
+    }
+
+    func testPersonQueryDetectorHandlesAnyoneWhoWorksAtVariant() {
+        let match = PersonQueryDetector.detectPersonQuery(
+            in: "tell me about people who work at Google"
+        )
+
+        XCTAssertEqual(match?.targetOrganisation, "Google")
+        XCTAssertTrue(match?.isExplicitQuery == true)
+    }
+
     func testBatchedTTSSegmentsKeepsShortRepliesIntact() {
         let segments = PipelineCoordinator.batchedTTSSegments(
             from: "Local AI keeps your private data on your own machine."
@@ -233,6 +279,43 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         XCTAssertEqual(call.arguments["schedule_type"] as? String, "interval")
         let params = call.arguments["schedule_params"] as? [String: String]
         XCTAssertEqual(params?["minutes"], "5")
+    }
+
+    func testRepairedToolCallForSchedulerUpdateUsesSchedulerListBootstrap() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, use scheduler_list to find fae-update-test, then use scheduler_update to change its interval to every 10 minutes"
+        ) else {
+            return XCTFail("Expected scheduler_list repair call")
+        }
+
+        XCTAssertEqual(call.name, "scheduler_list")
+    }
+
+    func testRepairedToolCallForUnquotedEditTurnExtractsReplacementPair() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, edit /tmp/fae-test-edit.txt and replace FAETEST_ORIGINAL with FAETEST_MODIFIED"
+        ) else {
+            return XCTFail("Expected edit repair call")
+        }
+
+        XCTAssertEqual(call.name, "edit")
+        XCTAssertEqual(call.arguments["path"] as? String, "/tmp/fae-test-edit.txt")
+        XCTAssertEqual(call.arguments["old_string"] as? String, "FAETEST_ORIGINAL")
+        XCTAssertEqual(call.arguments["new_string"] as? String, "FAETEST_MODIFIED")
+    }
+
+    func testRepairedToolCallForInputRequestUsesSecurePrompt() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, use the input_request tool to ask me for a password"
+        ) else {
+            return XCTFail("Expected input_request repair call")
+        }
+
+        XCTAssertEqual(call.name, "input_request")
+        XCTAssertEqual(call.arguments["title"] as? String, "Password Required")
+        XCTAssertEqual(call.arguments["prompt"] as? String, "Please enter the password.")
+        XCTAssertEqual(call.arguments["secure"] as? Bool, true)
+        XCTAssertEqual(call.arguments["return_to_model"] as? Bool, false)
     }
 
     func testRepairedToolCallForActivateSkillExtractsSkillName() {

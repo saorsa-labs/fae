@@ -131,6 +131,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
     private var memoryStore: SQLiteMemoryStore?
+    private(set) var memoryInboxService: MemoryInboxService?
+    private(set) var memoryDigestService: MemoryDigestService?
     private var entityStore: EntityStore?
     private var entityLinker: EntityLinker?
     private var neuralEmbedder: NeuralEmbeddingEngine?
@@ -248,7 +250,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     vectorStore: vectorStore,
                     embeddingEngine: neuralEmbedder
                 )
+                let inboxService = MemoryInboxService(store: memoryStore)
+                try? await inboxService.prepareInboxDirectories()
+                let digestService = MemoryDigestService(store: memoryStore)
                 self.memoryStore = memoryStore
+                self.memoryInboxService = inboxService
+                self.memoryDigestService = digestService
                 self.entityStore = entityStore
                 self.entityLinker = entityLinker
                 self.memoryOrchestrator = orchestrator
@@ -376,9 +383,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         eventBus: eventBus,
                         memoryOrchestrator: orchestrator,
                         memoryStore: memoryStore,
+                        memoryInboxService: inboxService,
+                        memoryDigestService: digestService,
                         entityStore: entityStore,
                         vectorStore: vectorStore,
-                        embeddingEngine: neuralEmbedder
+                        embeddingEngine: neuralEmbedder,
+                        memoryConfig: config.memory
                     )
 
                     // Wire persistence store for scheduler state.
@@ -506,6 +516,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
             pipelineCoordinator = nil
             skillManagerRef = nil
             memoryStore = nil
+            memoryInboxService = nil
+            memoryDigestService = nil
             entityStore = nil
             entityLinker = nil
             neuralEmbedder = nil
@@ -556,6 +568,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Whether any deferred (background) tool jobs are still running (test harness use).
     func hasPendingDeferredTools() async -> Bool {
         await pipelineCoordinator?.hasPendingDeferredTools ?? false
+    }
+
+    /// Return raw memory recall context without going through model generation (test harness use).
+    func recallMemoryContextForTest(query: String) async -> String? {
+        await memoryOrchestrator?.recall(query: query)
     }
 
     /// Toggle barge-in on/off, persist to config, and update the live pipeline.
@@ -1227,6 +1244,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    private func refreshMemoryRuntime() {
+        let memory = config.memory
+        let orchestratorRef = memoryOrchestrator
+        let schedulerRef = scheduler
+
+        Task {
+            if let orchestratorRef {
+                await orchestratorRef.setConfig(memory)
+            }
+            if let schedulerRef {
+                await schedulerRef.setMemoryConfig(memory)
+            }
+        }
+    }
+
     func patchConfig(key: String, payload: [String: Any]) {
         NSLog("FaeCore: config.patch key='%@'", key)
 
@@ -1422,6 +1454,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let value = value as? Bool else { return }
             config.memory.enabled = value
             persistConfig(reason: "config.patch.memory.enabled")
+            refreshMemoryRuntime()
 
         case "memory.max_recall_results":
             let parsed: Int?
@@ -1435,6 +1468,19 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let results = parsed, (1 ... 50).contains(results) else { return }
             config.memory.maxRecallResults = results
             persistConfig(reason: "config.patch.memory.max_recall_results")
+            refreshMemoryRuntime()
+
+        case "memory.auto_ingest_inbox":
+            guard let enabled = value as? Bool else { return }
+            config.memory.autoIngestInbox = enabled
+            persistConfig(reason: "config.patch.memory.auto_ingest_inbox")
+            refreshMemoryRuntime()
+
+        case "memory.generate_digests":
+            guard let enabled = value as? Bool else { return }
+            config.memory.generateDigests = enabled
+            persistConfig(reason: "config.patch.memory.generate_digests")
+            refreshMemoryRuntime()
 
         case "channels.enabled":
             guard let value = value as? Bool else { return }
@@ -1943,6 +1989,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
         pipelineCoordinator = nil
         memoryOrchestrator = nil
         memoryStore = nil
+        memoryInboxService = nil
+        memoryDigestService = nil
         entityStore = nil
         entityLinker = nil
         neuralEmbedder = nil

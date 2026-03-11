@@ -12,7 +12,7 @@
 #   ./scripts/test-comprehensive.sh --verbose          # Show curl responses
 #
 # Prerequisites: curl, python3, jq, PyYAML (pip3 install pyyaml)
-# For LLM scoring: claude CLI (pip install claude-code)
+# For LLM scoring: Claude Code or Codex CLI
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,6 +28,7 @@ CHATTERBOX_AVAILABLE=false
 
 # Defaults
 MODEL="claude"
+CODEX_JUDGE_MODEL="${CODEX_JUDGE_MODEL:-gpt-5.3-codex-spark}"
 PHASE=""
 SKIP_LLM=false
 VERBOSE=false
@@ -72,7 +73,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --model NAME    LLM CLI for scoring [default: claude]"
-            echo "                  Any CLI that supports -p (pipe: stdin → stdout)"
+            echo "                  Most CLIs use stdin→stdout pipe mode; codex uses 'codex exec'"
             echo "  --phase NN      Run only phase NN (e.g., 02)"
             echo "  --skip-build    No-op (build handled by justfile recipes)"
             echo "  --skip-llm      Skip LLM-scored tests entirely"
@@ -80,9 +81,12 @@ while [[ $# -gt 0 ]]; do
             echo "  --verbose        Show HTTP responses"
             echo "  --help           Show this help"
             echo ""
-            echo "Models — any CLI that accepts 'echo prompt | <cmd> -p':"
+            echo "Environment:"
+            echo "  CODEX_JUDGE_MODEL   Codex judge model [default: gpt-5.3-codex-spark]"
+            echo ""
+            echo "Models:"
             echo "  claude       Claude Code CLI (default)"
-            echo "  codex        OpenAI Codex CLI"
+            echo "  codex        OpenAI Codex CLI via 'codex exec -m \$CODEX_JUDGE_MODEL'"
             echo "  pi           Inflection Pi CLI"
             echo "  kimi         Moonshot Kimi CLI"
             echo "  gemini       Google Gemini CLI"
@@ -225,9 +229,11 @@ fae_wait_generation() {
         fae_get "/conversation"
         local generating
         local background
+        local has_input
         generating=$(echo "$HTTP_BODY" | jq -r '.isGenerating' 2>/dev/null || echo "false")
         background=$(echo "$HTTP_BODY" | jq -r '.isBackgroundLookupActive // false' 2>/dev/null || echo "false")
-        if [ "$generating" = "true" ] || [ "$background" = "true" ]; then
+        has_input=$(echo "$HTTP_BODY" | jq -r '.hasActiveInput // false' 2>/dev/null || echo "false")
+        if [ "$generating" = "true" ] || [ "$background" = "true" ] || [ "$has_input" = "true" ]; then
             started=true
             break
         fi
@@ -241,10 +247,12 @@ fae_wait_generation() {
         # must not count as completion.
         local non_user_count
         local streaming_text
+        local has_input
         non_user_count=$(echo "$HTTP_BODY" | jq -r '[.messages[]? | select(.role != "user")] | length' 2>/dev/null)
         non_user_count="${non_user_count:-0}"
         streaming_text=$(echo "$HTTP_BODY" | jq -r '.streamingText // ""' 2>/dev/null || echo "")
-        if [ "${non_user_count:-0}" -gt 0 ] || [ -n "$streaming_text" ]; then
+        has_input=$(echo "$HTTP_BODY" | jq -r '.hasActiveInput // false' 2>/dev/null || echo "false")
+        if [ "${non_user_count:-0}" -gt 0 ] || [ -n "$streaming_text" ] || [ "$has_input" = "true" ]; then
             return 0  # Response exists
         fi
         return 1  # Timed out waiting for generation to start
@@ -254,8 +262,10 @@ fae_wait_generation() {
     while [ "$elapsed" -lt "$max_wait" ]; do
         fae_get "/conversation"
         local generating
+        local has_input
         generating=$(echo "$HTTP_BODY" | jq -r '.isGenerating' 2>/dev/null || echo "true")
-        if [ "$generating" = "false" ]; then
+        has_input=$(echo "$HTTP_BODY" | jq -r '.hasActiveInput // false' 2>/dev/null || echo "false")
+        if [ "$generating" = "false" ] || [ "$has_input" = "true" ]; then
             break
         fi
         sleep 2
@@ -273,7 +283,12 @@ fae_wait_generation() {
     while [ "$deferred_wait" -lt "$deferred_max" ]; do
         fae_get "/conversation"
         local deferred
+        local has_input
         deferred=$(echo "$HTTP_BODY" | jq -r '.hasDeferredTools' 2>/dev/null || echo "false")
+        has_input=$(echo "$HTTP_BODY" | jq -r '.hasActiveInput // false' 2>/dev/null || echo "false")
+        if [ "$has_input" = "true" ]; then
+            return 0
+        fi
         if [ "$deferred" = "false" ]; then
             break
         fi
@@ -970,6 +985,37 @@ execute_step() {
                 if $VERBOSE; then dim "  wait_approval: resolved with decision=${decision}"; fi
             fi
             ;;
+        wait_input)
+            # Poll /inputs until a pending secure input request appears.
+            # Parameters:
+            #   max_wait_s  (default 120) — polling timeout in seconds
+            #   text        (optional)    — if set, auto-submit this value
+            local max_wait text
+            max_wait=$(echo "$step_json" | jq -r '.max_wait_s // 120')
+            text=$(echo "$step_json" | jq -r '.text // empty')
+            local elapsed=0
+            local found=false
+            while [ "$elapsed" -lt "$max_wait" ]; do
+                fae_get "/inputs"
+                local pending_count
+                pending_count=$(echo "$HTTP_BODY" | jq '.pending | length' 2>/dev/null)
+                pending_count="${pending_count:-0}"
+                if [ "${pending_count:-0}" -gt "0" ]; then
+                    found=true
+                    break
+                fi
+                sleep 2
+                elapsed=$((elapsed + 2))
+            done
+            if ! $found; then
+                yellow "  Warning: wait_input timed out after ${max_wait}s (no pending input appeared)"
+            elif [ -n "$text" ]; then
+                local escaped_text
+                escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
+                fae_post "/input-response" "{\"text\":${escaped_text}}"
+                if $VERBOSE; then dim "  wait_input: submitted text response"; fi
+            fi
+            ;;
         *)
             yellow "  Warning: unknown step action '$action'"
             ;;
@@ -1263,17 +1309,38 @@ $conv_json
 ## Criteria to Score
 $criteria_json
 
-Score each criterion. For deterministic criteria, score 0 or 1. For llm_judge criteria, score 0.0-1.0.
+Score each criterion as written.
+For deterministic criteria, score 0 or 1.
+For checks written as llm_judge('...') >= X, return 1.0 if your internal judgment meets or exceeds X, otherwise 0.0. Mention the internal raw judgment in evidence when useful.
+For rubric-style checks written as 'llm_judge: ...', follow the rubric exactly.
 Return ONLY a JSON array of score objects like:
 [{\"criterion\": \"name\", \"check\": \"...\", \"score\": 0.8, \"evidence\": \"...\"}]"
 
-    # All models use the same pattern: echo prompt | <cmd> -p
-    # This works with any CLI that supports pipe mode (stdin → stdout):
-    #   claude -p, codex -p, pi -p, kimi -p, gemini -p, etc.
     local llm_output
-    # Pipe prompt to LLM CLI, strip terminal escape sequences (OSC+BEL, CSI, etc.)
     local raw_output
-    raw_output=$(echo "$prompt" | env -u CLAUDECODE "$MODEL" -p 2>/dev/null || echo "")
+    if [ "$MODEL" = "codex" ]; then
+        local codex_output_file codex_log_file
+        codex_output_file=$(mktemp)
+        codex_log_file=$(mktemp)
+        printf '%s' "$prompt" | codex exec \
+            -m "$CODEX_JUDGE_MODEL" \
+            --skip-git-repo-check \
+            --sandbox read-only \
+            --ephemeral \
+            -c 'model_reasoning_effort="low"' \
+            -c 'mcp_servers.digitalocean.startup_timeout_sec=1' \
+            -o "$codex_output_file" \
+            - >/dev/null 2>"$codex_log_file" || true
+        if [ -s "$codex_output_file" ]; then
+            raw_output=$(cat "$codex_output_file")
+        else
+            raw_output=$(cat "$codex_log_file")
+        fi
+        rm -f "$codex_output_file" "$codex_log_file"
+    else
+        # Most judge CLIs use the same pattern: echo prompt | <cmd> -p
+        raw_output=$(echo "$prompt" | env -u CLAUDECODE "$MODEL" -p 2>/dev/null || echo "")
+    fi
     llm_output=$(printf '%s' "$raw_output" | python3 -c "
 import sys, re
 raw = sys.stdin.buffer.read().decode('utf-8', errors='replace')

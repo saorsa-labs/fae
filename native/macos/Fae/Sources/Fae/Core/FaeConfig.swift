@@ -152,10 +152,11 @@ struct FaeConfig: Codable {
     var isLightweightContext: Bool {
         let preset = llm.voiceModelPreset.lowercased()
         switch preset {
-        case "qwen3_5_0_8b", "qwen3_5_2b", "qwen3_0_6b", "qwen3_1_7b":
+        case "qwen3_5_0_8b", "qwen3_5_2b", "qwen3_0_6b", "qwen3_1_7b",
+             "saorsa1_tiny", "saorsa1-tiny", "saorsa1_worker", "saorsa1-worker":
             return true
         case "auto":
-            // Auto always selects 0.8B or 2B — both benefit from compact guidance.
+            // Auto selects saorsa1-worker (2B) or saorsa1-tiny (0.8B) — both lightweight.
             return true
         default:
             // Also honour manually configured very small contexts (e.g. developer overrides).
@@ -239,6 +240,8 @@ struct FaeConfig: Codable {
     struct MemoryConfig: Codable {
         var enabled: Bool = true
         var maxRecallResults: Int = 5
+        var autoIngestInbox: Bool = true
+        var generateDigests: Bool = true
     }
 
     // MARK: - Speaker
@@ -349,6 +352,35 @@ struct FaeConfig: Codable {
 
     // MARK: - Model Selection
 
+    static func canonicalVoiceModelPreset(_ preset: String) -> String {
+        switch preset.lowercased() {
+        case "saorsa1_worker", "saorsa1-worker",
+             "qwen3_5_35b_a3b", "qwen3_5_27b", "qwen3_5_9b", "qwen3_5_4b",
+             "qwen3_5_2b", "qwen3_8b", "qwen3_4b", "qwen3_1_7b":
+            return "saorsa1-worker"
+        case "saorsa1_tiny", "saorsa1-tiny", "qwen3_5_0_8b", "qwen3_0_6b":
+            return "saorsa1-tiny"
+        case "auto":
+            return "auto"
+        default:
+            return preset.lowercased()
+        }
+    }
+
+    static func canonicalConciergeModelPreset(_ preset: String) -> String {
+        switch preset.lowercased() {
+        case "saorsa1_concierge", "saorsa1-concierge",
+             "liquid_lfm2_24b_a2b", "lfm2_24b_a2b", "liquid":
+            return "saorsa1-concierge"
+        case "off", "none", "disabled":
+            return "off"
+        case "auto":
+            return "auto"
+        default:
+            return preset.lowercased()
+        }
+    }
+
     /// Select the appropriate LLM model based on system RAM and preset.
     ///
     /// Returns `(modelId, contextSize)` for MLX loading.
@@ -358,55 +390,19 @@ struct FaeConfig: Codable {
     ) -> (modelId: String, contextSize: Int) {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
-        switch preset.lowercased() {
-        case "qwen3_5_27b":
-            // NexVeridian text-only conversion (vision tower stripped).
-            // mlx-community versions are VL — incompatible with mlx-lm text-only loading.
-            // Native max_position_embeddings = 262,144. Capped at 131,072 (128K) to keep
-            // KV cache RAM manageable alongside STT+TTS+concierge on 32-64 GB machines.
-            return ("NexVeridian/Qwen3.5-27B-4bit", 131_072)
-        case "qwen3_5_35b_a3b":
-            // NexVeridian text-only conversion. MoE: 35B total / 3B active per token.
-            // 11.7 T/s in mlx-swift-lm — sufficient for chat with thinking feedback.
-            // Native max_position_embeddings = 262,144. Capped at 131,072 for RAM safety.
-            return ("NexVeridian/Qwen3.5-35B-A3B-4bit", 131_072)
-        case "qwen3_5_9b":
-            // Qwen3.5-9B: hybrid Gated DeltaNet + Gated Attention, 4-bit.
-            // Native max_position_embeddings = 262,144. Capped at 131,072 for RAM safety.
-            return ("mlx-community/Qwen3.5-9B-4bit", 131_072)
-        case "qwen3_5_4b":
-            // Qwen3.5-4B: hybrid architecture, 4-bit.
-            // Native max_position_embeddings = 262,144. Capped at 32,768 — 4B quality
-            // degrades at very long contexts and KV cache would dominate available RAM.
-            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
-        case "qwen3_5_2b":
-            // Qwen3.5-2B: hybrid architecture, 4-bit.
-            // Native max_position_embeddings = 262,144. Capped at 32,768 — practical
-            // limit for a 2B model where long-context quality is poor anyway.
-            return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
-        case "qwen3_5_0_8b":
-            // Qwen3.5-0.8B: hybrid architecture, 4-bit. Smallest Qwen3.5.
-            // Native max_position_embeddings = 262,144. Capped at 32,768.
-            return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
-        // Legacy Qwen3 presets — migrated to nearest Qwen3.5 equivalent.
-        case "qwen3_8b":
-            return ("mlx-community/Qwen3.5-9B-4bit", 131_072)
-        case "qwen3_4b":
-            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
-        case "qwen3_1_7b":
-            return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
-        case "qwen3_0_6b":
-            return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
+        switch canonicalVoiceModelPreset(preset) {
+        case "saorsa1-worker":
+            // Primary local companion model. Legacy Qwen/Qwen3.5 operator presets map here.
+            return ("saorsa-labs/saorsa1-worker-pre-release", 32_768)
+        case "saorsa1-tiny":
+            // Lightest local companion model. Legacy tiny/fallback presets map here.
+            return ("saorsa-labs/saorsa1-tiny-pre-release", 32_768)
         default: // "auto"
-            // Auto follows the current benchmark-backed operator policy.
-            // `qwen3.5-2b` is the strongest fit for Fae's operator role in the
-            // assistant-fit eval: tool use, strict instruction following, and
-            // tool-result handling all beat the larger Qwens while also keeping
-            // startup and first-token latency lower.
+            // Auto defaults to the saorsa1 companion weights.
             if totalGB >= 12 {
-                return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
+                return ("saorsa-labs/saorsa1-worker-pre-release", 32_768)
             } else {
-                return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
+                return ("saorsa-labs/saorsa1-tiny-pre-release", 32_768)
             }
         }
     }
@@ -417,16 +413,15 @@ struct FaeConfig: Codable {
     ) -> (modelId: String, contextSize: Int)? {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
-        switch preset.lowercased() {
-        case "off", "none", "disabled":
+        switch canonicalConciergeModelPreset(preset) {
+        case "off":
             return nil
-        case "liquid_lfm2_24b_a2b", "lfm2_24b_a2b", "liquid":
-            // MLX 4-bit export has max_position_embeddings = 131,072 (base model is 32K,
-            // but the LiquidAI MLX conversion was done at 128K).
-            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 131_072)
+        case "saorsa1-concierge":
+            // Rich local synthesis model. Legacy Liquid preset aliases map here.
+            return ("saorsa-labs/saorsa1-concierge-pre-release", 131_072)
         default: // auto
             guard totalGB >= 32 else { return nil }
-            return ("LiquidAI/LFM2-24B-A2B-MLX-4bit", 131_072)
+            return ("saorsa-labs/saorsa1-concierge-pre-release", 131_072)
         }
     }
 
@@ -882,6 +877,12 @@ struct FaeConfig: Codable {
                 case "maxRecallResults":
                     guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.memory.maxRecallResults = v
+                case "autoIngestInbox":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.memory.autoIngestInbox = v
+                case "generateDigests":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.memory.generateDigests = v
                 default: break
                 }
             case "voiceIdentity":
@@ -1102,6 +1103,8 @@ struct FaeConfig: Codable {
         lines.append("[memory]")
         lines.append("enabled = \(memory.enabled ? "true" : "false")")
         lines.append("maxRecallResults = \(memory.maxRecallResults)")
+        lines.append("autoIngestInbox = \(memory.autoIngestInbox ? "true" : "false")")
+        lines.append("generateDigests = \(memory.generateDigests ? "true" : "false")")
         lines.append("")
 
         lines.append("[scheduler]")

@@ -22,6 +22,8 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(config.llm.remoteModel, "openai/gpt-4.1-mini")
         XCTAssertEqual(config.llm.resolvedThinkingLevel, .fast)
         XCTAssertTrue(config.memory.enabled)
+        XCTAssertTrue(config.memory.autoIngestInbox)
+        XCTAssertTrue(config.memory.generateDigests)
         XCTAssertTrue(config.vision.enabled)
         XCTAssertTrue(config.awareness.enabled)
         XCTAssertNil(config.awareness.consentGrantedAt)
@@ -100,6 +102,8 @@ final class FaeConfigTests: XCTestCase {
         original.bargeIn.minRms = 0.12
 
         original.memory.maxRecallResults = 11
+        original.memory.autoIngestInbox = false
+        original.memory.generateDigests = false
         original.privacy.mode = "strict_local"
 
         try original.save(to: fileURL)
@@ -139,6 +143,8 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.bargeIn.minRms, 0.12, accuracy: 0.0001)
 
         XCTAssertEqual(loaded.memory.maxRecallResults, 11)
+        XCTAssertFalse(loaded.memory.autoIngestInbox)
+        XCTAssertFalse(loaded.memory.generateDigests)
         XCTAssertEqual(loaded.privacy.mode, "strict_local")
     }
 
@@ -160,7 +166,7 @@ final class FaeConfigTests: XCTestCase {
         var config = FaeConfig()
         config.llm.voiceModelPreset = "qwen3_5_2b"
         config.llm.dualModelEnabled = true
-        config.llm.conciergeModelPreset = "auto"
+        config.llm.conciergeModelPreset = "liquid_lfm2_24b_a2b"
         config.llm.dualModelMinSystemRAMGB = 32
 
         let plan = FaeConfig.recommendedLocalModelStack(
@@ -171,9 +177,29 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(plan.mode, .dualModel)
         XCTAssertTrue(plan.dualModelEligible)
         XCTAssertTrue(plan.dualModelActive)
-        XCTAssertEqual(plan.operatorModel.modelId, "mlx-community/Qwen3.5-2B-4bit")
-        XCTAssertEqual(plan.conciergeModel?.modelId, "LiquidAI/LFM2-24B-A2B-MLX-4bit")
+        XCTAssertEqual(plan.operatorModel.modelId, "saorsa-labs/saorsa1-worker-pre-release")
+        XCTAssertEqual(plan.conciergeModel?.modelId, "saorsa-labs/saorsa1-concierge-pre-release")
         XCTAssertEqual(plan.ttsModelId, "hexgrad/Kokoro-82M")
+    }
+
+    func testLegacyModelPresetAliasesResolveToSaorsaWeights() {
+        let worker = FaeConfig.recommendedModel(
+            totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
+            preset: "qwen3_5_27b"
+        )
+        XCTAssertEqual(worker.modelId, "saorsa-labs/saorsa1-worker-pre-release")
+
+        let tiny = FaeConfig.recommendedModel(
+            totalMemoryBytes: UInt64(8) * 1024 * 1024 * 1024,
+            preset: "qwen3_5_0_8b"
+        )
+        XCTAssertEqual(tiny.modelId, "saorsa-labs/saorsa1-tiny-pre-release")
+
+        let concierge = FaeConfig.recommendedConciergeModel(
+            totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
+            preset: "liquid_lfm2_24b_a2b"
+        )
+        XCTAssertEqual(concierge?.modelId, "saorsa-labs/saorsa1-concierge-pre-release")
     }
 
     func testApplyingTestServerMemoryProfileDisablesHotConcierge() {

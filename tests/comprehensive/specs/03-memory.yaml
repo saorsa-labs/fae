@@ -257,3 +257,123 @@ tests:
       - name: "mentions_alice"
         check: "assistant_response_contains('Alice')"
     pass_threshold: 1.0
+
+  - id: "mem-011"
+    name: "Memory inbox imports pasted text artifact"
+    class: deterministic
+    timeout_s: 90
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    steps:
+      - action: "http_post"
+        url: "/memory/import-text"
+        body:
+          title: "Release tester note"
+          origin: "comprehensive-memory"
+          source_type: "pasted_text"
+          dedupe_nonce: true
+          text: "Memory inbox note alpha: the release candidate needs artifact provenance and digest-first recall for testers."
+    criteria:
+      - name: "request_succeeded"
+        check: "status_code == 200"
+      - name: "artifact_created"
+        check: "body.ok == true and body.artifact_id != null and body.record_id != null"
+      - name: "source_type_matches"
+        check: "body.source_type == 'pasted_text'"
+    pass_threshold: 1.0
+
+  - id: "mem-012"
+    name: "Memory inbox ingests pending file"
+    class: deterministic
+    timeout_s: 90
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    steps:
+      - action: "bash"
+        command: "mkdir -p \"$HOME/Library/Application Support/fae/memory-inbox/pending\" && f=\"$HOME/Library/Application Support/fae/memory-inbox/pending/fae-comprehensive-memory-$(uuidgen | tr '[:upper:]' '[:lower:]').txt\" && printf '%s\\n' 'Memory inbox pending file beta: testers need the pending-folder ingestion path verified overnight.' > \"$f\""
+      - action: "http_post"
+        url: "/memory/ingest-pending"
+        body: {"limit": 8}
+    criteria:
+      - name: "request_succeeded"
+        check: "status_code == 200"
+      - name: "pending_file_imported"
+        check: "body.ok == true and body.imported_count > 0"
+    pass_threshold: 1.0
+
+  - id: "mem-013"
+    name: "Memory digest generates from imported artifacts"
+    class: deterministic
+    timeout_s: 90
+    depends_on: ["mem-011", "mem-012"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    steps:
+      - action: "http_post"
+        url: "/memory/generate-digest"
+        body: {}
+    criteria:
+      - name: "request_succeeded"
+        check: "status_code == 200"
+      - name: "digest_created"
+        check: "body.ok == true and body.created == true and body.digest_id != null"
+      - name: "digest_has_sources"
+        check: "body.source_count >= 2"
+    pass_threshold: 1.0
+
+  - id: "mem-014"
+    name: "Raw recall context prefers digest insights and provenance"
+    class: deterministic
+    timeout_s: 90
+    depends_on: ["mem-013"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    steps:
+      - action: "http_post"
+        url: "/memory/recall"
+        body:
+          query: "what have you learned recently?"
+    criteria:
+      - name: "request_succeeded"
+        check: "status_code == 200"
+      - name: "recall_has_context"
+        check: "body.ok == true and body.has_context == true and body.context_length > 0"
+      - name: "digest_section_present"
+        check: "body.has_memory_insights == true and body.has_supporting_memories == true"
+      - name: "provenance_present"
+        check: "body.has_provenance_labels == true"
+    pass_threshold: 1.0
+
+  - id: "mem-015"
+    name: "Conversation surfaces recent imported learning"
+    class: deterministic
+    timeout_s: 200
+    depends_on: ["mem-013"]
+    setup:
+      - action: "http_post"
+        url: "/reset"
+    teardown: []
+    phrasings:
+      - "Fae, what have you learned recently from my imported notes?"
+      - "Fae, what stands out from memory lately?"
+      - "Fae, what have you learned recently?"
+    steps:
+      - action: "inject"
+        phrasing: "random"
+      - action: "wait_generation"
+        max_wait_s: 180
+      - action: "collect_events"
+    criteria:
+      - name: "response_generated"
+        check: "assistant_response_length > 0"
+      - name: "mentions_imported_learning"
+        check: "assistant_response_contains_any(['artifact', 'provenance', 'digest', 'ingest', 'import', 'testers', 'release'])"
+    pass_threshold: 1.0

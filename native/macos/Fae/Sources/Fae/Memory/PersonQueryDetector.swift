@@ -18,7 +18,16 @@ enum PersonQueryDetector {
         let lower = text.lowercased().trimmingCharacters(in: .whitespaces)
 
         // Organisation queries — "who works at X", "who do I know at X".
-        let orgPrefixes = ["who works at ", "who do i know at ", "who do you know at "]
+        let orgPrefixes = [
+            "who works at ",
+            "who do i know at ",
+            "who do you know at ",
+            "do you know anyone who works at ",
+            "tell me about people who work at ",
+            "tell me about anyone who works at ",
+            "anyone who works at ",
+            "people who work at ",
+        ]
         for prefix in orgPrefixes where lower.hasPrefix(prefix) {
             let candidate = String(text.dropFirst(prefix.count))
                 .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -50,7 +50,16 @@ Your job is to evaluate each criterion and produce a score.
 | `event_count_gt(kind, n)` | Count of events matching kind > n -> 1, else 0 |
 | `approval_pending(tool)` | /approvals has a pending entry for this tool name -> 1, else 0 |
 
-### LLM-Scored Criteria (score 0.0 to 1.0 — continuous scale)
+### LLM-Scored Criteria
+
+For checks written as `llm_judge('...', assistant_response) >= X`, evaluate the
+criterion outcome, not just the raw confidence:
+- return `1.0` if your internal judgment meets or exceeds `X`
+- return `0.0` if it does not
+- include the internal raw judgment in the evidence text when helpful
+
+For rubric-style checks written as `llm_judge: ...`, follow the rubric exactly.
+If the rubric says binary, score `0.0` or `1.0`. If it asks for a range, use that range.
 
 | Criterion | What to evaluate |
 |-----------|-----------------|
@@ -135,7 +144,7 @@ Return exactly ONE JSON object per test. No markdown wrapping, no commentary out
 
 1. Always evaluate against the ACTUAL data provided — never assume or hallucinate events.
 2. For deterministic tests, score strictly: 0 or 1 only. No partial credit.
-3. For llm_scored tests, be fair but rigorous: 0.7+ is the passing bar.
+3. For llm_scored tests, score the criterion as written. If the check includes a threshold such as `>= 0.7`, treat meeting that threshold as a pass (`1.0`) and missing it as a fail (`0.0`).
 4. If a test timed out (isGenerating still true after max_wait), score as 0.0.
 5. Permission-dependent tests that fail due to macOS permissions -> skip, not fail.
 6. Return valid JSON only. No markdown fences, no text before or after the JSON object.

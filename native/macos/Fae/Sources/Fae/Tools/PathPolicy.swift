@@ -84,6 +84,7 @@ enum PathPolicy {
     /// Dotfiles/directories relative to home that are blocked for writes.
     /// Paths are compared case-insensitively (macOS APFS default).
     private static let blockedDotfiles: [String] = [
+        // Shell profiles
         "/.bashrc",
         "/.bash_profile",
         "/.bash_login",
@@ -95,15 +96,28 @@ enum PathPolicy {
         "/.zlogout",
         "/.profile",
         "/.login",
+        // Secrets / credentials (most critical — never writable by tools)
+        "/.secrets",
+        "/.env",
+        "/.envrc",
+        "/.saorsa-keys",
+        // Version control
         "/.gitconfig",
+        // Cryptographic credentials
         "/.ssh",
         "/.gnupg",
+        // Cloud provider credentials
         "/.aws",
         "/.azure",
         "/.kube",
         "/.docker",
+        // Package manager credentials
         "/.npmrc",
+        "/.pypirc",
+        "/.cargo/credentials.toml",
+        // Network credentials
         "/.netrc",
+        // Fae internal (managed by GitVaultManager, not tools)
         "/.fae-vault",
     ]
 }

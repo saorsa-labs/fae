@@ -128,21 +128,28 @@ Steps:
 4. Approve once and deny once; verify both outcomes with filesystem or test-server evidence.
 5. Trigger a key or input popup if relevant and verify the returned value reaches the runtime.
 
-### 6. Memory, scheduler, and skills
+### 6. Memory inbox, scheduler, and skills
 
 Acceptance:
 
 - Memory capture and recall work from the main window.
+- Memory Inbox accepts pasted text, at least one imported file, and one URL.
+- Files placed in the inbox pending folder can be ingested into memory.
+- Asking what Fae learned recently returns digest-first recall with visible provenance.
 - Scheduler create/update/delete/trigger works.
 - Skills list/add/edit/remove/execute works.
 
 Steps:
 
-1. Teach Fae one temporary memory, then ask for it back.
-2. Open scheduler UI and create one temporary task.
-3. Edit and then delete that task.
-4. Open skills UI, inspect at least one skill, and run one harmless skill flow if available.
-5. Capture screenshots and backend evidence for each surface.
+1. Teach Fae one temporary memory in conversation, then ask for it back.
+2. Open `Fae > Memory Inbox...` and import one pasted text artifact.
+3. Import one local file and one URL through the same Memory Inbox flow.
+4. Drop one supported text file into `~/Library/Application Support/fae/memory-inbox/pending/`, then trigger ingestion either by waiting for the built-in task or running the manual ingest path.
+5. Ask Fae `what have you learned recently?` and verify the answer shows a digest/insights section before supporting raw memories, with source labels.
+6. Open scheduler UI and create one temporary task.
+7. Edit and then delete that task.
+8. Open skills UI, inspect at least one skill, and run one harmless skill flow if available.
+9. Capture screenshots and backend evidence for each surface.
 
 ## Cowork scenarios
 

@@ -126,9 +126,10 @@ final class EndToEndSchedulerFlowTests: XCTestCase {
 
         let taskIDs = allStatus.compactMap { $0["id"] as? String }
 
-        // Verify all 11 builtin task IDs are present.
+        // Verify all core builtin task IDs are present.
         let expectedIDs = [
             "memory_reflect", "memory_reindex", "memory_migrate",
+            "memory_inbox_ingest", "memory_digest",
             "memory_gc", "memory_backup", "check_fae_update",
             "morning_briefing", "noise_budget_reset", "skill_proposals",
             "stale_relationships", "skill_health_check",

@@ -9,3 +9,9 @@ Fae.app/
 .local/
 *.profraw
 *.xcresult
+
+# Model training artifacts (weights, checkpoints, logs — too large for git)
+training/
+
+# HuggingFace Space — separate git repo, managed independently
+hf-space/

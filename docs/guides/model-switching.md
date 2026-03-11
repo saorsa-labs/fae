@@ -14,15 +14,11 @@ Examples:
 
 You can switch the preset used by local inference:
 
-- `auto` (current default — favors the benchmark-backed fast operator tier)
-- `qwen3_5_35b_a3b`
-- `qwen3_5_27b`
-- `qwen3_5_9b`
-- `qwen3_5_4b`
-- `qwen3_5_2b`
-- `qwen3_5_0_8b`
+- `auto` (current default — favors the saorsa1 local operator tier)
+- `saorsa1-worker`
+- `saorsa1-tiny`
 
-Legacy Qwen3 preset keys still load for backward compatibility, but they are migrated internally to the nearest Qwen3.5 preset.
+Legacy Qwen/Qwen3.5 preset keys are still accepted for backward compatibility, but they are migrated internally onto the nearest `saorsa1` operator model.
 
 The setting is persisted in:
 
@@ -39,11 +35,10 @@ UI path:
 - Changing the preset updates config immediately.
 - Model swap takes effect on next pipeline/model load.
 - In current app UX, restart is recommended after changing preset.
-- `auto` now follows the benchmark-backed operator policy:
-  - 12+ GB: `qwen3_5_2b` at 32K context
-  - below 12 GB: `qwen3_5_0_8b` at 32K context
-- The heavier `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_27b`, and `qwen3_5_35b_a3b` presets remain manual opt-in choices for users who prefer more local depth over faster startup and foreground responsiveness.
-- When dual-model local mode is enabled on 32+ GB systems, the current concierge default is `LiquidAI/LFM2-24B-A2B-MLX-4bit`.
+- `auto` now follows the saorsa1 operator policy:
+  - 12+ GB: `saorsa1-worker` at 32K context
+  - below 12 GB: `saorsa1-tiny` at 32K context
+- When dual-model local mode is enabled on 32+ GB systems, the current concierge default is `saorsa-labs/saorsa1-concierge-pre-release`.
 - Premium local mode now targets a **worker-backed** split: operator and concierge inference run in dedicated LLM worker processes while Kokoro remains in the main app process.
 - Inference priority is explicitly ordered as **operator > Kokoro > concierge**.
 - Runtime diagnostics for operator/concierge load state, current route, and fallback status are shown in **Settings → Diagnostics → Voice → Local model runtime**.

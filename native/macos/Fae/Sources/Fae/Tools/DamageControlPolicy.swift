@@ -125,7 +125,7 @@ actor DamageControlPolicy {
         // MARK: Disaster — catastrophic, override possible with deliberate physical click
 
         rules.append(BashRule(
-            pattern: #"rm\s+-[^\s]*r[^\s]*\s+~/?\s*$"#,
+            pattern: #"rm\s+-[^\s]*r[^\s]*\s+(~/?\s*$|\$HOME\s*$|\$\{HOME\}\s*$)"#,
             reason: "Entire home directory deletion — all your files, configs, and data would be permanently lost.",
             action: .disaster
         ))
@@ -171,16 +171,28 @@ actor DamageControlPolicy {
         self.bashRules = rules
 
         // MARK: Zero-access paths (non-local model only — credential exfiltration prevention)
+        //
+        // nonLocalOnly=true  → blocked only when an external/co-work model is active
+        // nonLocalOnly=false → blocked for all models (always)
 
         self.zeroAccessPaths = [
+            // Secrets files — always zero-access regardless of model
+            PathRule(path: "~/.secrets",              nonLocalOnly: false),
+            PathRule(path: "~/.env",                  nonLocalOnly: false),
+            PathRule(path: "~/.envrc",                nonLocalOnly: false),
+            PathRule(path: "~/.saorsa-keys",          nonLocalOnly: false),
+            // Cryptographic keys — zero-access for non-local models
             PathRule(path: "~/.ssh",                  nonLocalOnly: true),
             PathRule(path: "~/.gnupg",                nonLocalOnly: true),
+            // Cloud provider credentials — zero-access for non-local models
             PathRule(path: "~/.aws",                  nonLocalOnly: true),
             PathRule(path: "~/.azure",                nonLocalOnly: true),
             PathRule(path: "~/.kube",                 nonLocalOnly: true),
             PathRule(path: "~/.docker/config.json",   nonLocalOnly: true),
+            // Network / package credentials — zero-access for non-local models
             PathRule(path: "~/.netrc",                nonLocalOnly: true),
             PathRule(path: "~/.npmrc",                nonLocalOnly: true),
+            PathRule(path: "~/.pypirc",               nonLocalOnly: true),
         ]
 
         // MARK: No-delete paths (bash rm/mv → confirm_manual, always active)

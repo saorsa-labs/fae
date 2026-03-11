@@ -27,19 +27,11 @@ struct SettingsModelsTab: View {
 
     private let voiceModelOptions: [(label: String, value: String, description: String)] = [
         ("Auto (Recommended)", "auto",
-         "Uses Qwen3.5-2B as the benchmark-backed local operator on 12+ GB systems, with 0.8B as the small-machine fallback."),
-        ("Qwen3.5-35B-A3B", "qwen3_5_35b_a3b",
-         "MoE flagship (3B active). Best quality. Requires 64+ GB RAM."),
-        ("Qwen3.5-27B", "qwen3_5_27b",
-         "Dense 27B. Excellent quality. Requires 32+ GB RAM."),
-        ("Qwen3.5-9B", "qwen3_5_9b",
-         "Hybrid 9B. Richer than 2B, but slower and less reliable for strict tool/operator work in the current Fae benchmark suite. Requires 24+ GB RAM."),
-        ("Qwen3.5-4B", "qwen3_5_4b",
-         "Hybrid 4B. Good quality, fast responses. Requires 16+ GB RAM."),
-        ("Qwen3.5-2B", "qwen3_5_2b",
-         "Compact 2B. Best current local operator fit for tool use, instruction following, and latency. Requires 12+ GB RAM."),
-        ("Qwen3.5-0.8B", "qwen3_5_0_8b",
-         "Tiny 0.8B. Basic quality, instant responses. Runs on 8+ GB RAM."),
+         "Uses saorsa1-worker on 12+ GB systems, with saorsa1-tiny as the small-machine fallback."),
+        ("saorsa1-worker", "saorsa1-worker",
+         "Primary 2B local companion model. Best fit for tool use, quick turns, and the full Fae pipeline."),
+        ("saorsa1-tiny", "saorsa1-tiny",
+         "Lightest 0.8B local companion model. Fastest startup and best fallback for lower-memory Macs."),
     ]
 
     private let voiceIdentityModes: [(label: String, value: String, description: String)] = [
@@ -500,9 +492,10 @@ struct SettingsModelsTab: View {
         let modelPayload = unwrapPayload(voiceModel)
         if let llm = modelPayload["llm"] as? [String: Any] {
             if let preset = llm["voice_model_preset"] as? String,
-               voiceModelOptions.contains(where: { $0.value == preset })
+               let canonicalPreset = normalizedVoiceModelPreset(preset),
+               voiceModelOptions.contains(where: { $0.value == canonicalPreset })
             {
-                voiceModelPreset = preset
+                voiceModelPreset = canonicalPreset
             }
             if let levelRaw = llm["thinking_level"] as? String,
                let level = FaeThinkingLevel(rawValue: levelRaw)
@@ -564,6 +557,15 @@ struct SettingsModelsTab: View {
         }
     }
 
+    private func normalizedVoiceModelPreset(_ preset: String) -> String? {
+        let canonical = FaeConfig.canonicalVoiceModelPreset(preset)
+        switch canonical {
+        case "auto", "saorsa1-worker", "saorsa1-tiny":
+            return canonical
+        default:
+            return nil
+        }
+    }
     // MARK: - File Import
 
     private func handleFileImport(_ result: Result<[URL], Error>) {

@@ -131,6 +131,10 @@ test-phase phase model="claude":
 test-thinking-sweep model="claude":
     bash scripts/test-comprehensive.sh --skip-build --thinking-sweep --model {{model}}
 
+# Run comprehensive tests safely: restart Fae between phases and abort on high RSS.
+test-comprehensive-safe model="codex" max_rss_mb="16384":
+    bash scripts/test-comprehensive-safe.sh --model {{model}} --max-rss-mb {{max_rss_mb}}
+
 # Run only deterministic tests — no LLM scoring, fast CI-friendly
 test-deterministic: test-serve
     bash scripts/test-comprehensive.sh --skip-llm
