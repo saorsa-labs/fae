@@ -38,6 +38,7 @@ jobs:
     name: Tests
     needs: preflight
     runs-on: macos-26
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +52,7 @@ jobs:
 
       - name: Run tests
         run: swift test --package-path native/macos/Fae
+        timeout-minutes: 18
 
   # ── Build macOS app bundle (Apple Silicon) ────────────────────────
   build-macos:
