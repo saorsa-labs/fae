@@ -34,9 +34,19 @@ let package = Package(
         .package(path: "Vendor/kokoro-ios"),
     ],
     targets: [
+        .target(
+            name: "FaeInference",
+            dependencies: [
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/FaeInference"
+        ),
+
         .executableTarget(
             name: "Fae",
             dependencies: [
+                "FaeInference",
                 .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 // MLX LLM inference.
@@ -96,7 +106,7 @@ let package = Package(
         .executableTarget(
             name: "FaeBenchmark",
             dependencies: [
-                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                "FaeInference",
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/FaeBenchmark"

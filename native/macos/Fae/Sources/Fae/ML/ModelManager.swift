@@ -5,21 +5,6 @@ import MLXLMCommon
 // Use MLXLMCommon's WiredSumPolicy (extends MLX's WiredMemoryPolicy)
 typealias FaeWiredSumPolicy = MLXLMCommon.WiredSumPolicy
 
-/// Errors for ML engine operations.
-enum MLEngineError: LocalizedError {
-    case notLoaded(String)
-    case loadFailed(String, Error)
-
-    var errorDescription: String? {
-        switch self {
-        case .notLoaded(let engine):
-            return "\(engine) engine not loaded"
-        case .loadFailed(let engine, let error):
-            return "\(engine) engine failed to load: \(error.localizedDescription)"
-        }
-    }
-}
-
 /// Orchestrates loading of all ML models with progress reporting.
 ///
 /// Replaces: model loading logic from `src/host/handler.rs`

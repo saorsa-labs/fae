@@ -1,0 +1,321 @@
+FaeBenchmark — 1 model(s)
+Hardware: arm64, 96 GB RAM
+Backend: mlx-swift-lm (native Swift)
+Dimensions: throughput=false, no_think=false, ram=true, tools=true, intelligence=false, fae_capabilities=false, assistant_fit=false, freeform=true, serialization=false
+Eval profile: temporary Qwen-calibrated prompts enabled
+
+======================================================================
+  qwen3.5-2b (mlx-community/Qwen3.5-2B-4bit)
+======================================================================
+  Loading qwen3.5-2b (mlx-community/Qwen3.5-2B-4bit)...
+  Using xmlFunction tool-call parser.
+  Loaded.
+
+  Measuring idle RAM...
+    Idle RAM: 1227 MB
+  Warming up (3 throwaway generations)...
+
+  Tool calling (temp=0.0):
+    Tool test: What's on my calendar tomorrow?... OK (expected=calendar, got=calendar)
+    Tool test: Remind me to buy groceries at 5pm... OK (expected=reminders, got=reminders)
+    Tool test: Search the web for the latest news about Apple... OK (expected=web_search, got=web_search)
+    Tool test: Send an email to john@example.com saying I'll be l... OK (expected=mail, got=mail)
+    Tool test: What's David's phone number?... OK (expected=contacts, got=contacts)
+    Tool test: Create a note called Shopping List with milk, eggs... OK (expected=notes, got=notes)
+    Tool test: Read the file at ~/Documents/todo.txt... OK (expected=read, got=read)
+    Tool test: Can you look something up for me about quantum com... OK (expected=web_search, got=web_search)
+    Tool test: How are you feeling today?... OK (expected=none, got=none)
+    Tool test: Tell me a joke about programming... OK (expected=none, got=none)
+
+  Freeform assistant eval:
+    Freeform [exact_reply]: exact-reply-001... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-002... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-003... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-004... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-005... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-006... OK checks=1/1 words=3
+    Freeform [exact_reply]: exact-reply-007... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-008... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-009... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-010... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-011... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-012... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-013... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-014... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-015... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-016... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-017... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-018... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-019... OK checks=1/1 words=3
+    Freeform [exact_reply]: exact-reply-020... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-021... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-022... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-023... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-024... OK checks=1/1 words=1
+    Freeform [exact_reply]: exact-reply-025... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-001... MISS checks=0/1 words=4
+    Freeform [exact_format]: exact-format-002... OK checks=1/1 words=4
+    Freeform [exact_format]: exact-format-003... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-004... OK checks=1/1 words=3
+    Freeform [exact_format]: exact-format-005... MISS checks=0/1 words=13
+    Freeform [exact_format]: exact-format-006... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-007... OK checks=1/1 words=3
+    Freeform [exact_format]: exact-format-008... MISS checks=0/1 words=4
+    Freeform [exact_format]: exact-format-009... OK checks=1/1 words=3
+    Freeform [exact_format]: exact-format-010... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-011... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-012... MISS checks=0/1 words=9
+    Freeform [exact_format]: exact-format-013... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-014... OK checks=1/1 words=3
+    Freeform [exact_format]: exact-format-015... MISS checks=0/1 words=14
+    Freeform [exact_format]: exact-format-016... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-017... OK checks=1/1 words=3
+    Freeform [exact_format]: exact-format-018... MISS checks=0/1 words=3
+    Freeform [exact_format]: exact-format-019... OK checks=1/1 words=5
+    Freeform [exact_format]: exact-format-020... MISS checks=0/1 words=3
+    Freeform [exact_format]: exact-format-021... MISS checks=0/1 words=1
+    Freeform [exact_format]: exact-format-022... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-023... MISS checks=0/1 words=39
+    Freeform [exact_format]: exact-format-024... OK checks=1/1 words=1
+    Freeform [exact_format]: exact-format-025... OK checks=1/1 words=3
+    Freeform [clarify_before_action]: clarify-001... OK checks=4/4 words=21
+    Freeform [clarify_before_action]: clarify-002... OK checks=4/4 words=9
+    Freeform [clarify_before_action]: clarify-003... MISS checks=2/4 words=7
+    Freeform [clarify_before_action]: clarify-004... MISS checks=3/4 words=22
+    Freeform [clarify_before_action]: clarify-005... MISS checks=2/4 words=19
+    Freeform [clarify_before_action]: clarify-006... MISS checks=3/4 words=27
+    Freeform [clarify_before_action]: clarify-007... MISS checks=3/4 words=22
+    Freeform [clarify_before_action]: clarify-008... MISS checks=3/4 words=32
+    Freeform [clarify_before_action]: clarify-009... MISS checks=3/4 words=26
+    Freeform [clarify_before_action]: clarify-010... MISS checks=3/4 words=24
+    Freeform [clarify_before_action]: clarify-011... MISS checks=3/4 words=18
+    Freeform [clarify_before_action]: clarify-012... MISS checks=2/4 words=24
+    Freeform [clarify_before_action]: clarify-013... MISS checks=3/4 words=32
+    Freeform [clarify_before_action]: clarify-014... MISS checks=1/4 words=12
+    Freeform [clarify_before_action]: clarify-015... MISS checks=3/4 words=10
+    Freeform [clarify_before_action]: clarify-016... MISS checks=3/4 words=20
+    Freeform [clarify_before_action]: clarify-017... MISS checks=3/4 words=26
+    Freeform [clarify_before_action]: clarify-018... MISS checks=3/4 words=24
+    Freeform [clarify_before_action]: clarify-019... MISS checks=3/4 words=16
+    Freeform [clarify_before_action]: clarify-020... MISS checks=2/4 words=39
+    Freeform [clarify_before_action]: clarify-021... MISS checks=2/4 words=10
+    Freeform [clarify_before_action]: clarify-022... MISS checks=2/4 words=34
+    Freeform [clarify_before_action]: clarify-023... MISS checks=2/4 words=10
+    Freeform [clarify_before_action]: clarify-024... MISS checks=2/4 words=24
+    Freeform [clarify_before_action]: clarify-025... MISS checks=3/4 words=20
+    Freeform [clarify_before_action]: clarify-026... MISS checks=3/4 words=31
+    Freeform [clarify_before_action]: clarify-027... MISS checks=3/4 words=27
+    Freeform [clarify_before_action]: clarify-028... MISS checks=2/4 words=22
+    Freeform [clarify_before_action]: clarify-029... MISS checks=3/4 words=20
+    Freeform [clarify_before_action]: clarify-030... MISS checks=1/4 words=47
+    Freeform [tool_result_calendar]: calendar-result-001... MISS checks=2/3 words=19
+    Freeform [tool_result_calendar]: calendar-result-002... MISS checks=2/3 words=16
+    Freeform [tool_result_calendar]: calendar-result-003... MISS checks=2/3 words=15
+    Freeform [tool_result_calendar]: calendar-result-004... OK checks=3/3 words=13
+    Freeform [tool_result_calendar]: calendar-result-005... MISS checks=2/3 words=16
+    Freeform [tool_result_calendar]: calendar-result-006... OK checks=3/3 words=13
+    Freeform [tool_result_calendar]: calendar-result-007... OK checks=3/3 words=19
+    Freeform [tool_result_calendar]: calendar-result-008... MISS checks=2/3 words=9
+    Freeform [tool_result_calendar]: calendar-result-009... MISS checks=2/3 words=7
+    Freeform [tool_result_calendar]: calendar-result-010... OK checks=3/3 words=7
+    Freeform [tool_result_calendar]: calendar-result-011... MISS checks=2/3 words=21
+    Freeform [tool_result_calendar]: calendar-result-012... MISS checks=2/3 words=18
+    Freeform [tool_result_calendar]: calendar-result-013... MISS checks=2/3 words=11
+    Freeform [tool_result_calendar]: calendar-result-014... OK checks=3/3 words=9
+    Freeform [tool_result_calendar]: calendar-result-015... OK checks=3/3 words=16
+    Freeform [tool_result_calendar]: calendar-result-016... OK checks=3/3 words=21
+    Freeform [tool_result_calendar]: calendar-result-017... MISS checks=2/3 words=11
+    Freeform [tool_result_calendar]: calendar-result-018... OK checks=3/3 words=16
+    Freeform [tool_result_calendar]: calendar-result-019... MISS checks=2/3 words=4
+    Freeform [tool_result_calendar]: calendar-result-020... MISS checks=2/3 words=18
+    Freeform [tool_result_calendar]: calendar-result-021... OK checks=3/3 words=12
+    Freeform [tool_result_calendar]: calendar-result-022... MISS checks=2/3 words=13
+    Freeform [tool_result_calendar]: calendar-result-023... OK checks=3/3 words=23
+    Freeform [tool_result_calendar]: calendar-result-024... MISS checks=2/3 words=18
+    Freeform [tool_result_calendar]: calendar-result-025... OK checks=3/3 words=14
+    Freeform [tool_result_document]: document-result-001... MISS checks=2/3 words=12
+    Freeform [tool_result_document]: document-result-002... OK checks=3/3 words=17
+    Freeform [tool_result_document]: document-result-003... OK checks=3/3 words=17
+    Freeform [tool_result_document]: document-result-004... MISS checks=2/3 words=15
+    Freeform [tool_result_document]: document-result-005... MISS checks=2/3 words=19
+    Freeform [tool_result_document]: document-result-006... MISS checks=2/3 words=23
+    Freeform [tool_result_document]: document-result-007... OK checks=3/3 words=18
+    Freeform [tool_result_document]: document-result-008... OK checks=3/3 words=8
+    Freeform [tool_result_document]: document-result-009... OK checks=3/3 words=12
+    Freeform [tool_result_document]: document-result-010... OK checks=3/3 words=14
+    Freeform [tool_result_document]: document-result-011... OK checks=3/3 words=23
+    Freeform [tool_result_document]: document-result-012... MISS checks=2/3 words=22
+    Freeform [tool_result_document]: document-result-013... MISS checks=2/3 words=15
+    Freeform [tool_result_document]: document-result-014... OK checks=3/3 words=13
+    Freeform [tool_result_document]: document-result-015... OK checks=3/3 words=6
+    Freeform [tool_result_document]: document-result-016... OK checks=3/3 words=12
+    Freeform [tool_result_document]: document-result-017... OK checks=3/3 words=13
+    Freeform [tool_result_document]: document-result-018... OK checks=3/3 words=14
+    Freeform [tool_result_document]: document-result-019... OK checks=3/3 words=14
+    Freeform [tool_result_document]: document-result-020... OK checks=3/3 words=13
+    Freeform [tool_result_document]: document-result-021... MISS checks=2/3 words=15
+    Freeform [tool_result_document]: document-result-022... MISS checks=2/3 words=15
+    Freeform [tool_result_document]: document-result-023... OK checks=3/3 words=20
+    Freeform [tool_result_document]: document-result-024... MISS checks=2/3 words=13
+    Freeform [tool_result_document]: document-result-025... MISS checks=2/3 words=5
+    Freeform [permission_response]: permission-001... MISS checks=3/5 words=27
+    Freeform [permission_response]: permission-002... MISS checks=3/5 words=29
+    Freeform [permission_response]: permission-003... MISS checks=3/5 words=35
+    Freeform [permission_response]: permission-004... MISS checks=3/5 words=33
+    Freeform [permission_response]: permission-005... MISS checks=3/5 words=31
+    Freeform [permission_response]: permission-006... MISS checks=3/5 words=30
+    Freeform [permission_response]: permission-007... MISS checks=3/5 words=25
+    Freeform [permission_response]: permission-008... MISS checks=4/5 words=28
+    Freeform [permission_response]: permission-009... MISS checks=4/5 words=36
+    Freeform [permission_response]: permission-010... MISS checks=3/5 words=45
+    Freeform [permission_response]: permission-011... MISS checks=4/5 words=34
+    Freeform [permission_response]: permission-012... MISS checks=4/5 words=33
+    Freeform [permission_response]: permission-013... MISS checks=3/5 words=38
+    Freeform [permission_response]: permission-014... MISS checks=3/5 words=37
+    Freeform [permission_response]: permission-015... MISS checks=4/5 words=38
+    Freeform [permission_response]: permission-016... MISS checks=2/5 words=46
+    Freeform [permission_response]: permission-017... MISS checks=4/5 words=34
+    Freeform [permission_response]: permission-018... MISS checks=3/5 words=35
+    Freeform [permission_response]: permission-019... MISS checks=3/5 words=42
+    Freeform [permission_response]: permission-020... MISS checks=3/5 words=36
+    Freeform [memory_discipline]: memory-001... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-002... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-003... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-004... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-005... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-006... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-007... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-008... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-009... MISS checks=0/1 words=7
+    Freeform [memory_discipline]: memory-010... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-011... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-012... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-013... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-014... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-015... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-016... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-017... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-018... MISS checks=0/1 words=7
+    Freeform [memory_discipline]: memory-019... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-020... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-021... MISS checks=0/1 words=2
+    Freeform [memory_discipline]: memory-022... MISS checks=0/1 words=5
+    Freeform [memory_discipline]: memory-023... MISS checks=0/1 words=6
+    Freeform [memory_discipline]: memory-024... MISS checks=0/1 words=7
+    Freeform [memory_discipline]: memory-025... MISS checks=0/1 words=6
+    Freeform [summarization_grounded]: summary-001... MISS checks=2/3 words=19
+    Freeform [summarization_grounded]: summary-002... MISS checks=2/3 words=22
+    Freeform [summarization_grounded]: summary-003... OK checks=3/3 words=16
+    Freeform [summarization_grounded]: summary-004... MISS checks=2/3 words=18
+    Freeform [summarization_grounded]: summary-005... OK checks=3/3 words=25
+    Freeform [summarization_grounded]: summary-006... OK checks=3/3 words=14
+    Freeform [summarization_grounded]: summary-007... MISS checks=2/3 words=25
+    Freeform [summarization_grounded]: summary-008... OK checks=3/3 words=19
+    Freeform [summarization_grounded]: summary-009... OK checks=3/3 words=22
+    Freeform [summarization_grounded]: summary-010... OK checks=3/3 words=15
+    Freeform [summarization_grounded]: summary-011... MISS checks=2/3 words=19
+    Freeform [summarization_grounded]: summary-012... MISS checks=2/3 words=16
+    Freeform [summarization_grounded]: summary-013... OK checks=3/3 words=13
+    Freeform [summarization_grounded]: summary-014... OK checks=3/3 words=19
+    Freeform [summarization_grounded]: summary-015... MISS checks=2/3 words=19
+    Freeform [summarization_grounded]: summary-016... OK checks=3/3 words=17
+    Freeform [summarization_grounded]: summary-017... OK checks=3/3 words=19
+    Freeform [summarization_grounded]: summary-018... OK checks=3/3 words=16
+    Freeform [summarization_grounded]: summary-019... OK checks=3/3 words=11
+    Freeform [summarization_grounded]: summary-020... OK checks=3/3 words=17
+    Freeform [summarization_grounded]: summary-021... MISS checks=2/3 words=22
+    Freeform [summarization_grounded]: summary-022... OK checks=3/3 words=16
+    Freeform [summarization_grounded]: summary-023... MISS checks=2/3 words=17
+    Freeform [summarization_grounded]: summary-024... OK checks=3/3 words=17
+    Freeform [summarization_grounded]: summary-025... MISS checks=2/3 words=25
+    Freeform [supportive_reply]: support-001... MISS checks=3/5 words=17
+    Freeform [supportive_reply]: support-002... MISS checks=3/5 words=16
+    Freeform [supportive_reply]: support-003... MISS checks=3/4 words=27
+    Freeform [supportive_reply]: support-004... MISS checks=4/5 words=20
+    Freeform [supportive_reply]: support-005... MISS checks=4/5 words=26
+    Freeform [supportive_reply]: support-006... OK checks=4/4 words=38
+    Freeform [supportive_reply]: support-007... MISS checks=4/5 words=26
+    Freeform [supportive_reply]: support-008... MISS checks=3/5 words=12
+    Freeform [supportive_reply]: support-009... MISS checks=4/5 words=26
+    Freeform [supportive_reply]: support-010... MISS checks=3/5 words=12
+    Freeform [supportive_reply]: support-011... OK checks=5/5 words=16
+    Freeform [supportive_reply]: support-012... MISS checks=3/5 words=24
+    Freeform [supportive_reply]: support-013... MISS checks=3/5 words=27
+    Freeform [supportive_reply]: support-014... MISS checks=3/4 words=12
+    Freeform [supportive_reply]: support-015... MISS checks=3/5 words=15
+    Freeform [supportive_reply]: support-016... MISS checks=3/5 words=17
+    Freeform [supportive_reply]: support-017... MISS checks=4/5 words=22
+    Freeform [supportive_reply]: support-018... MISS checks=3/5 words=16
+    Freeform [supportive_reply]: support-019... MISS checks=3/4 words=19
+    Freeform [supportive_reply]: support-020... MISS checks=3/5 words=20
+    Freeform [supportive_reply]: support-021... MISS checks=3/5 words=24
+    Freeform [supportive_reply]: support-022... MISS checks=4/5 words=14
+    Freeform [supportive_reply]: support-023... OK checks=4/4 words=15
+    Freeform [supportive_reply]: support-024... MISS checks=4/5 words=14
+    Freeform [supportive_reply]: support-025... OK checks=5/5 words=26
+    Freeform [rewrite_actionable]: rewrite-001... MISS checks=2/3 words=10
+    Freeform [rewrite_actionable]: rewrite-002... MISS checks=2/3 words=10
+    Freeform [rewrite_actionable]: rewrite-003... OK checks=3/3 words=15
+    Freeform [rewrite_actionable]: rewrite-004... MISS checks=2/3 words=5
+    Freeform [rewrite_actionable]: rewrite-005... OK checks=3/3 words=6
+    Freeform [rewrite_actionable]: rewrite-006... OK checks=3/3 words=8
+    Freeform [rewrite_actionable]: rewrite-007... MISS checks=2/3 words=6
+    Freeform [rewrite_actionable]: rewrite-008... MISS checks=2/3 words=15
+    Freeform [rewrite_actionable]: rewrite-009... MISS checks=2/3 words=6
+    Freeform [rewrite_actionable]: rewrite-010... OK checks=3/3 words=6
+    Freeform [rewrite_actionable]: rewrite-011... OK checks=3/3 words=6
+    Freeform [rewrite_actionable]: rewrite-012... OK checks=3/3 words=9
+    Freeform [rewrite_actionable]: rewrite-013... OK checks=3/3 words=7
+    Freeform [rewrite_actionable]: rewrite-014... OK checks=3/3 words=8
+    Freeform [rewrite_actionable]: rewrite-015... MISS checks=2/3 words=7
+    Freeform [rewrite_actionable]: rewrite-016... OK checks=3/3 words=7
+    Freeform [rewrite_actionable]: rewrite-017... OK checks=3/3 words=7
+    Freeform [rewrite_actionable]: rewrite-018... MISS checks=2/3 words=10
+    Freeform [rewrite_actionable]: rewrite-019... OK checks=3/3 words=13
+    Freeform [rewrite_actionable]: rewrite-020... OK checks=3/3 words=6
+    Freeform [rewrite_actionable]: rewrite-021... MISS checks=2/3 words=6
+    Freeform [rewrite_actionable]: rewrite-022... OK checks=3/3 words=8
+    Freeform [rewrite_actionable]: rewrite-023... OK checks=3/3 words=8
+    Freeform [rewrite_actionable]: rewrite-024... OK checks=3/3 words=9
+    Freeform [rewrite_actionable]: rewrite-025... MISS checks=2/3 words=7
+
+JSON results saved to: /Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35_freeform_qcal_20260313-151202/qwen3.5-2b.json
+
+======================================================================
+MARKDOWN OUTPUT
+======================================================================
+## MLX Benchmark Results (Swift)
+
+**Hardware:** Apple Silicon, 96 GB unified memory
+**Quantization:** 4-bit (MLX)
+**Backend:** mlx-swift-lm (native Swift, same stack as Fae)
+**Date:** 2026-03-13
+
+### Model Summary
+
+| Model | Idle RAM | Peak T/s (no_think) | ~500 tok T/s | 8.5K ctx T/s |
+|---|---:|---:|---:|---:|
+| qwen3.5-2b | 1227 MB | 0 | 0 | 0 |
+
+### Speed by Context Size — /no_think
+
+| Context | qwen3.5-2b |
+|---|---:|
+
+### Speed by Context Size — Thinking ON
+
+| Context | qwen3.5-2b |
+|---|---:|
+
+### Tool Calling Accuracy
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.5-2b | 10 | 10 | 100% |
+
+### Freeform Assistant Eval
+
+| Model | Overall | By category |
+|---|---:|---|
+| qwen3.5-2b | 41% | Exact reply 100%, Exact format 64%, Clarify 7%, Calendar 44%, Doc/web result 60%, Permission 0%, Memory 0%, Summary 60%, Support 16%, Rewrite 60% |
+

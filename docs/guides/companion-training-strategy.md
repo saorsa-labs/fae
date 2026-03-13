@@ -2,6 +2,8 @@
 
 > How and why Fae's companion model is fine-tuned, what goes where, and what the pipeline looks like.
 
+> Note: this document captures the detailed companion-training design and the earlier `saorsa1` run shape. For the current canonical policy on post-training methods, benchmark gates, `Qwen3.5 4B` / `9B` comparison workflow, and `mlx-tune`, start with [Post-Training Strategy And Evaluation](post-training-and-evaluation.md).
+
 ---
 
 ## The core problem

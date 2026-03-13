@@ -272,6 +272,8 @@ This is the concrete evaluation surface we run today:
 - assistant-fit eval (tool use, instruction following, memory discipline, tool-result handling)
 - structured output compliance for JSON / XML / YAML
 
+`FaeBenchmark` now uses the same shared local inference path as the app (`FaeInference` / `MLXLLMEngine`), so runtime fixes to MLX/Qwen behavior land in benchmarking too. Run benchmark binaries through the native `just benchmark*` recipes rather than `swift run FaeBenchmark`.
+
 #### What matters for Fae
 
 - [Fae-priority local model evaluation — 2026-03-07](docs/benchmarks/fae-priority-eval-2026-03-07.md)
@@ -287,6 +289,17 @@ This re-ranks models using Fae's actual product priorities:
 #### Scoreboard / overview
 
 - [LLM benchmark overview / scoreboard](docs/benchmarks/llm-benchmarks.md)
+
+#### Post-training strategy and eval workflow
+
+- [Post-Training Strategy And Evaluation](docs/guides/post-training-and-evaluation.md)
+
+This is the canonical guide for:
+
+- which post-training methods Fae should use
+- why some methods fit Fae better than others
+- how to compare base `Qwen3.5 4B` and `9B` models against fine-tuned candidates
+- how `mlx-tune` fits into the plan
 
 ### Pipeline
 
@@ -446,6 +459,7 @@ modelPreset = "auto"
 - [Security Index](docs/guides/security-index.md)
 - [Damage Control Policy](docs/guides/damage-control.md)
 - [Memory Guide](docs/guides/Memory.md)
+- [Post-Training Strategy And Evaluation](docs/guides/post-training-and-evaluation.md)
 - [Voice Identity Guide](docs/guides/voice-identity.md)
 - [Self-Modification Guide](docs/guides/self-modification.md)
 - [Channel Setup Guide](docs/guides/channels-setup.md)

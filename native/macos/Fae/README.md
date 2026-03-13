@@ -31,6 +31,9 @@ Current benchmark docs live at the repository root so people can see both what w
 - [`../../docs/benchmarks/local-model-eval-2026-03-07.md`](../../docs/benchmarks/local-model-eval-2026-03-07.md) — what we test: RAM, TTFT, throughput, tool-calling, MMLU-style mini, Fae-capability, assistant-fit, and JSON/XML/YAML structured output
 - [`../../docs/benchmarks/fae-priority-eval-2026-03-07.md`](../../docs/benchmarks/fae-priority-eval-2026-03-07.md) — what matters for Fae: tool use, strict instruction following, memory discipline, tool-result handling, speed, and RAM efficiency
 - [`../../docs/benchmarks/llm-benchmarks.md`](../../docs/benchmarks/llm-benchmarks.md) — scoreboard / overview
+- [`../../docs/guides/post-training-and-evaluation.md`](../../docs/guides/post-training-and-evaluation.md) — canonical guide for post-training methods, benchmark/eval gates, and the `mlx-tune` plan
+
+`FaeBenchmark` now compiles against the same shared `FaeInference` / `MLXLLMEngine` path as the main app. Use the `just benchmark*` recipes or `just build-benchmark` so the Xcode-built binary picks up the required Metal bundle and the current `mlx-swift-lm` / Qwen behavior.
 
 ## Notes
 

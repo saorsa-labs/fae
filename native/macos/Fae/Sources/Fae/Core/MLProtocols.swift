@@ -1,26 +1,7 @@
 import AVFoundation
 import CoreGraphics
+import FaeInference
 import Foundation
-
-// MARK: - Engine Load State
-
-/// Tracks the lifecycle of an ML engine's model loading.
-enum MLEngineLoadState: Sendable {
-    case notStarted
-    case loading
-    case loaded
-    case failed(String)
-
-    var isLoaded: Bool {
-        if case .loaded = self { return true }
-        return false
-    }
-
-    var isFailed: Bool {
-        if case .failed = self { return true }
-        return false
-    }
-}
 
 // MARK: - Engine Protocols
 
@@ -32,39 +13,6 @@ protocol STTEngine: Actor {
     func transcribe(samples: [Float], sampleRate: Int) async throws -> STTResult
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
-}
-
-/// Large language model engine protocol.
-///
-/// Implementations: `MLXLLMEngine` (Phase 1, Qwen3 via mlx-swift-lm).
-protocol LLMEngine: Actor {
-    func load(modelID: String) async throws
-    func generate(
-        messages: [LLMMessage],
-        systemPrompt: String,
-        options: GenerationOptions
-    ) -> AsyncThrowingStream<LLMStreamEvent, Error>
-    /// Run a minimal warmup inference to pre-compile Metal shaders.
-    func warmup() async
-    /// Mark the session cache as authoritative for the supplied conversation history.
-    func synchronizeSession(history: [LLMMessage]) async
-    /// Clear any retained prompt/session cache state.
-    func resetSession() async
-    /// Tear down any engine-owned subprocesses, pipes, or transport state.
-    func shutdown() async
-    var isLoaded: Bool { get }
-    var loadState: MLEngineLoadState { get }
-}
-
-extension LLMEngine {
-    /// Default no-op for engines that don't implement warmup.
-    func warmup() async {}
-
-    func synchronizeSession(history: [LLMMessage]) async {}
-
-    func resetSession() async {}
-
-    func shutdown() async {}
 }
 
 /// Text-to-speech engine protocol.

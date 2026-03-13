@@ -1,7 +1,7 @@
 import Foundation
 import MLX
 import MLXLLM
-import MLXLMCommon
+@preconcurrency import MLXLMCommon
 
 private final class UnsafeBox<T>: @unchecked Sendable {
     var value: T
@@ -11,17 +11,8 @@ private final class UnsafeBox<T>: @unchecked Sendable {
     }
 }
 
-private func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
-    let lower = modelID.lowercased()
-    return lower.contains("qwen")
-        || lower.contains("saorsa1-worker")
-        || lower.contains("saorsa1-tiny")
-}
-
 /// Large language model engine using mlx-swift-lm.
-///
-/// Replaces: `src/llm/mod.rs` + `src/fae_llm/providers/local.rs`
-actor MLXLLMEngine: LLMEngine {
+public actor MLXLLMEngine: LLMEngine {
     private struct SessionState {
         let systemPrompt: String
         let toolSignature: String
@@ -38,24 +29,35 @@ actor MLXLLMEngine: LLMEngine {
         let effectiveMaxTokens: Int
     }
 
+    private struct RawTokenGenerationSetup: @unchecked Sendable {
+        let stream: AsyncStream<TokenGeneration>
+        let task: Task<Void, Never>
+        let detokenizer: NaiveStreamingDetokenizer
+        let promptTokenCount: Int
+        let cachedTokenCount: Int
+        let effectiveMaxTokens: Int
+    }
+
     private var container: ModelContainer?
-    private(set) var isLoaded: Bool = false
-    private(set) var loadState: MLEngineLoadState = .notStarted
+    public private(set) var isLoaded: Bool = false
+    public private(set) var loadState: MLEngineLoadState = .notStarted
     private var sessionState: SessionState?
     private var wiredMemoryTicketProvider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
-    private(set) var lastCompletionInfo: GenerateCompletionInfo?
+    public private(set) var lastCompletionInfo: GenerateCompletionInfo?
 
-    /// Load the LLM model.
-    func load(modelID: String) async throws {
+    public init() {}
+
+    public func load(modelID: String) async throws {
         loadState = .loading
         NSLog("MLXLLMEngine: loading model %@", modelID)
         do {
-            var config = ModelConfiguration(id: modelID)
-            // Qwen3.5-derived models use XML parameter format for tool calls:
-            //   <tool_call>{"name":"...","arguments":{...}}</tool_call>
-            // The default ToolCallProcessor can't parse XML content and silently
-            // discards tool calls. Setting .xmlFunction activates XMLFunctionParser
-            // which correctly handles this format.
+            var config: ModelConfiguration
+            if let localDirectory = localModelDirectoryURL(from: modelID) {
+                config = ModelConfiguration(directory: localDirectory)
+                NSLog("MLXLLMEngine: resolved local model directory %@", localDirectory.path)
+            } else {
+                config = ModelConfiguration(id: modelID)
+            }
             if usesQwenCompatibleToolCallFormat(modelID: modelID) {
                 config.toolCallFormat = .xmlFunction
                 NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen-compatible model")
@@ -64,6 +66,7 @@ actor MLXLLMEngine: LLMEngine {
             isLoaded = true
             loadState = .loaded
             sessionState = nil
+            lastCompletionInfo = nil
             NSLog("MLXLLMEngine: model loaded")
         } catch {
             loadState = .failed(error.localizedDescription)
@@ -72,24 +75,33 @@ actor MLXLLMEngine: LLMEngine {
         }
     }
 
-    func setWiredMemoryTicketProvider(
+    public func setWiredMemoryTicketProvider(
         _ provider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
     ) {
         wiredMemoryTicketProvider = provider
     }
 
-    func synchronizeSession(history: [LLMMessage]) async {
+    public func synchronizeSession(history: [LLMMessage]) async {
         guard var sessionState else { return }
         sessionState.history = history
         sessionState.reusable = true
         self.sessionState = sessionState
     }
 
-    func resetSession() async {
+    public func resetSession() async {
         sessionState = nil
     }
 
-    func measureMemory(
+    public func shutdown() async {
+        sessionState = nil
+        container = nil
+        wiredMemoryTicketProvider = nil
+        lastCompletionInfo = nil
+        isLoaded = false
+        loadState = .notStarted
+    }
+
+    public func measureMemory(
         tokenCount: Int,
         parameters: GenerateParameters
     ) async throws -> WiredMemoryMeasurement {
@@ -106,8 +118,7 @@ actor MLXLLMEngine: LLMEngine {
         }
     }
 
-    /// Run a warmup inference to pre-compile Metal shaders using production-like paths.
-    func warmup() async {
+    public func warmup() async {
         guard let container else { return }
         NSLog("MLXLLMEngine: starting warmup inference...")
 
@@ -149,8 +160,7 @@ actor MLXLLMEngine: LLMEngine {
         }
     }
 
-    /// Generate a streaming response.
-    func generate(
+    public func generate(
         messages: [LLMMessage],
         systemPrompt: String,
         options: GenerationOptions
@@ -178,12 +188,11 @@ actor MLXLLMEngine: LLMEngine {
                     toolSignature: toolSignature
                 )
 
-                let deltaMessages: [LLMMessage]
                 let chatMessages: [Chat.Message]
                 let cacheBox: UnsafeBox<[KVCache]>
 
                 if let priorSession, canReuseSession {
-                    deltaMessages = Array(messages.dropFirst(priorSession.history.count))
+                    let deltaMessages = Array(messages.dropFirst(priorSession.history.count))
                     chatMessages = await self.makeDeltaChatMessages(
                         from: deltaMessages,
                         turnContextPrefix: turnContextPrefix
@@ -194,7 +203,6 @@ actor MLXLLMEngine: LLMEngine {
                         deltaMessages.count
                     )
                 } else {
-                    deltaMessages = messages
                     chatMessages = await self.makeFullChatMessages(
                         from: messages,
                         systemPrompt: systemPrompt,
@@ -208,79 +216,155 @@ actor MLXLLMEngine: LLMEngine {
 
                 let baseParameters = await self.makeParameters(from: options)
                 let ticketProvider = await self.wiredMemoryTicketProvider
+                // MLX tool-call parsing can corrupt plain XML text when no tools are active,
+                // so only enable parsed generation on turns that actually expose tools.
+                let shouldParseToolCalls = !(options.tools?.isEmpty ?? true)
 
                 do {
-                    let setup = try await container.perform { context in
-                        var userInput = UserInput(chat: chatMessages)
-                        userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
-                        // With toolCallFormat=.xmlFunction, passing tools=nil can cause
-                        // 0-token generation. Always provide an array.
-                        userInput.tools = options.tools ?? []
+                    if shouldParseToolCalls {
+                        let setup = try await container.perform { context in
+                            var userInput = UserInput(chat: chatMessages)
+                            userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
+                            userInput.tools = options.tools ?? []
 
-                        let input = try await context.processor.prepare(input: userInput)
-                        let cachedTokenCount = cacheBox.value.first?.offset ?? 0
-                        let totalPromptTokens = cachedTokenCount + input.text.tokens.size
+                            let input = try await context.processor.prepare(input: userInput)
+                            let cachedTokenCount = cacheBox.value.first?.offset ?? 0
+                            let totalPromptTokens = cachedTokenCount + input.text.tokens.size
 
-                        var effectiveParameters = baseParameters
-                        if let contextLimit = options.contextLimitTokens {
-                            let availableForGeneration = max(contextLimit - totalPromptTokens - 32, 1)
-                            if let maxTokens = effectiveParameters.maxTokens, maxTokens > availableForGeneration {
-                                effectiveParameters.maxTokens = availableForGeneration
+                            var effectiveParameters = baseParameters
+                            if let contextLimit = options.contextLimitTokens {
+                                let availableForGeneration = max(contextLimit - totalPromptTokens - 32, 1)
+                                if let maxTokens = effectiveParameters.maxTokens, maxTokens > availableForGeneration {
+                                    effectiveParameters.maxTokens = availableForGeneration
+                                }
+                            }
+
+                            if cacheBox.value.isEmpty {
+                                cacheBox.value = context.model.newCache(parameters: effectiveParameters)
+                            }
+
+                            let ticket = await ticketProvider?(totalPromptTokens, effectiveParameters.maxTokens ?? 0)
+                            let iterator = try TokenIterator(
+                                input: input,
+                                model: context.model,
+                                cache: cacheBox.value,
+                                parameters: effectiveParameters
+                            )
+                            let (stream, task) = generateTask(
+                                promptTokenCount: input.text.tokens.size,
+                                modelConfiguration: context.configuration,
+                                tokenizer: context.tokenizer,
+                                iterator: iterator,
+                                wiredMemoryTicket: ticket
+                            )
+                            return GenerationSetup(
+                                stream: stream,
+                                task: task,
+                                promptTokenCount: input.text.tokens.size,
+                                cachedTokenCount: cachedTokenCount,
+                                effectiveMaxTokens: effectiveParameters.maxTokens ?? 0
+                            )
+                        }
+
+                        await self.storePreparedSession(
+                            history: messages,
+                            systemPrompt: systemPrompt,
+                            toolSignature: toolSignature,
+                            kvCache: cacheBox.value
+                        )
+
+                        var completionInfo: GenerateCompletionInfo?
+                        for await generation in setup.stream {
+                            if Task.isCancelled {
+                                break
+                            }
+                            switch generation {
+                            case .chunk(let text):
+                                continuation.yield(.text(text))
+                            case .toolCall(let call):
+                                continuation.yield(.toolCall(call))
+                            case .info(let info):
+                                completionInfo = info
+                                continuation.yield(.info(info))
                             }
                         }
 
-                        if cacheBox.value.isEmpty {
-                            cacheBox.value = context.model.newCache(parameters: effectiveParameters)
+                        await setup.task.value
+                        await self.finishGeneration(info: completionInfo, kvCache: cacheBox.value)
+                    } else {
+                        let setup = try await container.perform { context in
+                            var userInput = UserInput(chat: chatMessages)
+                            userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
+                            userInput.tools = []
+
+                            let input = try await context.processor.prepare(input: userInput)
+                            let cachedTokenCount = cacheBox.value.first?.offset ?? 0
+                            let totalPromptTokens = cachedTokenCount + input.text.tokens.size
+
+                            var effectiveParameters = baseParameters
+                            if let contextLimit = options.contextLimitTokens {
+                                let availableForGeneration = max(contextLimit - totalPromptTokens - 32, 1)
+                                if let maxTokens = effectiveParameters.maxTokens, maxTokens > availableForGeneration {
+                                    effectiveParameters.maxTokens = availableForGeneration
+                                }
+                            }
+
+                            if cacheBox.value.isEmpty {
+                                cacheBox.value = context.model.newCache(parameters: effectiveParameters)
+                            }
+
+                            let ticket = await ticketProvider?(totalPromptTokens, effectiveParameters.maxTokens ?? 0)
+                            let iterator = try TokenIterator(
+                                input: input,
+                                model: context.model,
+                                cache: cacheBox.value,
+                                parameters: effectiveParameters
+                            )
+                            let (stream, task) = generateTokenTask(
+                                promptTokenCount: input.text.tokens.size,
+                                modelConfiguration: context.configuration,
+                                tokenizer: context.tokenizer,
+                                iterator: iterator,
+                                wiredMemoryTicket: ticket
+                            )
+                            return RawTokenGenerationSetup(
+                                stream: stream,
+                                task: task,
+                                detokenizer: NaiveStreamingDetokenizer(tokenizer: context.tokenizer),
+                                promptTokenCount: input.text.tokens.size,
+                                cachedTokenCount: cachedTokenCount,
+                                effectiveMaxTokens: effectiveParameters.maxTokens ?? 0
+                            )
                         }
 
-                        let ticket = await ticketProvider?(totalPromptTokens, effectiveParameters.maxTokens ?? 0)
-                        let iterator = try TokenIterator(
-                            input: input,
-                            model: context.model,
-                            cache: cacheBox.value,
-                            parameters: effectiveParameters
+                        await self.storePreparedSession(
+                            history: messages,
+                            systemPrompt: systemPrompt,
+                            toolSignature: toolSignature,
+                            kvCache: cacheBox.value
                         )
-                        let (stream, task) = generateTask(
-                            promptTokenCount: input.text.tokens.size,
-                            modelConfiguration: context.configuration,
-                            tokenizer: context.tokenizer,
-                            iterator: iterator,
-                            wiredMemoryTicket: ticket
-                        )
-                        return GenerationSetup(
-                            stream: stream,
-                            task: task,
-                            promptTokenCount: input.text.tokens.size,
-                            cachedTokenCount: cachedTokenCount,
-                            effectiveMaxTokens: effectiveParameters.maxTokens ?? 0
-                        )
+
+                        var completionInfo: GenerateCompletionInfo?
+                        var detokenizer = setup.detokenizer
+                        for await generation in setup.stream {
+                            if Task.isCancelled {
+                                break
+                            }
+                            switch generation {
+                            case .token(let token):
+                                detokenizer.append(token: token)
+                                if let text = detokenizer.next(), !text.isEmpty {
+                                    continuation.yield(.text(text))
+                                }
+                            case .info(let info):
+                                completionInfo = info
+                                continuation.yield(.info(info))
+                            }
+                        }
+
+                        await setup.task.value
+                        await self.finishGeneration(info: completionInfo, kvCache: cacheBox.value)
                     }
-
-                    await self.storePreparedSession(
-                        history: messages,
-                        systemPrompt: systemPrompt,
-                        toolSignature: toolSignature,
-                        kvCache: cacheBox.value
-                    )
-
-                    var completionInfo: GenerateCompletionInfo?
-                    for await generation in setup.stream {
-                        if Task.isCancelled {
-                            break
-                        }
-                        switch generation {
-                        case .chunk(let text):
-                            continuation.yield(.text(text))
-                        case .toolCall(let call):
-                            continuation.yield(.toolCall(call))
-                        case .info(let info):
-                            completionInfo = info
-                            continuation.yield(.info(info))
-                        }
-                    }
-
-                    await setup.task.value
-                    await self.finishGeneration(info: completionInfo, kvCache: cacheBox.value)
                     continuation.finish()
                 } catch {
                     await self.invalidatePreparedSession(

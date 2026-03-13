@@ -17,7 +17,7 @@ build-release:
 
 # Build benchmark tool (requires xcodebuild for Metal shader compilation)
 build-benchmark:
-    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -quiet
+    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -derivedDataPath ".build/xcode-benchmark-derived" -quiet
 
 # Clean build artifacts
 clean:
@@ -37,6 +37,7 @@ test-target target:
 
 # Directory for cached benchmark results
 benchmark_dir := "../../../scripts/benchmark-results"
+benchmark_derived_data := ".build/xcode-benchmark-derived"
 
 # Build and return path to FaeBenchmark binary
 [private]
@@ -44,10 +45,10 @@ _ensure-benchmark:
     #!/usr/bin/env bash
     set -euo pipefail
     # Build via xcodebuild (compiles Metal shaders that swift run cannot)
-    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -quiet 2>&1 | grep -v "^$" || true
-    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" -newer Package.swift 2>/dev/null | head -1)
-    if [ -z "${BIN}" ]; then
-        echo "ERROR: FaeBenchmark binary not found in DerivedData"
+    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -derivedDataPath "{{benchmark_derived_data}}" -quiet 2>&1 | grep -v "^$" || true
+    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    if [ ! -x "${BIN}" ]; then
+        echo "ERROR: FaeBenchmark binary not built at ${BIN}"
         exit 1
     fi
 
@@ -61,7 +62,7 @@ benchmark model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{model}}_${TIMESTAMP}.json"
     echo "Benchmarking {{model}} → ${OUTPUT}"
@@ -76,7 +77,7 @@ benchmark-all: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/all_${TIMESTAMP}.json"
     echo "Benchmarking ALL models → ${OUTPUT}"
@@ -89,7 +90,7 @@ benchmark-throughput model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{model}}_throughput_${TIMESTAMP}.json"
     "${BIN}" --model "{{model}}" --throughput --ram --output "${OUTPUT}"
@@ -100,7 +101,7 @@ benchmark-tools model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{model}}_tools_${TIMESTAMP}.json"
     "${BIN}" --model "{{model}}" --tools --output "${OUTPUT}"
@@ -112,7 +113,7 @@ benchmark-custom model_id short_name: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN=$(find ~/Library/Developer/Xcode/DerivedData -name "FaeBenchmark" -type f -not -path "*/SourcePackages/*" 2>/dev/null | head -1)
+    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{short_name}}_${TIMESTAMP}.json"
     echo "Benchmarking {{model_id}} → ${OUTPUT}"

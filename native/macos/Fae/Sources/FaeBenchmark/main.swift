@@ -11,7 +11,7 @@
 // Models auto-download from HuggingFace on first run.
 
 import Foundation
-import MLXLLM
+import FaeInference
 import MLXLMCommon
 
 // MARK: - Model Registry
@@ -39,13 +39,6 @@ let models: [ModelEntry] = [
         modelID: "mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit"
     ),
 ]
-
-func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
-    let lower = modelID.lowercased()
-    return lower.contains("qwen")
-        || lower.contains("saorsa1-worker")
-        || lower.contains("saorsa1-tiny")
-}
 
 // MARK: - Result Types
 
@@ -285,8 +278,6 @@ func countThinkingChars(_ text: String) -> (visible: Int, thinking: Int) {
 // Native tool specs are passed via UserInput.tools so the model's chat template
 // can select the right output format for its family.
 let toolCallingSystemPrompt = """
-/no_think
-
 You are Fae, a personal AI companion running on macOS. When the user's request requires a tool, \
 call the appropriate tool. For simple conversation, just respond directly without tools.
 
@@ -434,9 +425,9 @@ let toolCallTests: [(prompt: String, expectedTool: String)] = [
     ("What's on my calendar tomorrow?", "calendar"),
     ("Remind me to buy groceries at 5pm", "reminders"),
     ("Search the web for the latest news about Apple", "web_search"),
-    ("Send an email to john@example.com saying I'll be late", "mail"),
+    ("Check my inbox and show me the latest three emails", "mail"),
     ("What's David's phone number?", "contacts"),
-    ("Create a note called Shopping List with milk, eggs, bread", "notes"),
+    ("Search my notes for the shopping list", "notes"),
     ("Read the file at ~/Documents/todo.txt", "read"),
     ("Can you look something up for me about quantum computing?", "web_search"),
     ("How are you feeling today?", "none"),
@@ -456,7 +447,7 @@ let noThinkTestPrompts = [
 // MARK: - Benchmark Engine
 
 actor BenchmarkEngine {
-    private var container: ModelContainer?
+    private let engine = MLXLLMEngine()
     private let modelID: String
     private let shortName: String
     private let qwenCalibrated: Bool
@@ -473,30 +464,16 @@ actor BenchmarkEngine {
 
     func load() async throws {
         print("  Loading \(shortName) (\(modelID))...")
-        var config = ModelConfiguration(id: modelID)
         if usesQwenCompatibleToolCallFormat(modelID: modelID) {
-            config.toolCallFormat = .xmlFunction
-            print("  Using xmlFunction tool-call parser.")
+            print("  Qwen-compatible model: shared MLXLLMEngine will use xmlFunction tool-call parsing.")
         }
-        container = try await LLMModelFactory.shared.loadContainer(configuration: config)
+        try await engine.load(modelID: modelID)
         print("  Loaded.")
     }
 
-    func warmup() async throws {
-        guard let container else { return }
-        print("  Warming up (3 throwaway generations)...")
-        for _ in 0..<3 {
-            let input = UserInput(
-                chat: [
-                    .system("/no_think\nYou are a helpful assistant."),
-                    .user("Hello"),
-                ]
-            )
-            let lmInput = try await container.prepare(input: input)
-            let params = GenerateParameters(maxTokens: 16, temperature: 0.7)
-            let stream = try await container.generate(input: lmInput, parameters: params)
-            for await _ in stream {}
-        }
+    func warmup() async {
+        print("  Warming up (production MLXLLMEngine passes)...")
+        await engine.warmup()
     }
 
     struct GenerateResult {
@@ -515,28 +492,25 @@ actor BenchmarkEngine {
         user: String,
         maxTokens: Int,
         temperature: Float,
-        tools: [[String: any Sendable]]? = nil
+        tools: [[String: any Sendable]]? = nil,
+        suppressThinking: Bool = true
     ) async throws -> GenerateResult {
-        guard let container else {
-            throw BenchmarkError.modelNotLoaded
-        }
-
-        let input = UserInput(
-            chat: [
-                .system(system),
-                .user(user),
-            ],
+        let messages = [
+            LLMMessage(role: .user, content: user),
+        ]
+        let options = GenerationOptions(
+            temperature: temperature,
+            maxTokens: maxTokens,
+            suppressThinking: suppressThinking,
             tools: tools
         )
 
-        let lmInput = try await container.prepare(input: input)
-        let params = GenerateParameters(
-            maxTokens: maxTokens,
-            temperature: temperature
-        )
-
         let start = CFAbsoluteTimeGetCurrent()
-        let stream = try await container.generate(input: lmInput, parameters: params)
+        let stream = await engine.generate(
+            messages: messages,
+            systemPrompt: system,
+            options: options
+        )
 
         var fullText = ""
         var promptTokens = 0
@@ -546,9 +520,9 @@ actor BenchmarkEngine {
         var promptTPS: Double = 0
         var capturedToolCalls: [ToolCall] = []
 
-        for await generation in stream {
+        for try await generation in stream {
             switch generation {
-            case .chunk(let text):
+            case .text(let text):
                 if firstTokenLatencyMS == nil, !text.isEmpty {
                     firstTokenLatencyMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
                 }
@@ -582,12 +556,8 @@ actor BenchmarkEngine {
     // MARK: - Throughput Sweep
 
     func runContextSweep(thinkMode: String, contexts: Set<String> = []) async throws -> [ThroughputResult] {
-        let system: String
-        if thinkMode == "no_think" {
-            system = "/no_think\n\nYou are a helpful assistant. Be concise."
-        } else {
-            system = "You are a helpful assistant. Be concise."
-        }
+        let system = "You are a helpful assistant. Be concise."
+        let suppressThinking = thinkMode == "no_think"
 
         let filler = buildFillerText(targetWords: 6500)
         let words = filler.split(separator: " ")
@@ -617,7 +587,8 @@ actor BenchmarkEngine {
                     system: system,
                     user: userPrompt,
                     maxTokens: maxTokens,
-                    temperature: 0.7
+                    temperature: 0.7,
+                    suppressThinking: suppressThinking
                 )
 
                 let tps = result.genTPS
@@ -654,8 +625,7 @@ actor BenchmarkEngine {
     // MARK: - /no_think Compliance
 
     func runNoThinkTest() async throws -> [NoThinkResult] {
-        let systemOn = "You are a helpful assistant. Be concise."
-        let systemOff = "/no_think\n\nYou are a helpful assistant. Be concise."
+        let system = "You are a helpful assistant. Be concise."
 
         var results: [NoThinkResult] = []
         for prompt in noThinkTestPrompts {
@@ -664,7 +634,11 @@ actor BenchmarkEngine {
 
             // Thinking ON
             let resOn = try await generate(
-                system: systemOn, user: prompt, maxTokens: 256, temperature: 0.7
+                system: system,
+                user: prompt,
+                maxTokens: 256,
+                temperature: 0.7,
+                suppressThinking: false
             )
             let tokOn = resOn.genTokens
             let timeOn = resOn.wallTime
@@ -672,7 +646,11 @@ actor BenchmarkEngine {
 
             // Thinking OFF
             let resOff = try await generate(
-                system: systemOff, user: prompt, maxTokens: 256, temperature: 0.7
+                system: system,
+                user: prompt,
+                maxTokens: 256,
+                temperature: 0.7,
+                suppressThinking: true
             )
             let tokOff = resOff.genTokens
             let timeOff = resOff.wallTime
@@ -858,7 +836,8 @@ actor BenchmarkEngine {
                 user: test.prompt,
                 maxTokens: 512,
                 temperature: temperature,
-                tools: toolCallingNativeTools
+                tools: toolCallingNativeTools,
+                suppressThinking: true
             )
             let output = toolResult.text
 
@@ -956,13 +935,9 @@ actor BenchmarkEngine {
         return results
     }
 
-    func unload() {
-        container = nil
+    func unload() async {
+        await engine.shutdown()
     }
-}
-
-enum BenchmarkError: Error {
-    case modelNotLoaded
 }
 
 // MARK: - CLI Argument Parsing
@@ -1334,7 +1309,7 @@ func benchmarkModel(
     }
 
     // Warmup
-    try await engine.warmup()
+    await engine.warmup()
 
     // Throughput
     if doThroughput {

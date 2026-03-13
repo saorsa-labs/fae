@@ -1,0 +1,3919 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-13",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "assistant_fit_eval" : [
+
+      ],
+      "fae_capability_eval" : [
+
+      ],
+      "freeform_eval" : [
+        {
+          "case_id" : "exact-reply-001",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 138.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: ok",
+          "raw_output" : "ok",
+          "total_checks" : 1,
+          "wall_time_s" : 0.17,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-002",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: BLUE",
+          "raw_output" : "BLUE",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-003",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: north,south",
+          "raw_output" : "north,south",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-004",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: Tuesday",
+          "raw_output" : "Tuesday",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-005",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: 42",
+          "raw_output" : "42",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-006",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.3,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: quiet local helper",
+          "raw_output" : "quiet local helper",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-reply-007",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 125.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: alpha-beta",
+          "raw_output" : "alpha-beta",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-008",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.1,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: Edinburgh",
+          "raw_output" : "Edinburgh",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-009",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.8,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: done",
+          "raw_output" : "done",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-010",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: YES",
+          "raw_output" : "YES",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-011",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.9,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: no",
+          "raw_output" : "no",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-012",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: fae",
+          "raw_output" : "fae",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-013",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.9,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: 1\/2",
+          "raw_output" : "1\/2",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-014",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: A1",
+          "raw_output" : "A1",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-015",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: green",
+          "raw_output" : "green",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-016",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.9,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: Inverness",
+          "raw_output" : "Inverness",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-017",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.3,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: coffee",
+          "raw_output" : "coffee",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-018",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.4,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: status:ok",
+          "raw_output" : "status:ok",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-019",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: north south east",
+          "raw_output" : "north south east",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-reply-020",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.3,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: ready",
+          "raw_output" : "ready",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-021",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: single-line",
+          "raw_output" : "single-line",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-022",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.3,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: 3.14",
+          "raw_output" : "3.14",
+          "total_checks" : 1,
+          "wall_time_s" : 0.25,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-023",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: apple,pear",
+          "raw_output" : "apple,pear",
+          "total_checks" : 1,
+          "wall_time_s" : 0.22,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-024",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: Monday",
+          "raw_output" : "Monday",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-reply-025",
+          "category" : "exact_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.5,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: HELLO",
+          "raw_output" : "HELLO",
+          "total_checks" : 1,
+          "wall_time_s" : 0.19,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-001",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 127.8,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two bullet points: apples and pears.",
+          "raw_output" : "*   Apples\n*   Pears",
+          "total_checks" : 1,
+          "wall_time_s" : 0.41,
+          "word_count" : 4
+        },
+        {
+          "case_id" : "exact-format-002",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 126.6,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one sentence: Local models are fast.",
+          "raw_output" : "Local models are fast.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.29,
+          "word_count" : 4
+        },
+        {
+          "case_id" : "exact-format-003",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.8,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly three comma-separated words: north,south,east",
+          "raw_output" : "north,south,east",
+          "total_checks" : 1,
+          "wall_time_s" : 0.29,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-004",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 127.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one line: Edinburgh | Glasgow",
+          "raw_output" : "Edinburgh | Glasgow",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-005",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 127.3,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two lines: first then second.",
+          "raw_output" : "Hello! How can I assist you today?\nPlease provide your question or request.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.68,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "exact-format-006",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 137.4,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: [ok]",
+          "raw_output" : "[ok]",
+          "total_checks" : 1,
+          "wall_time_s" : 0.23,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-007",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.6,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly the lowercase text: fae is ready",
+          "raw_output" : "fae is ready",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-008",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 131.7,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two bullet points: tea and coffee.",
+          "raw_output" : "*   Tea\n*   Coffee",
+          "total_checks" : 1,
+          "wall_time_s" : 0.36,
+          "word_count" : 4
+        },
+        {
+          "case_id" : "exact-format-009",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.6,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one sentence: The build passed.",
+          "raw_output" : "The build passed.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-010",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 129.6,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly two comma-separated words: read,write",
+          "raw_output" : "read,write",
+          "total_checks" : 1,
+          "wall_time_s" : 0.23,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-011",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 129,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one line: owner=ash",
+          "raw_output" : "owner=ash",
+          "total_checks" : 1,
+          "wall_time_s" : 0.23,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-012",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 128.5,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two lines: calm then focus.",
+          "raw_output" : "Calm now, then focus on the task at hand.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.51,
+          "word_count" : 9
+        },
+        {
+          "case_id" : "exact-format-013",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 129.1,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly the uppercase word: READY",
+          "raw_output" : "READY",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-014",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.1,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one sentence: Permissions are required.",
+          "raw_output" : "Permissions are required.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.25,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-015",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 127,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two bullet points: local first and private by default.",
+          "raw_output" : "*   Local execution is enabled by default.\n*   Private execution is enabled by default.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.73,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "exact-format-016",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 138.6,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly: user@example.com",
+          "raw_output" : "user@example.com",
+          "total_checks" : 1,
+          "wall_time_s" : 0.24,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-017",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.1,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one line: 09:00 design review",
+          "raw_output" : "09:00 design review",
+          "total_checks" : 1,
+          "wall_time_s" : 0.36,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-018",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 128.5,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly three comma-separated words: calm,clear,kind",
+          "raw_output" : "calm, clear, kind",
+          "total_checks" : 1,
+          "wall_time_s" : 0.33,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-019",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 129.6,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one sentence: I can help with that.",
+          "raw_output" : "I can help with that.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.32,
+          "word_count" : 5
+        },
+        {
+          "case_id" : "exact-format-020",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 127.2,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two lines: hello then goodbye.",
+          "raw_output" : "hello then goodbye.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "exact-format-021",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 127.4,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly: {done}",
+          "raw_output" : "done",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-022",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.7,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly the word: maybe",
+          "raw_output" : "maybe",
+          "total_checks" : 1,
+          "wall_time_s" : 0.16,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-023",
+          "category" : "exact_format",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 129.2,
+          "passed_checks" : 0,
+          "prompt" : "Reply with exactly two bullet points: browse web and summarise results.",
+          "raw_output" : "*   **Web Search:** I have searched the web for information on the topic.\n*   **Summary:** The search results indicate that the topic is currently under investigation, with initial findings pointing toward emerging technologies and potential applications in the field",
+          "total_checks" : 1,
+          "wall_time_s" : 1.63,
+          "word_count" : 39
+        },
+        {
+          "case_id" : "exact-format-024",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 136.2,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one line: context=8192",
+          "raw_output" : "context=8192",
+          "total_checks" : 1,
+          "wall_time_s" : 0.33,
+          "word_count" : 1
+        },
+        {
+          "case_id" : "exact-format-025",
+          "category" : "exact_format",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 125.8,
+          "passed_checks" : 1,
+          "prompt" : "Reply with exactly one sentence: Voice is enabled.",
+          "raw_output" : "Voice is enabled.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.25,
+          "word_count" : 3
+        },
+        {
+          "case_id" : "clarify-001",
+          "category" : "clarify_before_action",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 128.9,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'Schedule lunch with Sam next week.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll schedule our lunch with Sam for next week, but could you confirm which day and time works best for you?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.92,
+          "word_count" : 21
+        },
+        {
+          "case_id" : "clarify-002",
+          "category" : "clarify_before_action",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 138.4,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'Remind me to call Mum tomorrow afternoon.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "Tomorrow afternoon, will Mum be available for a call?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.51,
+          "word_count" : 9
+        },
+        {
+          "case_id" : "clarify-003",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:which alex|what address|which email"
+          ],
+          "first_token_latency_ms" : 134.1,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Email Alex about the draft.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll send the draft email to Alex.",
+          "total_checks" : 4,
+          "wall_time_s" : 0.43,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "clarify-004",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what time|which time"
+          ],
+          "first_token_latency_ms" : 130.9,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Add dentist to my calendar on Friday.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "Would you like to add a dentist appointment to your calendar for Friday, or would you prefer to schedule a different time?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.94,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "clarify-005",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:when|what time|which day",
+            "forbids_any:scheduled"
+          ],
+          "first_token_latency_ms" : 137.1,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Set a reminder for the report.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll set a reminder for your report, but could you confirm the date and time you'd like it scheduled?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.92,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "clarify-006",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:where|what path|which folder"
+          ],
+          "first_token_latency_ms" : 139.6,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Write a file for today's notes.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll create a file for your notes today. To ensure it's the right format, should I include a specific topic, time range, or any special formatting requirements?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.27,
+          "word_count" : 27
+        },
+        {
+          "case_id" : "clarify-007",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which file|what path|where is the contract"
+          ],
+          "first_token_latency_ms" : 140,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Read the contract and summarise it.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I cannot read contracts directly; could you provide the contract text or a link to the document you wish me to summarize?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.96,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "clarify-008",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which jordan|what contact|what address"
+          ],
+          "first_token_latency_ms" : 160.3,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Find Jordan in my contacts and send the update.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I can't find Jordan in your contacts, but could you confirm if you meant a specific person named Jordan or if you'd like me to search for Jordan in a different way?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.39,
+          "word_count" : 32
+        },
+        {
+          "case_id" : "clarify-009",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which dates|what dates|when next month"
+          ],
+          "first_token_latency_ms" : 144.4,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Book travel for Glasgow next month.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll arrange your travel to Glasgow next month, but could you confirm your preferred departure date and whether you'd like to book a flight or train?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.17,
+          "word_count" : 26
+        },
+        {
+          "case_id" : "clarify-010",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what should i include|what title|which details"
+          ],
+          "first_token_latency_ms" : 137.9,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Create a note for the design meeting.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll draft a concise design meeting note for you, but could you confirm if you'd like to include specific project details or timeline constraints?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.1,
+          "word_count" : 24
+        },
+        {
+          "case_id" : "clarify-011",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which 1:1|what time|how much later"
+          ],
+          "first_token_latency_ms" : 137.1,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Move my 1:1 to later.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I will move your 1:1 to later, but could you confirm which specific 1:1 you are referring to?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.03,
+          "word_count" : 18
+        },
+        {
+          "case_id" : "clarify-012",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:which pat|what address|which email"
+          ],
+          "first_token_latency_ms" : 161.7,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Search for the latest Apple news and email it to Pat.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I cannot fulfill this request as I am not Fae, and I do not have the capability to search the internet or send emails.",
+          "total_checks" : 4,
+          "wall_time_s" : 1.11,
+          "word_count" : 24
+        },
+        {
+          "case_id" : "clarify-013",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which note|what title|which old note"
+          ],
+          "first_token_latency_ms" : 141.8,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Delete the old note.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I will erase the old note, but to ensure I don't overwrite your current thoughts, do you want me to delete it entirely or just the specific section you marked for removal?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.39,
+          "word_count" : 32
+        },
+        {
+          "case_id" : "clarify-014",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:which report|what path|what should i update",
+            "forbids_any:updated"
+          ],
+          "first_token_latency_ms" : 143.5,
+          "passed_checks" : 1,
+          "prompt" : "User says: 'Open the report and update it.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "Please provide the updated report content, and I will update it accordingly.",
+          "total_checks" : 4,
+          "wall_time_s" : 0.65,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "clarify-015",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:when|what time|which day"
+          ],
+          "first_token_latency_ms" : 141.4,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Send flowers reminder for Gran.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "Gran, are you ready to receive a bouquet of flowers?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.56,
+          "word_count" : 10
+        },
+        {
+          "case_id" : "clarify-016",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which chris|what address|which email"
+          ],
+          "first_token_latency_ms" : 140.2,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Email the invoice to Chris.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I can't email invoices directly, but could you confirm if you'd like me to draft a message to Chris instead?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.99,
+          "word_count" : 20
+        },
+        {
+          "case_id" : "clarify-017",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what time|which thursday|follow-up for what"
+          ],
+          "first_token_latency_ms" : 134.1,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Add a follow-up next Thursday.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I will schedule a follow-up for next Thursday at 10:00 AM, but could you confirm if you'd prefer to meet in person or via video call?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.37,
+          "word_count" : 26
+        },
+        {
+          "case_id" : "clarify-018",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:when|what time|which day"
+          ],
+          "first_token_latency_ms" : 137,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Remind me about airport pickup.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll remind you of the airport pickup details, but could you confirm your flight number and preferred time to ensure I don't miss anything?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.09,
+          "word_count" : 24
+        },
+        {
+          "case_id" : "clarify-019",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which note|what title|which notes"
+          ],
+          "first_token_latency_ms" : 141,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Read my notes from yesterday.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I can't read your notes directly; could you share a link or paste the text here?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.81,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "clarify-020",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what should it include|what title|where should i save",
+            "max_words:32"
+          ],
+          "first_token_latency_ms" : 142.4,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Create the document we discussed.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I will weave our past conversations into a cohesive document, but to ensure I capture the specific tone, key details, and any unique metaphors we discussed, could you please specify which chapter or section you'd like me to prioritize?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.76,
+          "word_count" : 39
+        },
+        {
+          "case_id" : "clarify-021",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:which jamie|what contact|how late"
+          ],
+          "first_token_latency_ms" : 140.1,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Text Jamie that I'm running late.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "Jamie, hurry up or I'll have to call the police!",
+          "total_checks" : 4,
+          "wall_time_s" : 0.6,
+          "word_count" : 10
+        },
+        {
+          "case_id" : "clarify-022",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which year|what filename|where should i search",
+            "max_words:32"
+          ],
+          "first_token_latency_ms" : 142,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Search my files for the tax PDF.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I can't search my files directly since I'm a text-based AI, but could you clarify which specific tax PDF you're looking for or if you meant a file named \"tax.pdf\" in a shared folder?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.65,
+          "word_count" : 34
+        },
+        {
+          "case_id" : "clarify-023",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:what day|which day|what time"
+          ],
+          "first_token_latency_ms" : 143.8,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Add coffee with Erin sometime this week.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll brew a cup of coffee for Erin this week.",
+          "total_checks" : 4,
+          "wall_time_s" : 0.57,
+          "word_count" : 10
+        },
+        {
+          "case_id" : "clarify-024",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:who in marketing|what address|which contact"
+          ],
+          "first_token_latency_ms" : 141.4,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Send the summary to marketing.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll craft a marketing summary for you, but I need to know which specific product, campaign, or audience you'd like me to focus on.",
+          "total_checks" : 4,
+          "wall_time_s" : 1.2,
+          "word_count" : 24
+        },
+        {
+          "case_id" : "clarify-025",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what title|what should i save|which note title"
+          ],
+          "first_token_latency_ms" : 144.3,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Save this as a note.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "Save this as a note. Which Fae do you wish to remember, and what is the purpose of this memory?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.99,
+          "word_count" : 20
+        },
+        {
+          "case_id" : "clarify-026",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what time|which day|when"
+          ],
+          "first_token_latency_ms" : 143.8,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Plan a reminder for the school run.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'll set a gentle reminder for your school run at 7:30 AM, but could you confirm if you'd like me to include a note about the weather or a special class?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.52,
+          "word_count" : 31
+        },
+        {
+          "case_id" : "clarify-027",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:which file|what path|what should i change"
+          ],
+          "first_token_latency_ms" : 151.3,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Update the todo file.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I will update your todo file with the latest tasks, but could you confirm if you'd like me to add any new entries or modify existing ones?",
+          "total_checks" : 4,
+          "wall_time_s" : 1.21,
+          "word_count" : 27
+        },
+        {
+          "case_id" : "clarify-028",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:which alex|what contact|what address"
+          ],
+          "first_token_latency_ms" : 153.1,
+          "passed_checks" : 2,
+          "prompt" : "User says: 'Find the right Alex and send a meeting note.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I can't find Alex, but I can help you draft a meeting note once you confirm the right person and the topic.",
+          "total_checks" : 4,
+          "wall_time_s" : 1.04,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "clarify-029",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:what day|what time|when works"
+          ],
+          "first_token_latency_ms" : 139.5,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Book a catch-up with Priya.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I'd love to catch up with Priya, but could you please tell me which time slot works best for you?",
+          "total_checks" : 4,
+          "wall_time_s" : 0.98,
+          "word_count" : 20
+        },
+        {
+          "case_id" : "clarify-030",
+          "category" : "clarify_before_action",
+          "correct" : false,
+          "failed_checks" : [
+            "question",
+            "contains_any:where|what path|which folder",
+            "max_words:32"
+          ],
+          "first_token_latency_ms" : 139.3,
+          "passed_checks" : 1,
+          "prompt" : "User says: 'Write the release checklist file.' Reply as Fae in one sentence. Ask the minimum necessary clarifying question before taking action.",
+          "raw_output" : "I cannot fulfill this request as I am not Fae, and I cannot write a release checklist file without knowing which project, version, or platform you are referring to. Please specify the project name, version, and target platform so I can provide the exact checklist you need.",
+          "total_checks" : 4,
+          "wall_time_s" : 2.07,
+          "word_count" : 47
+        },
+        {
+          "case_id" : "calendar-result-001",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:09:00"
+          ],
+          "first_token_latency_ms" : 157.4,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 09:00 design review; 13:00 lunch with Sam; 16:30 dentist. The user asked: 'What's on my schedule tomorrow?' Reply in one sentence.",
+          "raw_output" : "Tomorrow, you have a design review at 9:00, lunch with Sam at 13:00, and a dentist appointment at 16:30.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.51,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "calendar-result-002",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:train to glasgow"
+          ],
+          "first_token_latency_ms" : 164.9,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 08:30 train to Glasgow; 11:00 budget review. The user asked: 'What's on tomorrow morning?' Reply in one sentence.",
+          "raw_output" : "Tomorrow morning you have a train departing at 08:30 and a budget review scheduled at 11:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.18,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "calendar-result-003",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:1:1 with ash"
+          ],
+          "first_token_latency_ms" : 163.9,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 14:00 1:1 with Ash; 15:30 code review. The user asked: 'Summarise my afternoon.' Reply in one sentence.",
+          "raw_output" : "Your afternoon is scheduled for 14:00 to 15:30, with a code review session at 15:30.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.37,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "calendar-result-004",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 165.7,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 10:00 dentist; 18:00 family dinner. The user asked: 'What have I got on Friday?' Reply in one sentence.",
+          "raw_output" : "You have a dentist appointment at 10:00 and a family dinner at 18:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.08,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "calendar-result-005",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:07:45"
+          ],
+          "first_token_latency_ms" : 164.4,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 07:45 school drop-off; 12:00 lunch with Erin; 19:00 choir. The user asked: 'Give me a quick daily summary.' Reply in one sentence.",
+          "raw_output" : "Today's schedule includes school drop-off at 7:45, lunch with Erin at 12:00, and choir at 19:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.52,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "calendar-result-006",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.5,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 11:30 physio; 15:00 design sync. The user asked: 'What do I have after lunch?' Reply in one sentence.",
+          "raw_output" : "You have a physio session at 11:30 and a design sync at 15:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.15,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "calendar-result-007",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 166.2,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 09:15 stand-up; 09:45 roadmap review; 10:30 hiring call. The user asked: 'Summarise my first half of the morning.' Reply in one sentence.",
+          "raw_output" : "Your first half of the morning included a 09:15 stand-up, a 09:45 roadmap review, and a 10:30 hiring call.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.66,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "calendar-result-008",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:13:00,lunch with pat,14:00"
+          ],
+          "first_token_latency_ms" : 165.2,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 13:00 lunch with Pat; 14:00 write-up block. The user asked: 'What happens after noon?' Reply in one sentence.",
+          "raw_output" : "After noon, the schedule shifts to a write-up block.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.64,
+          "word_count" : 9
+        },
+        {
+          "case_id" : "calendar-result-009",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:16:00,pickup at station"
+          ],
+          "first_token_latency_ms" : 142.6,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 16:00 pickup at station. The user asked: 'Do I have anything late today?' Reply in one sentence.",
+          "raw_output" : "No, you don't have anything late today.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.54,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "calendar-result-010",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 137.7,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: no events found for tomorrow. The user asked: 'What's on tomorrow?' Reply in one sentence.",
+          "raw_output" : "There are no events scheduled for tomorrow.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.46,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "calendar-result-011",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:08:00,09:30,groceries"
+          ],
+          "first_token_latency_ms" : 152.4,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 08:00 gym; 09:30 sprint planning; 17:30 groceries. The user asked: 'What's in my day?' Reply in one sentence.",
+          "raw_output" : "Your day looks packed with a gym session at 8:00, a sprint planning meeting at 9:30, and grocery shopping at 17:30.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.62,
+          "word_count" : 21
+        },
+        {
+          "case_id" : "calendar-result-012",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:12:30,13:30"
+          ],
+          "first_token_latency_ms" : 167.8,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 12:30 lunch; 13:30 interview prep; 15:00 interview. The user asked: 'What does my afternoon look like?' Reply in one sentence.",
+          "raw_output" : "Your afternoon looks like a busy mix of lunch, interview prep, and the actual interview starting at 15:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.23,
+          "word_count" : 18
+        },
+        {
+          "case_id" : "calendar-result-013",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:10:00,11:00"
+          ],
+          "first_token_latency_ms" : 163.2,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 10:00 demo; 11:00 retro; 12:00 lunch. The user asked: 'What's before lunch?' Reply in one sentence.",
+          "raw_output" : "Before lunch, you can have a demo and a retro session.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.68,
+          "word_count" : 11
+        },
+        {
+          "case_id" : "calendar-result-014",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 146.5,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 18:30 dinner with Iona. The user asked: 'Do I have plans tonight?' Reply in one sentence.",
+          "raw_output" : "You have a dinner with Iona at 18:30 tonight.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.8,
+          "word_count" : 9
+        },
+        {
+          "case_id" : "calendar-result-015",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.3,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 09:00 onboarding; 10:00 architecture review; 14:00 customer call. The user asked: 'Summarise the key appointments.' Reply in one sentence.",
+          "raw_output" : "Today's key appointments are a 09:00 onboarding, a 10:00 architecture review, and a 14:00 customer call.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.61,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "calendar-result-016",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 160,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 08:00 school run; 09:00 stand-up; 17:00 school run. The user asked: 'What fixed commitments are in my day?' Reply in one sentence.",
+          "raw_output" : "Your day has three fixed commitments: a school run at 08:00, a stand-up at 09:00, and another school run at 17:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.81,
+          "word_count" : 21
+        },
+        {
+          "case_id" : "calendar-result-017",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:14:30,project review"
+          ],
+          "first_token_latency_ms" : 165.6,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 14:30 project review; 16:00 dentist; 18:30 dinner. The user asked: 'What have I got later?' Reply in one sentence.",
+          "raw_output" : "You have a dentist appointment at 16:00 and dinner at 18:30.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.06,
+          "word_count" : 11
+        },
+        {
+          "case_id" : "calendar-result-018",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 170.2,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 09:00 focus block; 11:00 design sync; 13:00 lunch. The user asked: 'What meetings do I have?' Reply in one sentence.",
+          "raw_output" : "You have a focus block at 9:00, a design sync at 11:00, and lunch at 13:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.51,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "calendar-result-019",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:15:00,physio"
+          ],
+          "first_token_latency_ms" : 145,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 15:00 physio. The user asked: 'Any appointments this afternoon?' Reply in one sentence.",
+          "raw_output" : "No appointments this afternoon.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.35,
+          "word_count" : 4
+        },
+        {
+          "case_id" : "calendar-result-020",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:08:15"
+          ],
+          "first_token_latency_ms" : 155.1,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 08:15 nursery drop-off; 12:00 lunch with Robin; 18:00 parents' evening. The user asked: 'Give me a short summary for today.' Reply in one sentence.",
+          "raw_output" : "Today's schedule includes nursery drop-off at 8:15, lunch with Robin at 12:00, and a parents' evening at 18:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.68,
+          "word_count" : 18
+        },
+        {
+          "case_id" : "calendar-result-021",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 160.7,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 10:30 product review; 11:30 follow-up notes. The user asked: 'What is the main thing before noon?' Reply in one sentence.",
+          "raw_output" : "The main thing before noon is the product review scheduled for 10:30.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.9,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "calendar-result-022",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:collect parcel"
+          ],
+          "first_token_latency_ms" : 166.1,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 17:00 collect parcel; 19:30 concert. The user asked: 'What do I have this evening?' Reply in one sentence.",
+          "raw_output" : "You have a parcel to collect at 17:00 and a concert at 19:30.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.15,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "calendar-result-023",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.5,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 09:00 team sync; 09:30 customer prep; 10:00 customer call. The user asked: 'Summarise the customer-related items.' Reply in one sentence.",
+          "raw_output" : "The customer-related items scheduled for the day are a team sync at 09:00, customer prep at 09:30, and a customer call at 10:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.87,
+          "word_count" : 23
+        },
+        {
+          "case_id" : "calendar-result-024",
+          "category" : "tool_result_calendar",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:school pickup"
+          ],
+          "first_token_latency_ms" : 164.9,
+          "passed_checks" : 2,
+          "prompt" : "Calendar tool returned: 13:00 lunch with Pat; 16:00 school pickup. The user asked: 'What do I need to remember later today?' Reply in one sentence.",
+          "raw_output" : "You need to remember to have lunch with Pat at 13:00 and pick up your school at 16:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.34,
+          "word_count" : 18
+        },
+        {
+          "case_id" : "calendar-result-025",
+          "category" : "tool_result_calendar",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 164.1,
+          "passed_checks" : 3,
+          "prompt" : "Calendar tool returned: 11:00 GP appointment; 12:15 pharmacy pickup. The user asked: 'What health-related errands are on my calendar?' Reply in one sentence.",
+          "raw_output" : "Your calendar shows a GP appointment at 11:00 and a pharmacy pickup at 12:15.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.19,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "document-result-001",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:send invoice,call vet"
+          ],
+          "first_token_latency_ms" : 143.6,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned this todo list: buy milk, send invoice, call vet. The user asked for a concise summary. Reply in one sentence.",
+          "raw_output" : "You need to buy milk, send an invoice, and call a vet.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.76,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "document-result-002",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 162.4,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned meeting notes: launch moved to Tuesday, marketing needs final copy by Monday, design sign-off is pending. The user asked for a short summary. Reply in one sentence.",
+          "raw_output" : "Launch is scheduled for Tuesday, with marketing requesting final copy by Monday and design sign-off still pending.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.95,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "document-result-003",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 162.3,
+          "passed_checks" : 3,
+          "prompt" : "Web search returned three recent Apple headlines: new MacBook launch, Apple Vision update, services revenue rises. The user asked for a quick summary. Reply in one sentence.",
+          "raw_output" : "Apple is launching a new MacBook, updating the Vision Pro, and reporting a rise in services revenue.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.95,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "document-result-004",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:docs,tag release"
+          ],
+          "first_token_latency_ms" : 144.4,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned release checklist items: run migration, update docs, capture screenshots, tag release. The user asked for a concise summary. Reply in one sentence.",
+          "raw_output" : "The release checklist includes running a migration, updating documentation, capturing screenshots, and tagging the release.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.9,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "document-result-005",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:owner=ash,context=8192,tool_mode=full"
+          ],
+          "first_token_latency_ms" : 162.4,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned the file contents: line 1 'owner=ash', line 2 'context=8192', line 3 'tool_mode=full'. The user asked what is configured. Reply in one sentence.",
+          "raw_output" : "The system is configured with an owner named ash, a context size of 8192, and full tool mode enabled.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.19,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "document-result-006",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:couldn't find"
+          ],
+          "first_token_latency_ms" : 148.8,
+          "passed_checks" : 2,
+          "prompt" : "Contacts tool returned no match for Alex. The user asked: 'Can you email Alex for me?' Reply in one sentence.",
+          "raw_output" : "I cannot fulfill that request as I do not have access to external email services or a contact list to search for Alex.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.09,
+          "word_count" : 23
+        },
+        {
+          "case_id" : "document-result-007",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 162,
+          "passed_checks" : 3,
+          "prompt" : "Web search returned: Glasgow rail strike planned Monday, service reductions expected, travellers advised to check operators. The user asked for the key point. Reply in one sentence.",
+          "raw_output" : "A Glasgow rail strike is planned for Monday, with service reductions expected and travelers advised to check operators.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.95,
+          "word_count" : 18
+        },
+        {
+          "case_id" : "document-result-008",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 162.7,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned a draft email: 'Thanks for the update. I'll review the proposal by Thursday.' The user asked for a summary. Reply in one sentence.",
+          "raw_output" : "The user will review the proposal by Thursday.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.52,
+          "word_count" : 8
+        },
+        {
+          "case_id" : "document-result-009",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 135.8,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned a grocery note: bread, tomatoes, basil, olive oil. The user asked for a quick summary. Reply in one sentence.",
+          "raw_output" : "You have a quick summary of bread, tomatoes, basil, and olive oil.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.79,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "document-result-010",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 165,
+          "passed_checks" : 3,
+          "prompt" : "Web search returned: local weather warning for high winds, travel disruption possible, avoid unnecessary coastal trips. The user asked for a short summary. Reply in one sentence.",
+          "raw_output" : "High winds and travel disruptions are currently in effect, so avoid unnecessary coastal trips.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.83,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "document-result-011",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.7,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned a bug list: startup freeze on cold boot, missing permission overlay on write, flaky voice wake after playback. The user asked for the main issues. Reply in one sentence.",
+          "raw_output" : "The startup freeze, missing permission overlay, and flaky voice wake issues are all critical bugs that need immediate attention to restore full functionality.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.28,
+          "word_count" : 23
+        },
+        {
+          "case_id" : "document-result-012",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:docs updated"
+          ],
+          "first_token_latency_ms" : 168.4,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned project status: benchmark rerun complete, live eval blocked by startup readiness, docs updated. The user asked for a concise update. Reply in one sentence.",
+          "raw_output" : "The benchmark rerun is complete, but live evaluation is currently blocked due to startup readiness issues; please check the docs for updates.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.2,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "document-result-013",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:markets"
+          ],
+          "first_token_latency_ms" : 148,
+          "passed_checks" : 2,
+          "prompt" : "Web search returned headlines: UK budget announced, markets mixed, energy support extended. The user asked for a one-sentence summary. Reply in one sentence.",
+          "raw_output" : "The UK budget was announced with mixed market reactions, while energy support measures were extended.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.83,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "document-result-014",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 138.5,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned travel checklist: passport, chargers, medicine, printed tickets. The user asked for a short recap. Reply in one sentence.",
+          "raw_output" : "You're all set with your travel checklist: passport, chargers, medicine, and printed tickets.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.91,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "document-result-015",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 143.4,
+          "passed_checks" : 3,
+          "prompt" : "Contacts tool returned one match: Priya Shah, priya@example.com. The user asked for Priya's email. Reply in one sentence.",
+          "raw_output" : "Priya Shah's email address is priya@example.com.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.62,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "document-result-016",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 164.9,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned sprint goals: stabilise voice path, tighten tool repair, add freeform evals. The user asked for the priorities. Reply in one sentence.",
+          "raw_output" : "Priorities are stabilise voice path, tighten tool repair, and add freeform evals.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.94,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "document-result-017",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 145.4,
+          "passed_checks" : 3,
+          "prompt" : "Web search returned: Apple supplier delays may affect autumn launch, analysts expect cautious guidance. The user asked for the gist. Reply in one sentence.",
+          "raw_output" : "Apple supplier delays could impact the autumn launch, with analysts expecting cautious guidance.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.76,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "document-result-018",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 160.8,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned book notes: chapter one covers memory systems, chapter two covers retrieval, chapter three covers evaluation. The user asked for a concise summary. Reply in one sentence.",
+          "raw_output" : "Chapter one covers memory systems, chapter two covers retrieval, and chapter three covers evaluation.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.86,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "document-result-019",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 166.1,
+          "passed_checks" : 3,
+          "prompt" : "Read tool returned: 'Remember to call the GP, pay council tax, and send the school form.' The user asked for a quick summary. Reply in one sentence.",
+          "raw_output" : "You need to call the GP, pay council tax, and send the school form.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.87,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "document-result-020",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 147,
+          "passed_checks" : 3,
+          "prompt" : "Web search returned: severe rain warning for Edinburgh, commuter disruption likely, schools monitoring closures. The user asked for the key points. Reply in one sentence.",
+          "raw_output" : "Severe rain warning for Edinburgh with likely commuter disruption and schools monitoring closures.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.76,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "document-result-021",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:on-demand vlm"
+          ],
+          "first_token_latency_ms" : 162.5,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned this changelog: switched to single-model Qwen, added on-demand VLM, updated RAM auto-selection. The user asked what changed. Reply in one sentence.",
+          "raw_output" : "I've switched to a single-model Qwen architecture, added on-demand vision-language capabilities, and updated RAM auto-selection.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.15,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "document-result-022",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:does not answer"
+          ],
+          "first_token_latency_ms" : 166,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned a support ticket: user hears audio cue but Fae does not answer, likely voice gating issue after playback. The user asked for the problem. Reply in one sentence.",
+          "raw_output" : "The audio cue is likely being blocked by voice gating, so please try speaking again.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.87,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "document-result-023",
+          "category" : "tool_result_document",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.6,
+          "passed_checks" : 3,
+          "prompt" : "Web search returned: local airport security delays, passengers advised to arrive early, morning flights worst affected. The user asked for a short summary. Reply in one sentence.",
+          "raw_output" : "Local airport security delays and passenger advice to arrive early are expected due to morning flights being the worst affected.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.02,
+          "word_count" : 20
+        },
+        {
+          "case_id" : "document-result-024",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:10,5"
+          ],
+          "first_token_latency_ms" : 166.3,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned note contents: dentist at 10, pick up parcel at 5, buy printer ink. The user asked for a concise summary. Reply in one sentence.",
+          "raw_output" : "The user visited a dentist, picked up a parcel, and bought printer ink.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.82,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "document-result-025",
+          "category" : "tool_result_document",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:cache repaired,switched in-app,approval overlays fixed"
+          ],
+          "first_token_latency_ms" : 147.6,
+          "passed_checks" : 2,
+          "prompt" : "Read tool returned deployment notes: cache repaired, model switched in-app, approval overlays fixed. The user asked for the headline update. Reply in one sentence.",
+          "raw_output" : "Your headline update is live.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.4,
+          "word_count" : 5
+        },
+        {
+          "case_id" : "permission-001",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 134.9,
+          "passed_checks" : 3,
+          "prompt" : "The calendar action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The calendar action failed because you don't have permission to access the requested event. To proceed, please try selecting a different event or contact the organizer directly.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.4,
+          "word_count" : 27
+        },
+        {
+          "case_id" : "permission-002",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 143.8,
+          "passed_checks" : 3,
+          "prompt" : "The reminders action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The reminder feature is currently disabled because your account lacks the necessary permissions to send notifications. To resolve this, please contact your account administrator to request the required access.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.45,
+          "word_count" : 29
+        },
+        {
+          "case_id" : "permission-003",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 143.5,
+          "passed_checks" : 3,
+          "prompt" : "The contacts action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The contact block was blocked because you don't have permission to access that specific contact. To proceed, please try selecting a different contact or check if your account has the necessary privileges for this action.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.74,
+          "word_count" : 35
+        },
+        {
+          "case_id" : "permission-004",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 142.6,
+          "passed_checks" : 3,
+          "prompt" : "The mail action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The block is occurring because the current user lacks the necessary permissions to access the requested mail action. To proceed, please try logging in with an account that has the required access rights.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.63,
+          "word_count" : 33
+        },
+        {
+          "case_id" : "permission-005",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 144.8,
+          "passed_checks" : 3,
+          "prompt" : "The notes action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The block is occurring because you do not have permission to access the notes action. To proceed, please log in with a different account or contact the administrator to request access.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.54,
+          "word_count" : 31
+        },
+        {
+          "case_id" : "permission-006",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 149.3,
+          "passed_checks" : 3,
+          "prompt" : "The read action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The block is due to a missing or invalid access token required to authenticate your request. Please refresh the page and try again, or contact support if the issue persists.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.47,
+          "word_count" : 30
+        },
+        {
+          "case_id" : "permission-007",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 148,
+          "passed_checks" : 3,
+          "prompt" : "The write action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The block is caused by a missing or corrupted configuration file required for this operation. Please try refreshing the page and retrying the write action.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.27,
+          "word_count" : 25
+        },
+        {
+          "case_id" : "permission-008",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 146.4,
+          "passed_checks" : 4,
+          "prompt" : "The camera action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The camera action failed because the requested permission was denied by the system. To proceed, please grant the necessary access or try again with a different camera angle.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.42,
+          "word_count" : 28
+        },
+        {
+          "case_id" : "permission-009",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 143.5,
+          "passed_checks" : 4,
+          "prompt" : "The microphone action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The microphone permission was denied because the current device lacks the necessary access rights to record audio. To proceed, please allow microphone access in your device settings, or try using a different device with available permissions.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.77,
+          "word_count" : 36
+        },
+        {
+          "case_id" : "permission-010",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you",
+            "max_words:42"
+          ],
+          "first_token_latency_ms" : 147.4,
+          "passed_checks" : 3,
+          "prompt" : "The screen recording action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The screen recording feature is currently disabled because your account lacks the necessary permissions to access this specific content. To proceed, please log in with an account that has been granted access to the target application or contact your administrator to request the required permissions.",
+          "total_checks" : 5,
+          "wall_time_s" : 2.12,
+          "word_count" : 45
+        },
+        {
+          "case_id" : "permission-011",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 144.5,
+          "passed_checks" : 4,
+          "prompt" : "The photos action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The photos action failed because your current account lacks the necessary permissions to access the requested content. To proceed, please log in with an account that has been granted access to this specific resource.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.64,
+          "word_count" : 34
+        },
+        {
+          "case_id" : "permission-012",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 146.6,
+          "passed_checks" : 4,
+          "prompt" : "The downloads action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The download action failed because your current account lacks the necessary permissions to access this specific resource. To proceed, please log in with an account that has been granted access to this content.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.6,
+          "word_count" : 33
+        },
+        {
+          "case_id" : "permission-013",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 149,
+          "passed_checks" : 3,
+          "prompt" : "The desktop action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The desktop action failed because the current user lacks the necessary permissions to execute the requested command. To proceed, please log in with an account that has elevated privileges or try running the action from a different location.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.79,
+          "word_count" : 38
+        },
+        {
+          "case_id" : "permission-014",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 142.2,
+          "passed_checks" : 3,
+          "prompt" : "The automation action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The automation failed because the target account lacks the required permissions to execute the requested action. To resolve this, please verify that the account has the necessary access rights and retry the action once permissions are confirmed.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.74,
+          "word_count" : 37
+        },
+        {
+          "case_id" : "permission-015",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 144.3,
+          "passed_checks" : 4,
+          "prompt" : "The accessibility action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The block is preventing you from accessing the content because your current user account lacks the necessary permissions to view this section. To proceed, please log in with an account that has been granted access to this area.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.8,
+          "word_count" : 38
+        },
+        {
+          "case_id" : "permission-016",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you",
+            "max_words:42"
+          ],
+          "first_token_latency_ms" : 144.8,
+          "passed_checks" : 2,
+          "prompt" : "The full disk access action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The disk access failed because the current user lacks the necessary permissions to read or write to that specific partition. To resolve this, please log in as an administrator with elevated privileges or verify that the target disk is shared and accessible to your user account.",
+          "total_checks" : 5,
+          "wall_time_s" : 2.13,
+          "word_count" : 46
+        },
+        {
+          "case_id" : "permission-017",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 156.9,
+          "passed_checks" : 4,
+          "prompt" : "The browser action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The browser blocked the action because your website requires user interaction to proceed, and this request lacks the necessary permissions. To continue, please click the button on the page to grant the required access.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.72,
+          "word_count" : 34
+        },
+        {
+          "case_id" : "permission-018",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 146,
+          "passed_checks" : 3,
+          "prompt" : "The location action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The block is occurring because your current location data is outdated or restricted, which prevents the system from calculating the optimal route. To resolve this, please refresh your location settings or provide an alternative address.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.73,
+          "word_count" : 35
+        },
+        {
+          "case_id" : "permission-019",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 146,
+          "passed_checks" : 3,
+          "prompt" : "The calendar write action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The calendar write action failed because you do not have permission to modify the calendar for this user. To resolve this, please try logging in with an account that has access to the calendar, or contact your administrator to request elevated privileges.",
+          "total_checks" : 5,
+          "wall_time_s" : 2.01,
+          "word_count" : 42
+        },
+        {
+          "case_id" : "permission-020",
+          "category" : "permission_response",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:grant|allow|enable|once access|after access",
+            "contains_any:different approach|another way|once you|after you"
+          ],
+          "first_token_latency_ms" : 144.5,
+          "passed_checks" : 3,
+          "prompt" : "The reminders write action failed because permission is denied. Reply naturally in one or two sentences, explain the block clearly, and suggest the next step.",
+          "raw_output" : "The reminder write action failed because you do not have permission to write reminders in this context. Please try again with a different user or check if the reminder feature is available for your current account.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.7,
+          "word_count" : 36
+        },
+        {
+          "case_id" : "memory-001",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 144.6,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'My birthday is on April 12.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.35,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-002",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.2,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'Please call me Ash from now on.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Ash",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-003",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.1,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I'm allergic to peanuts.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-004",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 134.5,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I'm vegan.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.34,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-005",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 155.2,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: Memory already says favorite drink = tea. User now says, 'Actually coffee is my favorite drink.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.37,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-006",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I moved to Inverness last month.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-007",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136.8,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'My pronouns are they\/them.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: they\/them",
+          "total_checks" : 1,
+          "wall_time_s" : 0.35,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-008",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.2,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'My dog is called Moss.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Moss",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-009",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136.6,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I work night shifts on Tuesdays.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: I work night shifts on Tuesdays.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.56,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "memory-010",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 144.9,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I prefer train travel when possible.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.27,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-011",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136.1,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I live in Leith.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Leith",
+          "total_checks" : 1,
+          "wall_time_s" : 0.31,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-012",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136.2,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I am lactose intolerant.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.27,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-013",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.6,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'My partner is called Jamie.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.35,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-014",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I start work at 7 most weekdays.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: 7",
+          "total_checks" : 1,
+          "wall_time_s" : 0.3,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-015",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.2,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I use metric units.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.25,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-016",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.1,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'My verification code today is 493821.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.33,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-017",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.1,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I had soup for lunch.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.26,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-018",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 134.6,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'It's raining here right now.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: It is raining here right now.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.51,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "memory-019",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 138.9,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'My parcel tracking number is AB12345.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.35,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-020",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136.1,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I'm in seat 14A today.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: <fact>",
+          "total_checks" : 1,
+          "wall_time_s" : 0.34,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-021",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.9,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I had toast this morning.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: Yes",
+          "total_checks" : 1,
+          "wall_time_s" : 0.25,
+          "word_count" : 2
+        },
+        {
+          "case_id" : "memory-022",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 134.3,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'This meeting ran long.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: The meeting ran long.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.47,
+          "word_count" : 5
+        },
+        {
+          "case_id" : "memory-023",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 136.5,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'The train is delayed tonight.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: The train is delayed tonight.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.46,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "memory-024",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.2,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'I feel a bit tired today.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: I feel a bit tired today.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.47,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "memory-025",
+          "category" : "memory_discipline",
+          "correct" : false,
+          "failed_checks" : [
+            "exact"
+          ],
+          "first_token_latency_ms" : 135.3,
+          "passed_checks" : 0,
+          "prompt" : "Conversation: User says, 'The Wi-Fi password is office-guest-22.' Reply with exactly either STORE: <fact> or IGNORE.",
+          "raw_output" : "STORE: The Wi-Fi password is office-guest-22.",
+          "total_checks" : 1,
+          "wall_time_s" : 0.78,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "summary-001",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:tuesday"
+          ],
+          "first_token_latency_ms" : 161.7,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'The team shipped the macOS update on Tuesday. It fixed a calendar sync bug, reduced memory usage, and improved startup time.' Summarise this in one sentence.",
+          "raw_output" : "The team shipped a macOS update that fixed a calendar sync bug, reduced memory usage, and improved startup time.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.05,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "summary-002",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:called ahead"
+          ],
+          "first_token_latency_ms" : 139.9,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'Mara missed the bus because heavy rain slowed traffic. She called ahead and arrived twenty minutes late.' Summarise this in one sentence.",
+          "raw_output" : "Mara missed the bus due to heavy rain, which caused traffic to slow down and resulted in her arrival twenty minutes late.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.14,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "summary-003",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.5,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The workshop covered prompt design, local models, and privacy trade-offs. Attendees asked many questions about on-device inference.' Summarise this in one sentence.",
+          "raw_output" : "The workshop covered prompt design, local models, and privacy trade-offs, with attendees inquiring about on-device inference.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.14,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "summary-004",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:small fire,no one was hurt"
+          ],
+          "first_token_latency_ms" : 167.2,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'A small fire in the kitchen was quickly extinguished. No one was hurt, but the room smelled strongly of smoke.' Summarise this in one sentence.",
+          "raw_output" : "A small kitchen fire was quickly extinguished without causing injury, though the room retained a strong smoke odor.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.05,
+          "word_count" : 18
+        },
+        {
+          "case_id" : "summary-005",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 165.6,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'Fae switched from a dual concierge design to single-model Qwen3.5. Vision now loads on demand through a separate Qwen3-VL model.' Summarise this in one sentence.",
+          "raw_output" : "Fae has transitioned from a dual concierge design to a single-model Qwen3.5 architecture, with vision capabilities now loading on demand via a separate Qwen3-VL model.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.81,
+          "word_count" : 25
+        },
+        {
+          "case_id" : "summary-006",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 165.5,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The train left at 08:15, stopped at Stirling, and arrived in Glasgow at 09:10.' Summarise this in one sentence.",
+          "raw_output" : "The train departed at 08:15, stopped at Stirling, and arrived in Glasgow at 09:10.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.34,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "summary-007",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:passed"
+          ],
+          "first_token_latency_ms" : 164.3,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'The release was delayed because the secure input overlay was invisible. After switching to a darker card surface, manual checks passed.' Summarise this in one sentence.",
+          "raw_output" : "The release was delayed due to an invisible secure input overlay, which was resolved after switching to a darker card surface and passing manual checks.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.3,
+          "word_count" : 25
+        },
+        {
+          "case_id" : "summary-008",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 162.6,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The weather warning covers Edinburgh and Fife. High winds are expected overnight, and ferry disruption is likely.' Summarise this in one sentence.",
+          "raw_output" : "A weather warning for Edinburgh and Fife is expected overnight due to high winds, which may cause ferry disruptions.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.09,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "summary-009",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 166.7,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The benchmark harness showed perfect tool calling for Qwen3.5-4B, 9B, 27B, and 35B-A3B, but the live app path exposed a readiness bug.' Summarise this in one sentence.",
+          "raw_output" : "The benchmark harness demonstrated perfect tool calling for Qwen3.5-4B, 9B, 27B, and 35B-A3B, while the live app path exposed a readiness bug.",
+          "total_checks" : 3,
+          "wall_time_s" : 2.1,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "summary-010",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 146.4,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'Iona reviewed the draft, suggested a shorter opening, and asked for clearer next steps by Friday.' Summarise this in one sentence.",
+          "raw_output" : "Iona reviewed the draft, proposed a shorter opening, and requested clearer next steps by Friday.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.97,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "summary-011",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:train was delayed"
+          ],
+          "first_token_latency_ms" : 167.3,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'The family arrived at 6, ate dinner at 7, and left just before 9 because the last train was delayed.' Summarise this in one sentence.",
+          "raw_output" : "The family arrived at 6, ate dinner at 7, and left just before 9 due to a delayed train.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.25,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "summary-012",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:not continuous"
+          ],
+          "first_token_latency_ms" : 146.5,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'Camera use is occasional, not continuous. Screenshots and sparse still frames are the main perception mode.' Summarise this in one sentence.",
+          "raw_output" : "Camera use is occasional, with screenshots and sparse still frames serving as the primary perception mode.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.91,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "summary-013",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 148,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The package contains a notebook, a charger, two adapters, and a handwritten card.' Summarise this in one sentence.",
+          "raw_output" : "The package contains a notebook, a charger, two adapters, and a handwritten card.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.87,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "summary-014",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 161.4,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'Alex changed the meeting from Wednesday to Thursday at 11, and the room moved from Cedar to Rowan.' Summarise this in one sentence.",
+          "raw_output" : "Alex shifted the meeting from Wednesday to Thursday at 11, causing the room to move from Cedar to Rowan.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.15,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "summary-015",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:mcqs"
+          ],
+          "first_token_latency_ms" : 165.8,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'The freeform eval should replace flaky MCQs as the main signal for correctness, consistency, and conversational quality.' Summarise this in one sentence.",
+          "raw_output" : "The freeform evaluation should replace flaky multiple-choice questions as the primary signal for assessing correctness, consistency, and conversational quality.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.29,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "summary-016",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 162.7,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The gardener pruned the apple tree, planted basil, and fixed the broken gate before the rain began.' Summarise this in one sentence.",
+          "raw_output" : "The gardener pruned an apple tree, planted basil, and fixed a broken gate before the rain began.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.11,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "summary-017",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 166.2,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'Pat forgot the tickets at home, drove back to get them, and still reached the theatre before the curtain.' Summarise this in one sentence.",
+          "raw_output" : "Pat forgot the tickets at home, drove back to retrieve them, and successfully reached the theatre before the curtain.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.07,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "summary-018",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 145.9,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The build succeeded on the second attempt after the missing destination flag was added to xcodebuild.' Summarise this in one sentence.",
+          "raw_output" : "The build succeeded on the second attempt after the missing destination flag was added to xcodebuild.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.95,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "summary-019",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 146.7,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The budget includes rent, food, transport, and a small emergency buffer.' Summarise this in one sentence.",
+          "raw_output" : "The budget encompasses rent, food, transport, and a small emergency buffer.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.79,
+          "word_count" : 11
+        },
+        {
+          "case_id" : "summary-020",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 167.7,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The school emailed to confirm the trip leaves at 07:30, requires packed lunch, and returns by 18:00.' Summarise this in one sentence.",
+          "raw_output" : "The school requires a packed lunch and a return trip departing at 07:30 and returning by 18:00.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.35,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "summary-021",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:treated as failure"
+          ],
+          "first_token_latency_ms" : 166.6,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'Contacts permission looked denied because EventKit write-only access was being treated as failure, but the fix corrected that path.' Summarise this in one sentence.",
+          "raw_output" : "The fix corrected a path where EventKit write-only access was incorrectly treated as a failure, thereby resolving the denied contacts permission error.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.28,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "summary-022",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 168.2,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'Qwen3-VL loads on demand, which keeps idle RAM lower than always loading a separate vision model.' Summarise this in one sentence.",
+          "raw_output" : "Qwen3-VL loads on demand to keep idle RAM lower than always loading a separate vision model.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.06,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "summary-023",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:busy but calm"
+          ],
+          "first_token_latency_ms" : 145.6,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'The cafe was busy but calm, and the barista remembered the usual order without being asked.' Summarise this in one sentence.",
+          "raw_output" : "The cafe remained busy yet calm as the barista automatically remembered the usual order without being asked.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.95,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "summary-024",
+          "category" : "summarization_grounded",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 148,
+          "passed_checks" : 3,
+          "prompt" : "Source text: 'The river path was closed after flooding, so walkers were redirected through the upper park instead.' Summarise this in one sentence.",
+          "raw_output" : "The river path was closed due to flooding, causing walkers to be redirected through the upper park.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.97,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "summary-025",
+          "category" : "summarization_grounded",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:not model quality,pipeline ready"
+          ],
+          "first_token_latency_ms" : 166.2,
+          "passed_checks" : 2,
+          "prompt" : "Source text: 'After the benchmark rerun, the remaining blocker was not model quality but the app startup path never reaching pipeline ready.' Summarise this in one sentence.",
+          "raw_output" : "Following the benchmark rerun, the primary blocker was identified as the app startup path failing to reach the pipeline-ready state rather than model quality issues.",
+          "total_checks" : 3,
+          "wall_time_s" : 1.41,
+          "word_count" : 25
+        },
+        {
+          "case_id" : "support-001",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:let's break|one small step|what feels most urgent",
+            "question"
+          ],
+          "first_token_latency_ms" : 143.7,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I'm overwhelmed and don't know where to start.' Reply naturally in one or two sentences.",
+          "raw_output" : "Take a deep breath and try breaking down your overwhelm into small, manageable steps. You've got this!",
+          "total_checks" : 5,
+          "wall_time_s" : 1.05,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "support-002",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:you've got this|let's keep it simple|want to practise",
+            "question"
+          ],
+          "first_token_latency_ms" : 145.7,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I'm nervous about the presentation.' Reply naturally in one or two sentences.",
+          "raw_output" : "Take a deep breath, and remember that everyone else is just as nervous as you are!",
+          "total_checks" : 5,
+          "wall_time_s" : 0.94,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "support-003",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:keep it simple|plain terms|step by step"
+          ],
+          "first_token_latency_ms" : 150.6,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Can you explain this simply?' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, I'd be happy to break it down! Just let me know what you're curious about, and I'll explain it in a way that's easy to understand.",
+          "total_checks" : 4,
+          "wall_time_s" : 1.68,
+          "word_count" : 27
+        },
+        {
+          "case_id" : "support-004",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "question"
+          ],
+          "first_token_latency_ms" : 147.6,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'I made a mistake in that email.' Reply naturally in one or two sentences.",
+          "raw_output" : "No worries at all—just let me know what you meant to send, and I'll help you draft a quick correction.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.24,
+          "word_count" : 20
+        },
+        {
+          "case_id" : "support-005",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:prioritise|one thing|we can"
+          ],
+          "first_token_latency_ms" : 146.2,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'I'm behind on everything today.' Reply naturally in one or two sentences.",
+          "raw_output" : "I hear you, so let's take it one step at a time. How about we prioritize the most urgent tasks first and then tackle the rest?",
+          "total_checks" : 5,
+          "wall_time_s" : 1.47,
+          "word_count" : 26
+        },
+        {
+          "case_id" : "support-006",
+          "category" : "supportive_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 158.1,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'I need a quick summary before my meeting.' Reply naturally in one or two sentences.",
+          "raw_output" : "Here's a quick summary of the meeting's key points: we discussed the project timeline, identified potential bottlenecks, and agreed on next steps for the team. Let me know if you'd like to dive deeper into any specific areas.",
+          "total_checks" : 4,
+          "wall_time_s" : 2.27,
+          "word_count" : 38
+        },
+        {
+          "case_id" : "support-007",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:unstick|next step|we can"
+          ],
+          "first_token_latency_ms" : 144.6,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'I feel a bit stuck.' Reply naturally in one or two sentences.",
+          "raw_output" : "It sounds like you're feeling a bit stuck, and I'd be happy to help you find a way forward. What's been weighing on your mind lately?",
+          "total_checks" : 5,
+          "wall_time_s" : 1.54,
+          "word_count" : 26
+        },
+        {
+          "case_id" : "support-008",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:that's okay|we can make a plan|want a reminder",
+            "question"
+          ],
+          "first_token_latency_ms" : 146.8,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I'm embarrassed I forgot again.' Reply naturally in one or two sentences.",
+          "raw_output" : "No worries at all—let's just get back to what you were doing!",
+          "total_checks" : 5,
+          "wall_time_s" : 0.84,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "support-009",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:gentler|draft|want me to rewrite"
+          ],
+          "first_token_latency_ms" : 148.9,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'I need help being kinder in this reply.' Reply naturally in one or two sentences.",
+          "raw_output" : "I'd be happy to help you craft a kinder reply. Could you share what you'd like to say, or what kind of kindness you're aiming for?",
+          "total_checks" : 5,
+          "wall_time_s" : 1.54,
+          "word_count" : 26
+        },
+        {
+          "case_id" : "support-010",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:one thing at a time|small next step|we can",
+            "question"
+          ],
+          "first_token_latency_ms" : 147.5,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'This is all a bit much today.' Reply naturally in one or two sentences.",
+          "raw_output" : "I hear you, so I'll keep things light and simple for now.",
+          "total_checks" : 5,
+          "wall_time_s" : 0.81,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "support-011",
+          "category" : "supportive_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 145.7,
+          "passed_checks" : 5,
+          "prompt" : "User says: 'Can you give me a calmer version of this message?' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, here's a calmer version: \"I'm here to help, and I'm listening. What's on your mind?\"",
+          "total_checks" : 5,
+          "wall_time_s" : 1.32,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "support-012",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:checklist|scan|let's review",
+            "question"
+          ],
+          "first_token_latency_ms" : 150.1,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I'm worried I've missed something important.' Reply naturally in one or two sentences.",
+          "raw_output" : "Don't worry, it's likely just a momentary lapse in focus. Take a deep breath and try to get back to what you were doing.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.48,
+          "word_count" : 24
+        },
+        {
+          "case_id" : "support-013",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:five minutes|single task|let's narrow",
+            "question"
+          ],
+          "first_token_latency_ms" : 144.9,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I can't focus.' Reply naturally in one or two sentences.",
+          "raw_output" : "It's common to feel overwhelmed when trying to focus; take a few deep breaths and try breaking your task into smaller steps to get back on track.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.52,
+          "word_count" : 27
+        },
+        {
+          "case_id" : "support-014",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:simpler|plain language|clear"
+          ],
+          "first_token_latency_ms" : 147.5,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'Can you make this easier to understand?' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, I can simplify it by breaking it down into smaller steps.",
+          "total_checks" : 4,
+          "wall_time_s" : 0.76,
+          "word_count" : 12
+        },
+        {
+          "case_id" : "support-015",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:apology|own it|draft",
+            "question"
+          ],
+          "first_token_latency_ms" : 150.3,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I need to apologise without sounding defensive.' Reply naturally in one or two sentences.",
+          "raw_output" : "I'm sorry I messed things up, and I'll do my best to make it right.",
+          "total_checks" : 5,
+          "wall_time_s" : 0.99,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "support-016",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:first step|ten minutes|we can",
+            "question"
+          ],
+          "first_token_latency_ms" : 148.6,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I keep putting this off.' Reply naturally in one or two sentences.",
+          "raw_output" : "You're right, it's a common trap to keep things off until the last moment—let's tackle that now.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.21,
+          "word_count" : 17
+        },
+        {
+          "case_id" : "support-017",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:gentler|rewrite|want me to"
+          ],
+          "first_token_latency_ms" : 149.8,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'Can you help me say this more gently?' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, I'd be happy to help you rephrase that message to sound more gentle. Could you share what you'd like to convey?",
+          "total_checks" : 5,
+          "wall_time_s" : 1.39,
+          "word_count" : 22
+        },
+        {
+          "case_id" : "support-018",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:okay to ask|I can help|we can",
+            "question"
+          ],
+          "first_token_latency_ms" : 148.1,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I'm a bit ashamed to ask for help.' Reply naturally in one or two sentences.",
+          "raw_output" : "You're not alone in feeling that way, and I'm here to help you get through it.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.01,
+          "word_count" : 16
+        },
+        {
+          "case_id" : "support-019",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:you can do this|you've handled this before|one steady step"
+          ],
+          "first_token_latency_ms" : 151.1,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I need a quick confidence boost.' Reply naturally in one or two sentences.",
+          "raw_output" : "You've got this! Your capabilities are already impressive, so let's just focus on what you're capable of achieving today.",
+          "total_checks" : 4,
+          "wall_time_s" : 1.25,
+          "word_count" : 19
+        },
+        {
+          "case_id" : "support-020",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:draft|opening line|want me to",
+            "question"
+          ],
+          "first_token_latency_ms" : 145.4,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'I don't know how to start the message.' Reply naturally in one or two sentences.",
+          "raw_output" : "You can just send it as is, and I'll help you figure out the best way to continue the conversation!",
+          "total_checks" : 5,
+          "wall_time_s" : 1.15,
+          "word_count" : 20
+        },
+        {
+          "case_id" : "support-021",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:tidy it up|key points|we can",
+            "question"
+          ],
+          "first_token_latency_ms" : 148.1,
+          "passed_checks" : 3,
+          "prompt" : "User says: 'This feels messy.' Reply naturally in one or two sentences.",
+          "raw_output" : "I hear you, and I'm glad to hear that. Let's take a moment to organize our thoughts and get back to what matters most.",
+          "total_checks" : 5,
+          "wall_time_s" : 1.43,
+          "word_count" : 24
+        },
+        {
+          "case_id" : "support-022",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "question"
+          ],
+          "first_token_latency_ms" : 147.3,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'Can you make this sound warmer?' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, I can help with that. How about this: \"That sounds much warmer now!\"",
+          "total_checks" : 5,
+          "wall_time_s" : 0.98,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "support-023",
+          "category" : "supportive_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 147.9,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'I think I need to slow down.' Reply naturally in one or two sentences.",
+          "raw_output" : "You're right, taking a moment to breathe can help you feel more grounded and present.",
+          "total_checks" : 4,
+          "wall_time_s" : 0.93,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "support-024",
+          "category" : "supportive_reply",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:kinder|rewrite|want me to"
+          ],
+          "first_token_latency_ms" : 149.7,
+          "passed_checks" : 4,
+          "prompt" : "User says: 'Can you turn this into a kinder reply?' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, I'd be happy to help with that! What would you like to know?",
+          "total_checks" : 5,
+          "wall_time_s" : 0.94,
+          "word_count" : 14
+        },
+        {
+          "case_id" : "support-025",
+          "category" : "supportive_reply",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 147.9,
+          "passed_checks" : 5,
+          "prompt" : "User says: 'I just need a little help to get moving.' Reply naturally in one or two sentences.",
+          "raw_output" : "Sure, I can help you get moving! Would you like to try a quick walk around the block, or should we focus on something more specific?",
+          "total_checks" : 5,
+          "wall_time_s" : 1.45,
+          "word_count" : 26
+        },
+        {
+          "case_id" : "rewrite-001",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:sounds good|works for me|see you"
+          ],
+          "first_token_latency_ms" : 144.3,
+          "passed_checks" : 2,
+          "prompt" : "Draft a brief reply accepting lunch on Tuesday at 1pm. Keep it under 25 words.",
+          "raw_output" : "Sure, I'd love to have lunch on Tuesday at 1pm.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.8,
+          "word_count" : 10
+        },
+        {
+          "case_id" : "rewrite-002",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:sorry|can't make it|another time"
+          ],
+          "first_token_latency_ms" : 143.8,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short reply declining Friday lunch because I'm away. Keep it under 25 words.",
+          "raw_output" : "I'll be away on Friday, so no lunch for now.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.72,
+          "word_count" : 10
+        },
+        {
+          "case_id" : "rewrite-003",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 146.4,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short email asking for a deadline extension to Wednesday. Keep it under 35 words.",
+          "raw_output" : "Hi, I hope you're doing well. Could I request a deadline extension to Wednesday? Thanks!",
+          "total_checks" : 3,
+          "wall_time_s" : 1.03,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "rewrite-004",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:sorry|be there soon"
+          ],
+          "first_token_latency_ms" : 146.8,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short message saying I'll be 10 minutes late. Keep it under 20 words.",
+          "raw_output" : "I'll be 10 minutes late.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.54,
+          "word_count" : 5
+        },
+        {
+          "case_id" : "rewrite-005",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 140,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short reply thanking Priya for the update and saying I'll review it tonight. Keep it under 30 words.",
+          "raw_output" : "Thanks, Priya! I'll review it tonight.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.62,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-006",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 148.2,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short note asking Jamie if 3pm works. Keep it under 20 words.",
+          "raw_output" : "Hi Jamie, does 3pm work for the meeting?",
+          "total_checks" : 3,
+          "wall_time_s" : 0.67,
+          "word_count" : 8
+        },
+        {
+          "case_id" : "rewrite-007",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:confirmed|we're in|see you"
+          ],
+          "first_token_latency_ms" : 144.6,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short reply confirming the meeting room is Rowan. Keep it under 20 words.",
+          "raw_output" : "Yes, the meeting room is Rowan.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.54,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-008",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_all:sorry"
+          ],
+          "first_token_latency_ms" : 138.6,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short apology for missing the call and ask to reschedule tomorrow. Keep it under 30 words.",
+          "raw_output" : "My apologies for missing the call yesterday. Could we reschedule for tomorrow at 10 AM?",
+          "total_checks" : 3,
+          "wall_time_s" : 1,
+          "word_count" : 15
+        },
+        {
+          "case_id" : "rewrite-009",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:here|I've"
+          ],
+          "first_token_latency_ms" : 144,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short message saying the file is attached and the key points are highlighted. Keep it under 25 words.",
+          "raw_output" : "File attached with key points highlighted.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.45,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-010",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 136.3,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short reply saying I can do Thursday after 2. Keep it under 20 words.",
+          "raw_output" : "I can do Thursday after 2.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.49,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-011",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 139.9,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short reminder message to bring the passport and charger. Keep it under 20 words.",
+          "raw_output" : "Don't forget your passport and charger!",
+          "total_checks" : 3,
+          "wall_time_s" : 0.49,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-012",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 140.6,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short note to the neighbour asking them to leave the parcel inside. Keep it under 25 words.",
+          "raw_output" : "Hi Neighbor, could you leave the parcel inside? Thanks!",
+          "total_checks" : 3,
+          "wall_time_s" : 0.67,
+          "word_count" : 9
+        },
+        {
+          "case_id" : "rewrite-013",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 146.7,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short message saying I finished the benchmark rerun and will send results soon. Keep it under 25 words.",
+          "raw_output" : "Finished the benchmark rerun! Results coming soon.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.59,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "rewrite-014",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 147.4,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short reply asking Alex which file they mean. Keep it under 20 words.",
+          "raw_output" : "Hey Alex, which file are you referring to?",
+          "total_checks" : 3,
+          "wall_time_s" : 0.56,
+          "word_count" : 8
+        },
+        {
+          "case_id" : "rewrite-015",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:arrive|be there"
+          ],
+          "first_token_latency_ms" : 140.9,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short message saying I'm at the station and will arrive at 6. Keep it under 20 words.",
+          "raw_output" : "I'm at the station, arriving at 6.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.63,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "rewrite-016",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 145.5,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short response telling Pat the summary is ready and attached. Keep it under 20 words.",
+          "raw_output" : "Pat, the summary is ready and attached.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.53,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "rewrite-017",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 140.2,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short note asking if lunch can move to 12:30. Keep it under 20 words.",
+          "raw_output" : "Hi, can we move lunch to 12:30?",
+          "total_checks" : 3,
+          "wall_time_s" : 0.75,
+          "word_count" : 7
+        },
+        {
+          "case_id" : "rewrite-018",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:sorry|still"
+          ],
+          "first_token_latency_ms" : 145.9,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short reply saying the train is delayed but I'm on the way. Keep it under 20 words.",
+          "raw_output" : "My train is delayed, but I'm already on the way.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.71,
+          "word_count" : 10
+        },
+        {
+          "case_id" : "rewrite-019",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 148.5,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short email saying I reviewed the proposal and left comments. Keep it under 25 words.",
+          "raw_output" : "Subject: Review of Proposal\n\nHi, I've reviewed the proposal. Please find comments below.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.98,
+          "word_count" : 13
+        },
+        {
+          "case_id" : "rewrite-020",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 143.4,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short message asking what time the school pickup is. Keep it under 20 words.",
+          "raw_output" : "Hey, what time is school pickup?",
+          "total_checks" : 3,
+          "wall_time_s" : 0.48,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-021",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:confirmed|see you"
+          ],
+          "first_token_latency_ms" : 138.9,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short reply confirming dinner at 7 on Saturday. Keep it under 20 words.",
+          "raw_output" : "Yes, dinner at 7 on Saturday!",
+          "total_checks" : 3,
+          "wall_time_s" : 0.54,
+          "word_count" : 6
+        },
+        {
+          "case_id" : "rewrite-022",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 137.6,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short message saying I'll send the final copy by Monday morning. Keep it under 20 words.",
+          "raw_output" : "I'll send the final copy by Monday morning.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.57,
+          "word_count" : 8
+        },
+        {
+          "case_id" : "rewrite-023",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 141.7,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short note asking for the invoice address. Keep it under 20 words.",
+          "raw_output" : "Could you please confirm the invoice address? Thanks!",
+          "total_checks" : 3,
+          "wall_time_s" : 0.57,
+          "word_count" : 8
+        },
+        {
+          "case_id" : "rewrite-024",
+          "category" : "rewrite_actionable",
+          "correct" : true,
+          "failed_checks" : [
+
+          ],
+          "first_token_latency_ms" : 141.6,
+          "passed_checks" : 3,
+          "prompt" : "Draft a short reply saying the secure input fix is in and ready to test. Keep it under 25 words.",
+          "raw_output" : "Secure input fix is in and ready to test.",
+          "total_checks" : 3,
+          "wall_time_s" : 0.58,
+          "word_count" : 9
+        },
+        {
+          "case_id" : "rewrite-025",
+          "category" : "rewrite_actionable",
+          "correct" : false,
+          "failed_checks" : [
+            "contains_any:can talk|free"
+          ],
+          "first_token_latency_ms" : 143,
+          "passed_checks" : 2,
+          "prompt" : "Draft a short message saying I can talk after the school run. Keep it under 20 words.",
+          "raw_output" : "Sure, I'll talk after the school run!",
+          "total_checks" : 3,
+          "wall_time_s" : 0.58,
+          "word_count" : 7
+        }
+      ],
+      "idle_ram_mb" : 1227,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "mlx-community\/Qwen3.5-2B-4bit",
+      "model_short" : "qwen3.5-2b",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+        {
+          "actual_tool" : "calendar",
+          "correct" : true,
+          "expected_tool" : "calendar",
+          "prompt" : "What's on my calendar tomorrow?",
+          "raw_response_preview" : "<tool_call>\\n<function=calendar>\\n<parameter=action>\\nlist_week\\n<\/parameter>\\n<parameter=query>\\ntomorrow\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "reminders",
+          "correct" : true,
+          "expected_tool" : "reminders",
+          "prompt" : "Remind me to buy groceries at 5pm",
+          "raw_response_preview" : "I'll remind you to buy groceries at 5pm.\\n\\n<tool_call>\\n<function=reminders>\\n<parameter=action>\\ncreate\\n<\/parameter>\\n<parameter=query>\\ngroceries\\n<\/parameter>\\n<parameter=title>\\nBuy groceries\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Search the web for the latest news about Apple",
+          "raw_response_preview" : "<tool_call>\\n<function=web_search>\\n<parameter=query>\\nlatest news about Apple\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "mail",
+          "correct" : true,
+          "expected_tool" : "mail",
+          "prompt" : "Send an email to john@example.com saying I'll be late",
+          "raw_response_preview" : "<tool_call>\\n<function=mail>\\n<parameter=action>\\nsend\\n<\/parameter>\\n<parameter=body>\\nHi, I'm sorry to say I'll be late.\\n<\/parameter>\\n<parameter=query>\\njohn@example.com\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "contacts",
+          "correct" : true,
+          "expected_tool" : "contacts",
+          "prompt" : "What's David's phone number?",
+          "raw_response_preview" : "<tool_call>\\n<function=contacts>\\n<parameter=action>\\nget_phone\\n<\/parameter>\\n<parameter=query>\\nDavid\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "notes",
+          "correct" : true,
+          "expected_tool" : "notes",
+          "prompt" : "Create a note called Shopping List with milk, eggs, bread",
+          "raw_response_preview" : "<tool_call>\\n<function=notes>\\n<parameter=action>\\ncreate\\n<\/parameter>\\n<parameter=body>\\nShopping List\\n<\/parameter>\\n<parameter=query>\\nmilk, eggs, bread\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "read",
+          "correct" : true,
+          "expected_tool" : "read",
+          "prompt" : "Read the file at ~\/Documents\/todo.txt",
+          "raw_response_preview" : "<tool_call>\\n<function=read>\\n<parameter=path>\\n~\/Documents\/todo.txt\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Can you look something up for me about quantum computing?",
+          "raw_response_preview" : "<tool_call>\\n<function=web_search>\\n<parameter=query>\\nquantum computing\\n<\/parameter>\\n<parameter=max_results>\\n5\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "How are you feeling today?",
+          "raw_response_preview" : "I'm feeling great! I'm ready to help you with anything you need. How can I assist you today?",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "Tell me a joke about programming",
+          "raw_response_preview" : "Here's a joke about programming:\\n\\nWhy did the programmer break up with his girlfriend?\\n\\nBecause he told her, \"I'm not a programmer, I'm a programmer.\"\\n\\n*Heh, that's a classic one!* 😄",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        }
+      ]
+    }
+  ]
+}
