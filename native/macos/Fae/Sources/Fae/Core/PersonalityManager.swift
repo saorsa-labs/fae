@@ -155,6 +155,8 @@ enum PersonalityManager {
           - Shared/community skills may also be discovered from ~/.agents/skills/, ./.agents/skills/, and ~/.fae-forge/tools/
           - Before creating a new skill, ask the user for confirmation.
           - Use manage_skill update to modify existing personal skill behavior.
+          - Use manage_skill patch for surgical body edits, update_script for scripts/, write_reference_file for references/assets, and replace_manifest for MANIFEST.json changes.
+          - Use manage_skill list_drafts / show_draft to review staged distillation drafts, then apply_draft or dismiss_draft only after the user explicitly decides.
         - Use run_skill for executable skills.
           - Prefer structured `params` objects over stuffing everything into a single input string.
           - When a skill needs credentials, collect them with input_request + store_key, then pass them via `secret_bindings` so secrets stay out of chat history.
@@ -217,6 +219,7 @@ enum PersonalityManager {
           - "be more creative/precise" → self_config adjust_setting llm.temperature (0.9 / 0.3)
           - "enable/disable thinking" → self_config adjust_setting llm.thinking_enabled true/false
           - "set your directive to X" → self_config set_directive X
+          - "what did we say about X" / "search our earlier chat for X" → session_search
           - "search for X" / "look up X" → web_search
           - "what's on my calendar" → calendar list
           - "list my tasks" / "show scheduled tasks" → scheduler_list
@@ -224,6 +227,7 @@ enum PersonalityManager {
           - "read the file X" → read
           - "save a note" → notes create
           - "who is X" / "contact for X" → contacts search
+        - Use session_search for transcript recovery and prior wording. Use memory for durable facts, preferences, and commitments.
         - After a tool returns results, confirm the action in 1-2 spoken sentences.
         - For general knowledge and simple conversation, answer directly without tools.
         """
@@ -301,14 +305,16 @@ enum PersonalityManager {
 
     // MARK: - Acknowledgment Rotation
 
-    private static var ackCounter: Int = 0
+    private static let ackLock = NSLock()
+    private static var _ackCounter: Int = 0
 
     private static func nextPhrase(from array: [String]) -> String {
-        let phrase = array[ackCounter % array.count]
-        ackCounter += 1
+        ackLock.lock()
+        let phrase = array[_ackCounter % array.count]
+        _ackCounter += 1
+        ackLock.unlock()
         return phrase
     }
-
     static func nextThinkingAcknowledgment() -> String { nextPhrase(from: thinkingAcknowledgments) }
     static func nextApprovalGranted() -> String { nextPhrase(from: approvalGranted) }
     static func nextApprovalDenied() -> String { nextPhrase(from: approvalDenied) }
@@ -472,6 +478,8 @@ enum PersonalityManager {
             var toolSection = """
                 Tool usage:
                 - Calendar, reminders, mail, contacts, notes queries: ALWAYS call the relevant tool. Do NOT answer from memory — these require real-time data from the tool.
+                - Questions about earlier chats, prior wording, or "what did we say/decide about X": use session_search.
+                - Use memory for durable facts, preferences, and commitments. Use session_search for transcript recovery.
                 - Real-time data, file access, web searches, system changes: use the appropriate tool.
                 - If the user explicitly names a tool, call that tool instead of answering from general knowledge.
                 - For Qwen-family local models, tool calls may be emitted in XML form such as:

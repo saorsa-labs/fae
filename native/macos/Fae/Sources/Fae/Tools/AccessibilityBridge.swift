@@ -22,6 +22,17 @@ enum AccessibilityBridge {
         let isSecureInput: Bool
     }
 
+    /// Snapshot of the currently focused accessibility element.
+    struct FocusedElementSnapshot: Sendable {
+        let role: String
+        let title: String?
+        let value: String?
+        let pid: pid_t
+        let appName: String?
+        let bundleIdentifier: String?
+        let isSecureInput: Bool
+    }
+
     enum BridgeError: LocalizedError {
         case accessibilityNotEnabled
         case appNotFound(String)
@@ -96,20 +107,7 @@ enum AccessibilityBridge {
             throw BridgeError.accessibilityNotEnabled
         }
 
-        let targetApp: NSRunningApplication
-        if let appName = appName {
-            guard let app = NSWorkspace.shared.runningApplications.first(where: {
-                $0.localizedName?.localizedCaseInsensitiveContains(appName) == true
-            }) else {
-                throw BridgeError.appNotFound(appName)
-            }
-            targetApp = app
-        } else {
-            guard let frontmost = NSWorkspace.shared.frontmostApplication else {
-                throw BridgeError.elementQueryFailed
-            }
-            targetApp = frontmost
-        }
+        let targetApp = try resolveTargetApp(appName: appName)
 
         let targetPid = targetApp.processIdentifier
         let appElement = AXUIElementCreateApplication(targetPid)
@@ -177,7 +175,64 @@ enum AccessibilityBridge {
         }
     }
 
+    /// Returns the focused accessibility element for a specific app or PID.
+    static func focusedElementSnapshot(appName: String? = nil, pid: pid_t? = nil) throws -> FocusedElementSnapshot? {
+        guard isAccessibilityEnabled() else {
+            throw BridgeError.accessibilityNotEnabled
+        }
+
+        let targetApp: NSRunningApplication
+        if let pid {
+            guard let app = NSRunningApplication(processIdentifier: pid) else {
+                throw BridgeError.actionFailed("Could not resolve application for pid \(pid)")
+            }
+            targetApp = app
+        } else {
+            targetApp = try resolveTargetApp(appName: appName)
+        }
+
+        let appElement = AXUIElementCreateApplication(targetApp.processIdentifier)
+        let focusedObject = attribute(appElement, kAXFocusedUIElementAttribute)
+            ?? attribute(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute)
+        guard let focusedElement = axElement(from: focusedObject) else {
+            return nil
+        }
+
+        let role = attribute(focusedElement, kAXRoleAttribute) as? String ?? ""
+        let title = attribute(focusedElement, kAXTitleAttribute) as? String
+        let value = attribute(focusedElement, kAXValueAttribute) as? String
+        let subrole = attribute(focusedElement, kAXSubroleAttribute) as? String
+        let secure = (subrole == (kAXSecureTextFieldSubrole as String))
+            || (role == (kAXTextFieldRole as String) && (title ?? "").lowercased().contains("password"))
+
+        return FocusedElementSnapshot(
+            role: role,
+            title: title,
+            value: value,
+            pid: targetApp.processIdentifier,
+            appName: targetApp.localizedName,
+            bundleIdentifier: targetApp.bundleIdentifier,
+            isSecureInput: secure
+        )
+    }
+
     // MARK: - Private Helpers
+
+    private static func resolveTargetApp(appName: String?) throws -> NSRunningApplication {
+        if let appName {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: {
+                $0.localizedName?.localizedCaseInsensitiveContains(appName) == true
+            }) else {
+                throw BridgeError.appNotFound(appName)
+            }
+            return app
+        }
+
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            throw BridgeError.elementQueryFailed
+        }
+        return frontmost
+    }
 
     /// Recursively collect interactive UI elements from an accessibility hierarchy.
     private static func collectElements(
@@ -266,6 +321,13 @@ enum AccessibilityBridge {
         var value: AnyObject?
         let result = AXUIElementCopyAttributeValue(element, attr as CFString, &value)
         return result == .success ? value : nil
+    }
+
+    private static func axElement(from value: AnyObject?) -> AXUIElement? {
+        guard let value else { return nil }
+        let cfValue = value as CFTypeRef
+        guard CFGetTypeID(cfValue) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
     }
 
     private static func cgPoint(from value: AnyObject?) -> CGPoint? {

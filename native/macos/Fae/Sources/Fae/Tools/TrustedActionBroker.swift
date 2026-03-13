@@ -139,7 +139,7 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
     /// is denied by default until a policy rule is added.
     private static let explicitRuleTools: Set<String> = [
         "read", "write", "edit", "bash", "self_config",
-        "web_search", "fetch_url", "input_request",
+        "session_search", "web_search", "fetch_url", "input_request",
         "activate_skill", "run_skill", "manage_skill",
         "delegate_agent",
         "channel_setup",

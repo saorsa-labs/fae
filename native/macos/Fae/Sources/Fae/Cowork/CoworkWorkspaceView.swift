@@ -17,6 +17,7 @@ private enum ModelPickerTarget {
     case agentEditor
     case selectedConversationAgent
     case newWorkspaceAgent
+    case forkedConversation
 }
 
 private struct EditableSchedulerTaskDraft: Identifiable, Equatable {
@@ -760,11 +761,17 @@ struct CoworkWorkspaceView: View {
     @State private var showingAddAgentSheet = false
     @State private var showingDeleteAgentAlert = false
     @State private var showingDeleteWorkspaceAlert = false
+    @State private var showingForkSheet = false
+    @State private var showingCompareSheet = false
     @State private var newWorkspaceName = ""
     @State private var newWorkspaceAgentID = WorkWithFaeAgentProfile.faeLocal.id
     @State private var newWorkspaceModel = ""
     @State private var newWorkspaceDirectoryURL: URL?
     @State private var renameWorkspaceName = ""
+    @State private var selectedConversationMessageID: UUID?
+    @State private var selectedConversationMessageIndex: Int?
+    @State private var forkWorkspaceName = ""
+    @State private var forkModelOption: CoworkModelOption?
     @State private var draggedWorkspaceID: UUID?
     @State private var editingAgentID: String?
     @State private var newAgentName = ""
@@ -814,6 +821,12 @@ struct CoworkWorkspaceView: View {
             }
             .sheet(isPresented: $showingRenameWorkspaceSheet) {
                 workspaceRenameSheet
+            }
+            .sheet(isPresented: $showingForkSheet) {
+                forkConversationSheet
+            }
+            .sheet(isPresented: $showingCompareSheet) {
+                compareConversationSheet
             }
             .sheet(isPresented: $showingAddAgentSheet) {
                 agentCreationSheet
@@ -878,10 +891,14 @@ struct CoworkWorkspaceView: View {
                 controller.scheduleRefresh(after: 0.05)
             }
             .onChange(of: controller.latestConsensusResults.count) {
-                showConsensusDetails = false
+                showConsensusDetails = !activeConsensusResults.isEmpty
             }
             .onChange(of: controller.workspaces.map(\.id)) {
                 draggedWorkspaceID = nil
+            }
+            .onChange(of: controller.selectedWorkspace?.id) {
+                selectedConversationMessageID = nil
+                selectedConversationMessageIndex = nil
             }
             .onReceive(NotificationCenter.default.publisher(for: .faeCoworkToggleInspectorRequested)) { _ in
                 showDetailsRail.toggle()
@@ -1333,7 +1350,7 @@ struct CoworkWorkspaceView: View {
                     .animation(.easeInOut(duration: 0.2), value: conversation.streamingThinkText.isEmpty)
                 }
 
-                if !controller.latestConsensusResults.isEmpty {
+                if !activeConsensusResults.isEmpty {
                     consensusSummaryStrip
                 }
 
@@ -1345,11 +1362,11 @@ struct CoworkWorkspaceView: View {
                             } else {
                                 ForEach(Array(conversation.messages.suffix(40).enumerated()), id: \.element.id) { offset, message in
                                     let absoluteIndex = max(0, conversation.messages.count - 40) + offset
-                                    conversationBubble(message)
+                                    conversationBubble(message, at: absoluteIndex)
                                         .transition(.move(edge: message.role == .assistant ? .leading : .trailing).combined(with: .opacity))
                                         .contextMenu {
                                             Button {
-                                                controller.forkWorkspace(upToMessageIndex: absoluteIndex)
+                                                prepareForkSheet(messageIndex: absoluteIndex)
                                             } label: {
                                                 Label("Fork from here", systemImage: "arrow.branch")
                                             }
@@ -1491,21 +1508,17 @@ struct CoworkWorkspaceView: View {
                                 .accessibilityLabel(controller.canCompareAcrossAgents
                                                     ? "Auto compare on send for \(controller.consensusParticipants.count) agents"
                                                     : "Auto compare on, but only one agent is available")
-                            } else {
-                                Button(action: {
-                                    if controller.canCompareAcrossAgents {
-                                        controller.compareDraftAcrossAgents()
-                                    } else {
-                                        showCompareUnavailablePopover = true
-                                    }
-                                }) {
+
+                                Button {
+                                    showingCompareSheet = true
+                                } label: {
                                     HStack(spacing: 7) {
-                                        Image(systemName: "square.stack.3d.up.fill")
+                                        Image(systemName: "slider.horizontal.3")
                                             .font(.system(size: 11, weight: .semibold))
-                                        Text("Compare \(controller.consensusParticipants.count)")
+                                        Text("Review compare")
                                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     }
-                                    .foregroundStyle(.primary.opacity(controller.canCompareAcrossAgents ? 0.84 : 0.42))
+                                    .foregroundStyle(.primary.opacity(0.84))
                                     .padding(.horizontal, 11)
                                     .padding(.vertical, 8)
                                     .background(
@@ -1515,29 +1528,30 @@ struct CoworkWorkspaceView: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
-                                .popover(isPresented: $showCompareUnavailablePopover) {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Label("Comparison needs 2+ agents", systemImage: "square.stack.3d.up.fill")
-                                            .font(.system(size: 13, weight: .semibold))
-                                            .foregroundStyle(.primary)
-                                        Text("Add a second agent to this workspace to compare responses side by side.")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.secondary)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                        Button("Add Agent") {
-                                            showCompareUnavailablePopover = false
-                                            showingAddAgentSheet = true
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .controlSize(.small)
+                            } else {
+                                Button(action: {
+                                    showingCompareSheet = true
+                                }) {
+                                    HStack(spacing: 7) {
+                                        Image(systemName: "square.stack.3d.up.fill")
+                                            .font(.system(size: 11, weight: .semibold))
+                                        Text("Compare setup")
+                                            .font(.system(size: 12, weight: .semibold, design: .rounded))
                                     }
-                                    .padding(16)
-                                    .frame(width: 260)
+                                    .foregroundStyle(.primary.opacity(0.84))
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.05))
+                                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                                    )
                                 }
+                                .buttonStyle(.plain)
                                 .help(controller.isStrictLocalWorkspace ? "This workspace is strict local only, so comparison stays disabled." : "Ask multiple agents to answer this draft and let Fae summarize the results.")
                                 .accessibilityLabel("Compare models")
                                 .accessibilityValue("\(controller.consensusParticipants.count) agents")
-                                .accessibilityHint("Ask multiple agents to answer this draft.")
+                                .accessibilityHint("Open compare setup, choose the participating models, then run the comparison.")
                             }
 
                             Spacer(minLength: 8)
@@ -1884,7 +1898,7 @@ struct CoworkWorkspaceView: View {
             },
             onFork: {
                 controller.selectWorkspace(workspace)
-                controller.forkSelectedWorkspace()
+                prepareForkSheet()
             },
             onRename: {
                 controller.selectWorkspace(workspace)
@@ -2086,13 +2100,244 @@ struct CoworkWorkspaceView: View {
         .frame(width: 420)
     }
 
+    private var forkConversationSheet: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(selectedConversationMessageIndex == nil ? "Fork conversation" : "Fork from here")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+
+            Text(selectedConversationMessageIndex == nil
+                 ? "Create a new branch from the current conversation and optionally continue it on a different model."
+                 : "Create a new branch from the selected point in the conversation and optionally continue it on a different model.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.primary.opacity(0.64))
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(selectedConversationMessageIndex == nil ? "Source" : "Fork point")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.56))
+                Text(forkSourceSummaryText)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            )
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("New conversation name")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.56))
+                TextField("Conversation name", text: $forkWorkspaceName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Continue with")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.56))
+                Button {
+                    openModelPickerForForkedConversation()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: forkModelOption?.providerKind == .faeLocalhost ? "lock.shield.fill" : "network")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle((forkModelOption?.providerKind == .faeLocalhost ? CoworkPalette.mint : CoworkPalette.cyan).opacity(0.92))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(forkModelDisplayValue)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.primary)
+                            Text(forkModelSummary)
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(.primary.opacity(0.52))
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.primary.opacity(0.4))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    showingForkSheet = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(selectedConversationMessageIndex == nil ? "Fork conversation" : "Fork from here") {
+                    submitForkConversation()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+    }
+
+    private var compareConversationSheet: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Compare models")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+
+            Text("Choose which models take part in comparison, inspect the exact prompt being fanned out, and review the answers side by side.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.primary.opacity(0.64))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("Compare behavior", selection: Binding(
+                get: { controller.selectedWorkspacePolicy.compareBehavior },
+                set: { controller.updateWorkspaceCompareBehavior($0) }
+            )) {
+                ForEach(WorkWithFaeCompareBehavior.allCases) { behavior in
+                    Text(behavior.displayName).tag(behavior)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Prompt to compare")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.56))
+                    Spacer()
+                    Text(comparePromptForSheet.isEmpty ? "Write a draft first" : "Current draft")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.42))
+                }
+                Text(comparePromptForSheet.isEmpty ? "Type a draft in the composer, then open Compare to choose the participating models." : comparePromptForSheet)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(comparePromptForSheet.isEmpty ? Color.primary.opacity(0.48) : Color.primary)
+                    .lineSpacing(3)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            )
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Models in this comparison")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.56))
+                    Spacer()
+                    if controller.usesAutomaticConsensusSelection {
+                        Text("Automatic selection")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary.opacity(0.48))
+                    } else {
+                        Button("Use automatic") {
+                            controller.resetConsensusParticipantsToAutomatic()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    }
+                }
+
+                Text(controller.usesAutomaticConsensusSelection
+                     ? "Fae is picking the best available participants. Tap any card to switch this workspace into a custom comparison set."
+                     : "This workspace is using a custom set of comparison models. Tap a selected card to remove it or another card to add it.")
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.56))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12, alignment: .top)], spacing: 12) {
+                    ForEach(controller.agents) { agent in
+                        compareParticipantCard(agent)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button("Add agent") {
+                        prepareNewAgentForm()
+                        showingAddAgentSheet = true
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(
+                        Capsule()
+                            .fill(Color.primary.opacity(0.05))
+                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                    )
+
+                    if let selectedAgent = controller.selectedAgent {
+                        Button("Edit current agent") {
+                            prepareAgentFormForEditing(selectedAgent)
+                            showingAddAgentSheet = true
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(
+                            Capsule()
+                                .fill(Color.primary.opacity(0.05))
+                                .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                        )
+                    }
+                }
+            }
+
+            if !activeConsensusResults.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Latest comparison")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.56))
+                    consensusResultsBoard(activeConsensusResults)
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Done") {
+                    showingCompareSheet = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Compare now") {
+                    controller.compareDraftAcrossAgents()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(comparePromptForSheet.isEmpty || controller.consensusParticipants.count < 2)
+            }
+        }
+        .padding(24)
+        .frame(width: 880, height: 720)
+    }
+
     private var modelPickerSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(modelPickerTarget == .selectedConversationAgent ? "Choose conversation model" : "Choose model")
+            Text(modelPickerTitle)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
-            Text(modelPickerTarget == .selectedConversationAgent
-                 ? "Switch between local and remote models without losing the conversation. Model names stay primary; provider details are secondary."
-                 : "Pick the model this agent should use.")
+            Text(modelPickerDescription)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.primary.opacity(0.64))
                 .fixedSize(horizontal: false, vertical: true)
@@ -2127,6 +2372,8 @@ struct CoworkWorkspaceView: View {
                                         controller.applyConversationModelSelection(option)
                                     case .newWorkspaceAgent:
                                         newWorkspaceModel = option.modelIdentifier
+                                    case .forkedConversation:
+                                        forkModelOption = option
                                     }
                                     showingModelPickerSheet = false
                                 } label: {
@@ -2669,7 +2916,7 @@ struct CoworkWorkspaceView: View {
                     showingRenameWorkspaceSheet = true
                 }
                 Button("Fork conversation") {
-                    controller.forkSelectedWorkspace()
+                    prepareForkSheet()
                 }
                 Divider()
             }
@@ -3076,7 +3323,8 @@ struct CoworkWorkspaceView: View {
     }
 
     private var consensusSummaryStrip: some View {
-        let successCount = controller.latestConsensusResults.filter { $0.errorText == nil }.count
+        let results = activeConsensusResults
+        let successCount = results.filter { $0.errorText == nil }.count
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
@@ -3093,7 +3341,7 @@ struct CoworkWorkspaceView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
-                    capsule(text: "\(successCount)/\(controller.latestConsensusResults.count) replied", accent: successCount == controller.latestConsensusResults.count ? CoworkPalette.mint : CoworkPalette.amber)
+                    capsule(text: "\(successCount)/\(results.count) replied", accent: successCount == results.count ? CoworkPalette.mint : CoworkPalette.amber)
 
                     Button(showConsensusDetails ? "Hide answers" : "Show answers") {
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
@@ -3110,11 +3358,38 @@ struct CoworkWorkspaceView: View {
                             .fill(Color.primary.opacity(0.06))
                             .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     )
+
+                    Button("Compare setup") {
+                        showingCompareSheet = true
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule()
+                            .fill(Color.primary.opacity(0.06))
+                            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                    )
+                }
+            }
+
+            if let activeConsensusPrompt, !activeConsensusPrompt.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Compared prompt")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.45))
+                    Text(activeConsensusPrompt)
+                        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.82))
+                        .lineLimit(showConsensusDetails ? 6 : 2)
+                        .lineSpacing(3)
                 }
             }
 
             FlowLayout(spacing: 8) {
-                ForEach(controller.latestConsensusResults) { result in
+                ForEach(results) { result in
                     capsule(
                         text: result.errorText == nil ? result.agentName : "\(result.agentName) failed",
                         accent: result.errorText == nil ? (result.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan) : CoworkPalette.rose
@@ -3123,14 +3398,7 @@ struct CoworkWorkspaceView: View {
             }
 
             if showConsensusDetails {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 12) {
-                        ForEach(controller.latestConsensusResults) { result in
-                            consensusResultCard(result)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
+                consensusResultsBoard(results)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -3187,7 +3455,7 @@ struct CoworkWorkspaceView: View {
             .frame(maxHeight: 220)
         }
         .padding(14)
-        .frame(width: 280, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 260, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color.primary.opacity(0.045))
@@ -3198,14 +3466,73 @@ struct CoworkWorkspaceView: View {
         )
     }
 
-    private func conversationBubble(_ message: ChatMessage) -> some View {
-        HStack {
-            if message.role == .assistant {
-                bubble(message.content, accent: Color.primary.opacity(0.10), borderAccent: Color.primary.opacity(0.10), isTrailing: false)
-                Spacer(minLength: 60)
-            } else {
-                Spacer(minLength: 60)
-                bubble(message.content, accent: CoworkPalette.heather.opacity(0.18), borderAccent: CoworkPalette.heather.opacity(0.28), isTrailing: true)
+    private func conversationBubble(_ message: ChatMessage, at index: Int) -> some View {
+        let isSelected = selectedConversationMessageID == message.id
+
+        return VStack(alignment: message.role == .assistant ? .leading : .trailing, spacing: 8) {
+            HStack {
+                if message.role == .assistant {
+                    bubble(
+                        message.content,
+                        accent: Color.primary.opacity(0.10),
+                        borderAccent: isSelected ? CoworkPalette.amber.opacity(0.48) : Color.primary.opacity(0.10),
+                        isTrailing: false
+                    )
+                    Spacer(minLength: 60)
+                } else {
+                    Spacer(minLength: 60)
+                    bubble(
+                        message.content,
+                        accent: CoworkPalette.heather.opacity(0.18),
+                        borderAccent: isSelected ? CoworkPalette.amber.opacity(0.48) : CoworkPalette.heather.opacity(0.28),
+                        isTrailing: true
+                    )
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {
+                    if isSelected {
+                        selectedConversationMessageID = nil
+                        selectedConversationMessageIndex = nil
+                    } else {
+                        selectedConversationMessageID = message.id
+                        selectedConversationMessageIndex = index
+                    }
+                }
+            }
+
+            if isSelected {
+                HStack(spacing: 8) {
+                    if message.role == .user {
+                        Spacer(minLength: 0)
+                    }
+                    Button {
+                        prepareForkSheet(messageIndex: index)
+                    } label: {
+                        Label("Fork from here", systemImage: "arrow.branch")
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(CoworkPalette.amber.opacity(0.16))
+                                    .overlay(Capsule().stroke(CoworkPalette.amber.opacity(0.26), lineWidth: 1))
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("Selected message \(index + 1)")
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.48))
+
+                    if message.role == .assistant {
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(.horizontal, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }
@@ -3227,7 +3554,6 @@ struct CoworkWorkspaceView: View {
             .foregroundStyle(.primary.opacity(0.94))
             .multilineTextAlignment(isTrailing ? .trailing : .leading)
             .lineSpacing(4)
-            .textSelection(.enabled)
             .padding(.horizontal, 15)
             .padding(.vertical, 13)
             .background(
@@ -3703,6 +4029,39 @@ struct CoworkWorkspaceView: View {
         return controller.isStrictLocalWorkspace ? CoworkPalette.rose : CoworkPalette.cyan
     }
 
+    private var activeConsensusResults: [WorkWithFaeConsensusResult] {
+        guard controller.latestConsensusWorkspaceID == controller.selectedWorkspace?.id else { return [] }
+        return controller.latestConsensusResults
+    }
+
+    private var activeConsensusPrompt: String? {
+        guard controller.latestConsensusWorkspaceID == controller.selectedWorkspace?.id else { return nil }
+        return controller.latestConsensusPrompt
+    }
+
+    private var comparePromptForSheet: String {
+        let draft = controller.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draft.isEmpty {
+            return draft
+        }
+        return activeConsensusPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var selectedForkMessage: ChatMessage? {
+        guard let selectedConversationMessageIndex,
+              conversation.messages.indices.contains(selectedConversationMessageIndex)
+        else {
+            return nil
+        }
+        return conversation.messages[selectedConversationMessageIndex]
+    }
+
+    private var currentConversationModelOption: CoworkModelOption? {
+        guard let agent = controller.selectedAgent else { return nil }
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+        return modelOption(for: agent.modelIdentifier, preset: preset, baseURL: agent.baseURL)
+    }
+
     private var latestAssistantReply: String? {
         conversation.messages.last(where: { $0.role == .assistant })?.content.nilIfEmpty
     }
@@ -3723,6 +4082,8 @@ struct CoworkWorkspaceView: View {
             return controller.selectedAgent?.modelIdentifier ?? ""
         case .newWorkspaceAgent:
             return newWorkspaceModel
+        case .forkedConversation:
+            return forkModelOption?.modelIdentifier ?? currentConversationModelOption?.modelIdentifier ?? ""
         }
     }
 
@@ -3738,7 +4099,67 @@ struct CoworkWorkspaceView: View {
             guard let agent = newWorkspaceSelectedAgent else { return nil }
             let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
             return modelOptionID(for: newWorkspaceResolvedModelIdentifier, preset: preset, baseURL: agent.baseURL)
+        case .forkedConversation:
+            guard let option = forkModelOption ?? currentConversationModelOption else { return nil }
+            let preset = CoworkBackendPresetCatalog.preset(id: option.providerPresetID) ?? option.providerKind.defaultPreset
+            return modelOptionID(for: option.modelIdentifier, preset: preset, baseURL: option.baseURL)
         }
+    }
+
+    private var modelPickerTitle: String {
+        switch modelPickerTarget {
+        case .agentEditor:
+            return "Choose model"
+        case .selectedConversationAgent:
+            return "Choose conversation model"
+        case .newWorkspaceAgent:
+            return "Choose default model"
+        case .forkedConversation:
+            return "Choose fork model"
+        }
+    }
+
+    private var modelPickerDescription: String {
+        switch modelPickerTarget {
+        case .agentEditor:
+            return "Pick the model this agent will use when Cowork sends work to it."
+        case .selectedConversationAgent:
+            return "Switch this conversation to a different model without losing the thread."
+        case .newWorkspaceAgent:
+            return "Choose the starting model for the new conversation."
+        case .forkedConversation:
+            return "Continue the new fork on the same model or send the branch to a different model."
+        }
+    }
+
+    private var forkSourceSummaryText: String {
+        if let message = selectedForkMessage, let index = selectedConversationMessageIndex {
+            let roleLabel = message.role == .assistant ? "Assistant" : "You"
+            let timestamp = message.timestamp.formatted(date: .abbreviated, time: .shortened)
+            let preview = message.content
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(roleLabel) · message \(index + 1) · \(timestamp)\n\(String(preview.prefix(320)))"
+        }
+
+        let workspaceName = controller.selectedWorkspace?.name ?? "Conversation"
+        let messageCount = conversation.messages.count
+        let modelLabel = selectedAgentModelLabel ?? "Current model"
+        return "\(workspaceName)\n\(messageCount) message\(messageCount == 1 ? "" : "s") · \(modelLabel)"
+    }
+
+    private var forkModelDisplayValue: String {
+        forkModelOption?.displayTitle
+            ?? currentConversationModelOption?.displayTitle
+            ?? selectedAgentModelLabel
+            ?? "Current model"
+    }
+
+    private var forkModelSummary: String {
+        if let option = forkModelOption ?? currentConversationModelOption {
+            return "\(option.providerDisplayName) · \(option.compactLabel)"
+        }
+        return "Keep the current model for the new branch"
     }
 
     private var presetSuggestedModels: [String] {
@@ -3794,6 +4215,144 @@ struct CoworkWorkspaceView: View {
         }
     }
 
+    private func prepareForkSheet(messageIndex: Int? = nil) {
+        if let messageIndex, conversation.messages.indices.contains(messageIndex) {
+            selectedConversationMessageIndex = messageIndex
+            selectedConversationMessageID = conversation.messages[messageIndex].id
+        } else {
+            selectedConversationMessageIndex = nil
+            selectedConversationMessageID = nil
+        }
+
+        let workspaceName = controller.selectedWorkspace?.name ?? "Conversation"
+        forkWorkspaceName = "\(workspaceName) fork"
+        forkModelOption = currentConversationModelOption
+        showingForkSheet = true
+    }
+
+    private func submitForkConversation() {
+        let trimmedName = forkWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if let selectedConversationMessageIndex {
+            controller.forkWorkspace(
+                upToMessageIndex: selectedConversationMessageIndex,
+                named: trimmedName,
+                using: forkModelOption
+            )
+        } else {
+            controller.forkWorkspace(named: trimmedName, using: forkModelOption)
+        }
+        showingForkSheet = false
+        selectedConversationMessageID = nil
+        selectedConversationMessageIndex = nil
+    }
+
+    private func openModelPickerForForkedConversation() {
+        modelPickerTarget = .forkedConversation
+        modelSearchText = ""
+        isLoadingModelPickerOptions = false
+        browsableModelOptions = controller.availableConversationModelOptions()
+        showingModelPickerSheet = true
+    }
+
+    private func compareParticipantCard(_ agent: WorkWithFaeAgentProfile) -> some View {
+        let preset = agent.backendPreset ?? agent.providerKind.defaultPreset
+        let option = modelOption(for: agent.modelIdentifier, preset: preset, baseURL: agent.baseURL)
+        let isSelected = controller.isConsensusParticipantSelected(agent)
+        let isCurrentConversationAgent = controller.selectedWorkspace?.agentID == agent.id
+        let isBlockedByPolicy = controller.isStrictLocalWorkspace && !agent.isTrustedLocal
+        let capabilities = Array((option?.capabilities ?? []).sorted { $0.rawValue < $1.rawValue })
+
+        return Button {
+            controller.toggleConsensusParticipant(agent)
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(agent.name)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(option?.displayTitle ?? compactModelLabel(for: agent.modelIdentifier, preset: preset))
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.primary.opacity(0.72))
+                            .lineLimit(2)
+                        Text(option?.displaySubtitle ?? agent.backendDisplayName)
+                            .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(.primary.opacity(0.48))
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(isSelected ? CoworkPalette.mint : .primary.opacity(0.25))
+                }
+
+                HStack(spacing: 6) {
+                    capsule(text: agent.isTrustedLocal ? "Local" : "Remote", accent: agent.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan)
+                    if isCurrentConversationAgent {
+                        capsule(text: "Current", accent: CoworkPalette.amber)
+                    }
+                    if isBlockedByPolicy {
+                        capsule(text: "Blocked", accent: CoworkPalette.rose)
+                    }
+                    if let ctxLabel = option?.contextWindowLabel {
+                        capsule(text: ctxLabel, accent: CoworkPalette.heather)
+                    }
+                }
+
+                if !capabilities.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(capabilities, id: \.rawValue) { capability in
+                            HStack(spacing: 5) {
+                                CoworkCapabilityBadge(capability: capability)
+                                Text(capability.rawValue)
+                                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.primary.opacity(0.6))
+                            }
+                        }
+                    }
+                }
+
+                Text(isBlockedByPolicy
+                     ? "Strict local mode keeps this remote model out of the comparison."
+                     : (isSelected ? "Included in the comparison run." : "Tap to include this model in the comparison."))
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.54))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isSelected ? Color.primary.opacity(0.075) : Color.primary.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(
+                                isSelected ? CoworkPalette.amber.opacity(0.28) : Color.primary.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isBlockedByPolicy)
+        .opacity(isBlockedByPolicy ? 0.72 : 1)
+    }
+
+    private func consensusResultsBoard(_ results: [WorkWithFaeConsensusResult]) -> some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 12, alignment: .top)], spacing: 12) {
+                ForEach(results) { result in
+                    consensusResultCard(result)
+                }
+            }
+            .padding(.trailing, 4)
+        }
+        .frame(minHeight: 240, maxHeight: 420)
+    }
+
     private func openModelPickerForSelectedAgent() {
         modelPickerTarget = .selectedConversationAgent
         modelSearchText = ""
@@ -3816,6 +4375,8 @@ struct CoworkWorkspaceView: View {
         switch target {
         case .newWorkspaceAgent:
             currentModel = newWorkspaceModel
+        case .forkedConversation:
+            currentModel = forkModelOption?.modelIdentifier ?? agent.modelIdentifier
         case .agentEditor, .selectedConversationAgent:
             currentModel = agent.modelIdentifier
         }

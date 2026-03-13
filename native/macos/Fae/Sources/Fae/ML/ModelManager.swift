@@ -139,7 +139,10 @@ actor ModelManager {
         config: FaeConfig
     ) async throws {
         let (modelId, recommendedContext) = FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset)
-        self.recommendedContextSize = recommendedContext
+        let effectiveContext = config.llm.contextSizeTokens > 0
+            ? min(recommendedContext, config.llm.contextSizeTokens)
+            : recommendedContext
+        self.recommendedContextSize = effectiveContext
         loadedConciergeModelId = nil
         dualModelActive = false
         UserDefaults.standard.removeObject(forKey: "fae.loaded_concierge_model_id")
@@ -409,13 +412,20 @@ actor ModelManager {
 
     func loadConciergeIfNeeded(
         llm: any LLMEngine,
-        config: FaeConfig
-    ) async {
+        config: FaeConfig,
+        requireSuccess: Bool = false
+    ) async throws {
         guard config.llm.dualModelEnabled else {
             UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
             UserDefaults.standard.set("dual_model_disabled", forKey: "fae.runtime.fallback_reason")
             publishLocalStackStatus(currentRoute: nil)
             NSLog("ModelManager: dual-model disabled — concierge load skipped")
+            if requireSuccess {
+                throw MLEngineError.loadFailed(
+                    "Concierge",
+                    startupBlockingConciergeError("Dual-model mode is disabled.")
+                )
+            }
             return
         }
 
@@ -426,6 +436,12 @@ actor ModelManager {
             UserDefaults.standard.set("insufficient_ram_for_concierge", forKey: "fae.runtime.fallback_reason")
             publishLocalStackStatus(currentRoute: nil)
             NSLog("ModelManager: dual-model ineligible on current RAM tier — concierge load skipped")
+            if requireSuccess {
+                throw MLEngineError.loadFailed(
+                    "Concierge",
+                    startupBlockingConciergeError("Insufficient RAM for concierge.")
+                )
+            }
             return
         }
 
@@ -434,6 +450,12 @@ actor ModelManager {
             UserDefaults.standard.set("no_concierge_model_selected", forKey: "fae.runtime.fallback_reason")
             publishLocalStackStatus(currentRoute: nil)
             NSLog("ModelManager: no concierge model selected")
+            if requireSuccess {
+                throw MLEngineError.loadFailed(
+                    "Concierge",
+                    startupBlockingConciergeError("No concierge model is selected.")
+                )
+            }
             return
         }
 
@@ -457,6 +479,9 @@ actor ModelManager {
             UserDefaults.standard.set("concierge_load_failed", forKey: "fae.runtime.fallback_reason")
             publishLocalStackStatus(currentRoute: nil)
             NSLog("ModelManager: concierge load failed (continuing single-model): %@", error.localizedDescription)
+            if requireSuccess {
+                throw MLEngineError.loadFailed("Concierge", error)
+            }
         }
     }
 
@@ -485,6 +510,14 @@ actor ModelManager {
                 ]
             )
         }
+    }
+
+    private func startupBlockingConciergeError(_ message: String) -> NSError {
+        NSError(
+            domain: "Fae.ModelManager",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
     }
 
     private func persistVoiceRuntimeStatus(source: String, lockApplied: Bool) {

@@ -55,6 +55,8 @@ actor PipelineCoordinator {
     private let config: FaeConfig
     private let conversationState: ConversationStateTracker
     private let memoryOrchestrator: MemoryOrchestrator?
+    private let sessionStore: SessionStore?
+    private let workflowTraceStore: WorkflowTraceStore?
     private let approvalManager: ApprovalManager?
     private let registry: ToolRegistry
     private let actionBroker: any TrustedActionBroker
@@ -275,14 +277,18 @@ actor PipelineCoordinator {
             in: userText,
             availableToolNames: availableToolNames
         )
-        switch (proactiveAllowedTools, explicitMentions.isEmpty) {
+        let inferredMentions = explicitMentions.isEmpty
+            ? inferredToolNamesForTurn(in: userText, availableToolNames: availableToolNames)
+            : []
+        let requestedTools = explicitMentions.isEmpty ? inferredMentions : explicitMentions
+        switch (proactiveAllowedTools, requestedTools.isEmpty) {
         case let (allowed?, false):
-            let narrowed = allowed.intersection(explicitMentions)
+            let narrowed = allowed.intersection(requestedTools)
             return narrowed.isEmpty ? allowed : narrowed
         case let (allowed?, true):
             return allowed
         case (nil, false):
-            return explicitMentions
+            return requestedTools
         case (nil, true):
             return nil
         }
@@ -302,6 +308,138 @@ actor PipelineCoordinator {
                     matches.insert(toolName)
                     break
                 }
+            }
+        }
+
+        return matches
+    }
+
+    static func inferredToolNamesForTurn(
+        in userText: String,
+        availableToolNames: [String]
+    ) -> Set<String> {
+        let lower = userText.lowercased()
+        let available = Set(availableToolNames)
+        var matches: Set<String> = []
+
+        func add(_ names: String...) {
+            for name in names where available.contains(name) {
+                matches.insert(name)
+            }
+        }
+
+        func containsAny(_ terms: [String]) -> Bool {
+            terms.contains { lower.contains($0) }
+        }
+
+        if containsAny([
+            "what did we say about", "what did we decide about", "earlier conversation",
+            "earlier chat", "previous conversation", "previous chat", "search our conversation",
+            "search our conversations", "search the conversation", "search the transcript",
+            "look through our chat", "find in our chat", "find in previous chats",
+            "session search", "session_search",
+        ]) {
+            add("session_search")
+        }
+
+        if containsAny([
+            "search the web", "search web", "look up", "look something up",
+            "latest news", "news about", "headline", "search online", "find online"
+        ]) || isToolBackedLookupRequest(userText) {
+            add("web_search", "fetch_url", "read")
+        }
+
+        if containsAny([
+            "read ", "open ", "summarize ", "this file", "that file",
+            ".md", ".txt", ".json", ".swift", ".py", ".toml", "/users/", "~/", "/tmp/"
+        ]) {
+            add("read")
+        }
+
+        if containsAny([
+            "write ", "create file", "save ", "edit ", "modify ", "rewrite ",
+            "patch ", "update this file", "change this file"
+        ]) {
+            add("write", "edit", "read")
+        }
+
+        if containsAny([
+            "terminal", "shell", "bash", "command line", "run command",
+            "execute ", "git ", "npm ", "pnpm ", "cargo ", "swift build", "just "
+        ]) {
+            add("bash", "read", "write", "edit")
+        }
+
+        if containsAny([
+            "calendar", "schedule", "meeting", "appointment", "today", "tomorrow",
+            "free time", "availability", "busy"
+        ]) {
+            add("calendar")
+        }
+
+        if containsAny(["remind me", "reminder", "todo", "to-do", "task list", "tasks"]) {
+            add("reminders")
+        }
+
+        if containsAny(["contact", "phone number", "email address"]) {
+            add("contacts")
+        }
+
+        if containsAny(["send email", "draft email", "compose email", "mail "]) {
+            add("mail", "contacts")
+        }
+
+        if containsAny(["note", "notes", "jot down"]) {
+            add("notes")
+        }
+
+        if containsAny([
+            "screen", "what's on my screen", "what is on my screen", "ui", "button",
+            "click ", "type ", "scroll", "find element", "screenshot"
+        ]) {
+            add("screenshot", "read_screen", "click", "type_text", "scroll", "find_element")
+        }
+
+        if containsAny(["camera", "photo", "take a picture", "webcam"]) {
+            add("camera")
+        }
+
+        if containsAny(["skill", "activate skill", "run skill", "manage skill"]) {
+            add("activate_skill", "run_skill", "manage_skill")
+        }
+
+        if containsAny([
+            "schedule job", "automation", "scheduled task", "scheduler",
+            "every day", "every week", "cron"
+        ]) {
+            add(
+                "scheduler_list", "scheduler_create", "scheduler_update",
+                "scheduler_delete", "scheduler_trigger"
+            )
+        }
+
+        if containsAny(["settings", "config", "preference", "tool mode", "permission"]) {
+            add("self_config", "channel_setup")
+        }
+
+        if containsAny([
+            "voice identity", "speaker profile", "recognize my voice", "wake word"
+        ]) {
+            add("voice_identity")
+        }
+
+        if matches.count == 1 {
+            switch matches.first {
+            case "calendar":
+                add("reminders")
+            case "reminders":
+                add("calendar")
+            case "mail":
+                add("contacts")
+            case "web_search":
+                add("fetch_url", "read")
+            default:
+                break
             }
         }
 
@@ -632,6 +770,11 @@ actor PipelineCoordinator {
         switch toolName {
         case "self_config":
             aliases.formUnion(["self config", "settings tool", "config tool"])
+        case "session_search":
+            aliases.formUnion([
+                "session search", "session_search", "transcript search", "search our chat",
+                "search our conversation", "search previous conversation",
+            ])
         case "web_search":
             aliases.formUnion(["web search", "search tool"])
         case "fetch_url":
@@ -683,7 +826,7 @@ actor PipelineCoordinator {
     static func prefersLegacyInlineToolPrompt(modelId: String?) -> Bool {
         guard let modelId else { return false }
         let normalized = modelId.lowercased()
-        return normalized.contains("qwen3.5") || normalized.contains("qwen3-")
+        return normalized.contains("claude-4.6-opus-distilled")
     }
 
     /// Update the model locality (local vs. non-local co-work) for damage-control policy.
@@ -894,6 +1037,20 @@ actor PipelineCoordinator {
     private var lastUserTurnEndedAt: Date?
     private var ttfaEmittedForCurrentTurn: Bool = false
     private var currentTurnID: String?
+    private var activeConversationSessionID: String?
+
+    private struct WorkflowTraceContext: Sendable {
+        let turnID: String
+        let source: String
+        let userGoal: String
+        var sessionID: String?
+        var runID: String?
+        var toolSequence: [String] = []
+        var userApproved: Bool = false
+        var damageControlIntervened: Bool = false
+    }
+
+    private var workflowTraceContexts: [String: WorkflowTraceContext] = [:]
 
     private struct PendingSemanticTurn: Sendable {
         let rawText: String
@@ -1001,6 +1158,8 @@ actor PipelineCoordinator {
         config: FaeConfig,
         conversationState: ConversationStateTracker,
         memoryOrchestrator: MemoryOrchestrator? = nil,
+        sessionStore: SessionStore? = nil,
+        workflowTraceStore: WorkflowTraceStore? = nil,
         approvalManager: ApprovalManager? = nil,
         registry: ToolRegistry,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
@@ -1021,6 +1180,8 @@ actor PipelineCoordinator {
         self.config = config
         self.conversationState = conversationState
         self.memoryOrchestrator = memoryOrchestrator
+        self.sessionStore = sessionStore
+        self.workflowTraceStore = workflowTraceStore
         self.approvalManager = approvalManager
         self.registry = registry
         self.actionBroker = DefaultTrustedActionBroker(
@@ -1096,10 +1257,13 @@ actor PipelineCoordinator {
         pipelineTask = nil
         cancelDeferredToolJobs()
         await stopSpeechSegmentProcessingLoop()
+        await closeConversationSessionIfNeeded(reason: "pipeline_stop")
+        await abandonAllWorkflowTraces(reason: "Pipeline stopped before workflow completion.")
         await capture.stopCapture()
         await playback.stop()
         await llmEngine.shutdown()
         await conciergeEngine?.shutdown()
+        currentTurnID = nil
         eventBus.send(.pipelineStateChanged(.stopped))
         NSLog("PipelineCoordinator: pipeline stopped")
     }
@@ -1140,10 +1304,13 @@ actor PipelineCoordinator {
         cancelDeferredToolJobs()
         await playback.stop()
         assistantSpeaking = false
+        lastAssistantStart = nil
+        echoSuppressor.reset()
         // Ensure generation flag is cleared so the pipeline accepts new injections after reset.
         assistantGenerating = false
         awaitingApproval = false
         manualOnlyApprovalPending = false
+        await abandonAllWorkflowTraces(reason: "Generation cancelled before workflow completion.")
         NSLog("PipelineCoordinator: cancelAndWait complete")
     }
 
@@ -1478,12 +1645,18 @@ actor PipelineCoordinator {
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
         clearPendingSemanticTurn()
+        await closeConversationSessionIfNeeded(reason: "conversation_reset")
+        await abandonAllWorkflowTraces(reason: "Conversation reset before workflow completion.")
         await conversationState.clear()
         await llmEngine.resetSession()
         await conciergeEngine?.resetSession()
         _ = await RoleplaySessionStore.shared.stop()
         currentTurnGenerationContext = nil
+        currentTurnID = nil
         sessionDeclaredUserName = nil
+        assistantSpeaking = false
+        lastAssistantStart = nil
+        echoSuppressor.reset()
         NSLog("PipelineCoordinator: conversation fully reset (test harness)")
     }
 
@@ -2267,10 +2440,10 @@ actor PipelineCoordinator {
         }
     }
 
-    private func sleepAfterIdleTimeout(seconds: Int) {
+    private func sleepAfterIdleTimeout(seconds: Int) async {
         guard gateState == .active else { return }
         let inFollowup = engagedUntil.map { Date() < $0 } ?? false
-        guard !assistantSpeaking, !assistantGenerating, !awaitingApproval, !inFollowup else {
+        guard !assistantSpeaking, !assistantGenerating, !awaitingApproval, !inFollowup, deferredToolTasks.isEmpty else {
             scheduleIdleRearm()
             return
         }
@@ -2279,6 +2452,7 @@ actor PipelineCoordinator {
         engagedUntil = nil
         idleRearmTask = nil
         NSLog("PipelineCoordinator: gate → idle (idle timeout %ds)", seconds)
+        await closeConversationSessionIfNeeded(reason: "idle_timeout")
     }
 
     private func effectiveVisionEnabled() -> Bool {
@@ -2377,10 +2551,338 @@ actor PipelineCoordinator {
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
         clearPendingSemanticTurn()
+        await closeConversationSessionIfNeeded(reason: "conversation_reset")
         await conversationState.clear()
         await llmEngine.resetSession()
+        currentTurnID = nil
         NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
         debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
+    }
+
+    private func ensureConversationSessionIfNeeded(startedAt: Date) async -> String? {
+        if let activeConversationSessionID {
+            updateWorkflowTraceSessionID(activeConversationSessionID, turnID: currentTurnID)
+            return activeConversationSessionID
+        }
+        guard let sessionStore else { return nil }
+        do {
+            let session = try await sessionStore.openSession(
+                kind: .main,
+                speakerId: currentSpeakerLabel,
+                startedAt: startedAt
+            )
+            activeConversationSessionID = session.id
+            updateWorkflowTraceSessionID(session.id, turnID: currentTurnID)
+            return session.id
+        } catch {
+            NSLog("PipelineCoordinator: session open error: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func persistAcceptedUserTurnIfNeeded(_ text: String) async {
+        guard let sessionStore, let turnID = currentTurnID else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let createdAt = currentUtteranceTimestamp ?? Date()
+        guard let sessionID = await ensureConversationSessionIfNeeded(startedAt: createdAt) else { return }
+        do {
+            _ = try await sessionStore.appendMessage(
+                sessionId: sessionID,
+                turnId: turnID,
+                role: .user,
+                content: trimmed,
+                speakerId: currentSpeakerLabel,
+                createdAt: createdAt
+            )
+        } catch {
+            NSLog("PipelineCoordinator: session user message persist error: %@", error.localizedDescription)
+        }
+    }
+
+    private func persistFinalAssistantTurnIfNeeded(_ text: String, turnID: String? = nil) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let sessionStore, let sessionID = activeConversationSessionID {
+            do {
+                _ = try await sessionStore.appendMessage(
+                    sessionId: sessionID,
+                    turnId: turnID ?? currentTurnID,
+                    role: .assistant,
+                    content: trimmed,
+                    createdAt: Date()
+                )
+            } catch {
+                NSLog("PipelineCoordinator: session assistant message persist error: %@", error.localizedDescription)
+            }
+        }
+        await finalizeWorkflowTraceIfNeeded(turnID: turnID ?? currentTurnID, assistantOutcome: trimmed, success: true)
+    }
+
+    private func closeConversationSessionIfNeeded(reason: String) async {
+        guard let sessionStore, let sessionID = activeConversationSessionID else { return }
+        do {
+            try await sessionStore.closeSession(id: sessionID, endedAt: Date())
+            activeConversationSessionID = nil
+            debugLog(debugConsole, .pipeline, "Closed conversation session \(sessionID.prefix(8)) reason=\(reason)")
+        } catch {
+            NSLog("PipelineCoordinator: session close error (%@): %@", reason, error.localizedDescription)
+        }
+    }
+
+    private func workflowTraceSource(
+        proactiveContext: ProactiveRequestContext?,
+        turnSource: ActionSource
+    ) -> String {
+        if let proactiveContext {
+            return "scheduler:\(proactiveContext.taskId)"
+        }
+        return turnSource.rawValue
+    }
+
+    private func prepareWorkflowTraceContextIfNeeded(
+        turnID: String?,
+        userGoal: String,
+        proactiveContext: ProactiveRequestContext?,
+        turnSource: ActionSource
+    ) {
+        guard let turnID else { return }
+        workflowTraceContexts[turnID] = WorkflowTraceContext(
+            turnID: turnID,
+            source: workflowTraceSource(proactiveContext: proactiveContext, turnSource: turnSource),
+            userGoal: userGoal,
+            sessionID: activeConversationSessionID,
+            runID: nil
+        )
+    }
+
+    private func pruneUnusedWorkflowTraceContexts(keeping activeTurnID: String?) {
+        workflowTraceContexts = workflowTraceContexts.filter { turnID, context in
+            if turnID == activeTurnID { return true }
+            return context.runID != nil
+        }
+    }
+
+    private func updateWorkflowTraceSessionID(_ sessionID: String?, turnID: String?) {
+        guard let turnID, var context = workflowTraceContexts[turnID] else { return }
+        context.sessionID = sessionID
+        workflowTraceContexts[turnID] = context
+    }
+
+    private func ensureWorkflowTraceRun(turnID: String?) async -> String? {
+        guard let workflowTraceStore,
+              let turnID,
+              var context = workflowTraceContexts[turnID]
+        else {
+            return nil
+        }
+
+        if let runID = context.runID {
+            return runID
+        }
+
+        do {
+            let run = try await workflowTraceStore.createRun(
+                sessionId: context.sessionID,
+                turnId: context.turnID,
+                source: context.source,
+                userGoal: context.userGoal
+            )
+            context.runID = run.id
+            workflowTraceContexts[turnID] = context
+            return run.id
+        } catch {
+            NSLog("PipelineCoordinator: workflow trace run create error: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func recordWorkflowPreflightDenied(
+        turnID: String?,
+        callId: String,
+        call: ToolCall,
+        reason: String
+    ) async {
+        guard let workflowTraceStore,
+              let runID = await ensureWorkflowTraceRun(turnID: turnID)
+        else { return }
+
+        if var context = turnID.flatMap({ workflowTraceContexts[$0] }) {
+            context.toolSequence.append(call.name)
+            workflowTraceContexts[context.turnID] = context
+        }
+
+        do {
+            try await workflowTraceStore.appendStep(
+                runId: runID,
+                toolCallId: callId,
+                stepType: .toolCall,
+                toolName: call.name,
+                sanitizedInputJSON: Self.serializeArguments(call.arguments),
+                outputPreview: nil,
+                success: nil,
+                approved: nil,
+                latencyMs: nil
+            )
+            try await workflowTraceStore.appendStep(
+                runId: runID,
+                toolCallId: callId,
+                stepType: .toolResult,
+                toolName: call.name,
+                sanitizedInputJSON: nil,
+                outputPreview: reason,
+                success: false,
+                approved: false,
+                latencyMs: nil
+            )
+        } catch {
+            NSLog("PipelineCoordinator: workflow preflight trace error: %@", error.localizedDescription)
+        }
+    }
+
+    private func recordWorkflowToolCall(
+        turnID: String?,
+        callId: String?,
+        call: ToolCall
+    ) async {
+        guard let workflowTraceStore,
+              let runID = await ensureWorkflowTraceRun(turnID: turnID)
+        else { return }
+
+        if let turnID, var context = workflowTraceContexts[turnID] {
+            context.toolSequence.append(call.name)
+            workflowTraceContexts[turnID] = context
+        }
+
+        do {
+            try await workflowTraceStore.appendStep(
+                runId: runID,
+                toolCallId: callId,
+                stepType: .toolCall,
+                toolName: call.name,
+                sanitizedInputJSON: Self.serializeArguments(call.arguments),
+                outputPreview: nil,
+                success: nil,
+                approved: nil,
+                latencyMs: nil
+            )
+        } catch {
+            NSLog("PipelineCoordinator: workflow tool-call trace error: %@", error.localizedDescription)
+        }
+    }
+
+    private func recordWorkflowToolResult(
+        turnID: String?,
+        callId: String?,
+        call: ToolCall,
+        result: ToolResult,
+        approved: Bool?,
+        latencyMs: Int?,
+        damageControlIntervened: Bool = false
+    ) async {
+        guard let workflowTraceStore,
+              let runID = await ensureWorkflowTraceRun(turnID: turnID)
+        else { return }
+
+        if let turnID, var context = workflowTraceContexts[turnID] {
+            if approved == true {
+                context.userApproved = true
+            }
+            if damageControlIntervened {
+                context.damageControlIntervened = true
+            }
+            workflowTraceContexts[turnID] = context
+        }
+
+        do {
+            try await workflowTraceStore.appendStep(
+                runId: runID,
+                toolCallId: callId,
+                stepType: .toolResult,
+                toolName: call.name,
+                sanitizedInputJSON: nil,
+                outputPreview: result.output,
+                success: !result.isError,
+                approved: approved,
+                latencyMs: latencyMs
+            )
+        } catch {
+            NSLog("PipelineCoordinator: workflow tool-result trace error: %@", error.localizedDescription)
+        }
+    }
+
+    private func finalizeWorkflowTraceIfNeeded(
+        turnID: String?,
+        assistantOutcome: String,
+        success: Bool,
+        status: WorkflowRunStatus = .completed
+    ) async {
+        guard let turnID,
+              let context = workflowTraceContexts[turnID],
+              let runID = context.runID,
+              let workflowTraceStore
+        else {
+            workflowTraceContexts.removeValue(forKey: turnID ?? "")
+            return
+        }
+
+        do {
+            _ = try await workflowTraceStore.finalizeRun(
+                id: runID,
+                assistantOutcome: assistantOutcome,
+                success: success,
+                userApproved: context.userApproved,
+                toolSequenceSignature: Self.workflowTraceSignature(for: context.toolSequence),
+                damageControlIntervened: context.damageControlIntervened,
+                status: status
+            )
+        } catch {
+            NSLog("PipelineCoordinator: workflow trace finalize error: %@", error.localizedDescription)
+        }
+
+        workflowTraceContexts.removeValue(forKey: turnID)
+    }
+
+    private func abandonWorkflowTraceIfNeeded(turnID: String?, reason: String) async {
+        guard let turnID,
+              let context = workflowTraceContexts[turnID],
+              let runID = context.runID,
+              let workflowTraceStore
+        else {
+            workflowTraceContexts.removeValue(forKey: turnID ?? "")
+            return
+        }
+
+        do {
+            _ = try await workflowTraceStore.finalizeRun(
+                id: runID,
+                assistantOutcome: reason,
+                success: false,
+                userApproved: context.userApproved,
+                toolSequenceSignature: Self.workflowTraceSignature(for: context.toolSequence),
+                damageControlIntervened: context.damageControlIntervened,
+                status: .abandoned
+            )
+        } catch {
+            NSLog("PipelineCoordinator: workflow trace abandon error: %@", error.localizedDescription)
+        }
+
+        workflowTraceContexts.removeValue(forKey: turnID)
+    }
+
+    private func abandonAllWorkflowTraces(reason: String) async {
+        let turnIDs = Array(workflowTraceContexts.keys)
+        for turnID in turnIDs {
+            await abandonWorkflowTraceIfNeeded(turnID: turnID, reason: reason)
+        }
+    }
+
+    private static func workflowTraceSignature(for toolSequence: [String]) -> String? {
+        let normalized = toolSequence
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !normalized.isEmpty else { return nil }
+        return normalized.joined(separator: " -> ")
     }
 
     // MARK: - Speech Segment Queue
@@ -3297,6 +3799,7 @@ actor PipelineCoordinator {
             speakerId: currentSpeakerLabel,
             tag: tag
         )
+        await persistAcceptedUserTurnIfNeeded(queryText)
         lastAssistantResponseText = responseText
         if allowsAudibleOutput {
             await speakText(responseText, isFinal: true)
@@ -3305,6 +3808,7 @@ actor PipelineCoordinator {
         }
         await conversationState.addAssistantMessage(responseText, tag: tag)
         await synchronizeLLMSession()
+        await persistFinalAssistantTurnIfNeeded(responseText)
 
         let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
         if VoiceConversationPolicy.shouldPersistSpeechMemory(
@@ -3880,6 +4384,13 @@ actor PipelineCoordinator {
         if !isToolFollowUp {
             computerUseStepCount = 0
             seenToolCallSignatures = []
+            pruneUnusedWorkflowTraceContexts(keeping: currentTurnID)
+            prepareWorkflowTraceContextIfNeeded(
+                turnID: currentTurnID,
+                userGoal: userText,
+                proactiveContext: proactiveContext,
+                turnSource: turnSource
+            )
         }
 
         await refreshDegradedModeIfNeeded(context: "before_generation")
@@ -3908,6 +4419,9 @@ actor PipelineCoordinator {
                 speakerId: currentSpeakerLabel,
                 tag: proactiveContext?.conversationTag
             )
+            if proactiveContext == nil {
+                await persistAcceptedUserTurnIfNeeded(userText)
+            }
 
             if proactiveContext == nil,
                let forgetReply = await memoryOrchestrator?.handleForgetCommandIfNeeded(userText: userText)
@@ -3920,6 +4434,7 @@ actor PipelineCoordinator {
                     forgetReply,
                     tag: proactiveContext?.conversationTag
                 )
+                await persistFinalAssistantTurnIfNeeded(forgetReply)
                 endAssistantGeneration()
                 engage()
                 activeCapabilityTicket = nil
@@ -3938,6 +4453,7 @@ actor PipelineCoordinator {
                     directRecallReply,
                     tag: proactiveContext?.conversationTag
                 )
+                await persistFinalAssistantTurnIfNeeded(directRecallReply)
                 endAssistantGeneration()
                 engage()
                 activeCapabilityTicket = nil
@@ -3977,6 +4493,7 @@ actor PipelineCoordinator {
                     msg,
                     tag: proactiveContext?.conversationTag
                 )
+                await persistFinalAssistantTurnIfNeeded(msg)
                 endAssistantGeneration()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END blocked_before_generation tool=\(inferredToolCall.name) ===")
@@ -4017,6 +4534,13 @@ actor PipelineCoordinator {
                 availableToolNames: registry.toolNames,
                 proactiveAllowedTools: proactiveContext?.allowedTools
             )
+            if let visibleToolNames {
+                debugLog(
+                    debugConsole,
+                    .pipeline,
+                    "Visible tools for turn: \(visibleToolNames.sorted().joined(separator: ", "))"
+                )
+            }
             let toolsAvailableForTurn = toolMode != "off"
                 && !ownerEnrollmentRequired
                 && !preferToolFreeFastPath
@@ -4194,12 +4718,16 @@ actor PipelineCoordinator {
         let baseTurnContextPrefix = generationContext.turnContextPrefix ?? ""
         let history = await conversationState.history
 
-        // Suppress thinking on initial (conversational) turns for speed when the
-        // user selected Fast mode. Balanced and Deep keep explicit reasoning active.
-        // Tool follow-up turns may still reason even in Fast mode so the model can
-        // think carefully about tool results before responding.
+        // Fast mode disables explicit reasoning on all turns, including tool
+        // follow-ups. This keeps "thinking off" behavior consistent and avoids
+        // silent/suppressed follow-up answers when a model emits plain text
+        // instead of well-formed think tags.
         let effectiveThinkingLevel = thinkingLevelLive ?? config.llm.resolvedThinkingLevel
-        let suppressThinking = forceSuppressThinking || (!effectiveThinkingLevel.enablesThinking && !isToolFollowUp)
+        let suppressThinking = Self.shouldSuppressThinking(
+            forceSuppressThinking: forceSuppressThinking,
+            thinkingLevel: effectiveThinkingLevel,
+            isToolFollowUp: isToolFollowUp
+        )
 
         // Auto-tune prefill step size based on loaded model if not explicitly configured.
         var prefillStep = config.llm.prefillStepSize ?? 512
@@ -4269,6 +4797,8 @@ actor PipelineCoordinator {
         var firstTtsSent = false
         let suppressProvisionalOutputForLikelyToolTurn = !isToolFollowUp && (
             Self.isToolBackedLookupRequest(userText)
+                || Self.isScreenIntentRequest(userText)
+                || Self.isCameraIntentRequest(userText)
                 || Self.repairedToolCallForSkippedTurn(userText) != nil
         )
         let llmStartedAt = Date()
@@ -4716,7 +5246,9 @@ actor PipelineCoordinator {
            )
         {
             debugLog(debugConsole, .qa, "Tool repair fallback: forcing \(repairCall.name) tool call")
-            if Self.canRunDeferredToolCalls([repairCall], registry: registry) {
+            if Self.canRunDeferredToolCalls([repairCall], registry: registry),
+               !Self.shouldPreferInlineToolExecution(userText: userText, toolCalls: [repairCall])
+            {
                 let ack = "I’ll check that in the background and report back as soon as it’s ready."
                 eventBus.send(.assistantText(text: ack, isFinal: true))
                 if generationContext.allowsAudibleOutput {
@@ -4753,7 +5285,9 @@ actor PipelineCoordinator {
             let repairResult = await executeTool(
                 repairCall,
                 proactiveContext: proactiveContext,
-                generationContextOverride: generationContext
+                generationContextOverride: generationContext,
+                traceTurnID: currentTurnID,
+                traceToolCallID: repairCallID
             )
 
             eventBus.send(.toolResult(
@@ -4764,21 +5298,18 @@ actor PipelineCoordinator {
             ))
 
             if !repairResult.isError {
-                let trimmedRepairOutput = repairResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                if repairCall.name == "bash",
-                   !trimmedRepairOutput.isEmpty,
-                   trimmedRepairOutput.count <= 500
+                if let directReply = Self.directToolReplyText(for: repairCall, result: repairResult)
                 {
-                    let directReply = "Command output:\n\(trimmedRepairOutput)"
                     eventBus.send(.assistantText(text: directReply, isFinal: true))
                     if generationContext.allowsAudibleOutput {
-                        await speakText(directReply, isFinal: true)
+                        await speakText(directReply, isFinal: true, emitAssistantText: false)
                     }
                     await conversationState.addAssistantMessage(
                         directReply,
                         tag: proactiveContext?.conversationTag
                     )
                     await synchronizeLLMSession()
+                    await persistFinalAssistantTurnIfNeeded(directReply)
                     endAssistantGeneration()
                     engage()
                     activeCapabilityTicket = nil
@@ -4841,14 +5372,24 @@ actor PipelineCoordinator {
                     TextProcessing.stripNonSpeechChars(sentenceBuffer)
                 )
                 var sentences = deferredSentenceQueue
-                if !finalText.isEmpty { sentences.append(finalText) }
+                if !finalText.isEmpty, !suppressProvisionalOutputForLikelyToolTurn {
+                    sentences.append(finalText)
+                }
                 let filteredSentences = sentences.filter {
                     !$0.isEmpty && !TextProcessing.looksLikeNonProse($0)
                 }
                 let shouldSpeak = generationContext.allowsAudibleOutput && !filteredSentences.isEmpty
                 if !finalText.isEmpty {
-                    recordVisibleText(finalText)
-                    eventBus.send(.assistantText(text: finalText, isFinal: true))
+                    if suppressProvisionalOutputForLikelyToolTurn {
+                        debugLog(
+                            debugConsole,
+                            .pipeline,
+                            "[suppressed provisional tool-turn final text] \(String(finalText.prefix(80)))"
+                        )
+                    } else {
+                        recordVisibleText(finalText)
+                        eventBus.send(.assistantText(text: finalText, isFinal: true))
+                    }
                 }
                 if shouldSpeak {
                     let fullText = filteredSentences.joined(separator: " ")
@@ -4906,14 +5447,22 @@ actor PipelineCoordinator {
                 await awaitPendingTTS()
                 await conversationState.addAssistantMessage(fallback, tag: proactiveContext?.conversationTag)
                 await synchronizeLLMSession()
+                await persistFinalAssistantTurnIfNeeded(fallback)
                 endAssistantGeneration()
                 engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END fallback reason=llm_error ===")
                 return
             }
-            if assistantTextForStorage.isEmpty && visibleResponse.isEmpty && !options.suppressThinking && !forceSuppressThinking {
-                debugLog(debugConsole, .pipeline, "No visible response after thinking block — retrying with thinking disabled")
+            if assistantTextForStorage.isEmpty,
+               !forceSuppressThinking,
+               !options.suppressThinking,
+               proactiveContext == nil
+            {
+                let retryReason = visibleResponse.isEmpty
+                    ? "No visible response after thinking block"
+                    : "Only suppressed non-spoken output after thinking block"
+                debugLog(debugConsole, .pipeline, "\(retryReason) — retrying with thinking disabled")
                 await generateWithTools(
                     userText: userText,
                     isToolFollowUp: true,
@@ -4943,7 +5492,9 @@ actor PipelineCoordinator {
                     let repairResult = await executeTool(
                         repairCall,
                         proactiveContext: proactiveContext,
-                        generationContextOverride: generationContext
+                        generationContextOverride: generationContext,
+                        traceTurnID: currentTurnID,
+                        traceToolCallID: repairCallID
                     )
 
                     eventBus.send(.toolResult(
@@ -4977,6 +5528,62 @@ actor PipelineCoordinator {
                     }
 
                     debugLog(debugConsole, .qa, "Camera intent fallback failed: \(repairResult.output)")
+                }
+            }
+
+            if turnCount == 0,
+               toolCalls.isEmpty,
+               proactiveContext == nil,
+               Self.isScreenIntentRequest(userText)
+            {
+                if effectiveToolMode() == "off" {
+                    debugLog(debugConsole, .qa, "Screen intent fallback skipped — tools are off")
+                } else {
+                    let repairCall = Self.screenRepairToolCall(for: userText)
+                    debugLog(debugConsole, .qa, "Screen intent fallback: forcing \(repairCall.name) tool call")
+                    let repairCallID = UUID().uuidString
+                    let inputJSON = Self.serializeArguments(repairCall.arguments)
+                    eventBus.send(.toolCall(id: repairCallID, name: repairCall.name, inputJSON: inputJSON))
+
+                    let repairResult = await executeTool(
+                        repairCall,
+                        proactiveContext: proactiveContext,
+                        generationContextOverride: generationContext,
+                        traceTurnID: currentTurnID,
+                        traceToolCallID: repairCallID
+                    )
+
+                    eventBus.send(.toolResult(
+                        id: repairCallID,
+                        name: repairCall.name,
+                        success: !repairResult.isError,
+                        output: String(repairResult.output.prefix(200))
+                    ))
+
+                    if !repairResult.isError {
+                        await conversationState.addAssistantMessage(
+                            "I checked the screen.",
+                            tag: proactiveContext?.conversationTag
+                        )
+                        await conversationState.addToolResult(
+                            id: repairCallID,
+                            name: repairCall.name,
+                            content: repairResult.output
+                        )
+
+                        await generateWithTools(
+                            userText: userText,
+                            isToolFollowUp: true,
+                            turnCount: turnCount + 1,
+                            forceSuppressThinking: true,
+                            generationContext: generationContext,
+                            generationID: generationID,
+                            proactiveContext: proactiveContext
+                        )
+                        return
+                    }
+
+                    debugLog(debugConsole, .qa, "Screen intent fallback failed: \(repairResult.output)")
                 }
             }
 
@@ -5018,6 +5625,7 @@ actor PipelineCoordinator {
                 }
                 await awaitPendingTTS()
                 endAssistantGeneration()
+                await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: fallback, success: false)
                 engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END fallback reason=\(reasonCode) ===")
@@ -5027,6 +5635,11 @@ actor PipelineCoordinator {
             if !assistantTextForStorage.isEmpty {
                 await conversationState.addAssistantMessage(assistantTextForStorage, tag: proactiveContext?.conversationTag)
                 await synchronizeLLMSession()
+                if proactiveContext == nil {
+                    await persistFinalAssistantTurnIfNeeded(assistantTextForStorage)
+                } else {
+                    await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: assistantTextForStorage, success: true)
+                }
 
                 let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
                 if VoiceConversationPolicy.shouldPersistSpeechMemory(
@@ -5065,8 +5678,10 @@ actor PipelineCoordinator {
                     responseText: visibleResponse,
                     speakerId: currentSpeakerLabel
                 )
+                await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: visibleResponse, success: true)
                 debugLog(debugConsole, .memory, "Captured silent proactive memory for task \(proactiveContext.taskId)")
             } else if !visibleResponse.isEmpty {
+                await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: visibleResponse, success: true)
                 debugLog(debugConsole, .llmThink, "[suppressed non-spoken output] \(String(fullResponse.prefix(160)))")
             }
 
@@ -5085,7 +5700,8 @@ actor PipelineCoordinator {
         if turnCount == 0,
            !isToolFollowUp,
            proactiveContext == nil,
-           Self.canRunDeferredToolCalls(toolCalls, registry: registry)
+           Self.canRunDeferredToolCalls(toolCalls, registry: registry),
+           !Self.shouldPreferInlineToolExecution(userText: userText, toolCalls: toolCalls)
         {
             let assistantToolMessage = Self.stripThinkContent(fullResponse)
 
@@ -5128,6 +5744,7 @@ actor PipelineCoordinator {
                 await speakText(msg, isFinal: true)
             }
             endAssistantGeneration()
+            await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
             activeCapabilityTicket = nil
             return
         }
@@ -5194,6 +5811,12 @@ actor PipelineCoordinator {
                 if firstToolError == nil {
                     firstToolError = preflightDenial
                 }
+                await recordWorkflowPreflightDenied(
+                    turnID: currentTurnID,
+                    callId: callId,
+                    call: call,
+                    reason: preflightDenial
+                )
                 await conversationState.addToolResult(
                     id: callId,
                     name: call.name,
@@ -5216,6 +5839,12 @@ actor PipelineCoordinator {
             if seenToolCallSignatures.contains(callSignature) {
                 debugLog(debugConsole, .toolCall, "⚠️ Duplicate tool call blocked: \(call.name) — returning cached notice")
                 result = .success("You already retrieved these results earlier in this conversation. Please synthesize your response using the data already provided rather than repeating the same search.")
+                await recordWorkflowPreflightDenied(
+                    turnID: currentTurnID,
+                    callId: callId,
+                    call: call,
+                    reason: result.output
+                )
             } else {
                 seenToolCallSignatures.insert(callSignature)
                 result = await executeTool(
@@ -5223,7 +5852,9 @@ actor PipelineCoordinator {
                     capabilityTicketOverride: capabilityTicketForToolTurn,
                     explicitUserAuthorizationOverride: explicitAuthorizationForToolTurn,
                     proactiveContext: proactiveContext,
-                    generationContextOverride: generationContext
+                    generationContextOverride: generationContext,
+                    traceTurnID: currentTurnID,
+                    traceToolCallID: callId
                 )
             }
             if call.name == "camera", proactiveContext?.taskId == "camera_presence_check", !result.isError {
@@ -5245,11 +5876,10 @@ actor PipelineCoordinator {
                 }
             } else {
                 toolSuccessCount += 1
-                if toolCalls.count == 1, call.name == "bash" {
-                    let trimmed = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty, trimmed.count <= 500 {
-                        directToolReply = "Command output:\n\(trimmed)"
-                    }
+                if toolCalls.count == 1,
+                   let reply = Self.directToolReplyText(for: call, result: result)
+                {
+                    directToolReply = reply
                 }
             }
 
@@ -5292,6 +5922,7 @@ actor PipelineCoordinator {
                 await speakText(msg, isFinal: true)
             }
             endAssistantGeneration()
+            await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
             activeCapabilityTicket = nil
             return
         }
@@ -5303,13 +5934,14 @@ actor PipelineCoordinator {
         {
             eventBus.send(.assistantText(text: directToolReply, isFinal: true))
             if generationContext.allowsAudibleOutput {
-                await speakText(directToolReply, isFinal: true)
+                await speakText(directToolReply, isFinal: true, emitAssistantText: false)
             }
             await conversationState.addAssistantMessage(
                 directToolReply,
                 tag: proactiveContext?.conversationTag
             )
             await synchronizeLLMSession()
+            await persistFinalAssistantTurnIfNeeded(directToolReply)
             endAssistantGeneration()
             engage()
             activeCapabilityTicket = nil
@@ -5426,11 +6058,16 @@ actor PipelineCoordinator {
 
     /// Blocking TTS — used by `speakDirect`, `speakWithVoice`, and other non-streaming paths
     /// where we want to wait for speech to finish before continuing.
-    private func speakText(_ text: String, isFinal: Bool, voiceInstruct: String? = nil) async {
+    private func speakText(
+        _ text: String,
+        isFinal: Bool,
+        voiceInstruct: String? = nil,
+        emitAssistantText: Bool = true
+    ) async {
         markAssistantSpeechStarted()
 
         let cleaned = TextProcessing.stripNonSpeechChars(text)
-        if !cleaned.isEmpty {
+        if emitAssistantText, !cleaned.isEmpty {
             eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
         }
 
@@ -5868,6 +6505,8 @@ actor PipelineCoordinator {
             return ""
         }
         switch first {
+        case "session_search":
+            return "Let me pull up our earlier conversations."
         case "web_search", "fetch_url":
             return "Let me check that quickly."
         case "calendar", "reminders":
@@ -5922,7 +6561,12 @@ actor PipelineCoordinator {
     /// Tool names eligible for non-blocking background execution.
     private static let deferredToolAllowlist: Set<String> = [
         "calendar", "reminders", "contacts", "mail", "notes",
-        "web_search", "fetch_url", "read", "scheduler_list",
+        "session_search", "web_search", "fetch_url", "read", "scheduler_list",
+    ]
+
+    private static let inlineGroundedToolAllowlist: Set<String> = [
+        "calendar", "reminders", "contacts", "mail", "notes",
+        "screenshot", "camera",
     ]
 
     /// Returns true when every tool call is read-only and safe to defer.
@@ -5944,6 +6588,23 @@ actor PipelineCoordinator {
         }
 
         return true
+    }
+
+    static func shouldPreferInlineToolExecution(userText: String, toolCalls: [ToolCall]) -> Bool {
+        guard toolCalls.count == 1,
+              let toolName = toolCalls.first?.name
+        else {
+            return false
+        }
+
+        if inlineGroundedToolAllowlist.contains(toolName) {
+            return true
+        }
+
+        return (toolName == "read_screen" && isScreenIntentRequest(userText))
+            || (toolName == "camera" && isCameraIntentRequest(userText))
+            || (toolName == "screenshot" && isScreenIntentRequest(userText))
+            || (toolName == "calendar" && isToolBackedLookupRequest(userText))
     }
 
     /// Action-level guard for tools that can be both read and write.
@@ -5969,7 +6630,7 @@ actor PipelineCoordinator {
             let action = (call.arguments["action"] as? String) ?? ""
             return ["search", "list_recent"].contains(action)
 
-        case "scheduler_list", "web_search", "fetch_url", "read":
+        case "scheduler_list", "session_search", "web_search", "fetch_url", "read":
             return true
 
         default:
@@ -5994,19 +6655,128 @@ actor PipelineCoordinator {
         )
     }
 
+    /// Heuristic: requests that should inspect the current screen or capture a screenshot.
+    private static func isScreenIntentRequest(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let referencedApp = extractReferencedAppName(from: text)
+        let explicitScreenPhrases = [
+            "what is on my screen", "what's on my screen",
+            "what is on the screen", "what's on the screen",
+            "what is on my display", "what's on my display",
+            "describe my screen", "describe the screen",
+            "describe what you see on my screen",
+            "look at my screen", "check my screen",
+            "read what's on the screen",
+            "what's currently displayed on the screen",
+            "what is currently displayed on the screen",
+            "take a screenshot",
+            "capture my screen",
+        ]
+        if explicitScreenPhrases.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        let mentionsScreenSurface = lower.contains("screen")
+            || lower.contains("display")
+            || lower.contains("screenshot")
+            || (lower.contains("window") && referencedApp != nil)
+        let asksToInspect = lower.contains("look")
+            || lower.contains("check")
+            || lower.contains("describe")
+            || lower.contains("read")
+            || lower.contains("show")
+            || lower.contains("tell")
+            || lower.contains("what is")
+            || lower.contains("what's")
+            || lower.contains("use")
+        return mentionsScreenSurface && asksToInspect
+    }
+
+    private static func screenRepairToolCall(for text: String) -> ToolCall {
+        let lower = text.lowercased()
+        let appName = extractReferencedAppName(from: text)
+        if lower.contains("take a screenshot")
+            || lower.contains("capture my screen")
+            || lower.contains("screenshot")
+        {
+            var arguments: [String: Any] = ["prompt": "Describe what is visible on the current screen."]
+            if let appName {
+                arguments["app"] = appName
+            }
+            return ToolCall(
+                name: "screenshot",
+                arguments: arguments
+            )
+        }
+        var arguments: [String: Any] = [:]
+        if let appName {
+            arguments["app"] = appName
+        }
+        return ToolCall(name: "read_screen", arguments: arguments)
+    }
+
+    private static func extractReferencedAppName(from text: String) -> String? {
+        let lower = text.lowercased()
+        let builtInCandidates = [
+            "Safari",
+            "Google Chrome",
+            "Chrome",
+            "TextEdit",
+            "Preview",
+            "Finder",
+            "Mail",
+            "Notes",
+            "Calendar",
+            "Messages",
+            "Slack",
+            "Terminal",
+            "Ghostty",
+            "Discord",
+            "WhatsApp",
+            "ChatGPT",
+            "Codex",
+            "Fae",
+        ]
+        let runningCandidates = NSWorkspace.shared.runningApplications.compactMap(\.localizedName)
+        let candidates = Array(Set(builtInCandidates + runningCandidates)).sorted {
+            $0.count > $1.count
+        }
+
+        for candidate in candidates {
+            let normalized = candidate.lowercased()
+            let markers = [
+                " in \(normalized)",
+                " on \(normalized)",
+                " of \(normalized)",
+                " from \(normalized)",
+                " within \(normalized)",
+                "the \(normalized) window",
+                "the \(normalized) app",
+                "\(normalized) window",
+                "\(normalized) app",
+            ]
+            if markers.contains(where: { lower.contains($0) }) {
+                return candidate
+            }
+        }
+
+        return nil
+    }
+
     /// Heuristic: requests that should be grounded in live tool data (calendar/notes/mail/etc.)
     /// rather than answered from model prior.
     private static func isToolBackedLookupRequest(_ text: String) -> Bool {
         let lower = text.lowercased()
         let toolNouns = [
             "calendar", "diary", "schedule", "event", "events",
+            "meeting", "meetings", "appointment", "appointments",
             "note", "notes", "reminder", "reminders",
             "mail", "email", "inbox", "contact", "contacts",
         ]
         let lookupVerbs = [
             "check", "show", "read", "find", "look up", "list", "what's", "what is",
         ]
-        let hasNoun = toolNouns.contains { lower.contains($0) }
+        let hasNoun = toolNouns.contains { containsWholeWord($0, in: lower) }
         let hasVerb = lookupVerbs.contains { lower.contains($0) }
         return hasNoun && hasVerb
     }
@@ -6049,6 +6819,10 @@ actor PipelineCoordinator {
             return ToolCall(name: "fetch_url", arguments: ["url": url])
         }
 
+        if let sessionSearchQuery = extractSessionSearchQuery(from: text) {
+            return ToolCall(name: "session_search", arguments: ["query": sessionSearchQuery])
+        }
+
         if lower.contains("web_search")
             || lower.contains("search the web")
             || lower.contains("search for ")
@@ -6057,6 +6831,10 @@ actor PipelineCoordinator {
             if let query = extractSearchQuery(from: text) {
                 return ToolCall(name: "web_search", arguments: ["query": query])
             }
+        }
+
+        if let calendarCall = repairedCalendarLookupCall(from: text, lowercased: lower) {
+            return calendarCall
         }
 
         if lower.contains("bash")
@@ -6084,12 +6862,8 @@ actor PipelineCoordinator {
             return ToolCall(name: "camera", arguments: ["prompt": "Describe what the camera sees right now."])
         }
 
-        if lower.contains("read what's on the screen")
-            || lower.contains("describe what you see on my screen")
-            || lower.contains("what's currently displayed on the screen")
-            || lower.contains("what is currently displayed on the screen")
-        {
-            return ToolCall(name: "read_screen", arguments: [:])
+        if isScreenIntentRequest(text) {
+            return screenRepairToolCall(for: text)
         }
 
         if lower.contains("create a task called ")
@@ -6196,6 +6970,34 @@ actor PipelineCoordinator {
         return nil
     }
 
+    private static func extractSessionSearchQuery(from text: String) -> String? {
+        let lower = text.lowercased()
+        let markers = [
+            "what did we say about",
+            "what did we decide about",
+            "search our conversation for",
+            "search our conversations for",
+            "search previous conversation for",
+            "search previous conversations for",
+            "search our chat for",
+            "look through our chat for",
+            "find in our chat",
+            "find in previous chats",
+            "session_search",
+            "session search",
+        ]
+
+        for marker in markers {
+            guard let range = lower.range(of: marker) else { continue }
+            let suffix = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let cleaned = cleanInterestTopic(suffix) {
+                return cleaned
+            }
+        }
+
+        return nil
+    }
+
     static func shouldAttemptRepairToolCall(
         _ call: ToolCall,
         registry: ToolRegistry,
@@ -6237,6 +7039,18 @@ actor PipelineCoordinator {
         }
 
         return nil
+    }
+
+    static func shouldSuppressThinking(
+        forceSuppressThinking: Bool,
+        thinkingLevel: FaeThinkingLevel,
+        isToolFollowUp: Bool
+    ) -> Bool {
+        guard !forceSuppressThinking else { return true }
+        // Tool follow-up turns keep thinking enabled even in Fast mode so the
+        // model can reason over tool results before forming a response.
+        if isToolFollowUp { return false }
+        return !thinkingLevel.enablesThinking
     }
 
     private static func extractSingleQuotedSegments(from text: String) -> [String] {
@@ -6307,13 +7121,110 @@ actor PipelineCoordinator {
         for marker in ["search for ", "look up ", "search the web for "] {
             if let range = lower.range(of: marker) {
                 let originalRange = range.upperBound..<text.endIndex
-                let query = text[originalRange].trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                let query = normalizeSearchRepairQuery(String(text[originalRange]))
                 if !query.isEmpty {
                     return query
                 }
             }
         }
         return nil
+    }
+
+    private static func normalizeSearchRepairQuery(_ raw: String) -> String {
+        var query = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        let lower = query.lowercased()
+
+        let leadingPrefixes = [
+            "for me about ",
+            "for me on ",
+            "for me regarding ",
+            "about ",
+            "regarding ",
+        ]
+        for prefix in leadingPrefixes where lower.hasPrefix(prefix) {
+            query = String(query.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            break
+        }
+
+        let trailingPatterns = [
+            #"(?i)^(.*?)(?:,?\s+(?:then|and then)\s+(?:give|tell|show|provide|report|summarize|write|return)\b.*)$"#,
+            #"(?i)^(.*?)(?:,?\s+and\s+(?:give|tell|show|provide|report|summarize|write|return)\b.*)$"#,
+            #"(?i)^(.*?)(?:,?\s+(?:then|and then|and)\s+briefly\b.*)$"#,
+        ]
+
+        for pattern in trailingPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(query.startIndex..<query.endIndex, in: query)
+            guard let match = regex.firstMatch(in: query, range: range),
+                  match.numberOfRanges > 1,
+                  let capturedRange = Range(match.range(at: 1), in: query)
+            else {
+                continue
+            }
+            query = String(query[capturedRange])
+                .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            break
+        }
+
+        return query
+    }
+
+    private static func repairedCalendarLookupCall(from text: String, lowercased lower: String) -> ToolCall? {
+        let calendarIntent = [
+            "calendar", "diary", "schedule", "event", "events",
+            "meeting", "meetings", "appointment", "appointments",
+        ].contains { containsWholeWord($0, in: lower) }
+        guard calendarIntent else { return nil }
+
+        if let date = extractISODateCandidate(from: text) {
+            return ToolCall(name: "calendar", arguments: ["action": "list_date", "date": date])
+        }
+
+        if lower.contains("this week") || lower.contains("next 7 days") || lower.contains("next week") {
+            return ToolCall(name: "calendar", arguments: ["action": "list_week"])
+        }
+
+        if lower.contains("search") || lower.contains("find ") || lower.contains("look for ") {
+            if let query = extractCalendarSearchQuery(from: text, lowercased: lower) {
+                return ToolCall(name: "calendar", arguments: ["action": "search", "query": query])
+            }
+        }
+
+        return ToolCall(name: "calendar", arguments: ["action": "list_today"])
+    }
+
+    private static func extractISODateCandidate(from text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"\b\d{4}-\d{2}-\d{2}\b"#) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let candidateRange = Range(match.range(at: 0), in: text)
+        else {
+            return nil
+        }
+        return String(text[candidateRange])
+    }
+
+    private static func containsWholeWord(_ word: String, in text: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: word)
+        guard let regex = try? NSRegularExpression(pattern: #"\b\#(escaped)\b"#) else {
+            return false
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.firstMatch(in: text, range: range) != nil
+    }
+
+    private static func extractCalendarSearchQuery(from text: String, lowercased lower: String) -> String? {
+        for marker in ["search my calendar for ", "find in my calendar ", "find on my calendar ", "look for "] {
+            if let range = lower.range(of: marker) {
+                let query = text[range.upperBound...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                if !query.isEmpty {
+                    return query
+                }
+            }
+        }
+        return extractSearchQuery(from: text)
     }
 
     private static func extractCommandCandidate(from text: String) -> String? {
@@ -6427,6 +7338,31 @@ actor PipelineCoordinator {
         Int(Double(text.count) / 3.5)
     }
 
+    static func directToolReplyText(for call: ToolCall, result: ToolResult) -> String? {
+        guard !result.isError else { return nil }
+
+        let trimmed = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        switch call.name {
+        case "bash":
+            guard trimmed.count <= 500 else { return nil }
+            return "Command output:\n\(trimmed)"
+
+        case "calendar", "reminders", "contacts", "mail", "notes":
+            return trimmed
+
+        case "screenshot":
+            return stripScreenshotEnvelope(from: trimmed)
+
+        case "camera":
+            return stripSimpleToolPrefix("Camera capture:\n", from: trimmed)
+
+        default:
+            return nil
+        }
+    }
+
     private static func serializeArguments(_ args: [String: Any]) -> String {
         if let data = try? JSONSerialization.data(withJSONObject: args),
            let str = String(data: data, encoding: .utf8)
@@ -6434,6 +7370,20 @@ actor PipelineCoordinator {
             return str
         }
         return "{}"
+    }
+
+    private static func stripScreenshotEnvelope(from output: String) -> String {
+        guard output.hasPrefix("Screenshot ("),
+              let newline = output.firstIndex(of: "\n")
+        else {
+            return output
+        }
+        return String(output[output.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func stripSimpleToolPrefix(_ prefix: String, from output: String) -> String {
+        guard output.hasPrefix(prefix) else { return output }
+        return String(output.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Extract an audio file path from skill output JSON (looks for "audio_file" key).
@@ -6506,6 +7456,7 @@ actor PipelineCoordinator {
         var toolSuccessCount = 0
         var toolFailureCount = 0
         var firstToolError: String?
+        var directToolReply: String?
 
         for call in job.toolCalls {
             guard !Task.isCancelled else { return }
@@ -6525,6 +7476,12 @@ actor PipelineCoordinator {
                 if firstToolError == nil {
                     firstToolError = preflightDenial
                 }
+                await recordWorkflowPreflightDenied(
+                    turnID: job.originTurnID,
+                    callId: callId,
+                    call: call,
+                    reason: preflightDenial
+                )
                 await conversationState.addToolResult(id: callId, name: call.name, content: preflightDenial)
                 continue
             }
@@ -6537,7 +7494,9 @@ actor PipelineCoordinator {
                 call,
                 capabilityTicketOverride: job.capabilityTicket,
                 explicitUserAuthorizationOverride: job.explicitUserAuthorization,
-                generationContextOverride: job.generationContext
+                generationContextOverride: job.generationContext,
+                traceTurnID: job.originTurnID,
+                traceToolCallID: callId
             )
             if result.isError {
                 toolFailureCount += 1
@@ -6546,6 +7505,11 @@ actor PipelineCoordinator {
                 }
             } else {
                 toolSuccessCount += 1
+                if job.toolCalls.count == 1,
+                   let reply = Self.directToolReplyText(for: call, result: result)
+                {
+                    directToolReply = reply
+                }
             }
 
             let outputPreview = String(result.output.prefix(100))
@@ -6575,6 +7539,7 @@ actor PipelineCoordinator {
             if job.generationContext.allowsAudibleOutput {
                 await speakText(msg, isFinal: true)
             }
+            await finalizeWorkflowTraceIfNeeded(turnID: job.originTurnID, assistantOutcome: msg, success: false)
             return
         }
 
@@ -6594,6 +7559,22 @@ actor PipelineCoordinator {
             assistantGenerating: assistantGenerating
         ) else {
             debugLog(debugConsole, .pipeline, "Deferred tool follow-up dropped: origin turn no longer active")
+            await abandonWorkflowTraceIfNeeded(
+                turnID: job.originTurnID,
+                reason: "Deferred follow-up dropped because the originating turn was no longer active."
+            )
+            return
+        }
+
+        if let directToolReply {
+            eventBus.send(.assistantText(text: directToolReply, isFinal: true))
+            if job.generationContext.allowsAudibleOutput {
+                await speakText(directToolReply, isFinal: true, emitAssistantText: false)
+            }
+            await conversationState.addAssistantMessage(directToolReply)
+            await synchronizeLLMSession()
+            await persistFinalAssistantTurnIfNeeded(directToolReply, turnID: job.originTurnID)
+            debugLog(debugConsole, .qa, "=== TURN END deferred_direct_tool_reply name=\(job.toolCalls[0].name) ===")
             return
         }
 
@@ -6621,29 +7602,66 @@ actor PipelineCoordinator {
         )
     }
 
-    private static let toolTimeoutSeconds: TimeInterval = 30
+    private static let defaultToolTimeoutSeconds: TimeInterval = 30
+    private static let extendedVisionToolTimeoutSeconds: TimeInterval = 180
+
+    static func toolTimeoutSeconds(for toolName: String) -> TimeInterval {
+        switch toolName {
+        case "screenshot", "camera", "read_screen":
+            return extendedVisionToolTimeoutSeconds
+        default:
+            return defaultToolTimeoutSeconds
+        }
+    }
 
     private func executeTool(
         _ call: ToolCall,
         capabilityTicketOverride: CapabilityTicket? = nil,
         explicitUserAuthorizationOverride: Bool? = nil,
         proactiveContext: ProactiveRequestContext? = nil,
-        generationContextOverride: GenerationContext? = nil
+        generationContextOverride: GenerationContext? = nil,
+        traceTurnID: String? = nil,
+        traceToolCallID: String? = nil
     ) async -> ToolResult {
+        let workflowTurnID = traceTurnID ?? currentTurnID
+        await recordWorkflowToolCall(
+            turnID: workflowTurnID,
+            callId: traceToolCallID,
+            call: call
+        )
+
         // Tool mode enforcement — reject tools not allowed in current mode.
         let toolMode = effectiveToolMode()
         let privacyMode = effectivePrivacyMode()
         debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(toolMode) privacy=\(privacyMode)")
         guard registry.isToolAllowed(call.name, mode: toolMode, privacyMode: privacyMode) else {
             debugLog(debugConsole, .toolResult, "Blocked by mode/privacy: \(call.name) mode=\(toolMode) privacy=\(privacyMode)")
-            return .error("Tool '\(call.name)' is not available in current mode/privacy policy (\(toolMode), \(privacyMode))")
+            let result = ToolResult.error("Tool '\(call.name)' is not available in current mode/privacy policy (\(toolMode), \(privacyMode))")
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: nil,
+                latencyMs: nil
+            )
+            return result
         }
 
         if let proactiveContext,
            !proactiveContext.allowedTools.contains(call.name)
         {
             debugLog(debugConsole, .toolResult, "Blocked by proactive allowlist: \(call.name) task=\(proactiveContext.taskId)")
-            return .error("Tool '\(call.name)' is not allowed for proactive task '\(proactiveContext.taskId)'")
+            let result = ToolResult.error("Tool '\(call.name)' is not allowed for proactive task '\(proactiveContext.taskId)'")
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: nil,
+                latencyMs: nil
+            )
+            return result
         }
 
         // Computer-use action step limiter (click/type_text/scroll).
@@ -6651,7 +7669,16 @@ actor PipelineCoordinator {
         if actionTools.contains(call.name) {
             computerUseStepCount += 1
             if computerUseStepCount > Self.maxComputerUseSteps {
-                return .error("Computer use step limit reached (\(Self.maxComputerUseSteps) per turn). Ask the user before continuing.")
+                let result = ToolResult.error("Computer use step limit reached (\(Self.maxComputerUseSteps) per turn). Ask the user before continuing.")
+                await recordWorkflowToolResult(
+                    turnID: workflowTurnID,
+                    callId: traceToolCallID,
+                    call: call,
+                    result: result,
+                    approved: nil,
+                    latencyMs: nil
+                )
+                return result
             }
         }
 
@@ -6679,7 +7706,16 @@ actor PipelineCoordinator {
         }
 
         guard let tool = registry.tool(named: call.name, vlmProvider: vlmProvider) else {
-            return .error("Unknown tool: \(call.name)")
+            let result = ToolResult.error("Unknown tool: \(call.name)")
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: nil,
+                latencyMs: nil
+            )
+            return result
         }
 
         let policyProfile = currentPolicyProfile()
@@ -6698,7 +7734,16 @@ actor PipelineCoordinator {
             profile: policyProfile
         ) {
             debugLog(debugConsole, .toolResult, "Rate limited: \(call.name) reason=\(limitError)")
-            return .error(limitError)
+            let result = ToolResult.error(limitError)
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: nil,
+                latencyMs: nil
+            )
+            return result
         }
 
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
@@ -6727,6 +7772,7 @@ actor PipelineCoordinator {
         )
 
         let brokerDecisionStartedAt = Date()
+        var workflowDamageControlIntervened = false
 
         // MARK: Damage Control — Layer 0 (pre-broker)
         // Evaluates before the outbound guard and TrustedActionBroker.
@@ -6742,6 +7788,7 @@ actor PipelineCoordinator {
             break
 
         case .block(let reason):
+            workflowDamageControlIntervened = true
             await securityLogger.log(
                 event: "dc_block",
                 toolName: call.name,
@@ -6750,9 +7797,20 @@ actor PipelineCoordinator {
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
-            return .error("Blocked by damage-control policy: \(reason)")
+            let result = ToolResult.error("Blocked by damage-control policy: \(reason)")
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: nil,
+                latencyMs: nil,
+                damageControlIntervened: true
+            )
+            return result
 
         case .disaster(let reason):
+            workflowDamageControlIntervened = true
             await securityLogger.log(
                 event: "dc_disaster",
                 toolName: call.name,
@@ -6769,6 +7827,7 @@ actor PipelineCoordinator {
             )
 
         case .confirmManual(let reason):
+            workflowDamageControlIntervened = true
             await securityLogger.log(
                 event: "dc_confirm_manual",
                 toolName: call.name,
@@ -6871,7 +7930,17 @@ actor PipelineCoordinator {
                 toolName: call.name,
                 arguments: call.arguments
             ) {
-                return .error(transformError)
+                let result = ToolResult.error(transformError)
+                await recordWorkflowToolResult(
+                    turnID: workflowTurnID,
+                    callId: traceToolCallID,
+                    call: call,
+                    result: result,
+                    approved: nil,
+                    latencyMs: nil,
+                    damageControlIntervened: workflowDamageControlIntervened
+                )
+                return result
             }
 
         case .confirm(let prompt, _, let manualOnly, let isDisasterLevel):
@@ -6916,7 +7985,17 @@ actor PipelineCoordinator {
                         error: "Tool execution denied by user",
                         arguments: call.arguments
                     )
-                    return .error("Tool execution denied by user.")
+                    let result = ToolResult.error("Tool execution denied by user.")
+                    await recordWorkflowToolResult(
+                        turnID: workflowTurnID,
+                        callId: traceToolCallID,
+                        call: call,
+                        result: result,
+                        approved: false,
+                        latencyMs: Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000),
+                        damageControlIntervened: workflowDamageControlIntervened
+                    )
+                    return result
                 }
             } else {
                 if let analytics = toolAnalytics {
@@ -6939,7 +8018,17 @@ actor PipelineCoordinator {
                     error: "No approval manager available",
                     arguments: call.arguments
                 )
-                return .error("Tool requires approval, but no approval manager is available.")
+                let result = ToolResult.error("Tool requires approval, but no approval manager is available.")
+                await recordWorkflowToolResult(
+                    turnID: workflowTurnID,
+                    callId: traceToolCallID,
+                    call: call,
+                    result: result,
+                    approved: nil,
+                    latencyMs: Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000),
+                    damageControlIntervened: workflowDamageControlIntervened
+                )
+                return result
             }
 
         case .deny(let reason):
@@ -6964,7 +8053,17 @@ actor PipelineCoordinator {
                 error: reason.message,
                 arguments: call.arguments
             )
-            return .error(reason.message)
+            let result = ToolResult.error(reason.message)
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: nil,
+                latencyMs: Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000),
+                damageControlIntervened: workflowDamageControlIntervened
+            )
+            return result
         }
 
         // Execute with timeout and analytics.
@@ -6979,6 +8078,7 @@ actor PipelineCoordinator {
             executionArguments["enrollment_active"] = firstOwnerEnrollmentActive
         }
 
+        let timeoutSeconds = Self.toolTimeoutSeconds(for: call.name)
         let startTime = Date()
         let result: ToolResult
         do {
@@ -6987,8 +8087,8 @@ actor PipelineCoordinator {
                     try await tool.execute(input: executionArguments)
                 }
                 group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(Self.toolTimeoutSeconds * 1_000_000_000))
-                    return .error("Tool timed out after \(Int(Self.toolTimeoutSeconds))s")
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    return .error("Tool timed out after \(Int(timeoutSeconds))s")
                 }
                 guard let r = try await group.next() else {
                     group.cancelAll()
@@ -7019,7 +8119,17 @@ actor PipelineCoordinator {
                 error: error.localizedDescription,
                 arguments: call.arguments
             )
-            return .error("Tool error: \(error.localizedDescription)")
+            let result = ToolResult.error("Tool error: \(error.localizedDescription)")
+            await recordWorkflowToolResult(
+                turnID: workflowTurnID,
+                callId: traceToolCallID,
+                call: call,
+                result: result,
+                approved: approvedByUser ? true : nil,
+                latencyMs: latencyMs,
+                damageControlIntervened: workflowDamageControlIntervened
+            )
+            return result
         }
 
         let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
@@ -7048,6 +8158,16 @@ actor PipelineCoordinator {
         if !result.isError {
             await outboundGuard.recordSuccessfulSend(toolName: call.name, arguments: call.arguments)
         }
+
+        await recordWorkflowToolResult(
+            turnID: workflowTurnID,
+            callId: traceToolCallID,
+            call: call,
+            result: result,
+            approved: approvedByUser ? true : nil,
+            latencyMs: latencyMs,
+            damageControlIntervened: workflowDamageControlIntervened
+        )
 
         return result
     }
@@ -7159,6 +8279,18 @@ actor PipelineCoordinator {
     ) -> Bool {
         if toolName == "self_config" {
             return !isSelfConfigReadAction(arguments: arguments)
+        }
+        if toolName == "calendar" {
+            let action = (arguments["action"] as? String)?.lowercased() ?? ""
+            if action == "create" {
+                return true
+            }
+        }
+        if toolName == "reminders" {
+            let action = (arguments["action"] as? String)?.lowercased() ?? ""
+            if action == "create" || action == "complete" {
+                return true
+            }
         }
         return defaultRequiresApproval
     }

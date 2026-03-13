@@ -40,6 +40,7 @@ struct InputBarView: View {
 
             // Action pills
             HStack(spacing: 8) {
+                toolModePill
                 thinkingTogglePill
                 coworkPill
             }
@@ -206,6 +207,83 @@ struct InputBarView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Stop generation")
         .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+
+    // MARK: - Tool Mode Pill
+
+    /// Simplified 3-state quick picker: Ask / Read only / Full.
+    /// "Ask" = off (no tools); "Read only" = read_only; "Full" = full.
+    /// Colour-coded: Read only → orange, Full → red.
+    private var toolModePill: some View {
+        Menu {
+            Button {
+                faeCore.patchConfig(key: "tool_mode", payload: ["value": "off"])
+            } label: {
+                if faeCore.toolMode == "off" {
+                    Label("Ask", systemImage: "checkmark")
+                } else {
+                    Label("Ask", systemImage: "questionmark.bubble")
+                }
+            }
+            Button {
+                faeCore.patchConfig(key: "tool_mode", payload: ["value": "read_only"])
+            } label: {
+                if faeCore.toolMode == "read_only" {
+                    Label("Read only", systemImage: "checkmark")
+                } else {
+                    Label("Read only", systemImage: "book")
+                }
+            }
+            Button {
+                faeCore.patchConfig(key: "tool_mode", payload: ["value": "full"])
+            } label: {
+                if ["read_write", "full", "full_no_approval"].contains(faeCore.toolMode) {
+                    Label("Full", systemImage: "checkmark")
+                } else {
+                    Label("Full", systemImage: "wrench.and.screwdriver")
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(toolModeColor)
+                    .frame(width: 6, height: 6)
+                Text(toolModeLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color.primary.opacity(0.68))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .animation(.easeInOut(duration: 0.2), value: faeCore.toolMode)
+        .accessibilityLabel("Tool access level")
+        .accessibilityValue(toolModeLabel)
+        .accessibilityHint("Choose how much access Fae has to system tools.")
+    }
+
+    private var toolModeLabel: String {
+        switch faeCore.toolMode {
+        case "off":   return "Ask"
+        case "read_only": return "Read only"
+        default:      return "Full"
+        }
+    }
+
+    private var toolModeColor: Color {
+        switch faeCore.toolMode {
+        case "off":       return Color.primary.opacity(0.35)
+        case "read_only": return .orange
+        default:          return .red
+        }
     }
 
     // MARK: - Thinking Level Pill

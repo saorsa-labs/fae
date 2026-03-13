@@ -45,19 +45,21 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
     }
 
     func testPrefersLegacyInlineToolPromptForQwenModels() {
-        XCTAssertTrue(
+        // Qwen models use native MLX tool calling — no legacy inline prompt needed.
+        XCTAssertFalse(
             PipelineCoordinator.prefersLegacyInlineToolPrompt(
                 modelId: "mlx-community/Qwen3.5-2B-4bit"
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             PipelineCoordinator.prefersLegacyInlineToolPrompt(
                 modelId: "mlx-community/Qwen3-8B-4bit"
             )
         )
-        XCTAssertFalse(
+        // The Claude-distilled variant requires the legacy inline format.
+        XCTAssertTrue(
             PipelineCoordinator.prefersLegacyInlineToolPrompt(
-                modelId: "LiquidAI/LFM2-24B-A2B-MLX-4bit"
+                modelId: "mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit"
             )
         )
     }
@@ -267,6 +269,40 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         XCTAssertEqual(call.arguments["query"] as? String, "Rust programming")
     }
 
+    func testRepairedToolCallForCalendarLookupDefaultsToToday() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, check my calendar"
+        ) else {
+            return XCTFail("Expected calendar repair call")
+        }
+
+        XCTAssertEqual(call.name, "calendar")
+        XCTAssertEqual(call.arguments["action"] as? String, "list_today")
+    }
+
+    func testRepairedToolCallForCalendarWeekLookupUsesListWeek() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, what is on my calendar this week?"
+        ) else {
+            return XCTFail("Expected calendar week repair call")
+        }
+
+        XCTAssertEqual(call.name, "calendar")
+        XCTAssertEqual(call.arguments["action"] as? String, "list_week")
+    }
+
+    func testRepairedToolCallForCalendarSearchUsesSearchAction() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, search my calendar for dentist"
+        ) else {
+            return XCTFail("Expected calendar search repair call")
+        }
+
+        XCTAssertEqual(call.name, "calendar")
+        XCTAssertEqual(call.arguments["action"] as? String, "search")
+        XCTAssertEqual(call.arguments["query"] as? String, "dentist")
+    }
+
     func testRepairedToolCallForSchedulerCreateExtractsNameAndInterval() {
         guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
             "Fae, create a task called fae-test-task that runs every 5 minutes"
@@ -351,6 +387,27 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         XCTAssertNotNil(call.arguments["prompt"] as? String)
     }
 
+    func testRepairedToolCallForScreenshotMentionUsesScreenshotTool() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, use the screenshot tool and tell me what is on my screen right now."
+        ) else {
+            return XCTFail("Expected screenshot repair call")
+        }
+
+        XCTAssertEqual(call.name, "screenshot")
+    }
+
+    func testRepairedToolCallForSafariScreenshotCarriesAppTarget() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, take a screenshot and tell me the exact headline text in the Safari window."
+        ) else {
+            return XCTFail("Expected screenshot repair call")
+        }
+
+        XCTAssertEqual(call.name, "screenshot")
+        XCTAssertEqual(call.arguments["app"] as? String, "Safari")
+    }
+
     func testRepairedToolCallForCameraRequestUsesCameraTool() {
         guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
             "Fae, capture from the webcam"
@@ -380,6 +437,60 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         }
 
         XCTAssertEqual(call.name, "read_screen")
+    }
+
+    func testRepairedToolCallForWhatsOnMyScreenUsesReadScreenTool() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, what is on my screen right now?"
+        ) else {
+            return XCTFail("Expected read_screen repair call")
+        }
+
+        XCTAssertEqual(call.name, "read_screen")
+    }
+
+    func testRepairedToolCallForSafariReadScreenCarriesAppTarget() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, read what is on the Safari window."
+        ) else {
+            return XCTFail("Expected read_screen repair call")
+        }
+
+        XCTAssertEqual(call.name, "read_screen")
+        XCTAssertEqual(call.arguments["app"] as? String, "Safari")
+    }
+
+    func testShouldSuppressThinkingInFastModeForToolFollowUps() {
+        // Tool follow-up turns always keep thinking enabled so the model can
+        // reason over tool results, even when the global level is .fast.
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSuppressThinking(
+                forceSuppressThinking: false,
+                thinkingLevel: .fast,
+                isToolFollowUp: true
+            )
+        )
+    }
+
+    func testShouldKeepThinkingInBalancedModeWhenNotForced() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSuppressThinking(
+                forceSuppressThinking: false,
+                thinkingLevel: .balanced,
+                isToolFollowUp: true
+            )
+        )
+    }
+
+    func testToolTimeoutSecondsExtendsVisionToolBudget() {
+        XCTAssertEqual(PipelineCoordinator.toolTimeoutSeconds(for: "screenshot"), 180)
+        XCTAssertEqual(PipelineCoordinator.toolTimeoutSeconds(for: "camera"), 180)
+        XCTAssertEqual(PipelineCoordinator.toolTimeoutSeconds(for: "read_screen"), 180)
+    }
+
+    func testToolTimeoutSecondsKeepsDefaultBudgetForNonVisionTools() {
+        XCTAssertEqual(PipelineCoordinator.toolTimeoutSeconds(for: "calendar"), 30)
+        XCTAssertEqual(PipelineCoordinator.toolTimeoutSeconds(for: "bash"), 30)
     }
 
     func testRepairedToolCallForClickRequestExtractsElementIndex() {
@@ -456,6 +567,68 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
                 awaitingApproval: true,
                 manualOnlyApprovalPending: false,
                 assistantSpeaking: false
+            )
+        )
+    }
+
+    func testDirectToolReplyTextUsesGroundedCalendarOutputVerbatim() {
+        let call = PipelineCoordinator.ToolCall(
+            name: "calendar",
+            arguments: ["action": "list_today"]
+        )
+        let result = ToolResult.success(
+            """
+            2 events:
+            - All day: Food Waste Caddy
+            - 12/03/2026, 17:00: Peader
+            """
+        )
+
+        XCTAssertEqual(
+            PipelineCoordinator.directToolReplyText(for: call, result: result),
+            """
+            2 events:
+            - All day: Food Waste Caddy
+            - 12/03/2026, 17:00: Peader
+            """
+        )
+    }
+
+    func testDirectToolReplyTextStripsScreenshotEnvelope() {
+        let call = PipelineCoordinator.ToolCall(name: "screenshot", arguments: [:])
+        let result = ToolResult.success("Screenshot (1920x1080):\nFAE Vision Test 7321")
+
+        XCTAssertEqual(
+            PipelineCoordinator.directToolReplyText(for: call, result: result),
+            "FAE Vision Test 7321"
+        )
+    }
+
+    func testDirectToolReplyTextLeavesReadScreenForFollowUpReasoning() {
+        let call = PipelineCoordinator.ToolCall(name: "read_screen", arguments: [:])
+        let result = ToolResult.success("Interactive elements:\n[0] AXButton: OK")
+
+        XCTAssertNil(PipelineCoordinator.directToolReplyText(for: call, result: result))
+    }
+
+    func testShouldPreferInlineToolExecutionForCalendarLookup() {
+        let call = PipelineCoordinator.ToolCall(name: "calendar", arguments: ["action": "list_today"])
+
+        XCTAssertTrue(
+            PipelineCoordinator.shouldPreferInlineToolExecution(
+                userText: "Fae, use the calendar tool right now and list my events for today.",
+                toolCalls: [call]
+            )
+        )
+    }
+
+    func testShouldPreferInlineToolExecutionKeepsWebSearchDeferredEligible() {
+        let call = PipelineCoordinator.ToolCall(name: "web_search", arguments: ["query": "swift news"])
+
+        XCTAssertFalse(
+            PipelineCoordinator.shouldPreferInlineToolExecution(
+                userText: "Fae, search for Swift news.",
+                toolCalls: [call]
             )
         )
     }

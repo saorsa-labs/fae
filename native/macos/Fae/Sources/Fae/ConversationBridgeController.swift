@@ -404,6 +404,14 @@ final class ConversationBridgeController: ObservableObject {
         case "verify_complete":
             subtitleState?.showProgress(label: "Models loaded — preparing first response…", percent: 98)
 
+        case "concierge":
+            let progress = userInfo["progress"] as? Double ?? 0.0
+            if progress >= 1.0 {
+                subtitleState?.showProgress(label: "Concierge ready — richer synthesis available.", percent: 99)
+            } else {
+                subtitleState?.showProgress(label: "Loading concierge model…", percent: 98)
+            }
+
         case "ready":
             subtitleState?.showProgress(
                 label: "Warming up Fae for the first conversation…",

@@ -13,6 +13,7 @@ final class TestRuntimeHarness: @unchecked Sendable {
     let eventCollector: EventCollector
     let memoryStore: SQLiteMemoryStore
     let memoryOrchestrator: MemoryOrchestrator
+    let workflowTraceStore: WorkflowTraceStore
     let scheduler: FaeScheduler
     let schedulerStore: SchedulerPersistenceStore
     let config: FaeConfig
@@ -39,6 +40,9 @@ final class TestRuntimeHarness: @unchecked Sendable {
         memoryStore = try SQLiteMemoryStore(
             path: tmpDir.appendingPathComponent("fae.db").path
         )
+        let workflowDBQueue = try DatabaseQueue(path: tmpDir.appendingPathComponent("fae.db").path)
+        _ = try SessionStore(dbQueue: workflowDBQueue)
+        workflowTraceStore = try WorkflowTraceStore(dbQueue: workflowDBQueue)
 
         // Memory orchestrator.
         memoryOrchestrator = MemoryOrchestrator(
@@ -55,7 +59,8 @@ final class TestRuntimeHarness: @unchecked Sendable {
         scheduler = FaeScheduler(
             eventBus: eventBus,
             memoryOrchestrator: memoryOrchestrator,
-            memoryStore: memoryStore
+            memoryStore: memoryStore,
+            workflowTraceStore: workflowTraceStore
         )
     }
 

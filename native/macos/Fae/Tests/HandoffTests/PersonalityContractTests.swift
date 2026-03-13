@@ -146,6 +146,8 @@ final class PersonalityContractTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("Before creating a new skill, ask the user for confirmation."))
         XCTAssertTrue(prompt.contains("Use manage_skill update to modify existing personal skill behavior."))
+        XCTAssertTrue(prompt.contains("Use manage_skill patch for surgical body edits"))
+        XCTAssertTrue(prompt.contains("Use manage_skill list_drafts / show_draft"))
         XCTAssertTrue(prompt.contains("collect them with input_request + store_key"))
         XCTAssertTrue(prompt.contains("secrets stay out of chat history"))
     }

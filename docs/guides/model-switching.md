@@ -1,49 +1,87 @@
-# Voice Model Preset Switching (Swift Runtime)
+# Local Model Switching (Swift Runtime)
 
-Fae runs locally on-device and supports switching the local **operator model preset** for the main LLM path. On supported machines, Fae can also load an optional **concierge** model for richer synthesis.
+Fae's primary local architecture is now:
 
-## What is supported
+- one active Qwen3.5 text model
+- one optional on-demand Qwen3-VL vision model
 
-**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+The dual / concierge path is no longer the recommended local setup.
 
-Preferred path: ask Fae to switch voice model preset conversationally.
+Canonical reference:
+
+- [Local model strategy](/Users/davidirvine/Desktop/Devel/projects/fae/docs/guides/local-model-strategy.md)
+
+## Preferred user path
+
+Ask Fae conversationally to switch models instead of editing config by hand.
 
 Examples:
-- "Switch my voice model to qwen3_5_4b"
-- "Set voice model preset to auto"
 
-You can switch the preset used by local inference:
+- "Switch my voice model to Qwen3.5 4B"
+- "Set my voice model preset to auto"
+- "Switch vision to auto"
 
-- `auto` (current default — favors the saorsa1 local operator tier)
-- `saorsa1-worker`
-- `saorsa1-tiny`
+## Supported text presets
 
-Legacy Qwen/Qwen3.5 preset keys are still accepted for backward compatibility, but they are migrated internally onto the nearest `saorsa1` operator model.
+User-facing text model presets:
 
-The setting is persisted in:
+- `auto`
+- `qwen3_5_2b`
+- `qwen3_5_4b`
+- `qwen3_5_9b`
+- `qwen3_5_27b`
+- `qwen3_5_35b_a3b`
+
+`Auto (Recommended)` resolves by RAM:
+
+| System RAM | Auto text model |
+|---|---|
+| `8–15 GB` | `Qwen3.5 2B` |
+| `16–31 GB` | `Qwen3.5 4B` |
+| `32+ GB` | `Qwen3.5 9B` |
+
+The larger `27B` and `35B-A3B` presets are explicit quality modes, not automatic defaults.
+
+## Supported vision presets
+
+User-facing vision presets:
+
+- `auto`
+- `qwen3_vl_4b_4bit`
+- `qwen3_vl_4b_8bit`
+
+`Auto` resolves by RAM:
+
+| System RAM | Auto vision model |
+|---|---|
+| `<16 GB` | disabled |
+| `16–31 GB` | `Qwen3-VL-4B (4-bit)` |
+| `32+ GB` | `Qwen3-VL-4B (8-bit)` |
+
+## Persistence
+
+The settings are persisted in:
 
 - `~/Library/Application Support/fae/config.toml`
-- key: `[llm].voiceModelPreset`
+- `[llm].voiceModelPreset`
+- `[vision].modelPreset`
+- `[vision].enabled`
 
 UI path:
 
 - **Settings → Models & Performance → Local LLM Stack**
-- legacy path: **Settings → Models → Voice Model**
+- **Settings → Models & Performance → Vision**
 
 ## Runtime behavior
 
-- Changing the preset updates config immediately.
-- Model swap takes effect on next pipeline/model load.
-- In current app UX, restart is recommended after changing preset.
-- `auto` now follows the saorsa1 operator policy:
-  - 12+ GB: `saorsa1-worker` at 32K context
-  - below 12 GB: `saorsa1-tiny` at 32K context
-- When dual-model local mode is enabled on 32+ GB systems, the current concierge default is `saorsa-labs/saorsa1-concierge-pre-release`.
-- Premium local mode now targets a **worker-backed** split: operator and concierge inference run in dedicated LLM worker processes while Kokoro remains in the main app process.
-- Inference priority is explicitly ordered as **operator > Kokoro > concierge**.
-- Runtime diagnostics for operator/concierge load state, current route, and fallback status are shown in **Settings → Diagnostics → Voice → Local model runtime**.
+- Changing the text preset persists immediately.
+- Fae reloads the local pipeline in-app. A full app restart is not required for normal switching.
+- If the selected text model is not cached, Fae downloads it during that reload.
+- Changing the vision preset unloads the current VLM; the next vision turn loads the selected VLM on demand.
+- Runtime diagnostics continue to use the internal `operator` naming for the active text model worker.
+- Legacy concierge settings remain in the config/runtime for compatibility, but they are not the recommended product path.
 
 ## Notes
 
-- Fae currently runs a Swift-native local stack (MLX/Core ML).
-- The legacy Rust/API backend switching docs are historical and not the active runtime path.
+- Fae's local runtime is Swift-native (`MLX`, `MLXVLM`, `Core ML`).
+- Legacy Rust and old saorsa1-specific switching docs are historical only.

@@ -118,6 +118,23 @@ final class TrustedActionBrokerTests: XCTestCase {
         }
     }
 
+    func testSessionSearchExplicitRuleAllowsLowRiskLookup() async {
+        let broker = DefaultTrustedActionBroker(
+            knownTools: ["session_search"],
+            speakerConfig: FaeConfig.SpeakerConfig()
+        )
+
+        let decision = await broker.evaluate(
+            makeIntent(toolName: "session_search", risk: .low, profile: .balanced)
+        )
+
+        if case .allow = decision {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("Expected allow")
+        }
+    }
+
     func testBalancedMediumHighImpactRequestsConfirmWhenAmbiguous() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["run_skill"],

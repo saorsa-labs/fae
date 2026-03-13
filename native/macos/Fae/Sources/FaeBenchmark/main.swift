@@ -32,9 +32,20 @@ let models: [ModelEntry] = [
     ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
     // NexVeridian text-only conversions (vision tower stripped).
     // mlx-community versions are VL — incompatible with text-only loading.
-    ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "NexVeridian/Qwen3.5-35B-A3B-4bit"),
-    ModelEntry(shortName: "qwen3.5-27b", modelID: "NexVeridian/Qwen3.5-27B-4bit"),
+    ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "mlx-community/Qwen3.5-35B-A3B-4bit"),
+    ModelEntry(shortName: "qwen3.5-27b", modelID: "mlx-community/Qwen3.5-27B-4bit"),
+    ModelEntry(
+        shortName: "qwen3.5-27b-opus-distilled",
+        modelID: "mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit"
+    ),
 ]
+
+func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
+    let lower = modelID.lowercased()
+    return lower.contains("qwen")
+        || lower.contains("saorsa1-worker")
+        || lower.contains("saorsa1-tiny")
+}
 
 // MARK: - Result Types
 
@@ -90,6 +101,8 @@ struct ToolCallResult: Codable {
     let prompt: String
     let expectedTool: String
     let actualTool: String
+    let toolCallSource: String
+    let rawResponsePreview: String
     let correct: Bool
     let temperature: Float
 
@@ -97,6 +110,8 @@ struct ToolCallResult: Codable {
         case prompt
         case expectedTool = "expected_tool"
         case actualTool = "actual_tool"
+        case toolCallSource = "tool_call_source"
+        case rawResponsePreview = "raw_response_preview"
         case correct
         case temperature
     }
@@ -264,9 +279,9 @@ func countThinkingChars(_ text: String) -> (visible: Int, thinking: Int) {
 
 // MARK: - Tool Schemas (for tool calling tests)
 
-// Tool calling system prompt — matches Fae's production PersonalityManager format.
-// Tools are described inline in the system prompt with <tool_call> examples,
-// NOT via OpenAI function-calling chat template (which Qwen3.5 models ignore).
+// Tool calling system prompt — close to Fae's production guidance.
+// Native tool specs are passed via UserInput.tools so the model's chat template
+// can select the right output format for its family.
 let toolCallingSystemPrompt = """
 /no_think
 
@@ -274,59 +289,144 @@ You are Fae, a personal AI companion running on macOS. When the user's request r
 call the appropriate tool. For simple conversation, just respond directly without tools.
 
 Tool usage:
-- When a task requires a tool, output a tool call in this exact format:
-  <tool_call>{"name":"tool_name","arguments":{"key":"value"}}</tool_call>
-- Wait for the tool result before continuing
-- After receiving a tool result, respond naturally in spoken language
-- Only use tools when the user's request genuinely needs one
-- For simple conversation, just respond directly without tools
-- Keep your spoken responses concise (1-4 sentences)
-- NEVER expose raw tool call markup or JSON to the user
-
-Available tools:
-
-## calendar
-Access macOS Calendar events. Actions: list_today, list_week, list_date, create, search.
-Risk: low
-Parameters: {"action": "string (list_today|list_week|list_date|create|search)", "query": "string", "date": "string (YYYY-MM-DD)"}
-Example: <tool_call>{"name":"calendar","arguments":{"action":"list_today"}}</tool_call>
-
-## reminders
-Access macOS Reminders. Actions: list_incomplete, create, complete, search.
-Risk: low
-Parameters: {"action": "string (list_incomplete|create|complete|search)", "title": "string", "query": "string"}
-Example: <tool_call>{"name":"reminders","arguments":{"action":"list_incomplete"}}</tool_call>
-
-## contacts
-Search macOS Contacts. Actions: search, get_phone, get_email.
-Risk: low
-Parameters: {"action": "string (search|get_phone|get_email)", "query": "string (name)"}
-Example: <tool_call>{"name":"contacts","arguments":{"action":"search","query":"Sarah"}}</tool_call>
-
-## mail
-Interact with macOS Mail. Actions: check_inbox, read_recent, send.
-Risk: medium
-Parameters: {"action": "string (check_inbox|read_recent|send)", "to": "string", "body": "string", "count": "integer"}
-Example: <tool_call>{"name":"mail","arguments":{"action":"check_inbox","count":5}}</tool_call>
-
-## notes
-Access macOS Notes. Actions: list_recent, create, search.
-Risk: low
-Parameters: {"action": "string (list_recent|create|search)", "title": "string", "body": "string", "query": "string"}
-Example: <tool_call>{"name":"notes","arguments":{"action":"search","query":"meeting notes"}}</tool_call>
-
-## web_search
-Search the web using DuckDuckGo. Returns up to 5 results with titles, snippets, and URLs.
-Risk: low
-Parameters: {"query": "string", "max_results": "integer (default 5)"}
-Example: <tool_call>{"name":"web_search","arguments":{"query":"latest Swift concurrency features"}}</tool_call>
-
-## read
-Read the contents of a file from the filesystem.
-Risk: low
-Parameters: {"path": "string (file path)"}
-Example: <tool_call>{"name":"read","arguments":{"path":"~/Documents/notes.txt"}}</tool_call>
+- Calendar, reminders, mail, contacts, notes queries: ALWAYS call the relevant tool. Do NOT answer from memory.
+- Real-time data, file access, and web lookups: use the appropriate tool.
+- If tools are provided, call them using the model's native tool-calling format.
+- Qwen-family models may emit XML function calls.
+- Liquid-family models may emit special-token or Pythonic tool calls.
+- After a tool result, respond naturally in spoken language.
+- For simple conversation, just respond directly without tools.
+- Keep spoken responses concise (1-4 sentences).
+- NEVER expose raw tool call markup, JSON, or code to the user.
 """
+
+let toolCallingNativeTools: [[String: any Sendable]] = [
+    [
+        "type": "function",
+        "function": [
+            "name": "calendar",
+            "description": "Access macOS Calendar events.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "action": [
+                        "type": "string",
+                        "description": "One of list_today, list_week, list_date, create, search.",
+                    ] as [String: String],
+                    "query": ["type": "string"] as [String: String],
+                    "date": ["type": "string"] as [String: String],
+                ] as [String: Any],
+                "required": ["action"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+    [
+        "type": "function",
+        "function": [
+            "name": "reminders",
+            "description": "Access macOS Reminders.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "action": [
+                        "type": "string",
+                        "description": "One of list_incomplete, create, complete, search.",
+                    ] as [String: String],
+                    "title": ["type": "string"] as [String: String],
+                    "query": ["type": "string"] as [String: String],
+                ] as [String: Any],
+                "required": ["action"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+    [
+        "type": "function",
+        "function": [
+            "name": "contacts",
+            "description": "Search macOS Contacts.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "action": [
+                        "type": "string",
+                        "description": "One of search, get_phone, get_email.",
+                    ] as [String: String],
+                    "query": ["type": "string"] as [String: String],
+                ] as [String: Any],
+                "required": ["action", "query"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+    [
+        "type": "function",
+        "function": [
+            "name": "mail",
+            "description": "Interact with macOS Mail.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "action": [
+                        "type": "string",
+                        "description": "One of check_inbox, read_recent, send.",
+                    ] as [String: String],
+                    "to": ["type": "string"] as [String: String],
+                    "body": ["type": "string"] as [String: String],
+                    "count": ["type": "integer"] as [String: String],
+                ] as [String: Any],
+                "required": ["action"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+    [
+        "type": "function",
+        "function": [
+            "name": "notes",
+            "description": "Access macOS Notes.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "action": [
+                        "type": "string",
+                        "description": "One of list_recent, create, search.",
+                    ] as [String: String],
+                    "title": ["type": "string"] as [String: String],
+                    "body": ["type": "string"] as [String: String],
+                    "query": ["type": "string"] as [String: String],
+                ] as [String: Any],
+                "required": ["action"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+    [
+        "type": "function",
+        "function": [
+            "name": "web_search",
+            "description": "Search the web and return titles, snippets, and URLs.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "query": ["type": "string"] as [String: String],
+                    "max_results": ["type": "integer"] as [String: String],
+                ] as [String: Any],
+                "required": ["query"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+    [
+        "type": "function",
+        "function": [
+            "name": "read",
+            "description": "Read the contents of a file from the filesystem.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string"] as [String: String],
+                ] as [String: Any],
+                "required": ["path"],
+            ] as [String: Any],
+        ] as [String: Any],
+    ],
+]
 
 let toolCallTests: [(prompt: String, expectedTool: String)] = [
     ("What's on my calendar tomorrow?", "calendar"),
@@ -371,7 +471,11 @@ actor BenchmarkEngine {
 
     func load() async throws {
         print("  Loading \(shortName) (\(modelID))...")
-        let config = ModelConfiguration(id: modelID)
+        var config = ModelConfiguration(id: modelID)
+        if usesQwenCompatibleToolCallFormat(modelID: modelID) {
+            config.toolCallFormat = .xmlFunction
+            print("  Using xmlFunction tool-call parser.")
+        }
         container = try await LLMModelFactory.shared.loadContainer(configuration: config)
         print("  Loaded.")
     }
@@ -701,33 +805,35 @@ actor BenchmarkEngine {
 
     // MARK: - Tool Calling
 
-    func runToolCallingTest(temperature: Float = 0.2) async throws -> [ToolCallResult] {
+    func runToolCallingTest(temperature: Float = 0.0) async throws -> [ToolCallResult] {
         let system = toolCallingSystemPrompt
         let validTools = Set(["calendar", "reminders", "contacts", "mail", "notes",
-                              "web_search", "web_search", "read", "write", "bash"])
+                              "web_search", "read", "write", "bash"])
 
         var results: [ToolCallResult] = []
         for test in toolCallTests {
             print("    Tool test: \(test.prompt.prefix(50))...", terminator: "")
             fflush(stdout)
 
-            // Tools are in the system prompt (Fae's production format), not via UserInput.tools.
-            // This matches how Fae actually works — inline <tool_call> markup, not chat template tools.
             let toolResult = try await generate(
                 system: system,
                 user: test.prompt,
                 maxTokens: 512,
-                temperature: temperature
+                temperature: temperature,
+                tools: toolCallingNativeTools
             )
             let output = toolResult.text
 
             var actual = "none"
+            var toolCallSource = "none"
+            let rawResponsePreview = String(output.prefix(300)).replacingOccurrences(of: "\n", with: "\\n")
 
             // 1. Check for library-parsed .toolCall events (native path)
             if let firstCall = toolResult.toolCalls.first {
                 let name = firstCall.function.name
                 // Map web_search back to web_search for comparison
                 actual = name == "web_search" ? "web_search" : name
+                toolCallSource = "native_tool_event"
             }
 
             // 2. Fallback: check raw text for <tool_call> tags (in case library didn't parse)
@@ -737,12 +843,43 @@ actor BenchmarkEngine {
                     if let valueRange = match.range(of: #""([^"]+)"$"#, options: .regularExpression) {
                         let candidate = String(match[valueRange]).replacingOccurrences(of: "\"", with: "")
                         let mapped = candidate == "web_search" ? "web_search" : candidate
-                        if validTools.contains(candidate) { actual = mapped }
+                        if validTools.contains(candidate) {
+                            actual = mapped
+                            toolCallSource = "raw_tool_call_json"
+                        }
                     }
                 }
             }
 
-            // 3. Fallback: look for "name": "tool_name" pattern in raw text
+            // 3. Fallback: Qwen XML tool-call format.
+            if actual == "none" {
+                if let functionRange = output.range(of: #"<function=([A-Za-z_][A-Za-z0-9_]*)>"#, options: .regularExpression) {
+                    let captured = output[functionRange]
+                    let candidate = String(captured)
+                        .replacingOccurrences(of: "<function=", with: "")
+                        .replacingOccurrences(of: ">", with: "")
+                    if validTools.contains(candidate) {
+                        actual = candidate
+                        toolCallSource = "raw_qwen_xml"
+                    }
+                }
+            }
+
+            // 4. Fallback: Liquid Pythonic/special-token tool-call format.
+            if actual == "none" {
+                if let functionRange = output.range(of: #"<\|tool_call_start\|>\s*\[\s*([A-Za-z_][A-Za-z0-9_]*)\("#, options: .regularExpression) {
+                    let captured = output[functionRange]
+                    if let nameRange = String(captured).range(of: #"[A-Za-z_][A-Za-z0-9_]*(?=\()"#, options: .regularExpression) {
+                        let candidate = String(String(captured)[nameRange])
+                        if validTools.contains(candidate) {
+                            actual = candidate
+                            toolCallSource = "raw_liquid_pythonic"
+                        }
+                    }
+                }
+            }
+
+            // 5. Fallback: loose JSON-ish name field in raw text.
             if actual == "none" {
                 if let nameMatch = output.range(of: #"["']name["']\s*:\s*["'](\w+)["']"#, options: .regularExpression) {
                     let captured = output[nameMatch]
@@ -750,8 +887,10 @@ actor BenchmarkEngine {
                         let candidate = String(captured[valRange])
                             .replacingOccurrences(of: "\"", with: "")
                             .replacingOccurrences(of: "'", with: "")
-                        let mapped = candidate == "web_search" ? "web_search" : candidate
-                        if validTools.contains(candidate) { actual = mapped }
+                        if validTools.contains(candidate) {
+                            actual = candidate
+                            toolCallSource = "raw_name_field"
+                        }
                     }
                 }
             }
@@ -760,15 +899,17 @@ actor BenchmarkEngine {
             print(" \(correct ? "OK" : "MISS") (expected=\(test.expectedTool), got=\(actual))")
             if !correct && test.expectedTool != "none" {
                 let nativeCount = toolResult.toolCalls.count
-                let preview = String(output.prefix(300)).replacingOccurrences(of: "\n", with: "\\n")
                 print("      Native .toolCall events: \(nativeCount)")
-                print("      Response: \(preview)")
+                print("      Tool source: \(toolCallSource)")
+                print("      Response: \(rawResponsePreview)")
             }
 
             results.append(ToolCallResult(
                 prompt: test.prompt,
                 expectedTool: test.expectedTool,
                 actualTool: actual,
+                toolCallSource: toolCallSource,
+                rawResponsePreview: rawResponsePreview,
                 correct: correct,
                 temperature: temperature
             ))
@@ -886,7 +1027,7 @@ func printUsage() {
     Model short names:
       qwen3-0.6b, qwen3-1.7b, qwen3-4b, qwen3-8b,
       qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, qwen3.5-9b,
-      qwen3.5-27b, qwen3.5-35b-a3b
+      qwen3.5-27b, qwen3.5-27b-opus-distilled, qwen3.5-35b-a3b
 
     Dimensions (default: all):
       --throughput       Run throughput benchmark (7 context sizes x 2 modes)
@@ -1148,8 +1289,8 @@ func benchmarkModel(
 
     // Tool calling
     if doTools {
-        print("\n  Tool calling (temp=0.2):")
-        result.toolCalling = try await engine.runToolCallingTest(temperature: 0.2)
+        print("\n  Tool calling (temp=0.0):")
+        result.toolCalling = try await engine.runToolCallingTest(temperature: 0.0)
     }
 
     // MMLU-style mini eval

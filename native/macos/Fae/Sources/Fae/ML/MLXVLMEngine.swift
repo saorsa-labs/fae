@@ -77,7 +77,7 @@ actor MLXVLMEngine: VLMEngine {
                     let ciImage = CIImage(cgImage: image)
                     let chatMessages: [Chat.Message] = [
                         .system("Describe what you see accurately and concisely."),
-                        .user(prompt, images: [.ciImage(ciImage)]),
+                        .user(InputSanitizer.sanitizeVLMPrompt(prompt), images: [.ciImage(ciImage)]),
                     ]
                     var userInput = UserInput(chat: chatMessages)
                     userInput.additionalContext = ["enable_thinking": !options.suppressThinking]

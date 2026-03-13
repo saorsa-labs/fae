@@ -1,6 +1,6 @@
 # Main And Cowork Live Test Scenarios
 
-Last updated: March 11, 2026
+Last updated: March 13, 2026
 
 This document is the step-by-step live validation companion to
 [`docs/checklists/app-release-validation.md`](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md).
@@ -12,6 +12,12 @@ security changes.
 Do not treat screenshots, scripted phase results, or isolated unit tests as a
 substitute for these live scenarios. The release bar is: the real app, with
 real windows, real audio, real popups, and real provider integration.
+
+Current local product path:
+
+- single Qwen3.5 text model
+- on-demand Qwen3-VL vision model
+- legacy dual / concierge mode treated as compatibility-only, not default behavior
 
 ## Required setup
 
@@ -43,9 +49,10 @@ Acceptance:
 - No empty canvas appears on startup.
 - The main surface is visually coherent within 3 seconds.
 - On a true first run, the intro crawl appears after license acceptance and before the live conversation surface unlocks.
-- The loaded local model is visible in the runtime or settings and matches expectations.
-- On a clean-install or cache-cleared run, local operator startup can wait through first-download latency without tripping a worker load timeout.
+- The active local text model is visible in the runtime or settings and matches expectations.
+- On a clean-install or cache-cleared run, local text-model startup can wait through first-download latency without tripping a worker load timeout.
 - The startup progress bar stays visible through download, model load, verification, and warmup.
+- The default startup path is the single-model Qwen3.5 flow rather than an implicit concierge boot.
 - The live text composer stays unavailable until Fae is actually ready to answer.
 - On the next launch after that first run completes, the intro crawl no longer appears.
 
@@ -53,7 +60,7 @@ Steps:
 
 1. Launch Fae from a clean build.
 2. Capture startup screenshot.
-3. Confirm `/status` reports the expected operator model and pipeline state.
+3. Confirm `/status` reports the expected local text model and pipeline state.
 4. Resize and move the main window once to confirm the surface remains stable.
 5. Repeat once on a cache-cleared or clean-install path and confirm the app waits for local model download instead of failing with `Worker command timed out: load`.
 6. During that first-run path, confirm the progress label keeps updating through warmup and the text composer only appears after readiness completes.
@@ -127,6 +134,7 @@ Acceptance:
 - Approval popups appear only when required.
 - Approval approve/deny paths match actual side effects.
 - Key-entry popups and permission prompts work.
+- First-use vision turns can wait through capture plus VLM load/inference instead of failing on an internal 30s-style timeout.
 
 Steps:
 
@@ -141,23 +149,27 @@ Steps:
 Acceptance:
 
 - Memory capture and recall work from the main window.
+- Session search can recover a prior conversation after a conversation reset.
 - Memory Inbox accepts pasted text, at least one imported file, and one URL.
 - Files placed in the inbox pending folder can be ingested into memory.
 - Asking what Fae learned recently returns digest-first recall with visible provenance.
 - Scheduler create/update/delete/trigger works.
 - Skills list/add/edit/remove/execute works.
+- Reviewable skill drafts can be listed, inspected, and explicitly applied or dismissed.
 
 Steps:
 
 1. Teach Fae one temporary memory in conversation, then ask for it back.
-2. Open `Fae > Memory Inbox...` and import one pasted text artifact.
-3. Import one local file and one URL through the same Memory Inbox flow.
-4. Drop one supported text file into `~/Library/Application Support/fae/memory-inbox/pending/`, then trigger ingestion either by waiting for the built-in task or running the manual ingest path.
-5. Ask Fae `what have you learned recently?` and verify the answer shows a digest/insights section before supporting raw memories, with source labels.
-6. Open scheduler UI and create one temporary task.
-7. Edit and then delete that task.
-8. Open skills UI, inspect at least one skill, and run one harmless skill flow if available.
-9. Capture screenshots and backend evidence for each surface.
+2. Reset the conversation, ask `what did we say about <that topic>?`, and verify Fae recovers transcript-backed snippets rather than inventing a durable memory.
+3. Open `Fae > Memory Inbox...` and import one pasted text artifact.
+4. Import one local file and one URL through the same Memory Inbox flow.
+5. Drop one supported text file into `~/Library/Application Support/fae/memory-inbox/pending/`, then trigger ingestion either by waiting for the built-in task or running the manual ingest path.
+6. Ask Fae `what have you learned recently?` and verify the answer shows a digest/insights section before supporting raw memories, with source labels.
+7. Open scheduler UI and create one temporary task.
+8. Edit and then delete that task.
+9. Open skills UI, inspect at least one skill, and run one harmless skill flow if available.
+10. If a staged skill draft exists, inspect the draft content and confirm apply/dismiss actions behave explicitly.
+11. Capture screenshots and backend evidence for each surface.
 
 ## Cowork scenarios
 
@@ -271,3 +283,37 @@ Only mark the build release-ready when all of the following are true:
 - Real audio input/output was used where voice is involved.
 - Screenshots and failure evidence were captured.
 - Any remaining issue is recorded as a release blocker rather than waved away.
+
+## Model-switch and RAM-tier live scenarios
+
+### Settings model switch without app restart
+
+1. Launch the app normally and wait for the pipeline to reach `running`.
+2. Open Settings and change the main local model to a different cached Qwen tier.
+3. Confirm the app stays open, the pipeline reloads internally, and the main window returns to a usable state without a full application restart.
+4. Confirm a simple prompt after the switch is answered by the new model.
+
+### Auto model selection by RAM tier
+
+1. Validate `Auto (Recommended)` on a low-memory test profile and confirm the app selects `Qwen3.5 2B · 4bit`.
+2. Validate `Auto (Recommended)` on a mid-tier machine/profile and confirm the app selects `Qwen3.5 4B · 4bit`.
+3. Validate `Auto (Recommended)` on a `32 GB+` machine/profile and confirm the app selects `Qwen3.5 9B · 4bit`.
+4. After each selection, run one real tool turn and record:
+   - time to first meaningful response
+   - native tool call vs repair fallback
+   - peak combined app + worker RSS
+
+### Auto vision selection by RAM tier
+
+1. With vision set to `Auto (Recommended)`, verify:
+   - under `16 GB`: vision remains off by default
+   - `16–31 GB`: `Qwen3-VL 4B · 4bit` is selected
+   - `32 GB+`: `Qwen3-VL 4B · 8bit` is selected
+2. Run one `screenshot`, `read_screen`, or `camera` turn and confirm the VLM loads on demand and unload/reload behavior remains stable.
+
+### Low-memory test-server verification
+
+1. Start the app in `--test-server` mode.
+2. Confirm logs show the low-memory profile is active.
+3. Confirm the runtime resolves to `Qwen3.5 2B · 4bit` with effective context `8192`.
+4. Run a bounded-memory core-tools phase and capture pass/fail outcomes together with peak combined RSS.

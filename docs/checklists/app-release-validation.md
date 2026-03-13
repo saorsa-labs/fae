@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: March 11, 2026
+Last updated: March 13, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae.
 
@@ -12,14 +12,14 @@ If a capability exists in the product but is not covered by an automated or guid
 
 Run this full contract when any of the following changes:
 
-- local operator or concierge model selection
+- local text or vision model selection
 - prompt templates, tool prompting, or tool repair logic
 - voice capture, STT, wake logic, TTS, or playback timing
 - permissions, approval popups, key input, or security/export review
 - memory capture/recall or scheduler behavior
 - skills management or Python-runtime integration
 - Cowork routing, model switching, compare/fork, or remote-provider handling
-- dual-model routing policy or concierge model changes
+- legacy dual-model or concierge compatibility changes
 - settings that affect loaded models, policy, or diagnostics
 - any release candidate build
 
@@ -57,9 +57,9 @@ Suggested screenshot root:
 
 - [ ] `just rebuild` or `just run-native` launches exactly one real Fae app bundle.
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
-- [ ] Loaded operator and concierge models are visible in Settings without truncation.
-- [ ] The runtime reports the expected operator model, context size, and tool mode.
-- [ ] On a cache-cleared or clean-install machine, first local operator load completes without `Worker command timed out: load` while model download is in progress.
+- [ ] The active local text model and configured vision model are visible in Settings without truncation.
+- [ ] The runtime reports the expected local text model, context size, and tool mode.
+- [ ] On a cache-cleared or clean-install machine, first local text-model load completes without `Worker command timed out: load` while model download is in progress.
 - [ ] Any stale onboarding, memory, scheduler, or approval state needed for the scenario is reset intentionally through the test server.
 
 ## Scripted harness phases
@@ -80,7 +80,7 @@ These phases are the minimum scripted baseline:
 - [ ] `11-voice-pipeline`
 - [ ] `12-onboarding`
 - [ ] `13-cowork`
-- [ ] `14-dual-model`
+- [ ] `14-dual-model` (legacy compatibility coverage only when that path is intentionally touched)
 - [ ] `15-cowork-voice` (requires Chatterbox)
 
 Acceptance:
@@ -98,7 +98,8 @@ Acceptance:
 - [ ] On a true first run after license acceptance, the startup intro/crawl appears exactly once while Fae finishes loading.
 - [ ] The orb/visual focus feels calm and intentional rather than blurry or noisy.
 - [ ] The main window can be resized and moved without layout breakage.
-- [ ] A clean-install or cache-cleared first launch can wait through local model download without failing the pipeline or dropping worker/concierge diagnostics into an error state.
+- [ ] A clean-install or cache-cleared first launch can wait through local model download without failing the pipeline or dropping local worker diagnostics into an error state.
+- [ ] The default local startup path is the single-model Qwen3.5 flow, not an implicit dual-model / concierge boot path.
 - [ ] On subsequent launches of an already-initialized install, the startup intro does not reappear.
 - [ ] Startup progress remains visible through download, model load, verification, and first-response warmup instead of disappearing on a timer.
 - [ ] The live conversation surface does not unlock early; input becomes available only after the pipeline is actually ready to respond.
@@ -140,16 +141,19 @@ Acceptance:
 - [ ] Key/input popups accept and return entered values correctly.
 - [ ] macOS permission prompts are understandable and unblock the intended feature.
 - [ ] Tool access copy is trustworthy and not hallucinatory.
+- [ ] First-use vision turns (`screenshot`, `camera`, `read_screen`) can wait through capture and VLM load/inference without failing on an internal tool timeout.
 
 ### Memory, scheduler, and skills
 
 - [ ] Memory capture and recall work from the main window.
+- [ ] Session search can recover a prior conversation after a conversation reset, with transcript snippets that match what was actually said.
 - [ ] Memory Inbox supports pasted text, file import, and URL import in the real app.
 - [ ] Files dropped into `~/Library/Application Support/fae/memory-inbox/pending/` can be ingested by the scheduler or manual trigger path.
 - [ ] Asking Fae what she learned recently surfaces digest-first recall before raw supporting memories.
 - [ ] Recall output shows trustworthy provenance labels for imported artifacts or derived digests.
 - [ ] Scheduler list/create/update/delete/trigger flows work.
 - [ ] Skills list/add/edit/remove/execute flows work.
+- [ ] Staged skill drafts can be listed, inspected, and only applied or dismissed after explicit user confirmation.
 - [ ] Any generated or edited artifacts appear where the UI says they will.
 
 ## Cowork scenarios
@@ -209,8 +213,8 @@ Acceptance:
 
 ## Settings and diagnostics scenarios
 
-- [ ] Settings clearly show the active operator and concierge models without clipping.
-- [ ] Diagnostics surface worker health, route, restart count, and last error correctly.
+- [ ] Settings clearly show the active local text model and configured vision model without clipping.
+- [ ] Diagnostics surface worker health, route, restart count, and last error correctly. If legacy dual mode is explicitly enabled, concierge diagnostics remain coherent.
 - [ ] Theme appearance follows the system appearance unless intentionally overridden.
 - [ ] Privacy/security settings match the actual runtime behavior under test.
 
@@ -247,3 +251,25 @@ bash scripts/test-comprehensive.sh --skip-llm --phase 12
 ```
 
 For live UI validation, keep using the real app plus screenshots, the test server, and real audio playback through Chatterbox.
+
+## Model switching and RAM-tier validation
+
+- Verify Settings model changes do not require a full app restart.
+- In Settings, switch from one cached local model to another and confirm the pipeline reloads in-app and returns to `running`.
+- If selecting an uncached model, verify the app communicates that the model will download during the reload flow and that the current session is replaced only by the new pipeline, not by a full application restart.
+- Validate `Auto (Recommended)` model selection against available RAM tiers:
+  - under `16 GB` available RAM: `Qwen3.5 2B · 4bit`
+  - `16–31 GB` available RAM: `Qwen3.5 4B · 4bit`
+  - `32 GB+` available RAM: `Qwen3.5 9B · 4bit`
+- Validate `Auto (Recommended)` vision selection against available RAM tiers:
+  - under `16 GB` available RAM: vision model remains off by default
+  - `16–31 GB` available RAM: `Qwen3-VL 4B · 4bit`
+  - `32 GB+` available RAM: `Qwen3-VL 4B · 8bit`
+- In `--test-server` or other low-memory validation flows, confirm the runtime clamp is actually applied and reported consistently:
+  - operator model resolves to `Qwen3.5 2B · 4bit`
+  - effective context is `8192`
+  - startup/memory-policy logs report the same effective context as the runtime configuration
+- For each RAM tier under validation, capture:
+  - idle app RSS
+  - peak combined app + worker RSS during at least one real tool turn
+  - whether the turn completed natively, via repair fallback, or timed out

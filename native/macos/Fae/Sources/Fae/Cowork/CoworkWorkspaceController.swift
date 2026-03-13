@@ -32,6 +32,8 @@ final class CoworkWorkspaceController: ObservableObject {
     @Published private(set) var providerKind: CoworkLLMProviderKind = .faeLocalhost
     @Published private(set) var providerStatus: String = "Connecting to Fae localhost"
     @Published private(set) var latestConsensusResults: [WorkWithFaeConsensusResult] = []
+    @Published private(set) var latestConsensusPrompt: String?
+    @Published private(set) var latestConsensusWorkspaceID: UUID?
     @Published private(set) var blockedRemoteEgressRequest: BlockedRemoteEgressRequest?
 
     private let faeCore: FaeCore
@@ -492,20 +494,19 @@ final class CoworkWorkspaceController: ObservableObject {
     }
 
     func forkSelectedWorkspace() {
-        duplicateSelectedWorkspace()
+        forkWorkspace(named: nil, using: nil)
     }
 
     func forkWorkspace(upToMessageIndex index: Int) {
-        guard let selectedWorkspace else { return }
-        let sourceName = selectedWorkspace.name
-        workspaceRegistry = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
-            workspaceID: selectedWorkspace.id,
-            truncatingToMessageIndex: index,
-            in: workspaceRegistry
-        )
-        persistWorkspaceRegistry()
-        applySelectedWorkspaceState()
-        prependActivity(title: "Forked from message \(index + 1)", detail: sourceName, tone: .success)
+        forkWorkspace(fromMessageIndex: index, named: nil, using: nil)
+    }
+
+    func forkWorkspace(upToMessageIndex index: Int, named name: String?, using option: CoworkModelOption?) {
+        forkWorkspace(fromMessageIndex: index, named: name, using: option)
+    }
+
+    func forkWorkspace(named name: String?, using option: CoworkModelOption?) {
+        forkWorkspace(fromMessageIndex: nil, named: name, using: option)
     }
 
     func deleteSelectedWorkspace() {
@@ -905,12 +906,43 @@ final class CoworkWorkspaceController: ObservableObject {
     }
 
     func applyConversationModelSelection(_ option: CoworkModelOption) {
-        guard let selectedWorkspace,
-              let workspaceIndex = workspaceRegistry.workspaces.firstIndex(where: { $0.id == selectedWorkspace.id })
+        applyConversationModelSelection(option, to: selectedWorkspace?.id)
+    }
+
+    func applyConversationModelSelection(_ option: CoworkModelOption, to workspaceID: UUID?) {
+        guard let workspaceID,
+              let workspaceIndex = workspaceRegistry.workspaces.firstIndex(where: { $0.id == workspaceID })
         else {
             return
         }
 
+        let workspaceName = workspaceRegistry.workspaces[workspaceIndex].name
+        let agentID = upsertAgent(for: option)
+        workspaceRegistry.workspaces[workspaceIndex].agentID = agentID
+        workspaceRegistry.workspaces[workspaceIndex].updatedAt = Date()
+        persistWorkspaceRegistry()
+        applySelectedWorkspaceState()
+
+        prependActivity(
+            title: "Conversation model updated",
+            detail: "\(workspaceName) → \(option.displayTitle)",
+            tone: .success
+        )
+
+        let preset = CoworkBackendPresetCatalog.preset(id: option.providerPresetID) ?? option.providerKind.defaultPreset
+        if option.requiresCredential,
+           let agent = workspaceRegistry.agents.first(where: { $0.id == agentID }),
+           !hasCredentialForModelSelection(agent, preset: preset)
+        {
+            prependActivity(
+                title: "API key needed",
+                detail: "Add a key for \(preset.displayName) before sending with \(option.displayTitle).",
+                tone: .warning
+            )
+        }
+    }
+
+    private func upsertAgent(for option: CoworkModelOption) -> String {
         let preset = CoworkBackendPresetCatalog.preset(id: option.providerPresetID) ?? option.providerKind.defaultPreset
         let normalizedBaseURL = CoworkProviderConnectionTester.normalizedBaseURL(option.baseURL, fallback: preset.defaultBaseURL)
         let existingIndex = workspaceRegistry.agents.firstIndex { agent in
@@ -919,64 +951,41 @@ final class CoworkWorkspaceController: ObservableObject {
             return agentPreset.id == preset.id && agentBaseURL == normalizedBaseURL
         }
 
-        let agentID: String
         if let existingIndex {
             var agent = workspaceRegistry.agents[existingIndex]
             agent.modelIdentifier = option.modelIdentifier
             workspaceRegistry.agents[existingIndex] = agent
-            agentID = agent.id
-        } else {
-            let credentialKey = preset.requiresAPIKey
-                ? "agents.\(option.providerKind.rawValue).\(UUID().uuidString.lowercased()).api_key"
-                : nil
-            if let credentialKey, let credential = globalCredentialForPreset(preset) {
-                do {
-                    try CredentialManager.store(key: credentialKey, value: credential)
-                } catch {
-                    prependActivity(title: "Credential save failed", detail: error.localizedDescription, tone: .warning)
-                }
+            return agent.id
+        }
+
+        let credentialKey = preset.requiresAPIKey
+            ? "agents.\(option.providerKind.rawValue).\(UUID().uuidString.lowercased()).api_key"
+            : nil
+        if let credentialKey, let credential = globalCredentialForPreset(preset) {
+            do {
+                try CredentialManager.store(key: credentialKey, value: credential)
+            } catch {
+                prependActivity(title: "Credential save failed", detail: error.localizedDescription, tone: .warning)
             }
-
-            let createdAgent = WorkWithFaeAgentProfile(
-                id: option.providerKind == .faeLocalhost ? WorkWithFaeAgentProfile.faeLocal.id : "agent-\(UUID().uuidString.lowercased())",
-                name: preset.displayName,
-                providerKind: option.providerKind,
-                backendPresetID: preset.id,
-                modelIdentifier: option.modelIdentifier,
-                baseURL: normalizedBaseURL,
-                credentialKey: credentialKey,
-                notes: preset.setupHint,
-                createdAt: Date()
-            )
-            workspaceRegistry = WorkWithFaeWorkspaceStore.registryByUpsertingAgent(
-                createdAgent,
-                assignToSelectedWorkspace: false,
-                in: workspaceRegistry
-            )
-            agentID = createdAgent.id
         }
 
-        workspaceRegistry.workspaces[workspaceIndex].agentID = agentID
-        workspaceRegistry.workspaces[workspaceIndex].updatedAt = Date()
-        persistWorkspaceRegistry()
-        applySelectedWorkspaceState()
-
-        prependActivity(
-            title: "Conversation model updated",
-            detail: "\(selectedWorkspace.name) → \(option.displayTitle)",
-            tone: .success
+        let createdAgent = WorkWithFaeAgentProfile(
+            id: option.providerKind == .faeLocalhost ? WorkWithFaeAgentProfile.faeLocal.id : "agent-\(UUID().uuidString.lowercased())",
+            name: preset.displayName,
+            providerKind: option.providerKind,
+            backendPresetID: preset.id,
+            modelIdentifier: option.modelIdentifier,
+            baseURL: normalizedBaseURL,
+            credentialKey: credentialKey,
+            notes: preset.setupHint,
+            createdAt: Date()
         )
-
-        if option.requiresCredential,
-           let selectedAgent,
-           !hasCredentialForModelSelection(selectedAgent, preset: preset)
-        {
-            prependActivity(
-                title: "API key needed",
-                detail: "Add a key for \(preset.displayName) before sending with \(option.displayTitle).",
-                tone: .warning
-            )
-        }
+        workspaceRegistry = WorkWithFaeWorkspaceStore.registryByUpsertingAgent(
+            createdAgent,
+            assignToSelectedWorkspace: false,
+            in: workspaceRegistry
+        )
+        return createdAgent.id
     }
 
     func testConnection(for agent: WorkWithFaeAgentProfile) async throws -> CoworkProviderConnectionReport {
@@ -1084,6 +1093,13 @@ final class CoworkWorkspaceController: ObservableObject {
             selectAttachment(attachment)
             prependActivity(title: "Pasted text", detail: attachment.displayName, tone: .success)
         }
+    }
+
+    func clearAttachmentsForTesting() {
+        workspaceState.attachments = []
+        selectedAttachment = nil
+        focusedPreview = selectedWorkspaceFile.map(WorkWithFaeWorkspaceStore.preview(for:))
+        persistWorkspaceState()
     }
 
     func removeAttachment(id: UUID) {
@@ -1296,6 +1312,8 @@ final class CoworkWorkspaceController: ObservableObject {
         conversation.lastInteractionTimestamp = Date()
         conversationBindingWorkspaceID = selectedWorkspace?.id
         latestConsensusResults = []
+        latestConsensusPrompt = nil
+        latestConsensusWorkspaceID = nil
 
         if remoteAgentBlockedByPolicy {
             prependActivity(
@@ -1354,6 +1372,7 @@ final class CoworkWorkspaceController: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
+            let requestStartedAt = Date()
             let thinkingLevel = await MainActor.run { self.faeCore.thinkingLevel }
             let externalSystemPrompt: String? = executionAgent.providerKind == .faeLocalhost ? nil : {
                 var parts = ["You are a helpful AI assistant working within Fae, a personal voice-first AI."]
@@ -1371,10 +1390,33 @@ final class CoworkWorkspaceController: ObservableObject {
             )
 
             if executionAgent.providerKind == .faeLocalhost {
+                await MainActor.run {
+                    self.conversation.appendMessage(role: .user, content: prompt)
+                    self.conversation.beginThinkingTurn(
+                        placeholderTrace: Self.localThinkingTrace(
+                            for: executionAgent,
+                            thinkingLevel: thinkingLevel
+                        )
+                    )
+                }
                 if let chatProvider = self.chatProvider {
                     do {
                         let response = try await chatProvider.submit(request: providerRequest)
                         await MainActor.run {
+                            let hasFreshAssistantReply = self.conversation.messages.contains { message in
+                                message.role == .assistant
+                                    && message.timestamp >= requestStartedAt.addingTimeInterval(-0.25)
+                            }
+                            if !hasFreshAssistantReply {
+                                self.conversation.appendMessage(role: .assistant, content: response.content)
+                            }
+                            self.conversation.isGenerating = false
+                            if self.conversation.isStreaming {
+                                self.conversation.finalizeStreaming()
+                            } else {
+                                self.conversation.finalizeThinkingTrace()
+                            }
+                            self.conversationBindingWorkspaceID = nil
                             self.providerStatus = self.isStrictLocalWorkspace
                                 ? "Strict local only — handled by Fae Local"
                                 : (response.status == "completed"
@@ -1385,20 +1427,33 @@ final class CoworkWorkspaceController: ObservableObject {
                                 detail: prompt,
                                 tone: .neutral
                             )
+                            if preparedPrompt.containsLocalOnlyContext {
+                                self.prependActivity(
+                                    title: "Privacy guard applied",
+                                    detail: "Local-only workspace inventory and focused local previews were kept on this Mac.",
+                                    tone: .success
+                                )
+                            }
                         }
                         return
                     } catch {
                         await MainActor.run {
                             self.providerStatus = "Fae localhost unavailable — direct fallback active"
+                            self.conversation.isGenerating = false
+                            self.conversation.clearThinkingTrace()
+                            self.prependActivity(
+                                title: "Fae Local unavailable",
+                                detail: error.localizedDescription,
+                                tone: .warning
+                            )
                         }
                     }
                 }
 
                 await MainActor.run {
-                    self.conversation.appendMessage(role: .user, content: prompt)
                     self.faeCore.injectDesktopText(preparedPrompt.faeLocalPrompt)
                     self.prependActivity(
-                        title: "Prompt sent",
+                        title: "Prompt sent via direct fallback",
                         detail: prompt,
                         tone: .neutral
                     )
@@ -1581,6 +1636,8 @@ final class CoworkWorkspaceController: ObservableObject {
             let summary = await self.buildConsensusSummary(for: prompt, results: results)
             await MainActor.run {
                 self.latestConsensusResults = results
+                self.latestConsensusPrompt = prompt
+                self.latestConsensusWorkspaceID = self.selectedWorkspace?.id
                 self.conversation.isGenerating = false
                 self.conversation.appendMessage(role: .assistant, content: summary)
                 self.providerStatus = triggeredAutomatically ? "Auto-compare ready" : "Consensus ready"
@@ -1792,6 +1849,17 @@ final class CoworkWorkspaceController: ObservableObject {
         return lines.joined(separator: "\n\n")
     }
 
+    private static func localThinkingTrace(
+        for agent: WorkWithFaeAgentProfile,
+        thinkingLevel: FaeThinkingLevel
+    ) -> String {
+        [
+            "Preparing trusted local workspace context for \(agent.backendDisplayName).",
+            "Applying \(thinkingLevel.displayName.lowercased()) reasoning profile to \(agent.modelIdentifier).",
+            "Waiting for Fae Local to finish the turn on this Mac.",
+        ].joined(separator: "\n\n")
+    }
+
     private func truncate(_ value: String, limit: Int = 160) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > limit else { return trimmed }
@@ -1806,6 +1874,11 @@ final class CoworkWorkspaceController: ObservableObject {
         selectedWorkspaceFile = workspaceState.indexedFiles.first
         focusedPreview = selectedWorkspaceFile.map(WorkWithFaeWorkspaceStore.preview(for:))
         restoreWorkspaceConversation()
+        if latestConsensusWorkspaceID != selectedWorkspace?.id {
+            latestConsensusResults = []
+            latestConsensusPrompt = nil
+            latestConsensusWorkspaceID = nil
+        }
 
         if let executionAgent {
             providerKind = executionAgent.providerKind
@@ -1887,6 +1960,70 @@ final class CoworkWorkspaceController: ObservableObject {
         workspaceRegistry.workspaces[index].state = workspaceState
         workspaceRegistry.workspaces[index].updatedAt = Date()
         persistWorkspaceRegistry()
+    }
+
+    private func forkWorkspace(fromMessageIndex index: Int?, named name: String?, using option: CoworkModelOption?) {
+        guard let selectedWorkspace else { return }
+        let sourceName = selectedWorkspace.name
+
+        if let index {
+            workspaceRegistry = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
+                workspaceID: selectedWorkspace.id,
+                truncatingToMessageIndex: index,
+                in: workspaceRegistry
+            )
+        } else {
+            workspaceRegistry = WorkWithFaeWorkspaceStore.registryByDuplicatingWorkspace(
+                workspaceID: selectedWorkspace.id,
+                in: workspaceRegistry
+            )
+        }
+
+        let forkedWorkspaceID = workspaceRegistry.selectedWorkspaceID
+        if let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedName.isEmpty
+        {
+            workspaceRegistry = WorkWithFaeWorkspaceStore.registryByUpdatingWorkspaceName(
+                workspaceID: forkedWorkspaceID,
+                name: trimmedName,
+                in: workspaceRegistry
+            )
+        }
+
+        if let option,
+           let forkedWorkspaceID,
+           let forkedIndex = workspaceRegistry.workspaces.firstIndex(where: { $0.id == forkedWorkspaceID })
+        {
+            workspaceRegistry.workspaces[forkedIndex].agentID = upsertAgent(for: option)
+            workspaceRegistry.workspaces[forkedIndex].updatedAt = Date()
+        }
+
+        persistWorkspaceRegistry()
+        applySelectedWorkspaceState()
+
+        let title = index.map { "Forked from message \($0 + 1)" } ?? "Conversation forked"
+        let detail = index.map { "\(sourceName) · message \($0 + 1)" } ?? sourceName
+        prependActivity(title: title, detail: detail, tone: .success)
+    }
+
+    func clearConversationForTesting() {
+        conversationBindingWorkspaceID = selectedWorkspace?.id
+        conversation.replaceMessages([])
+        if let selectedID = workspaceRegistry.selectedWorkspaceID,
+           let index = workspaceRegistry.workspaces.firstIndex(where: { $0.id == selectedID })
+        {
+            workspaceRegistry.workspaces[index].state.conversationMessages = []
+            workspaceRegistry.workspaces[index].updatedAt = Date()
+            if selectedID == workspaceRegistry.selectedWorkspaceID {
+                workspaceState = workspaceRegistry.workspaces[index].state
+            }
+            persistWorkspaceRegistry()
+        }
+        conversationBindingWorkspaceID = nil
+        latestConsensusResults = []
+        latestConsensusPrompt = nil
+        latestConsensusWorkspaceID = nil
+        blockedRemoteEgressRequest = nil
     }
 
 }

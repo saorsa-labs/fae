@@ -95,6 +95,13 @@ actor WorkerLLMEngine: LLMEngine {
     private var restartCount: Int = 0
     private var launchGeneration: UInt64 = 0
 
+    /// Maximum consecutive restarts before circuit-breaking.
+    private static let maxConsecutiveRestarts = 5
+    /// Base backoff delay between restarts (doubles each attempt, capped at 30s).
+    private static let baseRestartBackoffSeconds: Double = 1.0
+    private static let maxRestartBackoffSeconds: Double = 30.0
+    /// Successful generation resets the restart counter after this many tokens.
+    private var consecutiveRestartFailures: Int = 0
     private(set) var isLoaded: Bool = false
     private(set) var loadState: MLEngineLoadState = .notStarted
 
@@ -190,12 +197,16 @@ actor WorkerLLMEngine: LLMEngine {
         // conversation loop on a non-essential worker command.
     }
 
+    /// Reset the restart circuit breaker (e.g. after user intervention or config change).
+    func resetCircuitBreaker() {
+        consecutiveRestartFailures = 0
+    }
+
     func shutdown() async {
         for (_, timeoutTask) in pendingCommandTimeouts {
             timeoutTask.cancel()
         }
         pendingCommandTimeouts.removeAll()
-
         for (_, watchdog) in streamWatchdogs {
             watchdog.cancel()
         }
@@ -313,12 +324,31 @@ actor WorkerLLMEngine: LLMEngine {
         let executableURL = Bundle.main.executableURL
             ?? URL(fileURLWithPath: CommandLine.arguments[0])
 
+        // Circuit breaker: refuse to restart if we've failed too many times in a row.
+        if consecutiveRestartFailures >= Self.maxConsecutiveRestarts {
+            let error = WorkerLLMError.workerFailed(
+                "Worker restart circuit breaker tripped after \(consecutiveRestartFailures) consecutive failures"
+            )
+            persistWorkerState(lastError: error.localizedDescription)
+            throw error
+        }
+
+        // Exponential backoff between restarts.
+        if consecutiveRestartFailures > 0 {
+            let delay = min(
+                Self.baseRestartBackoffSeconds * pow(2.0, Double(consecutiveRestartFailures - 1)),
+                Self.maxRestartBackoffSeconds
+            )
+            NSLog("WorkerLLMEngine[%@]: backoff %.1fs before restart (attempt %d)",
+                  role.rawValue, delay, consecutiveRestartFailures + 1)
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+
         let process = Process()
         process.executableURL = executableURL
         let responseFileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-worker-\(role.rawValue)-\(UUID().uuidString).ndjson")
         FileManager.default.createFile(atPath: responseFileURL.path, contents: nil)
-
         process.arguments = [
             "--llm-worker",
             "--role", role.rawValue,
@@ -348,10 +378,10 @@ actor WorkerLLMEngine: LLMEngine {
 
         if lastLoadedModelID != nil {
             restartCount += 1
+            consecutiveRestartFailures += 1
         }
         persistWorkerState(lastError: nil)
         NSLog("WorkerLLMEngine[%@]: launched worker pid=%d", role.rawValue, process.processIdentifier)
-
         if let lastLoadedModelID {
             try await sendAwaitingAck(
                 LLMWorkerRequest(
@@ -519,7 +549,7 @@ actor WorkerLLMEngine: LLMEngine {
             if let continuation = streamContinuations.removeValue(forKey: response.requestID) {
                 continuation.finish()
             }
-
+            consecutiveRestartFailures = 0
         case "error":
             clearStreamTracking(requestID: response.requestID)
             let error = WorkerLLMError.workerFailed(response.error ?? "Unknown worker error")

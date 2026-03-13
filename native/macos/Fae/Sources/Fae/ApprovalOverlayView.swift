@@ -486,6 +486,8 @@ private struct InputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
+    private static let cardFill = Color(red: 28 / 255, green: 31 / 255, blue: 40 / 255).opacity(0.96)
+    private static let cardStroke = Color.white.opacity(0.08)
 
     private var field: ApprovalOverlayController.InputField {
         request.fields.first ?? .init(
@@ -601,14 +603,21 @@ private struct InputCard: View {
         }
         .padding(14)
         .frame(width: field.isMultiline ? 340 : 260)
-        .background(.ultraThinMaterial)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Self.cardFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Self.cardStroke, lineWidth: 1)
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
         .overlay(alignment: .topTrailing) {
             DismissOverlayButton(action: controller.cancelInput)
                 .padding(.top, 10)
                 .padding(.trailing, 10)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
         .onAppear { isFocused = true }
     }
 
@@ -628,6 +637,8 @@ private struct FormInputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
+    private static let cardFill = Color(red: 28 / 255, green: 31 / 255, blue: 40 / 255).opacity(0.96)
+    private static let cardStroke = Color.white.opacity(0.08)
 
     private var hasMultilineField: Bool {
         request.fields.contains { $0.isMultiline }
@@ -738,14 +749,21 @@ private struct FormInputCard: View {
         }
         .padding(14)
         .frame(width: hasMultilineField ? 340 : 320)
-        .background(.ultraThinMaterial)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Self.cardFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Self.cardStroke, lineWidth: 1)
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
         .overlay(alignment: .topTrailing) {
             DismissOverlayButton(action: controller.cancelInput)
                 .padding(.top, 10)
                 .padding(.trailing, 10)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
     }
 
     private var firstValidationError: String? {

@@ -17,6 +17,14 @@ import Network
 /// - `POST /approve`       — `{"approved":true}` → resolve pending tool approval
 /// - `GET  /approvals`     — List pending approval requests
 /// - `GET  /inputs`        — List pending secure input requests
+/// - `GET  /cowork/state`  — Current Cowork window + attachment snapshot
+/// - `GET  /cowork/conversation` — Current Cowork conversation snapshot
+/// - `POST /cowork/open`   — Open the Cowork window, optionally to a section
+/// - `POST /cowork/clear-attachments` — Remove Cowork attachments from the selected workspace
+/// - `POST /cowork/clear-conversation` — Clear the Cowork conversation transcript
+/// - `POST /cowork/attach-files`      — Add explicit file paths to Cowork
+/// - `POST /cowork/paste`  — Paste text, file URLs, or an image into Cowork
+/// - `POST /cowork/submit` — Submit a Cowork prompt through the selected agent
 /// - `POST /reset`         — Clear conversation, events, and pipeline history
 /// - `POST /memory/import-text`     — Import a raw artifact into memory inbox
 /// - `POST /memory/ingest-pending`  — Ingest pending files from memory inbox folder
@@ -32,16 +40,27 @@ final class TestServer {
     private weak var debugConsole: DebugConsoleController?
     private weak var conversation: ConversationController?
     private weak var approvalOverlay: ApprovalOverlayController?
+    private weak var auxiliaryWindows: AuxiliaryWindowManager?
+    private weak var coworkWindow: CoworkWindowController?
     private var injectedTurnMuteDepth: Int = 0
     private var listeningStateBeforeInjectedTurns: Bool?
 
     private let port: UInt16 = 7433
 
-    init(faeCore: FaeCore, debugConsole: DebugConsoleController, conversation: ConversationController, approvalOverlay: ApprovalOverlayController) {
+    init(
+        faeCore: FaeCore,
+        debugConsole: DebugConsoleController,
+        conversation: ConversationController,
+        approvalOverlay: ApprovalOverlayController,
+        auxiliaryWindows: AuxiliaryWindowManager,
+        coworkWindow: CoworkWindowController
+    ) {
         self.faeCore = faeCore
         self.debugConsole = debugConsole
         self.conversation = conversation
         self.approvalOverlay = approvalOverlay
+        self.auxiliaryWindows = auxiliaryWindows
+        self.coworkWindow = coworkWindow
     }
 
     func start() {
@@ -171,6 +190,22 @@ final class TestServer {
             handleApprovals(connection: connection)
         case ("GET", "/inputs"):
             handleInputs(connection: connection)
+        case ("GET", "/cowork/state"):
+            handleCoworkState(connection: connection)
+        case ("GET", "/cowork/conversation"):
+            handleCoworkConversation(connection: connection)
+        case ("POST", "/cowork/open"):
+            handleCoworkOpen(body: body, connection: connection)
+        case ("POST", "/cowork/clear-attachments"):
+            handleCoworkClearAttachments(connection: connection)
+        case ("POST", "/cowork/clear-conversation"):
+            handleCoworkClearConversation(connection: connection)
+        case ("POST", "/cowork/attach-files"):
+            handleCoworkAttachFiles(body: body, connection: connection)
+        case ("POST", "/cowork/paste"):
+            handleCoworkPaste(body: body, connection: connection)
+        case ("POST", "/cowork/submit"):
+            handleCoworkSubmit(body: body, connection: connection)
         case ("POST", "/reset"):
             handleReset(connection: connection)
         case ("POST", "/memory/import-text"):
@@ -262,6 +297,9 @@ final class TestServer {
         let thinkingLevel = faeCore?.thinkingLevel.rawValue ?? FaeThinkingLevel.fast.rawValue
         let hasOwnerSetUp = faeCore?.hasOwnerSetUp ?? false
         let isListening = conversation?.isListening ?? false
+        let approvalVisible = auxiliaryWindows?.isApprovalVisible ?? false
+        let approvalToolName = approvalOverlay?.activeApproval?.toolName
+        let approvalRequestID = approvalOverlay?.activeApproval?.id
 
         // Derive policy profile from tool mode (matches PolicyProfile enum rawValues)
         let policyProfile: String
@@ -283,6 +321,9 @@ final class TestServer {
             "thinkingLevel": thinkingLevel,
             "hasOwnerSetUp": hasOwnerSetUp,
             "isListening": isListening,
+            "approvalVisible": approvalVisible,
+            "approvalToolName": approvalToolName as Any,
+            "approvalRequestId": approvalRequestID as Any,
             "policyProfile": policyProfile,
             "dualModelEnabled":        FaeConfig.load().llm.dualModelEnabled,
             "operatorLoaded":          defaults.bool(forKey: "fae.runtime.operator_loaded"),
@@ -830,6 +871,180 @@ final class TestServer {
             "submitted": true,
             "mode": "text",
         ])
+    }
+
+    private func handleCoworkState(connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "state": coworkWindow.snapshotForTesting(),
+        ])
+    }
+
+    private func handleCoworkConversation(connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "conversation": coworkWindow.conversationSnapshotForTesting(),
+        ])
+    }
+
+    private func handleCoworkOpen(body: Data?, connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        let json = (body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        let section = (json["section"] as? String).flatMap(CoworkWorkspaceSection.init(rawValue:))
+        if json["section"] != nil, section == nil {
+            sendResponse(connection: connection, status: 400, body: ["error": "invalid cowork section"])
+            return
+        }
+
+        coworkWindow.openForTesting(section: section)
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "state": coworkWindow.snapshotForTesting(),
+        ])
+    }
+
+    private func handleCoworkClearAttachments(connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "state": coworkWindow.clearAttachmentsForTesting(),
+        ])
+    }
+
+    private func handleCoworkClearConversation(connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "conversation": coworkWindow.clearConversationForTesting(),
+        ])
+    }
+
+    private func handleCoworkAttachFiles(body: Data?, connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        let json = (body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        guard let paths = json["paths"] as? [String], !paths.isEmpty else {
+            sendResponse(connection: connection, status: 400, body: ["error": "missing or empty 'paths' field"])
+            return
+        }
+
+        let missingPaths = paths.filter { !FileManager.default.fileExists(atPath: $0) }
+        guard missingPaths.isEmpty else {
+            sendResponse(connection: connection, status: 400, body: [
+                "error": "one or more attachment paths do not exist",
+                "missing_paths": missingPaths,
+            ])
+            return
+        }
+
+        let replaceExisting = json["replace_existing"] as? Bool ?? false
+        sendResponse(connection: connection, status: 200, body: [
+            "ok": true,
+            "state": coworkWindow.addAttachmentsForTesting(paths: paths, replaceExisting: replaceExisting),
+        ])
+    }
+
+    private func handleCoworkPaste(body: Data?, connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        let json = (body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        let replaceExisting = json["replace_existing"] as? Bool ?? false
+
+        do {
+            let state: [String: Any]
+            if let text = json["text"] as? String, !text.isEmpty {
+                state = try coworkWindow.pasteTextForTesting(text, replaceExisting: replaceExisting)
+            } else if let imagePath = json["image_path"] as? String, !imagePath.isEmpty {
+                guard FileManager.default.fileExists(atPath: imagePath) else {
+                    sendResponse(connection: connection, status: 400, body: [
+                        "error": "image_path does not exist",
+                        "image_path": imagePath,
+                    ])
+                    return
+                }
+                state = try coworkWindow.pasteImageForTesting(at: imagePath, replaceExisting: replaceExisting)
+            } else if let paths = json["paths"] as? [String], !paths.isEmpty {
+                let missingPaths = paths.filter { !FileManager.default.fileExists(atPath: $0) }
+                guard missingPaths.isEmpty else {
+                    sendResponse(connection: connection, status: 400, body: [
+                        "error": "one or more pasted file paths do not exist",
+                        "missing_paths": missingPaths,
+                    ])
+                    return
+                }
+                state = try coworkWindow.pasteFilesForTesting(paths: paths, replaceExisting: replaceExisting)
+            } else {
+                sendResponse(connection: connection, status: 400, body: [
+                    "error": "provide 'text', 'image_path', or 'paths' for cowork paste",
+                ])
+                return
+            }
+
+            sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "state": state,
+            ])
+        } catch {
+            sendResponse(connection: connection, status: 500, body: [
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    private func handleCoworkSubmit(body: Data?, connection: NWConnection) {
+        guard let coworkWindow else {
+            sendResponse(connection: connection, status: 503, body: ["error": "coworkWindow not available"])
+            return
+        }
+
+        let json = (body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        guard let prompt = json["prompt"] as? String,
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            sendResponse(connection: connection, status: 400, body: ["error": "missing or empty 'prompt' field"])
+            return
+        }
+
+        do {
+            let clearConversation = json["clear_conversation"] as? Bool ?? false
+            let conversation = try coworkWindow.submitPromptForTesting(prompt, clearConversation: clearConversation)
+            sendResponse(connection: connection, status: 200, body: [
+                "ok": true,
+                "conversation": conversation,
+            ])
+        } catch {
+            sendResponse(connection: connection, status: 500, body: [
+                "error": error.localizedDescription,
+            ])
+        }
     }
 
     // MARK: - Test Input Endpoint

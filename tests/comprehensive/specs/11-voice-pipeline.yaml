@@ -20,7 +20,7 @@ tests:
     steps:
       # Allow echo tail from any prior speech to clear before speaking
       - action: "sleep"
-        duration_ms: 5000
+        duration_ms: 8000
       - action: "speak"
         text: "Hello Fae, can you hear me?"
         voice: "jarvis"
@@ -52,7 +52,7 @@ tests:
     steps:
       # Echo tail drain after previous test's TTS
       - action: "sleep"
-        duration_ms: 5000
+        duration_ms: 8000
       - action: "speak"
         text: "Fae, what is seven times eight?"
         voice: "jarvis"
@@ -83,7 +83,7 @@ tests:
     steps:
       # Echo tail drain after previous test's TTS
       - action: "sleep"
-        duration_ms: 5000
+        duration_ms: 8000
       # Turn 1: introduce name
       - action: "speak"
         text: "Fae, my name is Jarvis"
@@ -94,7 +94,7 @@ tests:
         max_wait_s: 30
       # Echo tail drain between turns
       - action: "sleep"
-        duration_ms: 5000
+        duration_ms: 8000
       # Turn 2: ask for recall
       - action: "speak"
         text: "Fae, what is my name?"
@@ -143,4 +143,58 @@ tests:
       # (which would indicate self-triggering from echo)
       - name: "no_self_trigger"
         check: "body.count == 2"
+    pass_threshold: 1.0
+
+  - id: "voice-005"
+    name: "Voice tool request shows approval window"
+    class: live_audio
+    timeout_s: 220
+    setup:
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "conversation.require_direct_address", "value": "false"}
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "voice_identity.approval_requires_match", "value": "false"}
+      - action: "http_post"
+        url: "/reset"
+      - action: "bash"
+        command: "true"
+    teardown:
+      - action: "http_post"
+        url: "/approve"
+        body: {"decision": "no"}
+      - action: "wait_generation"
+        max_wait_s: 60
+      - action: "http_post"
+        url: "/config"
+        body: {"key": "tool_mode", "value": "full_no_approval"}
+      - action: "http_post"
+        url: "/reset"
+      - action: "bash"
+        command: "rm -f /tmp/fae-voice-approval-window-test.txt"
+    phrasings: []
+    steps:
+      - action: "sleep"
+        duration_ms: 8000
+      - action: "speak"
+        text: "Fae, create a reminder to call mum tomorrow at five PM"
+        voice: "jarvis"
+      - action: "wait_approval"
+        max_wait_s: 120
+      - action: "http_get"
+        url: "/status"
+      - action: "screenshot"
+        path: "/tmp/fae-voice-approval-window.png"
+      - action: "collect_events"
+    criteria:
+      - name: "approval_visible"
+        check: "body.approvalVisible == true"
+      - name: "approval_targets_reminders"
+        check: "body.approvalToolName == 'reminders'"
+      - name: "approval_requested_event"
+        check: "events_contain_kind('Approve', 'Requesting approval for reminders')"
     pass_threshold: 1.0

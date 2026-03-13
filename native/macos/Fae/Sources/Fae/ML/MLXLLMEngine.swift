@@ -11,6 +11,13 @@ private final class UnsafeBox<T>: @unchecked Sendable {
     }
 }
 
+private func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
+    let lower = modelID.lowercased()
+    return lower.contains("qwen")
+        || lower.contains("saorsa1-worker")
+        || lower.contains("saorsa1-tiny")
+}
+
 /// Large language model engine using mlx-swift-lm.
 ///
 /// Replaces: `src/llm/mod.rs` + `src/fae_llm/providers/local.rs`
@@ -44,14 +51,14 @@ actor MLXLLMEngine: LLMEngine {
         NSLog("MLXLLMEngine: loading model %@", modelID)
         do {
             var config = ModelConfiguration(id: modelID)
-            // Qwen3.5 models use XML parameter format for tool calls:
+            // Qwen3.5-derived models use XML parameter format for tool calls:
             //   <tool_call>{"name":"...","arguments":{...}}</tool_call>
             // The default ToolCallProcessor can't parse XML content and silently
             // discards tool calls. Setting .xmlFunction activates XMLFunctionParser
             // which correctly handles this format.
-            if modelID.lowercased().contains("qwen") {
+            if usesQwenCompatibleToolCallFormat(modelID: modelID) {
                 config.toolCallFormat = .xmlFunction
-                NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen model")
+                NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen-compatible model")
             }
             container = try await LLMModelFactory.shared.loadContainer(configuration: config)
             isLoaded = true

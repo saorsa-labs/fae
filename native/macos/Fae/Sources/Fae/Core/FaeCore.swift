@@ -138,6 +138,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
     private var memoryStore: SQLiteMemoryStore?
+    private var sessionStore: SessionStore?
+    private var workflowTraceStore: WorkflowTraceStore?
     private(set) var memoryInboxService: MemoryInboxService?
     private(set) var memoryDigestService: MemoryDigestService?
     private var entityStore: EntityStore?
@@ -211,7 +213,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 // Initialize memory system.
                 let memoryStore = try Self.createMemoryStore()
-                let entityStore = EntityStore(dbQueue: await memoryStore.sharedDatabaseQueue)
+                let sharedDBQueue = await memoryStore.sharedDatabaseQueue
+                let sessionStore = try SessionStore(dbQueue: sharedDBQueue)
+                let workflowTraceStore = try WorkflowTraceStore(dbQueue: sharedDBQueue)
+                _ = try? await sessionStore.closeOpenSessions()
+                let entityStore = EntityStore(dbQueue: sharedDBQueue)
 
                 // Neural embedding engine — load tier in background, non-blocking.
                 let neuralEmbedder = NeuralEmbeddingEngine()
@@ -261,6 +267,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try? await inboxService.prepareInboxDirectories()
                 let digestService = MemoryDigestService(store: memoryStore)
                 self.memoryStore = memoryStore
+                self.sessionStore = sessionStore
+                self.workflowTraceStore = workflowTraceStore
                 self.memoryInboxService = inboxService
                 self.memoryDigestService = digestService
                 self.entityStore = entityStore
@@ -288,13 +296,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let recommendedContext = await modelManager.recommendedContextSize
                 // contextSizeTokens == 0 means "auto" — use model-recommended size.
                 // Non-zero = user override (capped at recommended to prevent OOM).
-                let configuredContext = config.llm.contextSizeTokens
+                let configuredContext = runtimeConfig.llm.contextSizeTokens
                 let contextSize = configuredContext > 0
                     ? min(recommendedContext, configuredContext)
                     : recommendedContext
                 // Cap maxTokens to half the context — prevents tiny context tiers
                 // (2K/4K) from having a generation budget larger than context itself.
-                let effectiveMaxTokens = min(config.llm.maxTokens, contextSize / 2)
+                let effectiveMaxTokens = min(runtimeConfig.llm.maxTokens, contextSize / 2)
                 let maxHistory = FaeConfig.recommendedMaxHistory(
                     contextSize: contextSize, maxTokens: effectiveMaxTokens
                 )
@@ -322,6 +330,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 await activateAlwaysOnSkills(skillManager: skillManager)
                 let registry = ToolRegistry.buildDefault(
                     skillManager: skillManager,
+                    workflowTraceStore: workflowTraceStore,
+                    sessionStore: sessionStore,
                     speakerEncoder: speakerEncoder,
                     speakerProfileStore: speakerProfileStore,
                     audioCaptureManager: captureManager,
@@ -341,6 +351,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     config: pipelineConfig,
                     conversationState: conversationState,
                     memoryOrchestrator: isRescue ? nil : orchestrator,
+                    sessionStore: sessionStore,
+                    workflowTraceStore: workflowTraceStore,
                     approvalManager: approvalManager,
                     registry: registry,
                     speakerEncoder: speakerEncoder,
@@ -354,14 +366,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
-                if pipelineConfig.llm.dualModelEnabled && pipelineConfig.llm.keepConciergeHot {
-                    Task.detached(priority: .utility) { [weak self] in
-                        guard let self else { return }
-                        await self.modelManager.loadConciergeIfNeeded(
-                            llm: self.conciergeLLMEngine,
-                            config: pipelineConfig
-                        )
-                    }
+                if FaeConfig.shouldHoldStartupForConciergeHotLoad(config: pipelineConfig) {
+                    NSLog("FaeCore: loading concierge before startup becomes ready")
+                    try await modelManager.loadConciergeIfNeeded(
+                        llm: conciergeLLMEngine,
+                        config: pipelineConfig,
+                        requireSuccess: true
+                    )
+                    NSLog("FaeCore: concierge ready for startup")
                 } else if pipelineConfig.llm.dualModelEnabled {
                     NSLog("FaeCore: concierge hot-load disabled — leaving concierge cold until explicitly enabled")
                 }
@@ -395,6 +407,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         entityStore: entityStore,
                         vectorStore: vectorStore,
                         embeddingEngine: neuralEmbedder,
+                        skillManager: skillManager,
+                        workflowTraceStore: workflowTraceStore,
                         memoryConfig: config.memory
                     )
 
@@ -523,6 +537,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             pipelineCoordinator = nil
             skillManagerRef = nil
             memoryStore = nil
+            sessionStore = nil
             memoryInboxService = nil
             memoryDigestService = nil
             entityStore = nil
@@ -550,6 +565,40 @@ final class FaeCore: ObservableObject, HostCommandSender {
             NSLog("FaeCore: stopAndWait timed out in state=%@", String(describing: pipelineState))
         }
         return drained
+    }
+
+    private func reloadLocalPipelineForModelChange(reason: String, unloadVLM: Bool = true) {
+        Task { [weak self] in
+            guard let self else { return }
+            NSLog("FaeCore: reloading local pipeline for %@", reason)
+
+            if unloadVLM {
+                await self.modelManager.unloadVLM()
+            }
+
+            let wasActive = self.pipelineState == .running
+                || self.pipelineState == .starting
+                || self.pipelineState == .stopping
+            if wasActive {
+                _ = await self.stopAndWait(timeoutSeconds: 20.0)
+            }
+
+            guard self.isLicenseAccepted else { return }
+
+            do {
+                try self.start()
+            } catch {
+                NSLog("FaeCore: model-switch restart failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    private func unloadVisionModelForNextTurn(reason: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            NSLog("FaeCore: unloading VLM for %@", reason)
+            await self.modelManager.unloadVLM()
+        }
     }
 
     /// Cancel the current generation immediately without stopping the pipeline.
@@ -1114,7 +1163,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
             }
 
-        let registry = ToolRegistry.buildDefault()
+        let registry = ToolRegistry.buildDefault(
+            workflowTraceStore: workflowTraceStore,
+            sessionStore: sessionStore
+        )
         let tools = registry.allTools
             .filter { registry.isToolAllowed($0.name, mode: toolMode, privacyMode: config.privacy.mode) }
             .sorted { $0.name < $1.name }
@@ -1306,8 +1358,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let value = value as? String,
                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return }
+            let presetChanged = value != config.llm.voiceModelPreset
             config.llm.voiceModelPreset = value
             persistConfig(reason: "config.patch.llm.voice_model_preset")
+            if presetChanged {
+                reloadLocalPipelineForModelChange(reason: "llm.voice_model_preset")
+            }
 
         case "llm.dual_model_enabled":
             guard let enabled = value as? Bool else { return }
@@ -1318,10 +1374,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             Task { [weak self] in
                 guard let self else { return }
                 if enabled {
-                    await self.modelManager.loadConciergeIfNeeded(
-                        llm: self.conciergeLLMEngine,
-                        config: self.config
-                    )
+                    do {
+                        try await self.modelManager.loadConciergeIfNeeded(
+                            llm: self.conciergeLLMEngine,
+                            config: self.config
+                        )
+                    } catch {
+                        NSLog("FaeCore: concierge enable failed: %@", error.localizedDescription)
+                    }
                 } else {
                     await self.conciergeLLMEngine.shutdown()
                     UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
@@ -1341,10 +1401,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 Task { [weak self] in
                     guard let self else { return }
                     await self.conciergeLLMEngine.shutdown()
-                    await self.modelManager.loadConciergeIfNeeded(
-                        llm: self.conciergeLLMEngine,
-                        config: self.config
-                    )
+                    do {
+                        try await self.modelManager.loadConciergeIfNeeded(
+                            llm: self.conciergeLLMEngine,
+                            config: self.config
+                        )
+                    } catch {
+                        NSLog("FaeCore: concierge reload failed: %@", error.localizedDescription)
+                    }
                 }
             }
 
@@ -1593,6 +1657,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         case "vision.enabled":
             guard let enabled = value as? Bool else { return }
+            let changed = enabled != config.vision.enabled
             config.vision.enabled = enabled
             persistConfig(reason: "config.patch.vision.enabled")
             if let coordinator = pipelineCoordinator {
@@ -1600,6 +1665,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
             if let sched = scheduler {
                 Task { await sched.setVisionEnabled(enabled) }
+            }
+            if changed {
+                reloadLocalPipelineForModelChange(reason: "vision.enabled")
             }
 
         case "vision.model_preset", "vision.modelPreset":
@@ -1618,8 +1686,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
             let allowed = ["auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit"]
             guard allowed.contains(normalized) else { return }
+            let changed = normalized != config.vision.modelPreset
             config.vision.modelPreset = normalized
             persistConfig(reason: "config.patch.vision.model_preset")
+            if changed {
+                unloadVisionModelForNextTurn(reason: "vision.model_preset")
+            }
 
         case "awareness.enabled":
             guard let enabled = value as? Bool else { return }
@@ -2035,6 +2107,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         pipelineCoordinator = nil
         memoryOrchestrator = nil
         memoryStore = nil
+        sessionStore = nil
         memoryInboxService = nil
         memoryDigestService = nil
         entityStore = nil

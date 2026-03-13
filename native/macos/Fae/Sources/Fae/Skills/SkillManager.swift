@@ -10,6 +10,12 @@ import Foundation
 /// - Personal: `~/Library/Application Support/fae/skills/`
 /// - Shared/community: `~/.agents/skills/`, `./.agents/skills/`, `~/.fae-forge/tools/`
 actor SkillManager {
+    struct SkillMarkdownDraft: Sendable {
+        let name: String
+        let description: String
+        let body: String
+    }
+
     struct ConfigurableFieldDescriptor: Sendable {
         let id: String
         let label: String
@@ -675,6 +681,130 @@ actor SkillManager {
         return updatedMetadata
     }
 
+    /// Patch instruction text inside a personal skill body.
+    func patchSkill(
+        name: String,
+        findText: String,
+        replaceWith: String,
+        replaceAll: Bool = false
+    ) throws -> SkillMetadata {
+        let document = try loadPersonalSkillDocument(name: name)
+        let trimmedFind = findText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedFind.isEmpty else {
+            throw SkillError.policyViolation("find_text must not be empty")
+        }
+        guard document.body.contains(trimmedFind) else {
+            throw SkillError.policyViolation("find_text was not present in the skill body")
+        }
+
+        let updatedBody: String
+        if replaceAll {
+            updatedBody = document.body.replacingOccurrences(of: trimmedFind, with: replaceWith)
+        } else if let range = document.body.range(of: trimmedFind) {
+            updatedBody = document.body.replacingCharacters(in: range, with: replaceWith)
+        } else {
+            throw SkillError.policyViolation("find_text was not present in the skill body")
+        }
+
+        return try persistPersonalSkillDocument(
+            existing: document.metadata,
+            skillMdURL: document.skillMdURL,
+            description: document.description,
+            body: updatedBody
+        )
+    }
+
+    /// Write or replace a Python script under `scripts/` for a personal skill.
+    func writeSkillScript(
+        name: String,
+        scriptName: String,
+        scriptContent: String,
+        manifestJSON: String? = nil
+    ) throws -> SkillMetadata {
+        try Self.validateSkillName(name)
+        try Self.validateScriptFileName(scriptName)
+        try Self.validateScriptContent(scriptContent)
+
+        guard let existing = skillCache[name] ?? lookupSkill(named: name) else {
+            throw SkillError.notFound(name)
+        }
+        guard existing.tier == .personal else {
+            throw SkillError.notPersonal(name)
+        }
+
+        let scriptsDir = existing.directoryURL.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        let filename = scriptName.hasSuffix(".py") ? scriptName : "\(scriptName).py"
+        try scriptContent.write(
+            to: scriptsDir.appendingPathComponent(filename),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let integrity = SkillManifestPolicy.buildIntegrity(for: existing.directoryURL)
+        let manifest: SkillCapabilityManifest
+        if let manifestJSON,
+           !manifestJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            manifest = try Self.buildManifest(
+                for: .executable,
+                manifestJSON: manifestJSON,
+                integrity: integrity
+            )
+        } else if FileManager.default.fileExists(
+            atPath: SkillManifestPolicy.manifestURL(for: existing.directoryURL).path
+        ) {
+            manifest = try loadManifest(for: existing).withIntegrity(integrity)
+        } else {
+            manifest = try Self.buildManifest(
+                for: .executable,
+                manifestJSON: nil,
+                integrity: integrity
+            )
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let manifestData = try encoder.encode(manifest)
+        try manifestData.write(to: SkillManifestPolicy.manifestURL(for: existing.directoryURL))
+
+        return try refreshPersonalSkillMetadata(existing: existing)
+    }
+
+    /// Write or replace a skill-owned reference or asset file.
+    func writeSkillReferenceFile(
+        name: String,
+        relativePath: String,
+        content: String
+    ) throws {
+        let existing = try requirePersonalSkill(named: name)
+        let canonical = try Self.canonicalSkillChildURL(
+            skillName: existing.name,
+            relativePath: relativePath,
+            allowedPrefixes: ["references/", "assets/"]
+        )
+        try FileManager.default.createDirectory(
+            at: canonical.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try content.write(to: canonical, atomically: true, encoding: .utf8)
+    }
+
+    /// Replace MANIFEST.json for a personal skill, rehydrating integrity checksums.
+    func replaceSkillManifest(name: String, manifestJSON: String) throws -> SkillMetadata {
+        let existing = try requirePersonalSkill(named: name)
+        let type: SkillType = FileManager.default.fileExists(
+            atPath: existing.directoryURL.appendingPathComponent("scripts").path
+        ) ? .executable : existing.type
+        let integrity = SkillManifestPolicy.buildIntegrity(for: existing.directoryURL)
+        let manifest = try Self.buildManifest(for: type, manifestJSON: manifestJSON, integrity: integrity)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(manifest)
+        try data.write(to: SkillManifestPolicy.manifestURL(for: existing.directoryURL))
+        return try refreshPersonalSkillMetadata(existing: existing)
+    }
+
     /// Delete a personal skill directory.
     func deleteSkill(name: String) throws {
         try Self.validateSkillName(name)
@@ -967,10 +1097,119 @@ actor SkillManager {
         return findIn(scriptsDir: skillScripts)
     }
 
+    private func requirePersonalSkill(named name: String) throws -> SkillMetadata {
+        try Self.validateSkillName(name)
+        guard let existing = skillCache[name] ?? lookupSkill(named: name) else {
+            throw SkillError.notFound(name)
+        }
+        guard existing.tier == .personal else {
+            throw SkillError.notPersonal(name)
+        }
+        return existing
+    }
+
+    private func loadPersonalSkillDocument(
+        name: String
+    ) throws -> (metadata: SkillMetadata, skillMdURL: URL, description: String, body: String) {
+        let existing = try requirePersonalSkill(named: name)
+        let skillMdURL = existing.directoryURL.appendingPathComponent("SKILL.md")
+        let currentContent = try String(contentsOf: skillMdURL, encoding: .utf8)
+        let parsed = try Self.parseSkillMarkdown(currentContent, fallbackName: name)
+        return (existing, skillMdURL, parsed.description, parsed.body)
+    }
+
+    private func persistPersonalSkillDocument(
+        existing: SkillMetadata,
+        skillMdURL: URL,
+        description: String,
+        body: String
+    ) throws -> SkillMetadata {
+        try Self.validateSkillMetadata(name: existing.name, description: description, body: body)
+        let content = Self.renderSkillMarkdown(
+            name: existing.name,
+            description: description,
+            body: body
+        )
+        try content.write(to: skillMdURL, atomically: true, encoding: .utf8)
+        return try refreshPersonalSkillMetadata(existing: existing)
+    }
+
+    private func refreshPersonalSkillMetadata(existing: SkillMetadata) throws -> SkillMetadata {
+        let skillMdURL = existing.directoryURL.appendingPathComponent("SKILL.md")
+        guard let updatedMetadata = SkillParser.parse(
+            skillURL: skillMdURL,
+            tier: .personal,
+            isEnabled: existing.isEnabled
+        ) else {
+            throw SkillError.invalidSkillMd(existing.name)
+        }
+
+        skillCache[existing.name] = updatedMetadata
+
+        if activatedBodies[existing.name] != nil {
+            let record = SkillParser.parseRecord(
+                skillURL: skillMdURL,
+                tier: .personal,
+                isEnabled: existing.isEnabled
+            )
+            if let refreshedBody = record?.fullBody {
+                activatedBodies[existing.name] = refreshedBody
+            }
+        }
+
+        return updatedMetadata
+    }
+
     private static func validateSkillName(_ name: String) throws {
         guard isSafeSkillName(name) else {
             throw SkillError.invalidName(name)
         }
+    }
+
+    static func parseSkillMarkdown(_ content: String, fallbackName: String) throws -> SkillMarkdownDraft {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw SkillError.invalidSkillMd(fallbackName)
+        }
+
+        let lines = trimmed.components(separatedBy: .newlines)
+        guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" else {
+            throw SkillError.invalidSkillMd(fallbackName)
+        }
+
+        var closingIndex: Int?
+        for index in 1..<lines.count where lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == "---" {
+            closingIndex = index
+            break
+        }
+        guard let closingIndex else {
+            throw SkillError.invalidSkillMd(fallbackName)
+        }
+
+        let frontmatter = Array(lines[1..<closingIndex])
+        var parsedName: String?
+        var parsedDescription: String?
+        for line in frontmatter {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedLine.hasPrefix("name:") {
+                parsedName = String(trimmedLine.dropFirst("name:".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if trimmedLine.hasPrefix("description:") {
+                parsedDescription = String(trimmedLine.dropFirst("description:".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        let body = Array(lines[(closingIndex + 1)...]).joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let parsedName, !parsedName.isEmpty,
+              let parsedDescription, !parsedDescription.isEmpty,
+              !body.isEmpty
+        else {
+            throw SkillError.invalidSkillMd(fallbackName)
+        }
+
+        return SkillMarkdownDraft(name: parsedName, description: parsedDescription, body: body)
     }
 
     private static func validateSkillMetadata(name: String, description: String, body: String) throws {
@@ -1114,6 +1353,50 @@ actor SkillManager {
             throw SkillError.invalidName(name)
         }
         return candidate
+    }
+
+    private static func canonicalSkillChildURL(
+        skillName: String,
+        relativePath: String,
+        allowedPrefixes: [String]
+    ) throws -> URL {
+        let normalized = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw SkillError.policyViolation("relative_path must not be empty")
+        }
+        guard !normalized.hasPrefix("/"),
+              !normalized.contains(".."),
+              !normalized.contains("\\")
+        else {
+            throw SkillError.policyViolation("relative_path contains invalid path traversal")
+        }
+        guard allowedPrefixes.contains(where: { normalized.hasPrefix($0) }) else {
+            throw SkillError.policyViolation("relative_path must live under references/ or assets/")
+        }
+
+        let skillRoot = try canonicalSkillDirectory(for: skillName)
+        let target = skillRoot
+            .appendingPathComponent(normalized)
+            .standardized
+            .resolvingSymlinksInPath()
+        let rootPath = skillRoot.path.hasSuffix("/") ? skillRoot.path : skillRoot.path + "/"
+        guard target.path.hasPrefix(rootPath) else {
+            throw SkillError.policyViolation("relative_path escaped the skill directory")
+        }
+        return target
+    }
+
+    private static func renderSkillMarkdown(name: String, description: String, body: String) -> String {
+        let frontmatter = """
+            ---
+            name: \(name)
+            description: \(description)
+            metadata:
+              author: user
+              version: "1.0"
+            ---
+            """
+        return frontmatter + "\n" + body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
 
     /// Remove obvious secret material from skill input payloads.

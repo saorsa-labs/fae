@@ -183,9 +183,37 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(plan.mode, .dualModel)
         XCTAssertTrue(plan.dualModelEligible)
         XCTAssertTrue(plan.dualModelActive)
-        XCTAssertEqual(plan.operatorModel.modelId, "saorsa-labs/saorsa1-worker-pre-release")
+        XCTAssertEqual(plan.operatorModel.modelId, "mlx-community/Qwen3.5-2B-4bit")
         XCTAssertEqual(plan.conciergeModel?.modelId, "saorsa-labs/saorsa1-concierge-pre-release")
         XCTAssertEqual(plan.ttsModelId, "hexgrad/Kokoro-82M")
+    }
+
+    func testShouldHoldStartupForConciergeHotLoadWhenEligibleAndHot() {
+        var config = FaeConfig()
+        config.llm.dualModelEnabled = true
+        config.llm.keepConciergeHot = true
+        config.llm.conciergeModelPreset = "auto"
+        config.llm.dualModelMinSystemRAMGB = 32
+
+        XCTAssertTrue(
+            FaeConfig.shouldHoldStartupForConciergeHotLoad(
+                config: config,
+                totalMemoryBytes: UInt64(96) * 1024 * 1024 * 1024
+            )
+        )
+    }
+
+    func testShouldNotHoldStartupForConciergeWhenHotLoadDisabled() {
+        var config = FaeConfig()
+        config.llm.dualModelEnabled = true
+        config.llm.keepConciergeHot = false
+
+        XCTAssertFalse(
+            FaeConfig.shouldHoldStartupForConciergeHotLoad(
+                config: config,
+                totalMemoryBytes: UInt64(96) * 1024 * 1024 * 1024
+            )
+        )
     }
 
     func testLegacyModelPresetAliasesResolveToSaorsaWeights() {
@@ -193,13 +221,13 @@ final class FaeConfigTests: XCTestCase {
             totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
             preset: "qwen3_5_27b"
         )
-        XCTAssertEqual(worker.modelId, "saorsa-labs/saorsa1-worker-pre-release")
+        XCTAssertEqual(worker.modelId, "mlx-community/Qwen3.5-27B-4bit")
 
         let tiny = FaeConfig.recommendedModel(
             totalMemoryBytes: UInt64(8) * 1024 * 1024 * 1024,
             preset: "qwen3_5_0_8b"
         )
-        XCTAssertEqual(tiny.modelId, "saorsa-labs/saorsa1-tiny-pre-release")
+        XCTAssertEqual(tiny.modelId, "mlx-community/Qwen3.5-0.8B-4bit")
 
         let concierge = FaeConfig.recommendedConciergeModel(
             totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,

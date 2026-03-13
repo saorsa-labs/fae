@@ -9,6 +9,7 @@ let package = Package(
     products: [
         .executable(name: "Fae", targets: ["Fae"]),
         .executable(name: "FaeBenchmark", targets: ["FaeBenchmark"]),
+        .executable(name: "FaePerceptionBenchmark", targets: ["FaePerceptionBenchmark"]),
     ],
     dependencies: [
         // Shared Handoff contract types: FaeHandoffContract, ConversationSnapshot, etc.
@@ -99,6 +100,15 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/FaeBenchmark"
+        ),
+
+        .executableTarget(
+            name: "FaePerceptionBenchmark",
+            dependencies: [
+                .product(name: "MLXVLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/FaePerceptionBenchmark"
         ),
 
         // Local sqlite-vec C target — bundles sqlite-vec.c with SQLITE_CORE to avoid

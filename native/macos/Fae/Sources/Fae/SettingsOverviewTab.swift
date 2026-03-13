@@ -59,6 +59,15 @@ struct SettingsOverviewTab: View {
         .onAppear {
             loadSystemInfo()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .faePipelineState)) { _ in
+            loadSystemInfo()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .faeRuntimeState)) { _ in
+            loadSystemInfo()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .faeModelLoaded)) { _ in
+            loadSystemInfo()
+        }
     }
 
     // MARK: - Header
@@ -360,15 +369,21 @@ struct SettingsOverviewTab: View {
 
         let config = FaeConfig.load()
         let plan = FaeConfig.recommendedLocalModelStack(config: config)
-        let operatorModel = UserDefaults.standard.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
-        let conciergeModel = UserDefaults.standard.string(forKey: "fae.loaded_concierge_model_id")
+        let defaults = UserDefaults.standard
+        let operatorModel = defaults.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
+        let conciergeModel = defaults.string(forKey: "fae.loaded_concierge_model_id")
+        let conciergeLoaded = defaults.bool(forKey: "fae.runtime.concierge_loaded")
+        let conciergeRuntime = defaults.string(forKey: "fae.runtime.concierge_runtime")
+        let conciergeWorkerLastError = defaults.string(forKey: "fae.runtime.concierge_worker_last_error")
 
-        loadedOperatorModelName = operatorModel.components(separatedBy: "/").last ?? operatorModel
-        loadedConciergeModelName = if plan.dualModelActive, let conciergeModel {
-            conciergeModel.components(separatedBy: "/").last ?? conciergeModel
-        } else {
-            nil
-        }
+        loadedOperatorModelName = LocalModelStatusFormatter.shortModelName(operatorModel)
+        loadedConciergeModelName = LocalModelStatusFormatter.conciergeLabel(
+            plan: plan,
+            loadedConciergeModelId: conciergeModel,
+            conciergeLoaded: conciergeLoaded,
+            conciergeRuntime: conciergeRuntime,
+            conciergeWorkerLastError: conciergeWorkerLastError
+        )
     }
 
     private func patchConfig(_ key: String, value: Any?) {

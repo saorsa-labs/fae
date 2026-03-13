@@ -442,6 +442,8 @@ actor SQLiteMemoryStore {
         let now = UInt64(Date().timeIntervalSince1970)
         let normalizedText = String(rawText.prefix(MemoryConstants.maxArtifactTextLen))
 
+        // NOTE: This SELECT-then-INSERT pattern is safe in-process because GRDB's
+        // DatabaseQueue.write serializes writers on a single connection.
         return try dbQueue.write { db in
             if let existing = try Row.fetchOne(
                 db,
@@ -790,17 +792,17 @@ actor SQLiteMemoryStore {
             if let speakerId {
                 sql = """
                     SELECT * FROM memory_records
-                    WHERE status = 'active' AND tags LIKE ? AND speaker_id = ?
+                    WHERE status = 'active' AND tags LIKE ? ESCAPE '\\' AND speaker_id = ?
                     ORDER BY updated_at DESC
                     """
-                arguments = ["%\"\(tag)\"%", speakerId]
+                arguments = ["%\"\(Self.escapeLikePattern(tag))\"%", speakerId]
             } else {
                 sql = """
                     SELECT * FROM memory_records
-                    WHERE status = 'active' AND tags LIKE ?
+                    WHERE status = 'active' AND tags LIKE ? ESCAPE '\\'
                     ORDER BY updated_at DESC
                     """
-                arguments = ["%\"\(tag)\"%"]
+                arguments = ["%\"\(Self.escapeLikePattern(tag))\"%"]
             }
             let rows = try Row.fetchAll(db, sql: sql, arguments: arguments)
             return rows.map { Self.recordFromRow($0) }
@@ -966,6 +968,14 @@ actor SQLiteMemoryStore {
     }
 
     // MARK: - Private Helpers
+
+    /// Escape SQL LIKE wildcard characters so user-supplied strings are matched literally.
+    private static func escapeLikePattern(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
 
     private static func recordFromRow(_ row: Row) -> MemoryRecord {
         let tagsStr: String = row["tags"]

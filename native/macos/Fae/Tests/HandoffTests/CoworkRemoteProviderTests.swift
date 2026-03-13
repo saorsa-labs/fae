@@ -209,6 +209,58 @@ final class CoworkRemoteProviderTests: XCTestCase {
         XCTAssertEqual(response.status, "completed")
     }
 
+    func testFaeLocalhostSubmitUsesExtendedTimeoutAndParsesResponse() async throws {
+        let original = CoworkNetworkTransport.loader
+        defer { CoworkNetworkTransport.loader = original }
+
+        CoworkNetworkTransport.loader = { request in
+            XCTAssertEqual(request.timeoutInterval, 180, accuracy: 0.1)
+            XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:7434/v1/chat/completions")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+            let json = try XCTUnwrap(self.jsonObject(from: request))
+            XCTAssertEqual(json["model"] as? String, "fae-agent-local")
+
+            let messages = try XCTUnwrap(json["messages"] as? [[String: Any]])
+            XCTAssertEqual(messages.first?["content"] as? String, "local prompt")
+
+            let metadata = try XCTUnwrap(json["metadata"] as? [String: Any])
+            XCTAssertEqual(metadata["user_visible_prompt"] as? String, "visible prompt")
+            XCTAssertEqual(metadata["injected_prompt"] as? String, "local prompt")
+            XCTAssertEqual(metadata["context_scope"] as? String, "local_only")
+
+            let data = """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "content": "Local answer"
+                  }
+                }
+              ],
+              "fae": {
+                "status": "completed"
+              }
+            }
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(url: try XCTUnwrap(request.url), statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (data, response)
+        }
+
+        let provider = FaeLocalhostCoworkProvider(
+            descriptor: FaeLocalRuntimeDescriptor(
+                baseURL: URL(string: "http://127.0.0.1:7434")!,
+                bearerToken: "test-token",
+                defaultModel: "fae-agent-local"
+            )
+        )
+        let response = try await provider.submit(
+            request: CoworkProviderRequest(model: "fae-agent-local", preparedPrompt: preparedPrompt())
+        )
+
+        XCTAssertEqual(response.content, "Local answer")
+        XCTAssertEqual(response.status, "completed")
+    }
+
     func testOpenAICompatibleStreamParsesSSEChunks() async throws {
         let original = CoworkNetworkTransport.streamer
         defer { CoworkNetworkTransport.streamer = original }

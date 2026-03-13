@@ -71,7 +71,7 @@ struct CoworkToolSummary: Identifiable, Sendable {
         if ["screenshot", "camera", "read_screen", "click", "type_text", "scroll", "find_element"].contains(identifier) {
             return "Computer Use"
         }
-        if ["read", "write", "edit", "bash", "fetch_url", "web_search"].contains(identifier) {
+        if ["read", "write", "edit", "bash", "fetch_url", "web_search", "session_search"].contains(identifier) {
             return "Core"
         }
         if identifier.contains("voice") {

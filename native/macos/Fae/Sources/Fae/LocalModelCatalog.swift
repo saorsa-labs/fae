@@ -1,0 +1,128 @@
+import Foundation
+
+struct LocalModelCatalog {
+    struct VoiceOption {
+        let label: String
+        let value: String
+        let ram: String
+        let description: String
+    }
+
+    struct VisionOption {
+        let label: String
+        let value: String
+        let description: String
+    }
+
+    static let voiceOptions: [VoiceOption] = [
+        .init(
+            label: "Auto (Recommended)",
+            value: "auto",
+            ram: "8+ GB",
+            description: "Picks Qwen3.5 2B, 4B, or 9B based on this Mac's RAM. Recommended for most users."
+        ),
+        .init(
+            label: "Qwen3.5 2B",
+            value: "qwen3_5_2b",
+            ram: "8+ GB",
+            description: "Lowest-memory fallback. Best when you need a compact local model."
+        ),
+        .init(
+            label: "Qwen3.5 4B",
+            value: "qwen3_5_4b",
+            ram: "16+ GB",
+            description: "Best default balance for Fae: strong tool use, good latency, and enough headroom for on-demand vision."
+        ),
+        .init(
+            label: "Qwen3.5 9B",
+            value: "qwen3_5_9b",
+            ram: "24+ GB",
+            description: "Higher-quality single-model option. Better reasoning and tool behavior, but slower than 4B. Auto uses this on 32+ GB Macs."
+        ),
+        .init(
+            label: "Qwen3.5 27B",
+            value: "qwen3_5_27b",
+            ram: "32+ GB",
+            description: "Manual quality mode for larger-RAM Macs. Stronger reasoning, but much slower first-turn latency."
+        ),
+        .init(
+            label: "Qwen3.5 35B-A3B",
+            value: "qwen3_5_35b_a3b",
+            ram: "48+ GB",
+            description: "Largest local quality mode. Keep it manual-only unless you explicitly prefer quality over responsiveness."
+        ),
+    ]
+
+    static let visionOptions: [VisionOption] = [
+        .init(
+            label: "Auto",
+            value: "auto",
+            description: "Selects the recommended Qwen3-VL tier for your RAM: 4-bit from 16 GB, 8-bit from 32 GB."
+        ),
+        .init(
+            label: "Qwen3-VL-4B (8-bit)",
+            value: "qwen3_vl_4b_8bit",
+            description: "Higher-quality on-demand vision model. Best for 32+ GB systems."
+        ),
+        .init(
+            label: "Qwen3-VL-4B (4-bit)",
+            value: "qwen3_vl_4b_4bit",
+            description: "Lower-memory on-demand vision model. Best for 16-31 GB systems or tighter RAM."
+        ),
+    ]
+
+    static func voiceCacheStatus(for preset: String) -> (text: String, cached: Bool)? {
+        let modelID = FaeConfig.recommendedModel(preset: preset).modelId
+        return cacheStatus(for: modelID)
+    }
+
+    static func visionCacheStatus(for preset: String) -> (text: String, cached: Bool)? {
+        guard let modelID = FaeConfig.recommendedVLMModel(preset: preset)?.modelId else {
+            return nil
+        }
+        return cacheStatus(for: modelID)
+    }
+
+    private static func cacheStatus(for modelID: String) -> (text: String, cached: Bool) {
+        let cached = isModelCached(modelID: modelID)
+        if cached {
+            return ("Cached locally: \(modelID)", true)
+        }
+        return ("Not cached locally. Fae will download \(modelID) when you switch.", false)
+    }
+
+    static func isModelCached(modelID: String) -> Bool {
+        let parts = modelID.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return false }
+
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+
+        let libraryCache = home
+            .appendingPathComponent("Library/Caches/models")
+            .appendingPathComponent(parts[0])
+            .appendingPathComponent(parts[1])
+
+        if hasMLXModelPayload(at: libraryCache) {
+            return true
+        }
+
+        let hubCache = home
+            .appendingPathComponent(".cache/huggingface/hub")
+            .appendingPathComponent("models--\(parts[0])--\(parts[1])")
+
+        return fm.fileExists(atPath: hubCache.path)
+    }
+
+    private static func hasMLXModelPayload(at directory: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: directory.path) else { return false }
+        guard let contents = try? fm.contentsOfDirectory(atPath: directory.path) else {
+            return false
+        }
+
+        let hasConfig = contents.contains("config.json")
+        let hasWeights = contents.contains { $0.hasSuffix(".safetensors") }
+        return hasConfig && hasWeights
+    }
+}

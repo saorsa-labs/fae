@@ -94,6 +94,12 @@ struct EchoSuppressor {
         shortUtteranceGuardUntil = now.addingTimeInterval(Double(guardMs) / 1000.0)
     }
 
+    mutating func reset() {
+        assistantSpeaking = false
+        suppressUntil = nil
+        shortUtteranceGuardUntil = nil
+    }
+
     /// Evaluate whether a completed speech segment should be accepted or dropped.
     ///
     /// - Parameters:
@@ -153,8 +159,13 @@ struct EchoSuppressor {
             return false
         }
 
-        // 5. Amplitude cap — loud segments are speaker bleedthrough.
-        if rms > Self.echoRmsCeiling {
+        // 5. Amplitude cap — only apply while still inside the recent playback
+        //    guard window. Applying this unconditionally rejects legitimate
+        //    loud user speech long after Fae has stopped talking.
+        if let guardUntil = shortUtteranceGuardUntil,
+           onset < guardUntil,
+           rms > Self.echoRmsCeiling
+        {
             return false
         }
 

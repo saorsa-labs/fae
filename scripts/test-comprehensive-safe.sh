@@ -8,7 +8,7 @@ LOCK_FILE="/tmp/fae-test-comprehensive.lock"
 
 MODEL="codex"
 PHASE=""
-MAX_RSS_MB="${MAX_RSS_MB:-16384}"
+MAX_RSS_MB="${MAX_RSS_MB:-8192}"
 RSS_POLL_SECONDS="${RSS_POLL_SECONDS:-5}"
 PASSTHROUGH_ARGS=()
 

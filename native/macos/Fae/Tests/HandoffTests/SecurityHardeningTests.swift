@@ -324,6 +324,7 @@ final class ToolModeFilteringTests: XCTestCase {
 
     func testReadOnlyModeAllowsReadButBlocksMutationAndExecution() {
         XCTAssertTrue(registry.isToolAllowed("read", mode: "read_only"))
+        XCTAssertTrue(registry.isToolAllowed("session_search", mode: "read_only"))
         XCTAssertTrue(registry.isToolAllowed("web_search", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))

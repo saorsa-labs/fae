@@ -25,25 +25,14 @@ struct SettingsModelsTab: View {
     @State private var runtimeVoiceLockApplied: Bool = false
     @State private var showFilePicker: Bool = false
 
-    private let voiceModelOptions: [(label: String, value: String, description: String)] = [
-        ("Auto (Recommended)", "auto",
-         "Uses saorsa1-worker on 12+ GB systems, with saorsa1-tiny as the small-machine fallback."),
-        ("saorsa1-worker", "saorsa1-worker",
-         "Primary 2B local companion model. Best fit for tool use, quick turns, and the full Fae pipeline."),
-        ("saorsa1-tiny", "saorsa1-tiny",
-         "Lightest 0.8B local companion model. Fastest startup and best fallback for lower-memory Macs."),
-    ]
+    private let voiceModelOptions = LocalModelCatalog.voiceOptions
 
     private let voiceIdentityModes: [(label: String, value: String, description: String)] = [
         ("Assist (Recommended)", "assist", "Uses speaker matching but still allows direct-address fallback for regular conversation."),
         ("Enforce", "enforce", "Only accepts the enrolled speaker for gated voice interaction.")
     ]
 
-    private let visionModelOptions: [(label: String, value: String, description: String)] = [
-        ("Auto", "auto", "Selects the best VLM for your system RAM. Requires 24+ GB."),
-        ("Qwen3-VL-4B (8-bit)", "qwen3_vl_4b_8bit", "Higher quality. Requires 48+ GB RAM alongside LLM."),
-        ("Qwen3-VL-4B (4-bit)", "qwen3_vl_4b_4bit", "Memory-efficient. Requires 24+ GB RAM alongside LLM."),
-    ]
+    private let visionModelOptions = LocalModelCatalog.visionOptions
 
     var body: some View {
         Form {
@@ -315,10 +304,14 @@ struct SettingsModelsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let cacheStatus = LocalModelCatalog.voiceCacheStatus(for: voiceModelPreset) {
+                cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
+            }
+
             if showRestartNotice {
                 HStack(spacing: 6) {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Restart Fae for this change to take effect.")
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("Fae reloads the local pipeline automatically for model changes. First-time downloads can take a while.")
                         .font(.footnote)
                 }
                 .foregroundStyle(.orange)
@@ -388,6 +381,10 @@ struct SettingsModelsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let cacheStatus = LocalModelCatalog.visionCacheStatus(for: visionModelPreset) {
+                cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
+            }
+
             // Permission status badges.
             let permissions = PermissionStatusProvider.current()
             HStack(spacing: 12) {
@@ -409,6 +406,16 @@ struct SettingsModelsTab: View {
                 .foregroundStyle(granted ? .green : .secondary)
             Text(label)
                 .foregroundStyle(granted ? .primary : .secondary)
+        }
+    }
+
+    private func cacheStatusView(_ text: String, cached: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: cached ? "internaldrive.fill" : "arrow.down.circle")
+                .foregroundStyle(cached ? .green : .orange)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -559,12 +566,7 @@ struct SettingsModelsTab: View {
 
     private func normalizedVoiceModelPreset(_ preset: String) -> String? {
         let canonical = FaeConfig.canonicalVoiceModelPreset(preset)
-        switch canonical {
-        case "auto", "saorsa1-worker", "saorsa1-tiny":
-            return canonical
-        default:
-            return nil
-        }
+        return voiceModelOptions.contains(where: { $0.value == canonical }) ? canonical : nil
     }
     // MARK: - File Import
 

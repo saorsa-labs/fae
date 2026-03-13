@@ -473,7 +473,14 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 logger.log(event: event, seq: seq)
             }
 
-            let server = TestServer(faeCore: faeCore, debugConsole: debugConsole, conversation: conversation, approvalOverlay: approvalOverlay)
+            let server = TestServer(
+                faeCore: faeCore,
+                debugConsole: debugConsole,
+                conversation: conversation,
+                approvalOverlay: approvalOverlay,
+                auxiliaryWindows: auxiliaryWindows,
+                coworkWindow: coworkWindow
+            )
             testServer = server
             server.start()
             debugLog(debugConsole, .qa, "Test server started on 127.0.0.1:7433")

@@ -152,14 +152,13 @@ struct FaeConfig: Codable {
     /// Uses the model preset to distinguish 0.8B/2B from 4B even though both share
     /// the same 32K context window after the context maximisation update.
     var isLightweightContext: Bool {
-        let preset = llm.voiceModelPreset.lowercased()
+        let preset = FaeConfig.canonicalVoiceModelPreset(llm.voiceModelPreset)
         switch preset {
-        case "qwen3_5_0_8b", "qwen3_5_2b", "qwen3_0_6b", "qwen3_1_7b",
-             "saorsa1_tiny", "saorsa1-tiny", "saorsa1_worker", "saorsa1-worker":
+        case "qwen3_5_0_8b", "qwen3_5_2b", "qwen3_0_6b", "qwen3_1_7b":
             return true
         case "auto":
-            // Auto selects saorsa1-worker (2B) or saorsa1-tiny (0.8B) — both lightweight.
-            return true
+            let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
+            return totalGB < 24
         default:
             // Also honour manually configured very small contexts (e.g. developer overrides).
             return llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
@@ -171,6 +170,12 @@ struct FaeConfig: Codable {
         copy.llm.dualModelEnabled = false
         copy.llm.keepConciergeHot = false
         copy.llm.allowConciergeDuringVoiceTurns = false
+        copy.llm.voiceModelPreset = "qwen3_5_2b"
+        copy.llm.contextSizeTokens = min(copy.llm.contextSizeTokens > 0 ? copy.llm.contextSizeTokens : 8_192, 8_192)
+        copy.llm.maxKVCacheSize = min(copy.llm.maxKVCacheSize ?? 8_192, 8_192)
+        copy.llm.kvQuantBits = copy.llm.kvQuantBits ?? 4
+        copy.vision.enabled = false
+        copy.vision.modelPreset = "qwen3_vl_4b_4bit"
         return copy
     }
 
@@ -356,12 +361,20 @@ struct FaeConfig: Codable {
 
     static func canonicalVoiceModelPreset(_ preset: String) -> String {
         switch preset.lowercased() {
-        case "saorsa1_worker", "saorsa1-worker",
-             "qwen3_5_35b_a3b", "qwen3_5_27b", "qwen3_5_9b", "qwen3_5_4b",
-             "qwen3_5_2b", "qwen3_8b", "qwen3_4b", "qwen3_1_7b":
-            return "saorsa1-worker"
+        case "qwen3_5_35b_a3b":
+            return "qwen3_5_35b_a3b"
+        case "qwen3_5_27b":
+            return "qwen3_5_27b"
+        case "qwen3_5_27b_opus_distilled":
+            return "qwen3_5_27b_opus_distilled"
+        case "qwen3_5_9b", "qwen3_8b":
+            return "qwen3_5_9b"
+        case "qwen3_5_4b", "qwen3_4b":
+            return "qwen3_5_4b"
+        case "saorsa1_worker", "saorsa1-worker", "qwen3_5_2b", "qwen3_1_7b":
+            return "qwen3_5_2b"
         case "saorsa1_tiny", "saorsa1-tiny", "qwen3_5_0_8b", "qwen3_0_6b":
-            return "saorsa1-tiny"
+            return "qwen3_5_0_8b"
         case "auto":
             return "auto"
         default:
@@ -393,18 +406,27 @@ struct FaeConfig: Codable {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
         switch canonicalVoiceModelPreset(preset) {
-        case "saorsa1-worker":
-            // Primary local companion model. Legacy Qwen/Qwen3.5 operator presets map here.
-            return ("saorsa-labs/saorsa1-worker-pre-release", 32_768)
-        case "saorsa1-tiny":
-            // Lightest local companion model. Legacy tiny/fallback presets map here.
-            return ("saorsa-labs/saorsa1-tiny-pre-release", 32_768)
+        case "qwen3_5_35b_a3b":
+            return ("mlx-community/Qwen3.5-35B-A3B-4bit", 32_768)
+        case "qwen3_5_27b":
+            return ("mlx-community/Qwen3.5-27B-4bit", 32_768)
+        case "qwen3_5_27b_opus_distilled":
+            return ("mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit", 32_768)
+        case "qwen3_5_9b":
+            return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
+        case "qwen3_5_4b":
+            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
+        case "qwen3_5_2b":
+            return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
+        case "qwen3_5_0_8b":
+            return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
         default: // "auto"
-            // Auto defaults to the saorsa1 companion weights.
-            if totalGB >= 12 {
-                return ("saorsa-labs/saorsa1-worker-pre-release", 32_768)
+            if totalGB >= 32 {
+                return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
+            } else if totalGB >= 16 {
+                return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
             } else {
-                return ("saorsa-labs/saorsa1-tiny-pre-release", 32_768)
+                return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
             }
         }
     }
@@ -463,6 +485,17 @@ struct FaeConfig: Codable {
             ttsModelId: recommendedTTSModel(totalMemoryBytes: totalMemoryBytes),
             visionModelId: recommendedVLMModel(totalMemoryBytes: totalMemoryBytes, preset: config.vision.modelPreset)?.modelId
         )
+    }
+
+    static func shouldHoldStartupForConciergeHotLoad(
+        config: FaeConfig = FaeConfig(),
+        totalMemoryBytes: UInt64? = nil
+    ) -> Bool {
+        guard config.llm.keepConciergeHot else { return false }
+        return recommendedLocalModelStack(
+            config: config,
+            totalMemoryBytes: totalMemoryBytes
+        ).dualModelActive
     }
 
     /// Compute a sensible `maxHistoryMessages` from context size and generation budget.
@@ -544,12 +577,12 @@ struct FaeConfig: Codable {
         case "qwen3_vl_4b_4bit", "qwen3_vl_4b":
             return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
         default: // "auto"
-            // 48+ GB: Qwen3-VL-4B-Instruct 8-bit alongside 27B/35B text LLM.
-            // 24-47 GB: Qwen3-VL-4B-Instruct 4-bit alongside 9B/27B text LLM.
-            // <24 GB: disabled — not enough headroom for VLM + text LLM + STT + TTS.
-            if totalGB >= 48 {
+            // 32+ GB: Qwen3-VL-4B-Instruct 8-bit for higher-quality on-demand vision.
+            // 16-31 GB: Qwen3-VL-4B-Instruct 4-bit to preserve headroom beside 4B/9B text.
+            // <16 GB: disabled — not enough headroom for VLM + text LLM + STT + TTS.
+            if totalGB >= 32 {
                 return ("mlx-community/Qwen3-VL-4B-Instruct-8bit", 16_384)
-            } else if totalGB >= 24 {
+            } else if totalGB >= 16 {
                 return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
             } else {
                 return nil

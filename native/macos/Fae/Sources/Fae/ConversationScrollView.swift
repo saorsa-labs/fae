@@ -341,6 +341,7 @@ struct InlineToolCardView: View {
         switch card.kind {
         case .toolCall(let name), .toolResult(let name, _):
             switch name {
+            case "session_search": return "clock.arrow.trianglehead.counterclockwise.rotate.90"
             case "web_search": return "magnifyingglass"
             case "fetch_url": return "globe"
             case "read": return "doc.text"

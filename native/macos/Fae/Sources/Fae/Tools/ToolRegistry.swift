@@ -18,6 +18,8 @@ final class ToolRegistry: Sendable {
     /// Build a registry with all built-in tools.
     static func buildDefault(
         skillManager: SkillManager? = nil,
+        workflowTraceStore: WorkflowTraceStore? = nil,
+        sessionStore: SessionStore? = nil,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
         audioCaptureManager: AudioCaptureManager? = nil,
@@ -27,6 +29,8 @@ final class ToolRegistry: Sendable {
     ) -> ToolRegistry {
         let allTools: [any Tool] = Self.allBuiltinTools(
             skillManager: skillManager,
+            workflowTraceStore: workflowTraceStore,
+            sessionStore: sessionStore,
             speakerEncoder: speakerEncoder,
             speakerProfileStore: speakerProfileStore,
             audioCaptureManager: audioCaptureManager,
@@ -40,6 +44,8 @@ final class ToolRegistry: Sendable {
     /// All built-in tools (core + Apple + scheduler + skills + voice identity).
     private static func allBuiltinTools(
         skillManager: SkillManager?,
+        workflowTraceStore: WorkflowTraceStore? = nil,
+        sessionStore: SessionStore? = nil,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
         audioCaptureManager: AudioCaptureManager? = nil,
@@ -57,12 +63,13 @@ final class ToolRegistry: Sendable {
             SelfConfigTool(),
             ChannelSetupTool(),
             WindowControlTool(),
+            SessionSearchTool(sessionStore: sessionStore),
             WebSearchTool(),
             FetchURLTool(),
             // Skill tools
             ActivateSkillTool(skillManager: sm),
             RunSkillTool(skillManager: sm),
-            ManageSkillTool(skillManager: sm),
+            ManageSkillTool(skillManager: sm, workflowTraceStore: workflowTraceStore),
             AgentDelegateTool(),
             // User input tool
             InputRequestTool(),
@@ -198,7 +205,7 @@ final class ToolRegistry: Sendable {
     /// Tools available in "off" and "read_only" modes.
     /// Reads are always safe — Fae is local.
     private static let readOnlyTools: Set<String> = [
-        "read", "window_control", "web_search", "fetch_url",
+        "read", "window_control", "session_search", "web_search", "fetch_url",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "roleplay",
         "activate_skill",

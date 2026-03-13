@@ -1,4 +1,5 @@
 import XCTest
+import GRDB
 @testable import Fae
 
 final class SchedulerSkillRegressionTests: XCTestCase {
@@ -232,6 +233,137 @@ final class SchedulerSkillRegressionTests: XCTestCase {
         let bodyAfterRejectedUpdates = await manager.activate(skillName: skillName)
         XCTAssertTrue(bodyAfterRejectedUpdates?.contains("next safe action") == true)
         XCTAssertFalse(bodyAfterRejectedUpdates?.contains("hunter2") == true)
+    }
+
+    func testSkillManagerSupportsPatchScriptReferenceAndManifestMutators() async throws {
+        let manager = SkillManager()
+        let skillName = "mutator_skill_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let skillDirectory = SkillManager.skillsDirectory.appendingPathComponent(skillName)
+        defer { try? FileManager.default.removeItem(at: skillDirectory) }
+
+        _ = try await manager.createSkill(
+            name: skillName,
+            description: "A skill used to verify fine-grained mutation helpers.",
+            body: "Summarize the current status and list the next safe action."
+        )
+
+        let patched = try await manager.patchSkill(
+            name: skillName,
+            findText: "next safe action",
+            replaceWith: "next two safe actions"
+        )
+        XCTAssertEqual(patched.name, skillName)
+        let patchedBody = await manager.activate(skillName: skillName)
+        XCTAssertTrue(patchedBody?.contains("next two safe actions") == true)
+
+        let executable = try await manager.writeSkillScript(
+            name: skillName,
+            scriptName: "runner",
+            scriptContent: "print('ok')\n"
+        )
+        XCTAssertEqual(executable.type, .executable)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: skillDirectory.appendingPathComponent("scripts/runner.py").path
+            )
+        )
+
+        try await manager.writeSkillReferenceFile(
+            name: skillName,
+            relativePath: "references/context.md",
+            content: "Reference context"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: skillDirectory.appendingPathComponent("references/context.md").path
+            )
+        )
+
+        let manifestURL = skillDirectory.appendingPathComponent("MANIFEST.json")
+        let existingManifest = try String(contentsOf: manifestURL, encoding: .utf8)
+        _ = try await manager.replaceSkillManifest(name: skillName, manifestJSON: existingManifest)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
+    }
+
+    func testManageSkillToolCanListShowApplyAndDismissDrafts() async throws {
+        let manager = SkillManager()
+        let draftDB = try DatabaseQueue(path: tempDirectory.appendingPathComponent("workflow-drafts.db").path)
+        let traceStore = try WorkflowTraceStore(dbQueue: draftDB)
+        let tool = ManageSkillTool(skillManager: manager, workflowTraceStore: traceStore)
+
+        let applySkillName = "draft_apply_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let applySkillDir = SkillManager.skillsDirectory.appendingPathComponent(applySkillName)
+        defer { try? FileManager.default.removeItem(at: applySkillDir) }
+
+        let applyCandidate = try await traceStore.insertDraftCandidate(
+            workflowSignature: "session_search -> notes",
+            action: .create,
+            targetSkillName: applySkillName,
+            title: "Draft reusable workflow for supplier recall",
+            rationale: "Observed repeated successful recall runs.",
+            evidenceJSON: #"{"runs":["run-1","run-2"]}"#,
+            draftSkillMD: """
+            ---
+            name: \(applySkillName)
+            description: Recover earlier supplier notes safely.
+            metadata:
+              author: fae
+              version: "draft-1"
+            ---
+            Use this skill when the user asks for earlier supplier notes.
+            """,
+            confidence: 0.82
+        )
+
+        let dismissCandidate = try await traceStore.insertDraftCandidate(
+            workflowSignature: "web_search -> fetch_url",
+            action: .create,
+            targetSkillName: "dismiss_me",
+            title: "Draft reusable workflow for web verification",
+            rationale: "Observed repeated successful verification runs.",
+            evidenceJSON: nil,
+            draftSkillMD: """
+            ---
+            name: dismiss_me
+            description: Verify web pages safely.
+            metadata:
+              author: fae
+              version: "draft-1"
+            ---
+            Use this skill when a request needs repeated web verification.
+            """,
+            confidence: 0.61
+        )
+
+        let listResult = try await tool.execute(input: ["action": "list_drafts"])
+        XCTAssertFalse(listResult.isError)
+        XCTAssertTrue(listResult.output.contains(applyCandidate.id))
+        XCTAssertTrue(listResult.output.contains(dismissCandidate.id))
+
+        let showResult = try await tool.execute(input: [
+            "action": "show_draft",
+            "draft_id": applyCandidate.id,
+        ])
+        XCTAssertFalse(showResult.isError)
+        XCTAssertTrue(showResult.output.contains("Draft SKILL.md:"))
+        XCTAssertTrue(showResult.output.contains(applySkillName))
+
+        let applyResult = try await tool.execute(input: [
+            "action": "apply_draft",
+            "draft_id": applyCandidate.id,
+        ])
+        XCTAssertFalse(applyResult.isError, applyResult.output)
+        XCTAssertTrue(applyResult.output.contains("Applied skill draft"), applyResult.output)
+        let appliedSkill = await manager.activate(skillName: applySkillName)
+        XCTAssertTrue(appliedSkill?.contains("earlier supplier notes") == true, appliedSkill ?? "missing skill")
+
+        let dismissResult = try await tool.execute(input: [
+            "action": "dismiss_draft",
+            "draft_id": dismissCandidate.id,
+        ])
+        XCTAssertFalse(dismissResult.isError)
+        let dismissed = try await traceStore.fetchDraftCandidate(id: dismissCandidate.id)
+        XCTAssertEqual(dismissed?.status, .dismissed)
     }
 
     private func defaultBuiltinTasksForTesting() -> [SchedulerTask] {

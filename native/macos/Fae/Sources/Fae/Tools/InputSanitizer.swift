@@ -32,8 +32,46 @@ enum InputSanitizer {
         return (filtered, filtered != input)
     }
 
-    // MARK: - Bash Command Classification
+    // MARK: - VLM Prompt Sanitization
 
+    /// Strip known prompt injection patterns from VLM prompts.
+    ///
+    /// Vision-language models can be manipulated by adversarial text rendered
+    /// in screenshots or camera images. This strips the most common attack
+    /// vectors from the user-supplied prompt before it reaches the model.
+    static func sanitizeVLMPrompt(_ prompt: String) -> String {
+        var result = prompt
+
+        // Strip attempts to override system instructions.
+        let injectionPatterns = [
+            #"(?i)ignore (?:all )?(?:previous |prior |above )?instructions"#,
+            #"(?i)you are now "#,
+            #"(?i)new instructions:"#,
+            #"(?i)system prompt:"#,
+            #"(?i)\[INST\]"#,
+            #"(?i)\[/INST\]"#,
+            #"(?i)<\|(?:im_start|im_end|system|endoftext)\|>"#,
+            #"(?i)<<SYS>>"#,
+            #"(?i)<</SYS>>"#,
+        ]
+
+        for pattern in injectionPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Collapse excessive whitespace left by removals.
+        result = result.replacingOccurrences(
+            of: #"\s{3,}"#,
+            with: "  ",
+            options: .regularExpression
+        )
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Bash Command Classification
     /// Known-safe command prefixes for the bash tool.
     ///
     /// Commands matching these prefixes still require approval — the approval card

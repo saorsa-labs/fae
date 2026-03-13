@@ -259,6 +259,12 @@ final class PipelineAuxBridgeController: ObservableObject {
         case "verify_complete":
             status = "Models loaded — preparing first response…"
 
+        case "concierge":
+            let progress = userInfo["progress"] as? Double ?? 0.0
+            status = progress >= 1.0
+                ? "Concierge ready — richer synthesis available"
+                : "Loading concierge model…"
+
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
             status = "Loading \(model)…"

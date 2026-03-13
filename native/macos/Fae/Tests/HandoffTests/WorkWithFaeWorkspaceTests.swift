@@ -419,6 +419,65 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         XCTAssertEqual(WorkWithFaeWorkspaceStore.selectedWorkspace(in: persisted)?.state.conversationMessages.count, 120)
     }
 
+    func testControllerForkFromMessageCanRenameAndSwitchModel() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cowork-fork-model-regression-\(UUID().uuidString)", isDirectory: true)
+        let storageURL = tempRoot.appendingPathComponent("work_with_fae_workspace.json")
+        let originalOverride = WorkWithFaeWorkspaceStore.storageURLOverride
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        WorkWithFaeWorkspaceStore.storageURLOverride = storageURL
+        defer {
+            WorkWithFaeWorkspaceStore.storageURLOverride = originalOverride
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let messages = (1...5).map {
+            WorkWithFaeConversationMessage(role: $0.isMultiple(of: 2) ? "assistant" : "user", content: "message-\($0)")
+        }
+        let sourceWorkspace = WorkWithFaeWorkspaceRecord(
+            name: "Main workspace",
+            agentID: WorkWithFaeAgentProfile.faeLocal.id,
+            state: WorkWithFaeWorkspaceState(
+                selectedDirectoryPath: nil,
+                indexedFiles: [],
+                attachments: [],
+                conversationMessages: messages
+            )
+        )
+        WorkWithFaeWorkspaceStore.saveRegistry(
+            WorkWithFaeWorkspaceRegistry(
+                selectedWorkspaceID: sourceWorkspace.id,
+                workspaces: [sourceWorkspace],
+                agents: [.faeLocal]
+            )
+        )
+
+        let conversation = ConversationController()
+        let controller = CoworkWorkspaceController(
+            faeCore: FaeCore(),
+            conversation: conversation,
+            runtimeDescriptor: nil
+        )
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let preset = try XCTUnwrap(CoworkBackendPresetCatalog.preset(id: "openai"))
+        let option = try XCTUnwrap(modelOption(for: "gpt-4.1", preset: preset))
+
+        controller.forkWorkspace(upToMessageIndex: 2, named: "Forked review", using: option)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let forkWorkspace = try XCTUnwrap(controller.selectedWorkspace)
+        XCTAssertEqual(forkWorkspace.name, "Forked review")
+        XCTAssertEqual(forkWorkspace.parentWorkspaceID, sourceWorkspace.id)
+        XCTAssertEqual(forkWorkspace.state.conversationMessages.count, 3)
+        XCTAssertEqual(forkWorkspace.state.conversationMessages.last?.content, "message-3")
+
+        let forkAgent = try XCTUnwrap(controller.agents.first(where: { $0.id == forkWorkspace.agentID }))
+        XCTAssertEqual(forkAgent.providerKind, .openAICompatibleExternal)
+        XCTAssertEqual(forkAgent.backendPresetID, "openai")
+        XCTAssertEqual(forkAgent.modelIdentifier, "gpt-4.1")
+    }
+
     func testControllerUpdateSelectedAgentModelPersistsAcrossWorkspaceRestore() async throws {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("cowork-model-switch-regression-\(UUID().uuidString)", isDirectory: true)

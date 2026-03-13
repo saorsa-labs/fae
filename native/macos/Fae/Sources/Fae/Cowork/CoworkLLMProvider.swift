@@ -438,6 +438,8 @@ enum CoworkProviderConnectionTester {
 }
 
 struct FaeLocalhostCoworkProvider: CoworkLLMProvider {
+    private static let requestTimeout: TimeInterval = 180
+
     let descriptor: FaeLocalRuntimeDescriptor
 
     var kind: CoworkLLMProviderKind { .faeLocalhost }
@@ -445,6 +447,7 @@ struct FaeLocalhostCoworkProvider: CoworkLLMProvider {
     func submit(request: CoworkProviderRequest) async throws -> CoworkProviderResponse {
         var urlRequest = URLRequest(url: descriptor.baseURL.appendingPathComponent("v1/chat/completions"))
         urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = Self.requestTimeout
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("Bearer \(descriptor.bearerToken)", forHTTPHeaderField: "Authorization")
 

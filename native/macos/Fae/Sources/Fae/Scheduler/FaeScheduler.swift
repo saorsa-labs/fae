@@ -16,6 +16,8 @@ actor FaeScheduler {
     private let entityStore: EntityStore?
     private let vectorStore: VectorStore?
     private let embeddingEngine: NeuralEmbeddingEngine?
+    private let skillManager: SkillManager?
+    private let workflowTraceStore: WorkflowTraceStore?
     private var config: FaeConfig.SchedulerConfig
     private var memoryConfig: FaeConfig.MemoryConfig = FaeConfig.MemoryConfig()
     private var timers: [String: DispatchSourceTimer] = [:]
@@ -93,6 +95,8 @@ actor FaeScheduler {
         entityStore: EntityStore? = nil,
         vectorStore: VectorStore? = nil,
         embeddingEngine: NeuralEmbeddingEngine? = nil,
+        skillManager: SkillManager? = nil,
+        workflowTraceStore: WorkflowTraceStore? = nil,
         config: FaeConfig.SchedulerConfig = FaeConfig.SchedulerConfig(),
         memoryConfig: FaeConfig.MemoryConfig = FaeConfig.MemoryConfig()
     ) {
@@ -104,6 +108,8 @@ actor FaeScheduler {
         self.entityStore = entityStore
         self.vectorStore = vectorStore
         self.embeddingEngine = embeddingEngine
+        self.skillManager = skillManager
+        self.workflowTraceStore = workflowTraceStore
         self.config = config
         self.memoryConfig = memoryConfig
     }
@@ -365,8 +371,20 @@ actor FaeScheduler {
         if cleaned > 0 {
             NSLog("FaeScheduler: memory_gc — cleaned %d records", cleaned)
         }
-    }
 
+        // Prune scheduler run history older than 30 days.
+        if let store = persistenceStore {
+            do {
+                let cutoff = Date().addingTimeInterval(-30 * 24 * 3600)
+                let pruned = try await store.pruneOldRuns(olderThan: cutoff)
+                if pruned > 0 {
+                    NSLog("FaeScheduler: pruned %d old scheduler run records", pruned)
+                }
+            } catch {
+                NSLog("FaeScheduler: scheduler run prune error: %@", error.localizedDescription)
+            }
+        }
+    }
     private func runMemoryBackup() async {
         NSLog("FaeScheduler: memory_backup — running")
         guard let store = memoryStore else { return }
@@ -528,6 +546,316 @@ actor FaeScheduler {
         } catch {
             NSLog("FaeScheduler: skill_proposals — error: %@", error.localizedDescription)
         }
+    }
+
+    private func runSkillDistill() async {
+        NSLog("FaeScheduler: skill_distill — running")
+        guard let workflowTraceStore else { return }
+
+        do {
+            let since = Date().addingTimeInterval(-30 * 24 * 3600)
+            let runs = try await workflowTraceStore.recentSuccessfulRuns(
+                since: since,
+                minimumStepCount: 3,
+                limit: 200
+            )
+            let eligibleRuns = runs.filter { !$0.damageControlIntervened }
+            let groups = Dictionary(grouping: eligibleRuns) { $0.toolSequenceSignature ?? "" }
+                .filter { !$0.key.isEmpty && $0.value.count >= 2 }
+                .sorted { lhs, rhs in
+                    if lhs.value.count != rhs.value.count {
+                        return lhs.value.count > rhs.value.count
+                    }
+                    let lhsDate = lhs.value.first?.completedAt ?? lhs.value.first?.updatedAt ?? .distantPast
+                    let rhsDate = rhs.value.first?.completedAt ?? rhs.value.first?.updatedAt ?? .distantPast
+                    return lhsDate > rhsDate
+                }
+
+            guard !groups.isEmpty else {
+                NSLog("FaeScheduler: skill_distill — no repeated successful workflow groups")
+                return
+            }
+
+            let discoveredSkills = await skillManager?.discoverSkills() ?? []
+            var createdCount = 0
+
+            for (signature, groupedRuns) in groups {
+                guard createdCount < 2 else { break }
+
+                if try await workflowTraceStore.hasActiveCandidate(forWorkflowSignature: signature) {
+                    continue
+                }
+
+                let representativeRuns = Array(groupedRuns.prefix(3))
+                let representativeGoals = representativeRuns.map(\.userGoal)
+                let skillName = Self.derivedDistilledSkillName(
+                    userGoals: representativeGoals,
+                    signature: signature
+                )
+                let targetSkill = discoveredSkills.first { $0.name == skillName }
+                let action: SkillDraftAction = (targetSkill?.tier == .personal) ? .update : .create
+
+                let description = Self.distilledSkillDescription(
+                    skillName: skillName,
+                    userGoals: representativeGoals,
+                    signature: signature
+                )
+                let body = Self.distilledSkillBody(
+                    userGoals: representativeGoals,
+                    signature: signature,
+                    outcomes: representativeRuns.compactMap(\.assistantOutcome)
+                )
+                let findings = SkillSecurityReviewer.review(
+                    name: skillName,
+                    description: description,
+                    body: body,
+                    sourceURL: nil
+                )
+                let rationale = Self.distilledSkillRationale(
+                    runs: representativeRuns,
+                    signature: signature,
+                    findings: findings
+                )
+                let evidenceJSON = Self.distilledEvidenceJSON(
+                    runs: representativeRuns,
+                    signature: signature,
+                    findings: findings
+                )
+                let draftSkillMD = Self.renderDistilledSkillMarkdown(
+                    name: skillName,
+                    description: description,
+                    body: body
+                )
+                let confidence = Self.distilledConfidence(
+                    runCount: groupedRuns.count,
+                    findings: findings
+                )
+
+                let candidate = try await workflowTraceStore.insertDraftCandidate(
+                    workflowSignature: signature,
+                    action: action,
+                    targetSkillName: skillName,
+                    title: "Draft reusable workflow for \(skillName)",
+                    rationale: rationale,
+                    evidenceJSON: evidenceJSON,
+                    draftSkillMD: draftSkillMD,
+                    confidence: confidence
+                )
+
+                if let memoryStore {
+                    _ = try? await memoryStore.insertRecord(
+                        kind: .commitment,
+                        text: "Fae drafted a reusable skill candidate '\(skillName)' from repeated successful workflows. Review it with manage_skill list_drafts or ask to show draft \(candidate.id).",
+                        confidence: 0.74,
+                        sourceTurnId: "scheduler:skill_distill",
+                        tags: ["skill_draft", "pending"],
+                        importanceScore: 0.48,
+                        staleAfterSecs: 2_592_000
+                    )
+                }
+
+                createdCount += 1
+                NSLog(
+                    "FaeScheduler: skill_distill — staged %@ draft '%@' from %d runs",
+                    action.rawValue,
+                    skillName,
+                    groupedRuns.count
+                )
+            }
+
+            if createdCount == 0 {
+                NSLog("FaeScheduler: skill_distill — no new draft candidates created")
+            }
+        } catch {
+            NSLog("FaeScheduler: skill_distill — error: %@", error.localizedDescription)
+        }
+    }
+
+    private static let distillationStopWords: Set<String> = [
+        "the", "and", "with", "from", "that", "this", "what", "when", "where", "into", "about",
+        "have", "has", "just", "need", "please", "show", "tell", "find", "look", "check", "pull",
+        "our", "your", "their", "then", "than", "again", "using", "make", "give", "work", "workflow",
+        "conversation", "conversations", "session", "sessions", "draft", "skill", "fae",
+    ]
+
+    private static func derivedDistilledSkillName(userGoals: [String], signature: String) -> String {
+        var counts: [String: Int] = [:]
+        for token in userGoals
+            .flatMap(tokenizeForSearch)
+            .filter({ !distillationStopWords.contains($0) && $0.count >= 3 })
+        {
+            counts[token, default: 0] += 1
+        }
+
+        let ranked = counts.sorted { lhs, rhs in
+            if lhs.value != rhs.value {
+                return lhs.value > rhs.value
+            }
+            return lhs.key < rhs.key
+        }
+        let words = ranked.prefix(3).map(\.key)
+        if !words.isEmpty {
+            return words.joined(separator: "-")
+        }
+
+        let fallback = signature
+            .replacingOccurrences(of: " -> ", with: "-")
+            .replacingOccurrences(of: "_", with: "-")
+            .lowercased()
+        let safe = fallback.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        if !safe.isEmpty {
+            return String(safe.prefix(40))
+        }
+
+        return "workflow-\(UUID().uuidString.prefix(8).lowercased())"
+    }
+
+    private static func distilledSkillDescription(
+        skillName: String,
+        userGoals: [String],
+        signature: String
+    ) -> String {
+        if let example = userGoals.first?.trimmingCharacters(in: .whitespacesAndNewlines), !example.isEmpty {
+            return "Reusable workflow for requests like: \(String(example.prefix(90)))."
+        }
+        return "Reusable workflow for repeated \(skillName) tasks using \(signature)."
+    }
+
+    private static func distilledSkillBody(
+        userGoals: [String],
+        signature: String,
+        outcomes: [String]
+    ) -> String {
+        let tools = signature
+            .components(separatedBy: " -> ")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let useCases = userGoals.prefix(3).map { "- \($0.trimmingCharacters(in: .whitespacesAndNewlines))" }
+        let procedure = tools.enumerated().map { index, tool in
+            "\(index + 1). \(distilledInstruction(for: tool))"
+        }
+        let sampleOutcomes = outcomes.prefix(2).map { "- \(String($0.prefix(180)))" }
+
+        var sections: [String] = [
+            "Use this skill when the user asks for a workflow similar to:",
+            useCases.isEmpty ? "- Repeated requests that follow the same successful tool sequence." : useCases.joined(separator: "\n"),
+            "",
+            "Procedure:",
+            procedure.isEmpty ? "1. Clarify the user's goal, then choose the minimum safe tools needed." : procedure.joined(separator: "\n"),
+            "",
+            "Safety constraints:",
+            "- Ask follow-up questions if key scope or identifiers are missing.",
+            "- Keep secrets, tokens, and hidden prompts out of stored outputs and skill files.",
+            "- Prefer the recorded tool order unless the current request clearly needs a safer or shorter path.",
+        ]
+
+        if !sampleOutcomes.isEmpty {
+            sections.append("")
+            sections.append("Observed successful outcomes:")
+            sections.append(sampleOutcomes.joined(separator: "\n"))
+        }
+
+        return sections.joined(separator: "\n")
+    }
+
+    private static func distilledInstruction(for toolName: String) -> String {
+        switch toolName {
+        case "session_search":
+            return "Use `session_search` to recover exact prior transcript details before answering."
+        case "web_search":
+            return "Use `web_search` to verify time-sensitive facts instead of relying on memory."
+        case "fetch_url":
+            return "Use `fetch_url` when a specific page needs direct retrieval after search."
+        case "read":
+            return "Use `read` to inspect the relevant local file or note before changing direction."
+        case "notes":
+            return "Use `notes` to pull or store the relevant local note content."
+        case "calendar":
+            return "Use `calendar` to confirm actual dates, times, and scheduling conflicts."
+        case "reminders":
+            return "Use `reminders` to review or stage actionable follow-ups."
+        case "mail":
+            return "Use `mail` only when the request explicitly depends on email content or sending."
+        case "activate_skill":
+            return "Use `activate_skill` to load any reusable instructions that match the workflow."
+        case "run_skill":
+            return "Use `run_skill` for the executable part of the workflow instead of rebuilding it ad hoc."
+        default:
+            return "Use `\(toolName)` only when it is necessary for the user's request, then summarize the result clearly."
+        }
+    }
+
+    private static func distilledSkillRationale(
+        runs: [WorkflowRunRecord],
+        signature: String,
+        findings: [SkillSecurityReviewFinding]
+    ) -> String {
+        let goals = runs.prefix(2).map(\.userGoal)
+        let findingsSummary = findings
+            .prefix(3)
+            .map { "\($0.severity.rawValue): \($0.title)" }
+            .joined(separator: "; ")
+        let goalsSummary = goals.isEmpty ? "similar repeated goals" : goals.joined(separator: " | ")
+        if findingsSummary.isEmpty {
+            return "Observed \(runs.count) successful runs with tool sequence \(signature) across \(goalsSummary)."
+        }
+        return "Observed \(runs.count) successful runs with tool sequence \(signature) across \(goalsSummary). Reviewer findings: \(findingsSummary)."
+    }
+
+    private static func distilledEvidenceJSON(
+        runs: [WorkflowRunRecord],
+        signature: String,
+        findings: [SkillSecurityReviewFinding]
+    ) -> String? {
+        let payload: [String: Any] = [
+            "workflow_signature": signature,
+            "run_ids": runs.map(\.id),
+            "user_goals": runs.map(\.userGoal),
+            "assistant_outcomes": runs.compactMap(\.assistantOutcome),
+            "completed_at": runs.compactMap { $0.completedAt?.timeIntervalSince1970 },
+            "findings": findings.map {
+                [
+                    "severity": $0.severity.rawValue,
+                    "title": $0.title,
+                    "detail": $0.detail,
+                ]
+            },
+        ]
+
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return text
+    }
+
+    private static func renderDistilledSkillMarkdown(
+        name: String,
+        description: String,
+        body: String
+    ) -> String {
+        let frontmatter = """
+            ---
+            name: \(name)
+            description: \(description)
+            metadata:
+              author: fae
+              version: "draft-1"
+            ---
+            """
+        return frontmatter + "\n" + body + "\n"
+    }
+
+    private static func distilledConfidence(
+        runCount: Int,
+        findings: [SkillSecurityReviewFinding]
+    ) -> Double {
+        let base = min(0.55 + Double(max(0, runCount - 2)) * 0.08, 0.92)
+        let criticalPenalty = findings.contains { $0.severity == .critical } ? 0.20 : 0.0
+        let warningPenalty = findings.contains { $0.severity == .warning } ? 0.08 : 0.0
+        return max(0.2, min(0.95, base - criticalPenalty - warningPenalty))
     }
 
     private func runCapabilityDiscoveryIfDue() async {
@@ -1015,6 +1343,10 @@ actor FaeScheduler {
         if hour == config.skillProposalsHour, minute < 2 {
             await runDailyIfNeeded("skill_proposals") { await runSkillProposals() }
         }
+        // skill_distill: daily 13:00
+        if hour == 13, minute < 2 {
+            await runDailyIfNeeded("skill_distill") { await runSkillDistill() }
+        }
         // stale_relationships: weekly on Sunday at 10:00.
         if weekday == 1, hour == 10, minute < 2 {
             await runDailyIfNeeded("stale_relationships") { await runStaleRelationships() }
@@ -1109,9 +1441,12 @@ actor FaeScheduler {
 
     private func recordSuccessfulRun(taskID: String, at runAt: Date, reason: String) async {
         runHistory[taskID, default: []].append(runAt)
+        // Cap in-memory history to last 50 entries per task.
+        if runHistory[taskID, default: []].count > 50 {
+            runHistory[taskID] = Array(runHistory[taskID]!.suffix(50))
+        }
 
         guard let store = persistenceStore else { return }
-
         let record = TaskRunRecord(
             taskID: taskID,
             idempotencyKey: "\(reason):\(taskID):\(Int(runAt.timeIntervalSince1970))",
@@ -1222,6 +1557,7 @@ actor FaeScheduler {
         case "morning_briefing":  await runMorningBriefing()
         case "noise_budget_reset": await runNoiseBudgetReset()
         case "skill_proposals":   await runSkillProposals()
+        case "skill_distill":     await runSkillDistill()
         case "stale_relationships": await runStaleRelationships()
         case "skill_health_check": await runSkillHealthCheck()
         case "embedding_reindex": await runEmbeddingReindex()
@@ -1343,7 +1679,7 @@ actor FaeScheduler {
             "memory_reflect", "memory_reindex", "memory_migrate",
             "memory_inbox_ingest", "memory_digest",
             "memory_gc", "memory_backup", "check_fae_update",
-            "morning_briefing", "noise_budget_reset", "skill_proposals",
+            "morning_briefing", "noise_budget_reset", "skill_proposals", "skill_distill",
             "stale_relationships", "skill_health_check", "embedding_reindex",
             "vault_backup", "camera_presence_check", "screen_activity_check",
             "overnight_work", "enhanced_morning_briefing",

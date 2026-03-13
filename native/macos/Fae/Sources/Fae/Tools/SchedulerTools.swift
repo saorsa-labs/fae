@@ -178,6 +178,8 @@ private func defaultBuiltinTasks() -> [SchedulerTask] {
                        scheduleType: "daily", scheduleParams: ["hour": "8", "minute": "0"], action: "morning_briefing", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "skill_proposals", name: "Skill Proposals", kind: "builtin", enabled: true,
                        scheduleType: "daily", scheduleParams: ["hour": "11", "minute": "0"], action: "skill_proposals", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
+        SchedulerTask(id: "skill_distill", name: "Skill Distill", kind: "builtin", enabled: true,
+                       scheduleType: "daily", scheduleParams: ["hour": "13", "minute": "0"], action: "skill_distill", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "stale_relationships", name: "Stale Relationships", kind: "builtin", enabled: true,
                        scheduleType: "weekly", scheduleParams: ["day": "sunday", "hour": "10", "minute": "0"], action: "stale_relationships", taskDescription: nil, instructionBody: nil, nextRun: nil, allowedTools: nil),
         SchedulerTask(id: "skill_health_check", name: "Skill Health Check", kind: "builtin", enabled: true,

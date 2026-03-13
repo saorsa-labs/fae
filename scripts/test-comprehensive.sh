@@ -865,22 +865,11 @@ execute_step() {
             local escaped_text
             escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
             if $VERBOSE; then dim "  speak: '$text' (voice=$voice)"; fi
-            # Map voice name to audio_prompt_path for voice cloning.
-            # Looks for voices/<name>.wav in the Chatterbox directory.
-            local audio_prompt_path voice_prompt_json
-            local chatterbox_dir
-            chatterbox_dir="$(cd "$(dirname "$0")/.." && pwd)/../chatterbox"
-            if [ -f "${chatterbox_dir}/voices/${voice}.wav" ]; then
-                audio_prompt_path="$(cd "${chatterbox_dir}" && pwd)/voices/${voice}.wav"
-                voice_prompt_json=",\"audio_prompt_path\":$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "${audio_prompt_path}")"
-            else
-                voice_prompt_json=""
-            fi
             local speak_body
-            speak_body="{\"text\":${escaped_text},\"play\":${play_audio}${voice_prompt_json}}"
+            speak_body="{\"text\":${escaped_text},\"voice\":\"${voice}\",\"play\":${play_audio}}"
             local speak_status
             speak_status=$(curl -s -o /dev/null -w "%{http_code}" \
-                --connect-timeout 5 --max-time 60 \
+                --connect-timeout 5 --max-time 30 \
                 -X POST "${CHATTERBOX_URL}/speak" \
                 -H "Content-Type: application/json" \
                 -d "${speak_body}" 2>/dev/null || echo "000")
@@ -928,24 +917,6 @@ execute_step() {
             if [ -f "$output_path" ]; then
                 dim "    Screenshot saved: $output_path"
             fi
-            ;;
-        speak)
-            # Speak text via Chatterbox TTS so Fae's mic picks it up.
-            # Requires Chatterbox at $CHATTERBOX_URL.
-            local text voice
-            text=$(echo "$step_json" | jq -r '.text // ""')
-            voice=$(echo "$step_json" | jq -r '.voice // "jarvis"')
-            if ! $CHATTERBOX_AVAILABLE; then
-                yellow "  Warning: Chatterbox not available — speak step skipped (test will fail)"
-                return
-            fi
-            local escaped_text
-            escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
-            if $VERBOSE; then dim "  speak: '$text' via voice '$voice'"; fi
-            curl -s --max-time 30 -X POST "$CHATTERBOX_URL/speak" \
-                -H "Content-Type: application/json" \
-                -d "{\"text\": ${escaped_text}, \"voice\": \"${voice}\", \"play\": true}" > /dev/null \
-                || yellow "  Warning: Chatterbox speak request failed"
             ;;
         wait_speech)
             local max_wait

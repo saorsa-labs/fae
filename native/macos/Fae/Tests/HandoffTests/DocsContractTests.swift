@@ -35,15 +35,15 @@ final class DocsContractTests: XCTestCase {
         let readWriteCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "read_write") }.count
         let fullCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "full") }.count
 
-        XCTAssertEqual(registry.allTools.count, 33)
-        XCTAssertEqual(readOnlyCount, 15)
-        XCTAssertEqual(readWriteCount, 31)
-        XCTAssertEqual(fullCount, 33)
+        XCTAssertEqual(registry.allTools.count, 34)
+        XCTAssertEqual(readOnlyCount, 16)
+        XCTAssertEqual(readWriteCount, 32)
+        XCTAssertEqual(fullCount, 34)
 
-        XCTAssertTrue(guide.contains("Total: 33 tools"))
-        XCTAssertTrue(guide.contains("read_only`: 15 tools") || guide.contains("`read_only`: 15 tools"))
-        XCTAssertTrue(guide.contains("read_write`: 31 tools") || guide.contains("`read_write`: 31 tools"))
-        XCTAssertTrue(guide.contains("full` / `full_no_approval`: 33 tools") || guide.contains("`full` / `full_no_approval`: 33 tools"))
+        XCTAssertTrue(guide.contains("Total: 34 tools"))
+        XCTAssertTrue(guide.contains("read_only`: 16 tools") || guide.contains("`read_only`: 16 tools"))
+        XCTAssertTrue(guide.contains("read_write`: 32 tools") || guide.contains("`read_write`: 32 tools"))
+        XCTAssertTrue(guide.contains("full` / `full_no_approval`: 34 tools") || guide.contains("`full` / `full_no_approval`: 34 tools"))
         XCTAssertTrue(guide.contains("delegate_agent"))
         XCTAssertTrue(guide.contains("FaeScheduler.triggerTask(id:)"))
 
@@ -51,7 +51,7 @@ final class DocsContractTests: XCTestCase {
             "memory_reflect", "memory_reindex", "memory_migrate", "memory_gc", "memory_backup",
             "memory_inbox_ingest", "memory_digest",
             "check_fae_update", "noise_budget_reset", "stale_relationships", "morning_briefing",
-            "skill_proposals", "skill_health_check", "vault_backup", "camera_presence_check",
+            "skill_proposals", "skill_distill", "skill_health_check", "vault_backup", "camera_presence_check",
             "screen_activity_check", "overnight_work", "embedding_reindex", "enhanced_morning_briefing",
         ]
 
@@ -63,12 +63,13 @@ final class DocsContractTests: XCTestCase {
     func testModelDocsReflectCurrentAutoOperatorPolicy() throws {
         let readme = try loadRepositoryText(relativePath: "README.md")
         let modelSwitchingGuide = try loadRepositoryText(relativePath: "docs/guides/model-switching.md")
+        // Auto policy: <16 GB → 2B, 16–31 GB → 4B, 32+ GB → 9B
         let expectations: [(Int, String, Int)] = [
-            (8, "saorsa-labs/saorsa1-tiny-pre-release", 32_768),
-            (16, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
-            (32, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
-            (64, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
-            (128, "saorsa-labs/saorsa1-worker-pre-release", 32_768),
+            (8, "mlx-community/Qwen3.5-2B-4bit", 32_768),
+            (16, "mlx-community/Qwen3.5-4B-4bit", 32_768),
+            (32, "mlx-community/Qwen3.5-9B-4bit", 32_768),
+            (64, "mlx-community/Qwen3.5-9B-4bit", 32_768),
+            (128, "mlx-community/Qwen3.5-9B-4bit", 32_768),
         ]
 
         for (ramGB, modelId, contextSize) in expectations {
@@ -80,18 +81,16 @@ final class DocsContractTests: XCTestCase {
             XCTAssertEqual(selection.contextSize, contextSize)
         }
 
-        XCTAssertTrue(readme.contains("saorsa1 local stack"))
-        XCTAssertTrue(readme.contains("saorsa1 operator policy"))
-        XCTAssertTrue(readme.contains("12+ GB: `saorsa-labs/saorsa1-worker-pre-release`"))
-        XCTAssertTrue(readme.contains("below 12 GB: `saorsa-labs/saorsa1-tiny-pre-release`"))
-        XCTAssertTrue(readme.contains("`saorsa-labs/saorsa1-concierge-pre-release`"))
+        XCTAssertTrue(readme.contains("Qwen3.5 single-model local stack"))
+        XCTAssertTrue(readme.contains("`8–15 GB`: `Qwen3.5 2B`"))
+        XCTAssertTrue(readme.contains("`16–31 GB`: `Qwen3.5 4B`"))
+        XCTAssertTrue(readme.contains("`32+ GB`: `Qwen3.5 9B`"))
 
-        XCTAssertTrue(modelSwitchingGuide.contains("saorsa1 operator policy"))
-        XCTAssertTrue(modelSwitchingGuide.contains("12+ GB: `saorsa1-worker` at 32K context"))
-        XCTAssertTrue(modelSwitchingGuide.contains("below 12 GB: `saorsa1-tiny` at 32K context"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`saorsa1-worker`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`saorsa1-tiny`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`saorsa-labs/saorsa1-concierge-pre-release`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`Auto (Recommended)` resolves by RAM"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`8–15 GB` | `Qwen3.5 2B`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`16–31 GB` | `Qwen3.5 4B`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`32+ GB` | `Qwen3.5 9B`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("one active Qwen3.5 text model"))
     }
 
     func testAdversarialSecurityPlanKeepsCriticalCoverageAreasDocumented() throws {

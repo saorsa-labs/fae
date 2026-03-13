@@ -197,7 +197,7 @@ See: [Work with Fae Guide](docs/guides/work-with-fae.md)
 
 ## Architecture
 
-Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-swift) for on-device ML inference. No Rust core, no subprocess — all intelligence runs natively on Apple Silicon.
+Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-swift) and Core ML for on-device inference. There is no Rust runtime in the active path. The UI process and local workers are all Swift-native on Apple Silicon.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -215,13 +215,13 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  ML Engines (all MLX, on-device):                             │
 │  ┌───────────┐ ┌────────────┐ ┌───────────┐ ┌─────────────┐  │
 │  │ STT       │ │ LLM        │ │ TTS       │ │ Speaker     │  │
-│  │ Qwen3-ASR │ │ saorsa1    │ │ Qwen3-TTS │ │ ECAPA-TDNN  │  │
-│  │ 1.7B 4bit │ │ MLX 4bit   │ │ 1.7B bf16 │ │ Core ML     │  │
+│  │ Qwen3-ASR │ │ Qwen3.5    │ │ Kokoro    │ │ ECAPA-TDNN  │  │
+│  │ 0.6/1.7B  │ │ 2B/4B/9B   │ │ 82M       │ │ Core ML     │  │
 │  └───────────┘ └────────────┘ └───────────┘ └─────────────┘  │
 │  ┌───────────┐                                                │
 │  │ VLM       │  (on-demand, vision tools only)                │
 │  │ Qwen3-VL  │                                                │
-│  │ 4B/8B     │                                                │
+│  │ 4B 4/8bit │                                                │
 │  └───────────┘                                                │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -231,19 +231,27 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | saorsa1 local stack: worker (2B) on 12+ GB, tiny (0.8B) below 12 GB, plus optional concierge (24B) on 32+ GB | MLX | 4-bit | Conversation, reasoning, tool use |
-| TTS | Qwen3-TTS-1.7B | MLX | bf16 | Text-to-speech with voice cloning |
-| VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit | Vision — screen/camera understanding (on-demand) |
+| LLM | Qwen3.5 single-model local stack: `2B`, `4B`, or `9B` via `Auto`; `27B` / `35B-A3B` as manual quality tiers | MLX | 4-bit | Main conversation, reasoning, tool use |
+| TTS | Kokoro-82M | KokoroSwift / MLX | mixed | Text-to-speech |
+| VLM | Qwen3-VL-4B on-demand (`4-bit` or `8-bit`) | MLXVLM | 4/8-bit | Vision — screen/camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Current local default:
-- `auto` now follows the saorsa1 operator policy:
-  - 12+ GB: `saorsa-labs/saorsa1-worker-pre-release` at 32K context
-  - below 12 GB: `saorsa-labs/saorsa1-tiny-pre-release` at 32K context
-- on 32+ GB systems with dual-model local mode enabled, concierge defaults to `saorsa-labs/saorsa1-concierge-pre-release` at 128K context
-- legacy Qwen/Liquid preset keys are still accepted for backward compatibility, but they resolve onto the `saorsa1` weights
-- this local model policy lives in `FaeConfig.recommendedModel(...)` and `FaeConfig.recommendedConciergeModel(...)`
+- Fae now prioritizes a single local Qwen3.5 text model.
+- `auto` text model selection:
+  - `8–15 GB`: `Qwen3.5 2B`
+  - `16–31 GB`: `Qwen3.5 4B`
+  - `32+ GB`: `Qwen3.5 9B`
+- manual quality tiers:
+  - `Qwen3.5 27B` on `32+ GB`
+  - `Qwen3.5 35B-A3B` on `48+ GB`
+- `auto` vision selection:
+  - `<16 GB`: disabled
+  - `16–31 GB`: `Qwen3-VL-4B` `4-bit`
+  - `32+ GB`: `Qwen3-VL-4B` `8-bit`
+- the dual / concierge path remains only as a legacy compatibility path and is not the recommended local architecture
+- canonical local model guide: [Local model strategy](docs/guides/local-model-strategy.md)
 
 ### Benchmark reports
 
@@ -289,7 +297,7 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 3. **Speaker ID** — ECAPA-TDNN embedding, owner verification
 4. **Echo suppression** — time-based + text-overlap + voice identity filtering
 5. **STT** — Qwen3-ASR transcription
-6. **LLM** — Qwen3 with inline tool calling (max 5 tool turns per query), plus deferred background execution for eligible read-only lookups
+6. **LLM** — one active Qwen3.5 text model with inline tool calling (max 5 tool turns per query), plus deferred background execution for eligible read-only lookups
 7. **TTS** — Qwen3-TTS with voice cloning, sentence-level streaming
 8. **Playback** — with barge-in interruption support
 
@@ -307,7 +315,7 @@ The unified pipeline handles everything in a single pass — the LLM decides whe
 | Computer Use | `click`, `type_text`, `scroll`, `find_element` |
 | Roleplay | `roleplay` |
 
-The LLM decides when to use tools — no separate routing or intent classification needed.
+The active Qwen3.5 model decides when to use tools — no separate local router or concierge handoff is required in the default path.
 
 ### Adaptive Window
 

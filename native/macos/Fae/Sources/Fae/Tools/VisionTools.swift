@@ -29,6 +29,257 @@ private enum ComputerUseSafety {
     }
 }
 
+enum DesktopWindowSelection {
+    struct CaptureWindowCandidate: Sendable, Equatable {
+        let windowID: CGWindowID
+        let processID: pid_t
+        let appName: String
+        let title: String?
+        let frame: CGRect
+    }
+
+    struct VisibleWindow: Sendable, Equatable {
+        let windowID: CGWindowID
+        let processID: pid_t
+        let ownerName: String
+        let title: String?
+        let layer: Int
+        let bounds: CGRect
+    }
+
+    static func orderedVisibleWindows() -> [VisibleWindow] {
+        guard let windowInfo = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+
+        return windowInfo.compactMap { item in
+            guard let windowNumber = item[kCGWindowNumber as String] as? NSNumber,
+                  let ownerPID = item[kCGWindowOwnerPID as String] as? NSNumber,
+                  let ownerName = item[kCGWindowOwnerName as String] as? String,
+                  !ownerName.isEmpty
+            else {
+                return nil
+            }
+
+            let alpha = (item[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            guard alpha > 0 else { return nil }
+
+            let boundsDict = item[kCGWindowBounds as String] as? NSDictionary
+            let bounds = boundsDict.flatMap { CGRect(dictionaryRepresentation: $0) } ?? .zero
+            guard bounds.width > 0, bounds.height > 0 else { return nil }
+
+            return VisibleWindow(
+                windowID: CGWindowID(windowNumber.uint32Value),
+                processID: ownerPID.int32Value,
+                ownerName: ownerName,
+                title: item[kCGWindowName as String] as? String,
+                layer: item[kCGWindowLayer as String] as? Int ?? 0,
+                bounds: bounds
+            )
+        }
+    }
+
+    static func selectCaptureWindow(
+        candidates: [CaptureWindowCandidate],
+        preferredAppName: String?,
+        frontmostPID: pid_t?,
+        orderedWindows: [VisibleWindow]
+    ) -> CaptureWindowCandidate? {
+        let scopedCandidates: [CaptureWindowCandidate]
+        if let preferredAppName, !preferredAppName.isEmpty {
+            scopedCandidates = candidates.filter { $0.appName.localizedCaseInsensitiveContains(preferredAppName) }
+        } else if let frontmostPID {
+            scopedCandidates = candidates.filter { $0.processID == frontmostPID }
+        } else {
+            scopedCandidates = candidates
+        }
+
+        guard !scopedCandidates.isEmpty else { return nil }
+
+        return scopedCandidates.max { lhs, rhs in
+            scoreCaptureWindow(lhs, orderedWindows: orderedWindows) < scoreCaptureWindow(rhs, orderedWindows: orderedWindows)
+        }
+    }
+
+    static func resolveFallbackTypingTargetName(
+        explicitAppName: String?,
+        frontmostAppName: String?,
+        orderedWindows: [VisibleWindow],
+        excludedAppNames: Set<String>
+    ) -> String? {
+        if let explicitAppName,
+           !explicitAppName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return explicitAppName
+        }
+
+        if let frontmostAppName,
+           !excludedAppNames.contains(frontmostAppName.lowercased())
+        {
+            return frontmostAppName
+        }
+
+        if let window = orderedWindows.first(where: {
+            $0.layer == 0 && !excludedAppNames.contains($0.ownerName.lowercased())
+        }) {
+            return window.ownerName
+        }
+
+        return orderedWindows.first(where: {
+            !excludedAppNames.contains($0.ownerName.lowercased())
+        })?.ownerName
+    }
+
+    private static func scoreCaptureWindow(
+        _ candidate: CaptureWindowCandidate,
+        orderedWindows: [VisibleWindow]
+    ) -> Int {
+        let orderedIndex = orderedWindows.firstIndex(where: { $0.windowID == candidate.windowID })
+        let orderedMatch = orderedIndex.flatMap { orderedWindows[$0] }
+        let hasTitle = !(candidate.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let area = candidate.frame.width * candidate.frame.height
+
+        var score = 0
+        if let orderedIndex {
+            score += max(0, 1_000 - (orderedIndex * 20))
+        }
+        if orderedMatch?.layer == 0 {
+            score += 400
+        }
+        if hasTitle {
+            score += 250
+        }
+        if area >= 120_000 {
+            score += 150
+        } else if area >= 40_000 {
+            score += 75
+        }
+        return score
+    }
+}
+
+@MainActor
+private enum ScreenImageCapture {
+    private static let protectedFrontmostBundleIDs: Set<String> = [
+        "com.apple.loginwindow",
+        "com.apple.WindowManager",
+    ]
+
+    private static let protectedFrontmostNames: Set<String> = [
+        "loginwindow",
+        "windowmanager",
+    ]
+
+    static func capture(appName: String?) async throws -> CGImage {
+        NSLog("ScreenImageCapture: resolving shareable content app=%@", appName ?? "<all>")
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        NSLog(
+            "ScreenImageCapture: content displays=%d windows=%d applications=%d",
+            content.displays.count,
+            content.windows.count,
+            content.applications.count
+        )
+
+        let filter: SCContentFilter
+        let orderedWindows = DesktopWindowSelection.orderedVisibleWindows()
+        let candidates = content.windows.compactMap { window -> DesktopWindowSelection.CaptureWindowCandidate? in
+            guard let app = window.owningApplication else { return nil }
+            return DesktopWindowSelection.CaptureWindowCandidate(
+                windowID: window.windowID,
+                processID: app.processID,
+                appName: app.applicationName,
+                title: window.title,
+                frame: window.frame
+            )
+        }
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let frontmostPID: pid_t? = {
+            guard let frontmostApp, !isProtectedFrontmostTarget(frontmostApp) else { return nil }
+            return frontmostApp.processIdentifier
+        }()
+
+        if let targetCandidate = DesktopWindowSelection.selectCaptureWindow(
+            candidates: candidates,
+            preferredAppName: appName,
+            frontmostPID: frontmostPID,
+            orderedWindows: orderedWindows
+        ),
+           let targetWindow = content.windows.first(where: { $0.windowID == targetCandidate.windowID })
+        {
+            NSLog(
+                "ScreenImageCapture: targeting window app=%@ title=%@ windowID=%@",
+                targetCandidate.appName,
+                targetCandidate.title ?? "<untitled>",
+                String(targetWindow.windowID)
+            )
+            filter = SCContentFilter(desktopIndependentWindow: targetWindow)
+        } else if appName != nil, let display = content.displays.first {
+            NSLog(
+                "ScreenImageCapture: app matched but no usable window found, falling back to display %@",
+                String(display.displayID)
+            )
+            filter = SCContentFilter(display: display, excludingWindows: [])
+        } else if frontmostApp != nil {
+            let display = try displayForActiveContext(in: content)
+            NSLog(
+                "ScreenImageCapture: frontmost app had no usable window, falling back to display %@",
+                String(display.displayID)
+            )
+            filter = SCContentFilter(display: display, excludingWindows: [])
+        } else {
+            let display = try displayForActiveContext(in: content)
+            NSLog("ScreenImageCapture: no frontmost app, targeting display %@", String(display.displayID))
+            filter = SCContentFilter(display: display, excludingWindows: [])
+        }
+
+        let config = SCStreamConfiguration()
+        config.width = 1920
+        config.height = 1080
+        config.scalesToFit = true
+        config.showsCursor = false
+
+        NSLog("ScreenImageCapture: captureImage starting")
+        let image = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: config
+        )
+        NSLog("ScreenImageCapture: captureImage finished size=%dx%d", image.width, image.height)
+        return image
+    }
+
+    private static func displayForActiveContext(in content: SCShareableContent) throws -> SCDisplay {
+        let mouseLocation = NSEvent.mouseLocation
+        if let pointedDisplay = content.displays.first(where: { $0.frame.contains(mouseLocation) }) {
+            return pointedDisplay
+        }
+        if let mainScreenID = NSScreen.main?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+           let mainDisplay = content.displays.first(where: { $0.displayID == CGDirectDisplayID(mainScreenID.uint32Value) })
+        {
+            return mainDisplay
+        }
+        if let firstDisplay = content.displays.first {
+            return firstDisplay
+        }
+        throw ScreenshotTool.ScreenshotError.noDisplay
+    }
+
+    private static func isProtectedFrontmostTarget(_ app: NSRunningApplication) -> Bool {
+        if let bundleID = app.bundleIdentifier, protectedFrontmostBundleIDs.contains(bundleID) {
+            return true
+        }
+        if let name = app.localizedName?.lowercased(), protectedFrontmostNames.contains(name) {
+            return true
+        }
+        return false
+    }
+}
+
 // MARK: - Screenshot Tool
 
 /// Captures the screen (or a specific app window) and describes it via the VLM.
@@ -64,7 +315,9 @@ struct ScreenshotTool: Tool {
         // Capture the screen or specific app window.
         let image: CGImage
         do {
+            NSLog("ScreenshotTool: capture starting app=%@", appName ?? "<all>")
             image = try await captureScreen(appName: appName)
+            NSLog("ScreenshotTool: capture finished size=%dx%d", image.width, image.height)
         } catch {
             return .error("Screenshot failed: \(error.localizedDescription)")
         }
@@ -78,11 +331,13 @@ struct ScreenshotTool: Tool {
         )
 
         var result = ""
+        NSLog("ScreenshotTool: vlm describe starting prompt=%@", prompt)
         let stream = await vlm.describe(image: image, prompt: prompt, options: options)
         do {
             for try await chunk in stream {
                 result += chunk
             }
+            NSLog("ScreenshotTool: vlm describe finished chars=%d", result.count)
         } catch {
             return .error("VLM description failed: \(error.localizedDescription)")
         }
@@ -94,40 +349,11 @@ struct ScreenshotTool: Tool {
 
     /// Capture the screen or a specific app window using ScreenCaptureKit.
     private func captureScreen(appName: String?) async throws -> CGImage {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-
-        let filter: SCContentFilter
-        if let appName, let app = content.applications.first(where: {
-            $0.applicationName.localizedCaseInsensitiveContains(appName)
-        }) {
-            let windows = content.windows.filter { $0.owningApplication?.processID == app.processID }
-            if let targetWindow = windows.first ?? content.windows.first {
-                filter = SCContentFilter(desktopIndependentWindow: targetWindow)
-            } else if let display = content.displays.first {
-                filter = SCContentFilter(display: display, excludingWindows: [])
-            } else {
-                throw ScreenshotError.noDisplay
-            }
-        } else {
-            guard let display = content.displays.first else {
-                throw ScreenshotError.noDisplay
-            }
-            filter = SCContentFilter(display: display, excludingWindows: [])
-        }
-
-        let config = SCStreamConfiguration()
-        config.width = 1920
-        config.height = 1080
-        config.scalesToFit = true
-        config.showsCursor = false
-
-        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        return image
+        try await ScreenImageCapture.capture(appName: appName)
     }
 
     enum ScreenshotError: LocalizedError {
         case noDisplay
-
         var errorDescription: String? {
             switch self {
             case .noDisplay:
@@ -364,16 +590,19 @@ struct ReadScreenTool: Tool {
         if let provider = vlmProvider, let vlm = try await provider() {
             do {
                 let image = try await captureScreen(appName: appName)
+                NSLog("ReadScreenTool: capture finished size=%dx%d", image.width, image.height)
                 let options = GenerationOptions(
                     temperature: 0.3, topP: 0.9, maxTokens: 512, suppressThinking: true
                 )
                 var desc = ""
+                NSLog("ReadScreenTool: vlm describe starting")
                 let stream = await vlm.describe(
                     image: image,
                     prompt: "Briefly describe what's visible on screen. Focus on the main app and its state.",
                     options: options
                 )
                 for try await chunk in stream { desc += chunk }
+                NSLog("ReadScreenTool: vlm describe finished chars=%d", desc.count)
                 visualDescription = "Visual overview: \(desc)\n\n"
             } catch {
                 visualDescription = "Visual capture unavailable: \(error.localizedDescription)\n\n"
@@ -384,34 +613,7 @@ struct ReadScreenTool: Tool {
     }
 
     private func captureScreen(appName: String?) async throws -> CGImage {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-
-        let filter: SCContentFilter
-        if let appName, let app = content.applications.first(where: {
-            $0.applicationName.localizedCaseInsensitiveContains(appName)
-        }) {
-            let windows = content.windows.filter { $0.owningApplication?.processID == app.processID }
-            if let targetWindow = windows.first ?? content.windows.first {
-                filter = SCContentFilter(desktopIndependentWindow: targetWindow)
-            } else if let display = content.displays.first {
-                filter = SCContentFilter(display: display, excludingWindows: [])
-            } else {
-                throw ScreenshotTool.ScreenshotError.noDisplay
-            }
-        } else {
-            guard let display = content.displays.first else {
-                throw ScreenshotTool.ScreenshotError.noDisplay
-            }
-            filter = SCContentFilter(display: display, excludingWindows: [])
-        }
-
-        let config = SCStreamConfiguration()
-        config.width = 1920
-        config.height = 1080
-        config.scalesToFit = true
-        config.showsCursor = false
-
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        try await ScreenImageCapture.capture(appName: appName)
     }
 }
 
@@ -497,6 +699,44 @@ struct TypeTextTool: Tool {
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"type_text","arguments":{"text":"Hello world","element_index":5,"app":"Notes"}}</tool_call>"#
 
+    private struct ResolvedTypingTarget: Sendable {
+        let pid: pid_t
+        let appName: String
+    }
+
+    private struct PasteboardSnapshot {
+        let items: [[NSPasteboard.PasteboardType: Data]]
+
+        static func capture(from pasteboard: NSPasteboard) -> PasteboardSnapshot {
+            let items = pasteboard.pasteboardItems?.map { item in
+                Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
+                    item.data(forType: type).map { (type, $0) }
+                })
+            } ?? []
+            return PasteboardSnapshot(items: items)
+        }
+
+        func restore(to pasteboard: NSPasteboard) {
+            pasteboard.clearContents()
+            let restoredItems = items.map { itemData -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, data) in itemData {
+                    item.setData(data, forType: type)
+                }
+                return item
+            }
+            if !restoredItems.isEmpty {
+                pasteboard.writeObjects(restoredItems)
+            }
+        }
+    }
+
+    private static let preferredTextRoles: Set<String> = [
+        kAXTextAreaRole as String,
+        kAXTextFieldRole as String,
+        kAXComboBoxRole as String,
+    ]
+
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let text = input["text"] as? String, !text.isEmpty else {
             return .error("Missing required parameter: text")
@@ -529,29 +769,206 @@ struct TypeTextTool: Tool {
             }
         }
 
-        // Fallback: keystroke synthesis at current cursor position.
-        guard let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              !AccessibilityBridge.isDeniedAutomationTarget(pid: frontmostPID)
+        // Fallback: activate the real target app, paste the text, and verify it landed.
+        let orderedVisibleWindows = DesktopWindowSelection.orderedVisibleWindows()
+        guard let target = await Self.resolveTypingTarget(
+            explicitAppName: input["app"] as? String,
+            orderedVisibleWindows: orderedVisibleWindows
+        )
         else {
+            return .error("Couldn't determine which app to type into. Bring the target window to the foreground or specify an app.")
+        }
+
+        if AccessibilityBridge.isDeniedAutomationTarget(pid: target.pid) {
             return .error("Refusing to type into a protected system surface.")
         }
 
-        for char in text {
-            let str = String(char)
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-                continue
-            }
-            var unicodeChars = Array(str.utf16)
-            event.keyboardSetUnicodeString(stringLength: unicodeChars.count, unicodeString: &unicodeChars)
-            event.post(tap: .cghidEventTap)
-
-            guard let upEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
-                continue
-            }
-            upEvent.post(tap: .cghidEventTap)
+        guard await Self.activateTargetApp(target) else {
+            return .error("Bring \(target.appName) to the foreground before typing.")
         }
 
-        return .success("Typed text at cursor position (\(text.count) chars).")
+        let beforeSnapshot = Self.focusedSnapshot(pid: target.pid)
+        if beforeSnapshot?.isSecureInput == true {
+            return .error("Refusing to type into a secure text field.")
+        }
+
+        let beforeValue = Self.preferredTextValue(appName: target.appName) ?? beforeSnapshot?.value
+
+        if let targetElement = Self.preferredTextElement(appName: target.appName) {
+            if targetElement.isSecureInput {
+                return .error("Refusing to type into a secure text field.")
+            }
+
+            let replacementValue = (targetElement.value ?? beforeValue ?? "") + text
+            do {
+                try AccessibilityBridge.setValue(replacementValue, pid: targetElement.pid, frame: targetElement.frame)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                let afterValue = Self.preferredTextValue(appName: target.appName) ?? Self.focusedSnapshot(pid: target.pid)?.value
+                if Self.didVerifyTypedText(text, beforeValue: beforeValue, afterValue: afterValue) {
+                    return .success("Typed text in \(target.appName) (\(text.count) chars).")
+                }
+            } catch {
+                // Fall back to paste-based input when AX value mutation is unavailable.
+            }
+        }
+
+        guard await Self.pasteText(text) else {
+            return .error("Failed to synthesize paste input.")
+        }
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard let afterSnapshot = Self.focusedSnapshot(pid: target.pid) else {
+            return .error("Typing could not be verified in \(target.appName). Bring the text field to the foreground or use read_screen first.")
+        }
+        if afterSnapshot.isSecureInput {
+            return .error("Refusing to type into a secure text field.")
+        }
+        let afterValue = Self.preferredTextValue(appName: target.appName) ?? afterSnapshot.value
+        guard Self.didVerifyTypedText(text, beforeValue: beforeValue, afterValue: afterValue) else {
+            return .error("Typing could not be verified in \(target.appName). Bring the text field to the foreground or use read_screen first.")
+        }
+
+        return .success("Typed text in \(target.appName) (\(text.count) chars).")
+    }
+
+    private static func focusedSnapshot(pid: pid_t) -> AccessibilityBridge.FocusedElementSnapshot? {
+        do {
+            return try AccessibilityBridge.focusedElementSnapshot(pid: pid)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func preferredTextElement(appName: String) -> AccessibilityBridge.UIElement? {
+        do {
+            return try AccessibilityBridge.queryElements(appName: appName)
+                .filter { preferredTextRoles.contains($0.role) && $0.isEnabled && !$0.isSecureInput }
+                .max { lhs, rhs in
+                    (lhs.frame.width * lhs.frame.height) < (rhs.frame.width * rhs.frame.height)
+                }
+        } catch {
+            return nil
+        }
+    }
+
+    private static func preferredTextValue(appName: String) -> String? {
+        preferredTextElement(appName: appName)?.value
+    }
+
+    private static func didVerifyTypedText(
+        _ text: String,
+        beforeValue: String?,
+        afterValue: String?
+    ) -> Bool {
+        guard let normalizedText = normalize(text),
+              let normalizedAfterValue = normalize(afterValue),
+              normalizedAfterValue.contains(normalizedText)
+        else {
+            return false
+        }
+
+        let normalizedBeforeValue = normalize(beforeValue)
+        return normalizedBeforeValue != normalizedAfterValue
+    }
+
+    private static func normalize(_ value: String?) -> String? {
+        value?
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    @MainActor
+    private static func resolveTypingTarget(
+        explicitAppName: String?,
+        orderedVisibleWindows: [DesktopWindowSelection.VisibleWindow]
+    ) -> ResolvedTypingTarget? {
+        if let explicitAppName,
+           let app = NSWorkspace.shared.runningApplications.first(where: {
+               $0.localizedName?.localizedCaseInsensitiveContains(explicitAppName) == true
+           }),
+           let appName = app.localizedName
+        {
+            return ResolvedTypingTarget(pid: app.processIdentifier, appName: appName)
+        }
+
+        let excludedAppNames: Set<String> = [
+            "fae",
+            "loginwindow",
+            "windowmanager",
+            "system settings",
+            "keychain access",
+            "securityagent",
+        ]
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        if let frontmostApp,
+           let frontmostName = frontmostApp.localizedName,
+           !excludedAppNames.contains(frontmostName.lowercased())
+        {
+            return ResolvedTypingTarget(pid: frontmostApp.processIdentifier, appName: frontmostName)
+        }
+
+        guard let targetName = DesktopWindowSelection.resolveFallbackTypingTargetName(
+            explicitAppName: nil,
+            frontmostAppName: frontmostApp?.localizedName,
+            orderedWindows: orderedVisibleWindows,
+            excludedAppNames: excludedAppNames
+        ),
+        let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.localizedName == targetName || $0.localizedName?.localizedCaseInsensitiveContains(targetName) == true
+        }),
+        let appName = app.localizedName
+        else {
+            return nil
+        }
+
+        return ResolvedTypingTarget(pid: app.processIdentifier, appName: appName)
+    }
+
+    @MainActor
+    private static func activateTargetApp(_ target: ResolvedTypingTarget) async -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: target.pid) else {
+            return false
+        }
+        _ = app.activate()
+        for _ in 0..<15 {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
+    }
+
+    @MainActor
+    private static func pasteText(_ text: String) -> Bool {
+        let pasteboard = NSPasteboard.general
+        let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+        defer { snapshot.restore(to: pasteboard) }
+
+        pasteboard.clearContents()
+        guard pasteboard.setString(text, forType: .string) else {
+            return false
+        }
+
+        let source = CGEventSource(stateID: .hidSystemState)
+        let commandKey: CGKeyCode = 55
+        let vKey: CGKeyCode = 9
+        guard let commandDown = CGEvent(keyboardEventSource: source, virtualKey: commandKey, keyDown: true),
+              let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
+              let vUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false),
+              let commandUp = CGEvent(keyboardEventSource: source, virtualKey: commandKey, keyDown: false)
+        else {
+            return false
+        }
+
+        vDown.flags = .maskCommand
+        vUp.flags = .maskCommand
+
+        commandDown.post(tap: .cghidEventTap)
+        vDown.post(tap: .cghidEventTap)
+        vUp.post(tap: .cghidEventTap)
+        commandUp.post(tap: .cghidEventTap)
+        return true
     }
 }
 

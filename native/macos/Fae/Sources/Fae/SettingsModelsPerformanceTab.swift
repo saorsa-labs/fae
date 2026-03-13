@@ -61,22 +61,13 @@ struct SettingsModelsPerformanceTab: View {
     @State private var estimatedKVSavings: String = "~4x"
     @State private var wakeTemplateCount: Int = 0
 
-    private let voiceModelOptions: [(label: String, value: String, ram: String)] = [
-        ("Auto (Recommended)", "auto", "12+ GB"),
-        ("saorsa1-worker", "saorsa1-worker", "12+ GB"),
-        ("saorsa1-tiny", "saorsa1-tiny", "8+ GB"),
-    ]
+    private let voiceModelOptions = LocalModelCatalog.voiceOptions
 
     private let conciergeModelOptions: [(label: String, value: String, ram: String)] = [
-        ("Auto (Recommended)", "auto", "32+ GB"),
-        ("saorsa1-concierge", "saorsa1-concierge", "32+ GB"),
+        ("Auto (Legacy)", "auto", "32+ GB"),
     ]
 
-    private let visionModelOptions: [(label: String, value: String)] = [
-        ("Auto", "auto"),
-        ("Qwen3-VL-4B (8-bit)", "qwen3_vl_4b_8bit"),
-        ("Qwen3-VL-4B (4-bit)", "qwen3_vl_4b_4bit"),
-    ]
+    private let visionModelOptions = LocalModelCatalog.visionOptions
 
     var body: some View {
         VStack(spacing: 0) {
@@ -113,6 +104,15 @@ struct SettingsModelsPerformanceTab: View {
                     await hydrateFromBackendConfig()
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .faePipelineState)) { _ in
+            loadSystemInfo()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .faeRuntimeState)) { _ in
+            loadSystemInfo()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .faeModelLoaded)) { _ in
+            loadSystemInfo()
         }
     }
 
@@ -200,9 +200,13 @@ struct SettingsModelsPerformanceTab: View {
                         }
                     }
 
+                    if let cacheStatus = LocalModelCatalog.voiceCacheStatus(for: voiceModelPreset) {
+                        cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
+                    }
+
                     Text(dualModelEnabled
-                         ? "Operator uses the saorsa1 local companion weights. Concierge uses saorsa1-concierge for richer synthesis when RAM allows."
-                         : "Single-model mode uses only the operator model.")
+                         ? "Single-model Qwen is the recommended path. Dual-model remains available as a legacy option."
+                         : "Single-model mode uses the selected Qwen3.5 operator model.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -252,6 +256,10 @@ struct SettingsModelsPerformanceTab: View {
                             guard !hydratingFromConfig else { return }
                             patchConfig("vision.model_preset", value: visionModelPreset)
                             showRestartNotice = true
+                        }
+
+                        if let cacheStatus = LocalModelCatalog.visionCacheStatus(for: visionModelPreset) {
+                            cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
                         }
                     }
 
@@ -580,7 +588,7 @@ struct SettingsModelsPerformanceTab: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Restart Required")
                     .font(.subheadline.weight(.semibold))
-                Text("Some changes require restarting Fae to take effect.")
+                Text("Fae reloads the local pipeline automatically for model changes. First-time downloads can take a while.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -599,14 +607,15 @@ struct SettingsModelsPerformanceTab: View {
 
         let config = FaeConfig.load()
         let plan = FaeConfig.recommendedLocalModelStack(config: config)
-        let operatorModel = UserDefaults.standard.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
-        let conciergeModel = UserDefaults.standard.string(forKey: "fae.loaded_concierge_model_id")
-
-        if plan.dualModelActive, let conciergeModel {
-            loadedModel = "Operator: \((operatorModel.components(separatedBy: "/").last ?? operatorModel)) · Concierge: \((conciergeModel.components(separatedBy: "/").last ?? conciergeModel))"
-        } else {
-            loadedModel = operatorModel.components(separatedBy: "/").last ?? operatorModel
-        }
+        let defaults = UserDefaults.standard
+        loadedModel = LocalModelStatusFormatter.stackSummary(
+            plan: plan,
+            loadedOperatorModelId: defaults.string(forKey: "fae.loaded_model_id"),
+            loadedConciergeModelId: defaults.string(forKey: "fae.loaded_concierge_model_id"),
+            conciergeLoaded: defaults.bool(forKey: "fae.runtime.concierge_loaded"),
+            conciergeRuntime: defaults.string(forKey: "fae.runtime.concierge_runtime"),
+            conciergeWorkerLastError: defaults.string(forKey: "fae.runtime.concierge_worker_last_error")
+        )
 
         updateEstimatedSavings()
     }
@@ -627,6 +636,17 @@ struct SettingsModelsPerformanceTab: View {
                 name: "config.patch",
                 payload: ["key": key, "value": NSNull()]
             )
+        }
+    }
+
+    @ViewBuilder
+    private func cacheStatusView(_ text: String, cached: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: cached ? "internaldrive.fill" : "arrow.down.circle")
+                .foregroundStyle(cached ? .green : .orange)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

@@ -215,6 +215,7 @@ struct SettingsDeveloperTab: View {
         switch tool {
         case "read", "write", "edit": return "Files"
         case "bash": return "Execution"
+        case "session_search": return "Memory"
         case "web_search", "fetch_url": return "Network"
         case "run_skill", "manage_skill", "activate_skill": return "Skills"
         case "calendar", "reminders", "contacts", "mail", "notes": return "Apple"

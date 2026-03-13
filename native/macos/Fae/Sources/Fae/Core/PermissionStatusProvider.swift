@@ -64,7 +64,7 @@ enum PermissionStatusProvider {
     private static func isEventKitAuthorized(for entityType: EKEntityType) -> Bool {
         let status = EKEventStore.authorizationStatus(for: entityType)
         if #available(macOS 14.0, *) {
-            return status == .fullAccess
+            return status == .fullAccess || status == .writeOnly
         } else {
             return status == .authorized
         }
