@@ -31,6 +31,7 @@ This guide covers testing the Fae scheduler and tool system, including scheduler
 | `stale_relationships` | Stale Relationships | Weekly Sunday 10:00 | Detect relationships needing check-in | `runStaleRelationships()` |
 | `morning_briefing` | Morning Briefing | Daily 08:00 | Compile morning briefing (suppressed when enhanced active) | `runMorningBriefing()` |
 | `skill_proposals` | Skill Proposals | Daily 11:00 | Detect skill opportunities from interests | `runSkillProposals()` |
+| `skill_distill` | Skill Distill | Daily 13:00 | Stage reviewable skill drafts from repeated successful workflows | `runSkillDistill()` |
 | `skill_health_check` | Skill Health Check | Every 5 minutes | Python skill health checks | `runSkillHealthCheck()` |
 | `vault_backup` | Git Vault Backup | Daily 02:30 | Full snapshot to `~/.fae-vault/` | `runVaultBackup()` |
 | `camera_presence_check` | Camera Presence | Every 30s (adaptive) | User presence detection | `runCameraPresenceCheck()` |
@@ -93,13 +94,13 @@ Implementation in `SchedulerTriggerTool`:
 
 ### Tool Inventory
 
-**Total: 33 tools**
+**Total: 34 tools**
 
 Breakdown by category:
 
 | Category | Count | Tools |
 |----------|-------|-------|
-| Core | 9 | read, write, edit, bash, self_config, channel_setup, window_control, web_search, fetch_url |
+| Core | 10 | read, write, edit, bash, self_config, channel_setup, window_control, session_search, web_search, fetch_url |
 | Skills | 3 | activate_skill, run_skill, manage_skill |
 | Delegation | 1 | delegate_agent |
 | User Input | 1 | input_request |
@@ -108,7 +109,7 @@ Breakdown by category:
 | Roleplay | 1 | roleplay |
 | Vision | 7 | screenshot, camera, read_screen, click, type_text, scroll, find_element |
 | Voice Identity | 1 | voice_identity |
-| **Total** | **33** | |
+| **Total** | **34** | |
 
 ### Tool Modes & Filtering
 
@@ -128,7 +129,7 @@ The registry supports 5 permission modes:
 
 **15 tools** (always safe):
 ```
-read, window_control, web_search, fetch_url,
+read, window_control, session_search, web_search, fetch_url,
 calendar, reminders, contacts, mail, notes,
 scheduler_list, roleplay, activate_skill, input_request, find_element, voice_identity
 ```
@@ -152,12 +153,12 @@ screenshot, camera, read_screen, click, type_text, scroll
 
 ### Testing Checklist
 
-- [ ] **Tool Count**: Verify 33 tools are registered: `ToolRegistry.buildDefault().allTools.count == 33`
+- [ ] **Tool Count**: Verify 34 tools are registered: `ToolRegistry.buildDefault().allTools.count == 34`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
   - `off`: zero tools
-  - `read_only`: 15 tools (no write, no bash)
-  - `read_write`: 31 tools (no bash)
-  - `full` / `full_no_approval`: 33 tools
+  - `read_only`: 16 tools (no write, no bash)
+  - `read_write`: 32 tools (no bash)
+  - `full` / `full_no_approval`: 34 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels
