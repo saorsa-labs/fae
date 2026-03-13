@@ -1,0 +1,62 @@
+FaeBenchmark — 1 model(s)
+Hardware: arm64, 96 GB RAM
+Backend: mlx-swift-lm (native Swift)
+Dimensions: throughput=false, no_think=false, ram=true, tools=true, intelligence=false, fae_capabilities=false, assistant_fit=false, serialization=false
+
+======================================================================
+  qwen3.5-35b-a3b (mlx-community/Qwen3.5-35B-A3B-4bit)
+======================================================================
+  Loading qwen3.5-35b-a3b (mlx-community/Qwen3.5-35B-A3B-4bit)...
+  Using xmlFunction tool-call parser.
+  Loaded.
+
+  Measuring idle RAM...
+    Idle RAM: 18821 MB
+  Warming up (3 throwaway generations)...
+
+  Tool calling (temp=0.0):
+    Tool test: What's on my calendar tomorrow?... OK (expected=calendar, got=calendar)
+    Tool test: Remind me to buy groceries at 5pm... OK (expected=reminders, got=reminders)
+    Tool test: Search the web for the latest news about Apple... OK (expected=web_search, got=web_search)
+    Tool test: Send an email to john@example.com saying I'll be l... OK (expected=mail, got=mail)
+    Tool test: What's David's phone number?... OK (expected=contacts, got=contacts)
+    Tool test: Create a note called Shopping List with milk, eggs... OK (expected=notes, got=notes)
+    Tool test: Read the file at ~/Documents/todo.txt... OK (expected=read, got=read)
+    Tool test: Can you look something up for me about quantum com... OK (expected=web_search, got=web_search)
+    Tool test: How are you feeling today?... OK (expected=none, got=none)
+    Tool test: Tell me a joke about programming... OK (expected=none, got=none)
+
+JSON results saved to: /Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35_rerun2_20260313-090626/qwen3.5-35b-a3b.json
+
+======================================================================
+MARKDOWN OUTPUT
+======================================================================
+## MLX Benchmark Results (Swift)
+
+**Hardware:** Apple Silicon, 96 GB unified memory
+**Quantization:** 4-bit (MLX)
+**Backend:** mlx-swift-lm (native Swift, same stack as Fae)
+**Date:** 2026-03-13
+
+### Model Summary
+
+| Model | Idle RAM | Peak T/s (no_think) | ~500 tok T/s | 8.5K ctx T/s |
+|---|---:|---:|---:|---:|
+| qwen3.5-35b-a3b | 18821 MB | 0 | 0 | 0 |
+
+### Speed by Context Size — /no_think
+
+| Context | qwen3.5-35b-a3b |
+|---|---:|
+
+### Speed by Context Size — Thinking ON
+
+| Context | qwen3.5-35b-a3b |
+|---|---:|
+
+### Tool Calling Accuracy
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.5-35b-a3b | 10 | 10 | 100% |
+

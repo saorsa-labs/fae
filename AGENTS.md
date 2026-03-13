@@ -78,6 +78,7 @@ Record semantics:
   - `noise_budget_reset` daily 00:00
   - `morning_briefing` daily (configurable hour)
   - `skill_proposals` daily (configurable hour)
+  - `skill_distill` daily 13:00
   - `stale_relationships` weekly
   - `skill_health_check` every 5m
 
@@ -87,7 +88,7 @@ Record semantics:
 
 Registered built-ins (ToolRegistry):
 
-- Core/web: `read`, `write`, `edit`, `bash`, `self_config`, `web_search`, `fetch_url`
+- Core/web: `read`, `write`, `edit`, `bash`, `self_config`, `session_search`, `web_search`, `fetch_url`
 - Apple: `calendar`, `reminders`, `contacts`, `mail`, `notes`
 - Scheduler: `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger`
 - Roleplay: `roleplay`

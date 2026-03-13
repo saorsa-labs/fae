@@ -1,0 +1,30 @@
+warning: 'mlx-audio-swift': found 2 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/MLXAudioVAD/Models/SmartTurn/README.md
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/MLXAudioVAD/Models/Sortformer/README.md
+warning: 'mlx-audio-swift': found 2 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/MLXAudioSTS/Models/LFMAudio/README.md
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/MLXAudioSTS/Models/SAMAudio/README.md
+warning: 'mlx-audio-swift': found 1 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/Tools/mlx-audio-swift-tts/README.md
+warning: 'mlx-audio-swift': found 1 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/Tools/mlx-audio-swift-codec/README.md
+warning: 'mlx-audio-swift': found 1 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/Tools/mlx-audio-swift-sts/README.md
+warning: 'mlx-audio-swift': found 1 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/Vendor/mlx-audio-swift/Sources/Tools/mlx-audio-swift-stt/README.md
+[0/1] Planning build
+Building for debugging...
+[0/3] Write swift-version--58304C5D6DBC2206.txt
+Build of product 'FaeBenchmark' complete! (4.11s)
+FaeBenchmark — 1 model(s)
+Hardware: arm64, 96 GB RAM
+Backend: mlx-swift-lm (native Swift)
+Dimensions: throughput=false, no_think=false, ram=true, tools=true, intelligence=true, fae_capabilities=true, assistant_fit=true, serialization=true
+Eval profile: temporary Qwen-calibrated prompts enabled
+
+======================================================================
+  qwen3.5-2b (mlx-community/Qwen3.5-2B-4bit)
+======================================================================
+  Loading qwen3.5-2b (mlx-community/Qwen3.5-2B-4bit)...
+  Using xmlFunction tool-call parser.
+MLX error: Failed to load the default metallib. library not found library not found library not found library not found  at /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/.build/checkouts/mlx-swift/Source/Cmlx/mlx-c/mlx/c/stream.cpp:115

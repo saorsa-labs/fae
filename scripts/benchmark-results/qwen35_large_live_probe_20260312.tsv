@@ -1,0 +1,3 @@
+preset	load_seconds	peak_main_rss_mb	peak_worker_rss_mb	peak_total_rss_mb	ttfa_ms	tool_path
+qwen3_5_27b	17	1812	14710	16522		none
+qwen3_5_35b_a3b	13	2213	18874	21087		none

@@ -117,7 +117,13 @@ actor ConversationStateTracker {
         // Second pass: token-aware truncation (if budget is configured).
         guard contextBudget > 0 else { return }
         let available = contextBudget - reservedTokens
-        guard available > 0 else { return }
+        if available <= 0 {
+            // Budget exhausted by system prompt — keep only the most recent pair.
+            while history.count > 2 {
+                history.removeFirst()
+            }
+            return
+        }
 
         while history.count > 2, estimateTokenCount() > available {
             history.removeFirst()

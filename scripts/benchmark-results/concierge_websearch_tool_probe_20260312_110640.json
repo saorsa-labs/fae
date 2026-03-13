@@ -1,0 +1,90 @@
+{
+  "hardware": {
+    "arch": "arm64",
+    "ram_gb": 96
+  },
+  "date": "2026-03-12",
+  "backend": "mlx-lm",
+  "models": [
+    {
+      "model_id": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+      "model_short": "LFM2-24B-A2B-MLX-4bit",
+      "idle_ram_mb": 0.0,
+      "throughput_no_think": [],
+      "throughput_think_on": [],
+      "no_think_compliance": [],
+      "tool_calling": [
+        {
+          "prompt": "What's on my calendar tomorrow?",
+          "expected_tool": "calendar",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Remind me to buy groceries at 5pm",
+          "expected_tool": "reminders",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Search the web for the latest news about Apple",
+          "expected_tool": "web_search",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "expected_tool": "mail",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "What's David's phone number?",
+          "expected_tool": "contacts",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "expected_tool": "notes",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "expected_tool": "read",
+          "actual_tool": "read",
+          "correct": true,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Can you look something up for me about quantum computing?",
+          "expected_tool": "web_search",
+          "actual_tool": "none",
+          "correct": false,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "How are you feeling today?",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "correct": true,
+          "temperature": 0.2
+        },
+        {
+          "prompt": "Tell me a joke about programming",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "correct": true,
+          "temperature": 0.2
+        }
+      ]
+    }
+  ]
+}

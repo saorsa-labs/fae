@@ -1,0 +1,128 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-12",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "assistant_fit_eval" : [
+
+      ],
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "mlx-community\/Qwen3.5-35B-A3B-4bit",
+      "model_short" : "Qwen3.5-35B-A3B-4bit",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "calendar",
+          "prompt" : "What's on my calendar tomorrow?",
+          "raw_response_preview" : "The user is asking about their calendar for tomorrow. I need to use the calendar tool to check what's scheduled. Since they're asking about \"tomorrow\", I should use the list_date action with tomorrow's date. However, I don't know what today's date is, so I'll need to make a reasonable assumption or ",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "reminders",
+          "correct" : true,
+          "expected_tool" : "reminders",
+          "prompt" : "Remind me to buy groceries at 5pm",
+          "raw_response_preview" : "The user wants to set a reminder to buy groceries at 5pm. I need to use the reminders tool to create this reminder. Looking at the reminders function, it has these parameters:\\n- action: One of list_incomplete, create, complete, search\\n- query: optional\\n- title: optional\\n\\nTo create a reminder, I shou",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Search the web for the latest news about Apple",
+          "raw_response_preview" : "The user wants me to search the web for the latest news about Apple. I should use the web_search function with \"Apple\" as the query.\\n<\/think>\\n\\n<tool_call>\\n<function=web_search>\\n<parameter=query>\\nApple latest news\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "mail",
+          "correct" : true,
+          "expected_tool" : "mail",
+          "prompt" : "Send an email to john@example.com saying I'll be late",
+          "raw_response_preview" : "The user wants to send an email to john@example.com saying they'll be late. I need to use the mail tool to send this email. Looking at the mail function parameters:\\n\\n- action: \"send\" (required)\\n- to: \"john@example.com\" (optional but provided)\\n- body: \"I'll be late\" (optional but provided)\\n- count: n",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "contacts",
+          "correct" : true,
+          "expected_tool" : "contacts",
+          "prompt" : "What's David's phone number?",
+          "raw_response_preview" : "The user is asking for David's phone number. This is a contacts query, so I need to use the contacts tool to search for David and get his phone number.\\n\\nI'll use the contacts function with action \"search\" to find David, and then use \"get_phone\" to get his phone number.\\n<\/think>\\n\\n<tool_call>\\n<functio",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "notes",
+          "correct" : true,
+          "expected_tool" : "notes",
+          "prompt" : "Create a note called Shopping List with milk, eggs, bread",
+          "raw_response_preview" : "The user wants me to create a note called \"Shopping List\" with the items milk, eggs, and bread. I need to use the notes tool to create this note.\\n\\nLooking at the notes function parameters:\\n- action: \"create\" (required)\\n- title: \"Shopping List\" (optional but provided by user)\\n- body: \"milk, eggs, bre",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "read",
+          "correct" : true,
+          "expected_tool" : "read",
+          "prompt" : "Read the file at ~\/Documents\/todo.txt",
+          "raw_response_preview" : "The user wants me to read a file at ~\/Documents\/todo.txt. I need to use the read function to access this file.\\n<\/think>\\n\\n<tool_call>\\n<function=read>\\n<parameter=path>\\n~\/Documents\/todo.txt\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Can you look something up for me about quantum computing?",
+          "raw_response_preview" : "The user is asking me to look up information about quantum computing. This is a web search request, so I should use the web_search function to find information about quantum computing.\\n<\/think>\\n\\n<tool_call>\\n<function=web_search>\\n<parameter=query>\\nquantum computing\\n<\/parameter>\\n<\/function\\n<\/tool_call",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "How are you feeling today?",
+          "raw_response_preview" : "The user is asking how I'm feeling today. This is a simple conversational question that doesn't require any tools. I should respond naturally and conversationally.\\n<\/think>\\n\\nI'm doing well, thank you for asking! How about you? How's your day going so far?",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "Tell me a joke about programming",
+          "raw_response_preview" : "The user is asking me to tell them a joke about programming. This is a simple conversation request that doesn't require any tools. I should just respond with a programming joke directly.\\n<\/think>\\n\\nWhy do programmers prefer dark mode?\\n\\nBecause light attracts bugs! 🐛\\n\\nHere's another one:\\n\\nA programmer",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        }
+      ]
+    }
+  ]
+}

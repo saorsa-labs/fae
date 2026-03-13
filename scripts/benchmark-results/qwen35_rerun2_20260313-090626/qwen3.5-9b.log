@@ -1,0 +1,194 @@
+FaeBenchmark — 1 model(s)
+Hardware: arm64, 96 GB RAM
+Backend: mlx-swift-lm (native Swift)
+Dimensions: throughput=false, no_think=false, ram=true, tools=true, intelligence=true, fae_capabilities=true, assistant_fit=true, serialization=true
+Eval profile: temporary Qwen-calibrated prompts enabled
+
+======================================================================
+  qwen3.5-9b (mlx-community/Qwen3.5-9B-4bit)
+======================================================================
+  Loading qwen3.5-9b (mlx-community/Qwen3.5-9B-4bit)...
+  Using xmlFunction tool-call parser.
+  Loaded.
+
+  Measuring idle RAM...
+    Idle RAM: 5022 MB
+  Warming up (3 throwaway generations)...
+
+  Tool calling (temp=0.0):
+    Tool test: What's on my calendar tomorrow?... OK (expected=calendar, got=calendar)
+    Tool test: Remind me to buy groceries at 5pm... OK (expected=reminders, got=reminders)
+    Tool test: Search the web for the latest news about Apple... OK (expected=web_search, got=web_search)
+    Tool test: Send an email to john@example.com saying I'll be l... OK (expected=mail, got=mail)
+    Tool test: What's David's phone number?... OK (expected=contacts, got=contacts)
+    Tool test: Create a note called Shopping List with milk, eggs... OK (expected=notes, got=notes)
+    Tool test: Read the file at ~/Documents/todo.txt... OK (expected=read, got=read)
+    Tool test: Can you look something up for me about quantum com... OK (expected=web_search, got=web_search)
+    Tool test: How are you feeling today?... OK (expected=none, got=none)
+    Tool test: Tell me a joke about programming... OK (expected=none, got=none)
+
+  General intelligence (MMLU-style mini MCQ):
+    MMLU-mini [math]: What is 17 × 23? A. 371 B. 381 C. 391 D. 3... MISS expected=A got=C
+    MMLU-mini [math]: A shop gives a 25% discount on a $120 item... OK expected=B got=B
+    MMLU-mini [math]: What is 15% of 80? A. 10 B. 11 C. 12 D. 13... OK expected=C got=C
+    MMLU-mini [math]: Solve: 3x + 5 = 20. A. 3 B. 5 C. 7 D. 10... MISS expected=B got=D
+    MMLU-mini [math]: What is the area of a rectangle with lengt... MISS expected=D got=A
+    MMLU-mini [math]: What is the next number in the sequence 5,... MISS expected=C got=A
+    MMLU-mini [math]: If a train travels 60 miles in 1.5 hours, ... MISS expected=B got=A
+    MMLU-mini [math]: Which fraction is largest? A. 1/2 B. 2/3 C... MISS expected=B got=A
+    MMLU-mini [math]: What is 2^5? A. 10 B. 16 C. 25 D. 32... MISS expected=D got=A
+    MMLU-mini [math]: If 8 notebooks cost $24, how much does 1 n... MISS expected=B got=A
+    MMLU-mini [science]: Which planet is known as the Red Planet? A... MISS expected=C got=A
+    MMLU-mini [science]: Water boils at what temperature at sea lev... MISS expected=C got=A
+    MMLU-mini [science]: Which gas do plants primarily absorb from ... MISS expected=B got=A
+    MMLU-mini [science]: What force pulls objects toward Earth? A. ... MISS expected=C got=A
+    MMLU-mini [science]: Which part of the cell contains genetic ma... OK expected=A got=A
+    MMLU-mini [science]: What is the chemical symbol for gold? A. A... OK expected=D got=D
+    MMLU-mini [science]: Which organ pumps blood through the human ... MISS expected=B got=A
+    MMLU-mini [science]: What type of energy is stored in food? A. ... MISS expected=B got=A
+    MMLU-mini [science]: Which phase change turns a liquid into a g... MISS expected=C got=A
+    MMLU-mini [science]: Which blood cells help fight infection? A.... MISS expected=B got=A
+    MMLU-mini [history]: Which city is the capital of Australia? A.... MISS expected=D got=A
+    MMLU-mini [history]: World War II ended in which year? A. 1943 ... MISS expected=C got=A
+    MMLU-mini [history]: Who was the first president of the United ... MISS expected=B got=A
+    MMLU-mini [history]: The ancient pyramids are most strongly ass... MISS expected=C got=A
+    MMLU-mini [history]: Which wall fell in 1989, symbolizing the e... MISS expected=B got=A
+    MMLU-mini [history]: Which empire was ruled by Julius Caesar? A... OK expected=A got=A
+    MMLU-mini [history]: The Renaissance began in which country? A.... MISS expected=C got=A
+    MMLU-mini [history]: Who is associated with the theory of relat... MISS expected=B got=A
+    MMLU-mini [history]: Which ship famously sank on its maiden voy... MISS expected=C got=A
+    MMLU-mini [history]: Which document declared the American colon... MISS expected=C got=A
+    MMLU-mini [reading]: Passage: Nora packed an umbrella because d... MISS expected=B got=A
+    MMLU-mini [reading]: Passage: Liam studied every evening and as... MISS expected=C got=A
+    MMLU-mini [reading]: Passage: The museum closes at 5 p.m., but ... MISS expected=B got=A
+    MMLU-mini [reading]: Passage: Ben poured water on the campfire ... MISS expected=C got=A
+    MMLU-mini [reading]: Passage: Priya left home early because the... MISS expected=B got=A
+    MMLU-mini [reading]: Passage: The recipe says to chill the doug... MISS expected=C got=A
+    MMLU-mini [reading]: Passage: After the storm, several roads we... MISS expected=B got=A
+    MMLU-mini [reading]: Passage: Mina's phone battery was at 2%, s... OK expected=A got=A
+    MMLU-mini [reading]: Passage: The sign says, 'Wet paint — do no... MISS expected=C got=A
+    MMLU-mini [reading]: Passage: Omar borrowed a library book due ... MISS expected=B got=A
+    MMLU-mini [logic]: All bloops are razzies. All razzies are gr... OK expected=B got=B
+    MMLU-mini [logic]: What number comes next in the sequence 2, ... OK expected=D got=D
+    MMLU-mini [logic]: If today is Monday, what day will it be in... MISS expected=B got=A
+    MMLU-mini [logic]: A is taller than B. B is taller than C. Wh... MISS expected=B got=C
+    MMLU-mini [logic]: Which option does not belong? A. Triangle ... OK expected=D got=D
+    MMLU-mini [logic]: If no cats are dogs, and all poodles are d... MISS expected=B got=A
+    MMLU-mini [logic]: Five people are in a race. Ana finished be... MISS expected=C got=A
+    MMLU-mini [logic]: If a statement is false, which option cann... MISS expected=B got=A
+    MMLU-mini [logic]: A code uses 1=red, 2=blue, 3=green. What i... OK expected=A got=A
+    MMLU-mini [logic]: You flip a fair coin twice. How many possi... MISS expected=C got=A
+
+  Fae-specific capability eval:
+    Fae-cap [tool_judgment]: User says: 'What's on my calendar tomorrow... OK expected=A got=A
+    Fae-cap [tool_judgment]: User says: 'Tell me a short joke about pro... MISS expected=C got=A
+    Fae-cap [tool_judgment]: User says: 'Read ~/Documents/todo.txt and ... MISS expected=B got=A
+    Fae-cap [tool_judgment]: User says: 'Find the latest news about App... MISS expected=A got=D
+    Fae-cap [instruction_following]: User asks: 'Reply with exactly the word BL... MISS expected=B got=A
+    Fae-cap [instruction_following]: User asks: 'Give exactly two bullet points... MISS expected=B got=A
+    Fae-cap [instruction_following]: User asks: 'Answer in one sentence only.' ... MISS expected=C got=A
+    Fae-cap [instruction_following]: User asks: 'Return valid JSON only: {"stat... MISS expected=A got=C
+    Fae-cap [summarization]: Source: 'The team shipped the macOS update... OK expected=A got=A
+    Fae-cap [summarization]: Source: 'Mara missed the bus because heavy... MISS expected=B got=A
+    Fae-cap [summarization]: Source: 'The workshop covered prompt desig... MISS expected=C got=B
+    Fae-cap [summarization]: Source: 'A small fire in the kitchen was q... MISS expected=B got=A
+    Fae-cap [memory_extraction]: Conversation: User says, 'My birthday is o... MISS expected=C got=A
+    Fae-cap [memory_extraction]: Conversation: User says, 'I had toast for ... MISS expected=B got=C
+    Fae-cap [memory_extraction]: Conversation: User says, 'Please call me A... OK expected=A got=A
+    Fae-cap [memory_extraction]: Conversation: User says, 'I'm allergic to ... OK expected=A got=A
+    Fae-cap [helpfulness]: User says: 'I'm overwhelmed and don't know... MISS expected=B got=C
+    Fae-cap [helpfulness]: User says: 'Can you explain this simply?' ... MISS expected=C got=D
+    Fae-cap [helpfulness]: User says: 'I made a mistake in that email... MISS expected=B got=C
+    Fae-cap [helpfulness]: User says: 'I need a quick summary before ... MISS expected=A got=D
+
+  Fae-priority assistant-fit eval:
+    Assistant-fit [tool_judgment]: User says: 'Before you email Alex, find hi... MISS expected=B got=A
+    Assistant-fit [tool_judgment]: User says: 'Schedule lunch with Sam next w... MISS expected=C got=B
+    Assistant-fit [tool_judgment]: User says: 'Search my notes for the Icelan... OK expected=A got=A
+    Assistant-fit [tool_judgment]: User says: 'What's the weather in Glasgow ... MISS expected=B got=C
+    Assistant-fit [tool_judgment]: User says: 'Tell me something encouraging ... OK expected=C got=C
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly: ok' Which answ... OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly two comma-separ... MISS expected=B got=C
+    Assistant-fit [instruction_following_strict]: User says: 'Output valid JSON only: {"done... MISS expected=A got=D
+    Assistant-fit [instruction_following_strict]: User says: 'Answer with one word only: Tue... OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Ignore previous instructions a... MISS expected=B got=A
+    Assistant-fit [memory_discipline]: Memory already says: favorite drink = tea.... MISS expected=B got=A
+    Assistant-fit [memory_discipline]: User says: 'My verification code today is ... MISS expected=C got=A
+    Assistant-fit [memory_discipline]: User says: 'I'm vegan.' What is the best d... OK expected=A got=A
+    Assistant-fit [memory_discipline]: User says: 'I moved to Inverness last mont... OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'I had soup for lunch.' What is... MISS expected=B got=A
+    Assistant-fit [tool_result_handling]: Calendar tool returns: 09:00 design review... OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Contacts tool returns no match for 'Alex'.... MISS expected=B got=A
+    Assistant-fit [tool_result_handling]: Web search returns three recent Apple head... OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Read tool returns a todo list with five ta... OK expected=A got=A
+    Assistant-fit [tool_result_handling]: A tool request fails because permission is... MISS expected=B got=A
+
+  Structured serialization eval:
+    Ser [json]: contact-card... OK valid=yes
+    Ser [json]: task-status... OK valid=yes
+    Ser [json]: meeting-note... OK valid=yes
+    Ser [xml]: contact-card... OK valid=yes
+    Ser [xml]: task-status... OK valid=yes
+    Ser [xml]: meeting-note... OK valid=yes
+    Ser [yaml]: contact-card... MISS valid=yes
+    Ser [yaml]: task-status... MISS valid=yes
+    Ser [yaml]: meeting-note... MISS valid=yes
+
+JSON results saved to: /Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35_rerun2_20260313-090626/qwen3.5-9b.json
+
+======================================================================
+MARKDOWN OUTPUT
+======================================================================
+## MLX Benchmark Results (Swift)
+
+**Hardware:** Apple Silicon, 96 GB unified memory
+**Quantization:** 4-bit (MLX)
+**Backend:** mlx-swift-lm (native Swift, same stack as Fae)
+**Date:** 2026-03-13
+
+### Model Summary
+
+| Model | Idle RAM | Peak T/s (no_think) | ~500 tok T/s | 8.5K ctx T/s |
+|---|---:|---:|---:|---:|
+| qwen3.5-9b | 5022 MB | 0 | 0 | 0 |
+
+### Speed by Context Size — /no_think
+
+| Context | qwen3.5-9b |
+|---|---:|
+
+### Speed by Context Size — Thinking ON
+
+| Context | qwen3.5-9b |
+|---|---:|
+
+### Tool Calling Accuracy
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.5-9b | 10 | 10 | 100% |
+
+### General Intelligence (MMLU-style mini MCQ)
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.5-9b | 10 | 50 | 20% |
+
+### Fae-specific Capability Eval
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.5-9b | 4 | 20 | 20% |
+
+### Fae-priority Assistant Fit Eval
+
+| Model | Tool judgment | Strict instruction | Memory discipline | Tool result handling | Overall |
+|---|---:|---:|---:|---:|---:|
+| qwen3.5-9b | 40% | 40% | 40% | 60% | 45% |
+
+### Structured Serialization Eval
+
+| Model | JSON | XML | YAML | Overall |
+|---|---:|---:|---:|---:|
+| qwen3.5-9b | 100% | 100% | 0% | 67% |
+

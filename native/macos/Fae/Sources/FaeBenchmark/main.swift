@@ -174,6 +174,7 @@ struct ModelBenchmarkResult: Codable {
     var intelligenceEval: [IntelligenceEvalResult]
     var faeCapabilityEval: [IntelligenceEvalResult]
     var assistantFitEval: [IntelligenceEvalResult]
+    var freeformEval: [FreeformEvalResult]
     var serializationEval: [SerializationEvalResult]
 
     enum CodingKeys: String, CodingKey {
@@ -187,6 +188,7 @@ struct ModelBenchmarkResult: Codable {
         case intelligenceEval = "intelligence_eval"
         case faeCapabilityEval = "fae_capability_eval"
         case assistantFitEval = "assistant_fit_eval"
+        case freeformEval = "freeform_eval"
         case serializationEval = "serialization_eval"
     }
 }
@@ -753,6 +755,42 @@ actor BenchmarkEngine {
         try await runMCQEval(assistantFitQuestions, label: "Assistant-fit")
     }
 
+    func runFreeformEval() async throws -> [FreeformEvalResult] {
+        var results: [FreeformEvalResult] = []
+
+        for test in freeformEvalCases {
+            print("    Freeform [\(test.category)]: \(test.id)...", terminator: "")
+            fflush(stdout)
+
+            let promptConfig = freeformPromptConfig(test: test, qwenCalibrated: useQwenCalibratedPrompts)
+            let result = try await generate(
+                system: promptConfig.system,
+                user: promptConfig.user,
+                maxTokens: promptConfig.maxTokens,
+                temperature: 0.0
+            )
+
+            let evaluation = evaluateFreeformOutput(result.text, checks: test.checks)
+            print(" \(evaluation.correct ? "OK" : "MISS") checks=\(test.checks.count - evaluation.failures.count)/\(test.checks.count) words=\(evaluation.wordCount)")
+
+            results.append(FreeformEvalResult(
+                caseID: test.id,
+                category: test.category,
+                prompt: test.prompt,
+                rawOutput: result.text,
+                failedChecks: evaluation.failures,
+                passedChecks: test.checks.count - evaluation.failures.count,
+                totalChecks: test.checks.count,
+                wordCount: evaluation.wordCount,
+                correct: evaluation.correct,
+                firstTokenLatencyMS: (result.firstTokenLatencyMS * 10).rounded() / 10,
+                wallTimeS: (result.wallTime * 100).rounded() / 100
+            ))
+        }
+
+        return results
+    }
+
     func runSerializationEval() async throws -> [SerializationEvalResult] {
         var results: [SerializationEvalResult] = []
 
@@ -942,13 +980,14 @@ struct CLIArgs {
     var doIntelligence = false
     var doFaeCapabilities = false
     var doAssistantFit = false
+    var doFreeform = false
     var doSerialization = false
     var contexts: [String] = []
     var outputPath: String?
     var markdownPath: String?
 
     var runAllDimensions: Bool {
-        !doThroughput && !doNoThink && !doRAM && !doTools && !doIntelligence && !doFaeCapabilities && !doAssistantFit && !doSerialization
+        !doThroughput && !doNoThink && !doRAM && !doTools && !doIntelligence && !doFaeCapabilities && !doAssistantFit && !doFreeform && !doSerialization
     }
 }
 
@@ -984,6 +1023,8 @@ func parseArgs() -> CLIArgs {
             args.doFaeCapabilities = true
         case "--assistant-fit", "--fae-priority":
             args.doAssistantFit = true
+        case "--freeform", "--assistant-freeform":
+            args.doFreeform = true
         case "--serialization", "--formats":
             args.doSerialization = true
         case "--contexts":
@@ -1038,6 +1079,7 @@ func printUsage() {
       --intelligence     Run MMLU-style mini MCQ eval (alias: --mmlu-mini)
       --fae-capabilities Run Fae-specific capability MCQ eval
       --assistant-fit    Run Fae-priority assistant-fit MCQ eval (alias: --fae-priority)
+      --freeform         Run the comprehensive freeform assistant eval (~250 cases)
       --serialization    Run structured output eval across JSON/XML/YAML (alias: --formats)
       --contexts         Comma-separated context keys: short,200,500,1k,2k,4k,8.5k
 
@@ -1203,6 +1245,26 @@ func resultsToMarkdown(_ benchmarks: [ModelBenchmarkResult]) -> String {
         lines.append("")
     }
 
+    let hasFreeform = benchmarks.contains(where: { !$0.freeformEval.isEmpty })
+    if hasFreeform {
+        lines.append("### Freeform Assistant Eval")
+        lines.append("")
+        lines.append("| Model | Overall | By category |")
+        lines.append("|---|---:|---|")
+        for b in benchmarks where !b.freeformEval.isEmpty {
+            let overall = Int(round(Double(b.freeformEval.filter(\.correct).count) / Double(b.freeformEval.count) * 100))
+            let byCategory = freeformEvalCategoryOrder.compactMap { category -> String? in
+                let rows = b.freeformEval.filter { $0.category == category }
+                guard !rows.isEmpty else { return nil }
+                let correct = rows.filter(\.correct).count
+                let pct = Int(round(Double(correct) / Double(rows.count) * 100))
+                return "\(freeformEvalCategoryLabels[category] ?? category) \(pct)%"
+            }.joined(separator: ", ")
+            lines.append("| \(b.modelShort) | \(overall)% | \(byCategory) |")
+        }
+        lines.append("")
+    }
+
     let hasSerialization = benchmarks.contains(where: { !$0.serializationEval.isEmpty })
     if hasSerialization {
         lines.append("### Structured Serialization Eval")
@@ -1237,6 +1299,7 @@ func benchmarkModel(
     doIntelligence: Bool,
     doFaeCapabilities: Bool,
     doAssistantFit: Bool,
+    doFreeform: Bool,
     doSerialization: Bool,
     qwenCalibrated: Bool = false,
     contexts: Set<String> = []
@@ -1259,6 +1322,7 @@ func benchmarkModel(
         intelligenceEval: [],
         faeCapabilityEval: [],
         assistantFitEval: [],
+        freeformEval: [],
         serializationEval: []
     )
 
@@ -1311,6 +1375,11 @@ func benchmarkModel(
         result.assistantFitEval = try await engine.runAssistantFitEval()
     }
 
+    if doFreeform {
+        print("\n  Freeform assistant eval:")
+        result.freeformEval = try await engine.runFreeformEval()
+    }
+
     // Structured serialization eval
     if doSerialization {
         print("\n  Structured serialization eval:")
@@ -1331,6 +1400,7 @@ func run() async throws {
     let doIntelligence = args.doIntelligence || args.runAllDimensions
     let doFaeCapabilities = args.doFaeCapabilities || args.runAllDimensions
     let doAssistantFit = args.doAssistantFit || args.runAllDimensions
+    let doFreeform = args.doFreeform
     let doSerialization = args.doSerialization || args.runAllDimensions
 
     // Determine models to benchmark
@@ -1368,7 +1438,7 @@ func run() async throws {
     print("FaeBenchmark — \(modelList.count) model(s)")
     print("Hardware: \(ProcessInfo.processInfo.machineArchitecture), \(systemRAMGB()) GB RAM")
     print("Backend: mlx-swift-lm (native Swift)")
-    print("Dimensions: throughput=\(doThroughput), no_think=\(doNoThink), ram=\(doRAM), tools=\(doTools), intelligence=\(doIntelligence), fae_capabilities=\(doFaeCapabilities), assistant_fit=\(doAssistantFit), serialization=\(doSerialization)")
+    print("Dimensions: throughput=\(doThroughput), no_think=\(doNoThink), ram=\(doRAM), tools=\(doTools), intelligence=\(doIntelligence), fae_capabilities=\(doFaeCapabilities), assistant_fit=\(doAssistantFit), freeform=\(doFreeform), serialization=\(doSerialization)")
     if args.qwenCalibrated {
         print("Eval profile: temporary Qwen-calibrated prompts enabled")
     }
@@ -1389,6 +1459,7 @@ func run() async throws {
                 doIntelligence: doIntelligence,
                 doFaeCapabilities: doFaeCapabilities,
                 doAssistantFit: doAssistantFit,
+                doFreeform: doFreeform,
                 doSerialization: doSerialization,
                 qwenCalibrated: args.qwenCalibrated,
                 contexts: contextFilter

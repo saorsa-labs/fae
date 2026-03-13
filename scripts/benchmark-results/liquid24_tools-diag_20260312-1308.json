@@ -1,0 +1,128 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-12",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "assistant_fit_eval" : [
+
+      ],
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "LiquidAI\/LFM2-24B-A2B-MLX-4bit",
+      "model_short" : "LFM2-24B-A2B-MLX-4bit",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+        {
+          "actual_tool" : "calendar",
+          "correct" : true,
+          "expected_tool" : "calendar",
+          "prompt" : "What's on my calendar tomorrow?",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "calendar",
+          "correct" : false,
+          "expected_tool" : "reminders",
+          "prompt" : "Remind me to buy groceries at 5pm",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "web_search",
+          "prompt" : "Search the web for the latest news about Apple",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "mail",
+          "prompt" : "Send an email to john@example.com saying I'll be late",
+          "raw_response_preview" : "I'm sorry, but I can't send emails. Based on the available API, I can help with calendar events, reminders, contacts, and notes, but sending emails is not supported. Let me know if you need assistance with any of those features.",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "contacts",
+          "correct" : true,
+          "expected_tool" : "contacts",
+          "prompt" : "What's David's phone number?",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "notes",
+          "correct" : true,
+          "expected_tool" : "notes",
+          "prompt" : "Create a note called Shopping List with milk, eggs, bread",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "read",
+          "correct" : true,
+          "expected_tool" : "read",
+          "prompt" : "Read the file at ~\/Documents\/todo.txt",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Can you look something up for me about quantum computing?",
+          "raw_response_preview" : "",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "How are you feeling today?",
+          "raw_response_preview" : "I'm just a computer program, so I don't have feelings, but I'm here to help with whatever you need! How can I assist you today?",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "Tell me a joke about programming",
+          "raw_response_preview" : "I'm sorry, but I can't tell jokes. However, I can help you with programming-related questions or tasks. For example, I can assist with code explanations, debugging, or even search for information online if needed. Let me know how I can assist you!",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        }
+      ]
+    }
+  ]
+}

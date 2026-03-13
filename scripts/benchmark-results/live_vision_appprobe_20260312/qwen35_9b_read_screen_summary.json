@@ -1,0 +1,11 @@
+{
+  "model_tag": "qwen35_9b",
+  "turn": "read_screen",
+  "prompt": "Fae, use read_screen to tell me what is on the display and list three visible UI elements.",
+  "model_label": "",
+  "baseline_events": 0,
+  "idle_rss_kb": 78960,
+  "peak_rss_kb": 79216,
+  "duration_s": 0,
+  "timed_out": false
+}

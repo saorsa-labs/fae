@@ -1,0 +1,8 @@
+{
+  "prompt": "Fae, use the screenshot tool to look at my current screen and tell me what is visible in two sentences.",
+  "model": "Qwen3.5 9B · 4bit",
+  "idle_rss_kb": 5196800,
+  "peak_rss_kb": 5197696,
+  "duration_s": 140,
+  "timed_out": false
+}

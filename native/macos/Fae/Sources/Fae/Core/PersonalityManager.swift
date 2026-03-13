@@ -310,9 +310,9 @@ enum PersonalityManager {
 
     private static func nextPhrase(from array: [String]) -> String {
         ackLock.lock()
+        defer { ackLock.unlock() }
         let phrase = array[_ackCounter % array.count]
         _ackCounter += 1
-        ackLock.unlock()
         return phrase
     }
     static func nextThinkingAcknowledgment() -> String { nextPhrase(from: thinkingAcknowledgments) }

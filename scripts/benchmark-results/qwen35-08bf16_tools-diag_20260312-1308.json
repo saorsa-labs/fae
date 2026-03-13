@@ -1,0 +1,128 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-12",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "assistant_fit_eval" : [
+
+      ],
+      "fae_capability_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "mlx-community\/Qwen3.5-0.8B-bf16",
+      "model_short" : "Qwen3.5-0.8B-bf16",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "calendar",
+          "prompt" : "What's on my calendar tomorrow?",
+          "raw_response_preview" : "I can't access your calendar directly. I can search for events in your calendar using the calendar tool, but I need to know the specific date you're interested in.",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "reminders",
+          "prompt" : "Remind me to buy groceries at 5pm",
+          "raw_response_preview" : "I can't create a reminder for you right now. I can help you set up a reminder later by using the reminders tool. Would you like me to create a new reminder for you?",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Search the web for the latest news about Apple",
+          "raw_response_preview" : "<tool_call>\\n<function=web_search>\\n<parameter=query>\\nlatest news about Apple\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "mail",
+          "prompt" : "Send an email to john@example.com saying I'll be late",
+          "raw_response_preview" : "I'm sorry, but I don't have the ability to send emails directly. I can help you with other tasks like organizing your calendar, checking your reminders, or searching for contacts.",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "contacts",
+          "prompt" : "What's David's phone number?",
+          "raw_response_preview" : "I can't access your macOS Calendar or Reminders to find David's phone number. Please check your calendar or Reminders for the specific event or note that mentions David.",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "notes",
+          "correct" : true,
+          "expected_tool" : "notes",
+          "prompt" : "Create a note called Shopping List with milk, eggs, bread",
+          "raw_response_preview" : "<tool_call>\\n<function=notes>\\n<parameter=action>\\ncreate\\n<\/parameter>\\n<parameter=title>\\nShopping List\\n<\/parameter>\\n<parameter=body>\\nMilk\\nEggs\\nBread\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "read",
+          "correct" : true,
+          "expected_tool" : "read",
+          "prompt" : "Read the file at ~\/Documents\/todo.txt",
+          "raw_response_preview" : "<tool_call>\\n<function=read>\\n<parameter=path>\\n~\/Documents\/todo.txt\\n<\/parameter>\\n<\/function\\n<\/tool_call>",
+          "temperature" : 0.2,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : false,
+          "expected_tool" : "web_search",
+          "prompt" : "Can you look something up for me about quantum computing?",
+          "raw_response_preview" : "I can search for information about quantum computing for you.",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "How are you feeling today?",
+          "raw_response_preview" : "I'm currently processing your request. How can I assist you today?",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "Tell me a joke about programming",
+          "raw_response_preview" : "What if you could write a joke that's actually a programming language?",
+          "temperature" : 0.2,
+          "tool_call_source" : "none"
+        }
+      ]
+    }
+  ]
+}

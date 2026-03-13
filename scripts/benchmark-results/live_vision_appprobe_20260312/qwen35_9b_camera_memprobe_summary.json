@@ -1,0 +1,7 @@
+{
+  "model_tag": "qwen35_9b",
+  "model_label": "Qwen3.5 9B · 4bit",
+  "root_pid": 19924,
+  "idle_rss_kb": 7030032,
+  "peak_rss_kb": 12700768
+}

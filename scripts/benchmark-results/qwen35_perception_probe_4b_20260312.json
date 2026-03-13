@@ -1,0 +1,199 @@
+{
+  "backend" : "mlx-swift-lm (MLXVLM)",
+  "date" : "2026-03-12T17:56:51Z",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "idle_ram_mb" : 3103.2,
+      "load_succeeded" : true,
+      "model_id" : "mlx-community\/Qwen3.5-4B-4bit",
+      "model_short" : "qwen3.5-4b",
+      "results" : [
+        {
+          "category" : "screen_grounding",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "cannot find",
+              "not found"
+            ],
+            [
+              "foo"
+            ],
+            [
+              "scope"
+            ]
+          ],
+          "first_token_latency_ms" : 63825.2,
+          "id" : "terminal_error",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "cannot find",
+            "foo",
+            "scope"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "What build error is visible? Answer in one sentence.",
+          "response" : "The image shows a terminal window displaying a Swift build error where the compiler cannot find the identifier 'foo' in scope at line 42, column 13 of the file PipelineCoordinator.swift.",
+          "scene" : "terminalError",
+          "wall_time_s" : 65.81
+        },
+        {
+          "category" : "screen_grounding",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "design"
+            ],
+            [
+              "lunch",
+              "sam"
+            ],
+            [
+              "dentist"
+            ]
+          ],
+          "first_token_latency_ms" : 61265.4,
+          "id" : "calendar_summary",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "design",
+            "lunch",
+            "dentist"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "Summarize today's calendar in one sentence.",
+          "response" : "On Thursday, March 12, you have a Design Review at 09:00, Lunch with Sam at 13:00, and a Dentist appointment at 16:30.",
+          "scene" : "calendarDay",
+          "wall_time_s" : 63.48
+        },
+        {
+          "category" : "screen_summary",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "apple"
+            ],
+            [
+              "battery",
+              "macbook"
+            ],
+            [
+              "compile",
+              "developers"
+            ]
+          ],
+          "first_token_latency_ms" : 61082.7,
+          "id" : "browser_headline",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "apple",
+            "battery",
+            "compile"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "What is the main headline and what is it about?",
+          "response" : "The main headline is:\n\n**\"Apple announces new MacBook battery improvements\"**\n\nIt's about developers reporting noticeably faster compile times after an update related to MacBook battery improvements.",
+          "scene" : "browserHeadline",
+          "wall_time_s" : 62.77
+        },
+        {
+          "category" : "screen_detail",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "alex@example.com",
+              "alex"
+            ],
+            [
+              "thursday"
+            ],
+            [
+              "3 pm",
+              "3pm",
+              "3:00"
+            ]
+          ],
+          "first_token_latency_ms" : 61155.8,
+          "id" : "mail_draft",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "alex@example.com",
+            "thursday",
+            "3 pm"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "Who is this email to, and what meeting time is proposed?",
+          "response" : "This email is to alex@example.com. The proposed meeting time is Thursday at 3 pm.",
+          "scene" : "mailDraft",
+          "wall_time_s" : 62.1
+        },
+        {
+          "category" : "screen_summary",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "renew passport",
+              "passport"
+            ],
+            [
+              "book dentist",
+              "dentist"
+            ],
+            [
+              "ship beta",
+              "beta"
+            ]
+          ],
+          "first_token_latency_ms" : 60833.8,
+          "id" : "notes_summary",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "renew passport",
+            "book dentist",
+            "ship beta"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "Give a brief summary of the visible to-do list.",
+          "response" : "- Renew passport\n- Book dentist appointment\n- Ship beta build to testers\n- Reply to Alex",
+          "scene" : "notesList",
+          "wall_time_s" : 61.8
+        },
+        {
+          "category" : "screen_context",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "xcode"
+            ],
+            [
+              "pipelinecoordinator.swift",
+              "pipeline coordinator"
+            ],
+            [
+              "swift",
+              "coding",
+              "development"
+            ]
+          ],
+          "first_token_latency_ms" : 60618.9,
+          "id" : "workspace_identification",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "xcode",
+            "pipelinecoordinator.swift",
+            "swift"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "What kind of work is on screen? Mention the app or file if you can.",
+          "response" : "Swift code in Xcode, specifically the `visibleToolNamesForTurn` function from `PipelineCoordinator.swift`.",
+          "scene" : "xcodeWorkspace",
+          "wall_time_s" : 61.7
+        }
+      ]
+    }
+  ]
+}

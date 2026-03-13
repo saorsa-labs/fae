@@ -1,0 +1,11 @@
+{
+  "model_tag": "qwen35_4b",
+  "turn": "screenshot",
+  "prompt": "Fae, use the screenshot tool to look at my current screen and tell me what is visible in two sentences.",
+  "model_label": "",
+  "baseline_events": 0,
+  "idle_rss_kb": 71584,
+  "peak_rss_kb": 71584,
+  "duration_s": 0,
+  "timed_out": false
+}

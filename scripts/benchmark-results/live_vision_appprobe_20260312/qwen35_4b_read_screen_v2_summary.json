@@ -1,0 +1,8 @@
+{
+  "prompt": "Fae, use read_screen to tell me what is on the display and list three visible UI elements.",
+  "model": "Qwen3.5 4B · 4bit",
+  "idle_rss_kb": 2574544,
+  "peak_rss_kb": 2575600,
+  "duration_s": 140,
+  "timed_out": false
+}

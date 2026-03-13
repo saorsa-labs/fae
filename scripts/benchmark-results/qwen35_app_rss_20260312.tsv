@@ -1,0 +1,6 @@
+preset	load_seconds	main_rss_mb	worker_rss_mb	total_rss_mb	state
+qwen3_5_2b	12	1811	1262	3073	running
+qwen3_5_4b	11	1810	2510	4320	running
+qwen3_5_9b	13	1806	5075	6881	running
+qwen3_5_27b	16	1807	14711	16518	running
+qwen3_5_35b_a3b	13	1809	18871	20680	running

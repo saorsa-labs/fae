@@ -1,0 +1,196 @@
+{
+  "backend" : "mlx-swift-lm (MLXVLM)",
+  "date" : "2026-03-12T18:09:48Z",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "idle_ram_mb" : 1850.3,
+      "load_succeeded" : true,
+      "model_id" : "mlx-community\/Qwen3.5-2B-4bit",
+      "model_short" : "qwen3.5-2b",
+      "results" : [
+        {
+          "category" : "screen_grounding",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "cannot find",
+              "not found"
+            ],
+            [
+              "foo"
+            ],
+            [
+              "scope"
+            ]
+          ],
+          "first_token_latency_ms" : 46215.3,
+          "id" : "terminal_error",
+          "matched_group_count" : 2,
+          "matched_keywords" : [
+            "foo",
+            "scope"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "What build error is visible? Answer in one sentence.",
+          "response" : "The build error is that the variable `foo` cannot be found in scope at line 42, column 13.",
+          "scene" : "terminalError",
+          "wall_time_s" : 47.16
+        },
+        {
+          "category" : "screen_grounding",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "design"
+            ],
+            [
+              "lunch",
+              "sam"
+            ],
+            [
+              "dentist"
+            ]
+          ],
+          "first_token_latency_ms" : 45930.9,
+          "id" : "calendar_summary",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "design",
+            "lunch",
+            "dentist"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "Summarize today's calendar in one sentence.",
+          "response" : "Today's calendar shows three scheduled events: a design review at 9:00, lunch with Sam at 13:00, and a dentist appointment at 16:30.",
+          "scene" : "calendarDay",
+          "wall_time_s" : 47.43
+        },
+        {
+          "category" : "screen_summary",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "apple"
+            ],
+            [
+              "battery",
+              "macbook"
+            ],
+            [
+              "compile",
+              "developers"
+            ]
+          ],
+          "first_token_latency_ms" : 45684,
+          "id" : "browser_headline",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "apple",
+            "battery",
+            "compile"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "What is the main headline and what is it about?",
+          "response" : "The main headline is \"Apple announces new MacBook battery improvements.\" It is about a new update to the MacBook that reportedly results in noticeably faster compile times for developers.",
+          "scene" : "browserHeadline",
+          "wall_time_s" : 46.88
+        },
+        {
+          "category" : "screen_detail",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "alex@example.com",
+              "alex"
+            ],
+            [
+              "thursday"
+            ],
+            [
+              "3 pm",
+              "3pm",
+              "3:00"
+            ]
+          ],
+          "first_token_latency_ms" : 45933.2,
+          "id" : "mail_draft",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "alex@example.com",
+            "thursday",
+            "3 pm"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "Who is this email to, and what meeting time is proposed?",
+          "response" : "To: alex@example.com\nTime: Thursday at 3 pm",
+          "scene" : "mailDraft",
+          "wall_time_s" : 46.4
+        },
+        {
+          "category" : "screen_summary",
+          "correct" : true,
+          "expected_keyword_groups" : [
+            [
+              "renew passport",
+              "passport"
+            ],
+            [
+              "book dentist",
+              "dentist"
+            ],
+            [
+              "ship beta",
+              "beta"
+            ]
+          ],
+          "first_token_latency_ms" : 45707.1,
+          "id" : "notes_summary",
+          "matched_group_count" : 3,
+          "matched_keywords" : [
+            "passport",
+            "dentist",
+            "beta"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "Give a brief summary of the visible to-do list.",
+          "response" : "This week's tasks include renewing a passport, booking a dentist appointment, shipping a beta build to testers, and replying to Alex.",
+          "scene" : "notesList",
+          "wall_time_s" : 46.73
+        },
+        {
+          "category" : "screen_context",
+          "correct" : false,
+          "expected_keyword_groups" : [
+            [
+              "xcode"
+            ],
+            [
+              "pipelinecoordinator.swift",
+              "pipeline coordinator"
+            ],
+            [
+              "swift",
+              "coding",
+              "development"
+            ]
+          ],
+          "first_token_latency_ms" : 46094,
+          "id" : "workspace_identification",
+          "matched_group_count" : 1,
+          "matched_keywords" : [
+            "xcode"
+          ],
+          "min_matched_groups" : 2,
+          "prompt" : "What kind of work is on screen? Mention the app or file if you can.",
+          "response" : "Xcode — Fae",
+          "scene" : "xcodeWorkspace",
+          "wall_time_s" : 46.28
+        }
+      ]
+    }
+  ]
+}
