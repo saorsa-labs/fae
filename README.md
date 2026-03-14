@@ -92,6 +92,12 @@ See [Self-Modification Guide](docs/guides/self-modification.md).
 
 For a deep technical analysis of how Fae learns, adapts, and grows with her user — including memory capture, proactive awareness, skill creation, and the growth loop — see **[Self-Improvement & Proactive Architecture](docs/guides/self-improvement-and-proactive-architecture.md)**.
 
+### Agent Orchestration (ACP)
+
+Fae can delegate complex coding tasks to external AI agents — Claude Code, Codex, Gemini CLI, Copilot, and any [ACP-compatible agent](https://agentclientprotocol.com) — via the bundled `acpx` client. Fae understands your intent, routes the task to the right specialist, monitors progress, and synthesises the result. The local LLM handles personality and judgment; the external agent handles code.
+
+See the **[ACP Integration Design](docs/specs/acp-integration-design.md)** for the full architecture.
+
 ### Skill-First Extensibility (Project Preference)
 
 **Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
