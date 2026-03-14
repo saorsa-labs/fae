@@ -16,3 +16,4 @@ training/
 # HuggingFace Space — separate git repo, managed independently
 hf-space/
 scripts/__pycache__/
+native/macos/Fae/Resources/Binaries/

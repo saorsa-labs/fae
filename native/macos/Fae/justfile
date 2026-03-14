@@ -15,6 +15,25 @@ build:
 build-release:
     swift build -c release
 
+# Build acpx standalone binary (requires bun)
+build-acpx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    OUTDIR="Resources/Binaries"
+    mkdir -p "$OUTDIR"
+    if [ -f "$OUTDIR/acpx" ]; then
+        echo "acpx already built at $OUTDIR/acpx ($(du -h "$OUTDIR/acpx" | cut -f1))"
+        echo "  Delete it to rebuild: rm $OUTDIR/acpx"
+        exit 0
+    fi
+    echo "Building acpx standalone binary..."
+    TMPDIR=$(mktemp -d)
+    cd "$TMPDIR" && npm pack acpx@latest --silent && tar xzf acpx-*.tgz
+    cd package && npm install --production --ignore-scripts 2>/dev/null || true
+    bun build dist/cli.js --compile --target=bun-darwin-arm64 --outfile "$OLDPWD/$OUTDIR/acpx"
+    rm -rf "$TMPDIR"
+    echo "Built acpx: $(du -h "$OLDPWD/$OUTDIR/acpx" | cut -f1)"
+
 # Build benchmark tool (requires xcodebuild for Metal shader compilation)
 build-benchmark:
     xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -derivedDataPath ".build/xcode-benchmark-derived" -quiet
@@ -313,6 +332,14 @@ bundle:
     cp "$PRODUCTS/Fae" "$APP_BUNDLE/Contents/MacOS/Fae"
     chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
 
+    # Bundle acpx (ACP agent client) if available
+    ACPX_SRC="$(dirname "$PRODUCTS")/../../Resources/Binaries/acpx"
+    if [ -f "$ACPX_SRC" ]; then
+        cp "$ACPX_SRC" "$APP_BUNDLE/Contents/MacOS/acpx"
+        chmod +x "$APP_BUNDLE/Contents/MacOS/acpx"
+        echo "  Bundled acpx"
+    fi
+
     # Fix rpaths: remove absolute xcode build-dir paths, add @executable_path/../Frameworks.
     # The debug binary has LC_RPATH entries like /Users/.../Debug/PackageFrameworks baked in
     # at build time. When the binary is moved into a standalone app bundle, those absolute paths
@@ -415,6 +442,15 @@ _sign-bundle app_bundle:
 
     # Entitlements.plist lives at the project root (3 levels up from native/macos/Fae/).
     ENTITLEMENTS="$(cd "../../.." && pwd)/Entitlements.plist"
+
+    # Sign acpx auxiliary binary (before main executable)
+    if [ -f "$APP_BUNDLE/Contents/MacOS/acpx" ]; then
+        echo "=== Signing acpx ==="
+        codesign --force --options runtime \
+            --sign "$MACOS_SIGNING_IDENTITY" \
+            --timestamp \
+            "$APP_BUNDLE/Contents/MacOS/acpx"
+    fi
 
     echo "=== Signing main executable ==="
     codesign --force --options runtime \

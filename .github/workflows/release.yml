@@ -69,6 +69,14 @@ jobs:
       - name: Select Xcode 26.2
         run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
 
+      - name: Install bun (for acpx compilation)
+        run: |
+          if ! command -v bun &>/dev/null; then
+            curl -fsSL https://bun.sh/install | bash
+            echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          fi
+          bun --version
+
       - name: Clear stale SPM cache
         run: rm -rf ~/Library/Caches/org.swift.swiftpm/repositories
 
@@ -234,6 +242,19 @@ jobs:
           cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/Fae"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
           chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
+
+          # Bundle acpx (ACP agent client) — built from npm source via bun
+          echo "Building acpx standalone binary..."
+          ACPX_TMP=$(mktemp -d)
+          (cd "$ACPX_TMP" && npm pack acpx@0.3.0 --silent && tar xzf acpx-*.tgz && \
+           cd package && npm install --production --ignore-scripts 2>/dev/null || true && \
+           bun build dist/cli.js --compile --target=bun-darwin-arm64 --outfile "$ACPX_TMP/acpx") || echo "WARN: acpx build failed (non-fatal)"
+          if [ -f "$ACPX_TMP/acpx" ]; then
+            cp "$ACPX_TMP/acpx" "$APP_BUNDLE/Contents/MacOS/acpx"
+            chmod +x "$APP_BUNDLE/Contents/MacOS/acpx"
+            echo "Bundled acpx ($(du -h "$APP_BUNDLE/Contents/MacOS/acpx" | cut -f1))"
+          fi
+          rm -rf "$ACPX_TMP"
 
           # Copy all SPM resource bundles (Fae_Fae, mlx-swift_Cmlx, etc.)
           # Search both top-level and subdirectories for bundles
@@ -413,6 +434,15 @@ jobs:
               "$fw"
             echo "  Signed: $FNAME"
           done
+
+          # Sign acpx auxiliary binary (before main executable)
+          if [ -f "$APP_BUNDLE/Contents/MacOS/acpx" ]; then
+            echo "=== Signing acpx ==="
+            codesign --force --options runtime \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              --timestamp \
+              "$APP_BUNDLE/Contents/MacOS/acpx"
+          fi
 
           echo "=== Signing main executable ==="
           codesign --force --options runtime \
