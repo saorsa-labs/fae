@@ -1,0 +1,23 @@
+{
+  "name": "huggingface-scout",
+  "version": "1.0.0",
+  "capabilities": [
+    "network"
+  ],
+  "allowedTools": [
+    "web_search",
+    "fetch_url",
+    "activate_skill"
+  ],
+  "allowedDomains": [
+    "huggingface.co"
+  ],
+  "riskTier": "low",
+  "files": {
+    "SKILL.md": "bad11156fa467190f4954438d39b39e13cc6b5886176a2b7c1a264eef454d80f",
+    "scripts/check_new_releases.py": "27a9a5ccc273657e021b3276082579c35897c1afd921463a93bfa7338c1e4827",
+    "scripts/evaluate_candidate.py": "4e407e3db1a39f25186bc53ed763ab6f2f86536ed307e534574dfb2a4c9413db",
+    "scripts/search_datasets.py": "1e23c25e815b4b4dc14bbfb10255c25129ffce703839ddae22d05a0e02002995",
+    "scripts/search_models.py": "b9bf864079bbfb2500196146d4643965cbeb5d40b13a517fd859a42f5b8f7914"
+  }
+}
