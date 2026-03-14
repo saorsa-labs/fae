@@ -90,6 +90,8 @@ Fae can change her own personality and learn new skills:
 
 See [Self-Modification Guide](docs/guides/self-modification.md).
 
+For a deep technical analysis of how Fae learns, adapts, and grows with her user — including memory capture, proactive awareness, skill creation, and the growth loop — see **[Self-Improvement & Proactive Architecture](docs/guides/self-improvement-and-proactive-architecture.md)**.
+
 ### Skill-First Extensibility (Project Preference)
 
 **Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
@@ -273,6 +275,8 @@ This is the concrete evaluation surface we run today:
 - structured output compliance for JSON / XML / YAML
 
 `FaeBenchmark` now uses the same shared local inference path as the app (`FaeInference` / `MLXLLMEngine`), so runtime fixes to MLX/Qwen behavior land in benchmarking too. Run benchmark binaries through the native `just benchmark*` recipes rather than `swift run FaeBenchmark`.
+
+Canonical local model cache: `~/.cache/huggingface/hub`. The app runtime, training scripts, and benchmark path now all resolve base models from that shared cache first. Legacy duplicates under `~/Library/Caches/models/...` can be removed with `bash scripts/cleanup_legacy_model_caches.sh --apply`.
 
 #### What matters for Fae
 
