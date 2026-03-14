@@ -53,6 +53,8 @@ UV_RUN=(
 
 RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 TRAINING_DATA_DIR="${FAE_TRAINING_DATA_DIR:-$PROJECT_ROOT/training/data}"
+IMPORTS_DIR="${FAE_IMPORTS_DIR:-$PROJECT_ROOT/training/imports}"
+SKIP_MARKDOWN_SOURCES="${FAE_SKIP_MARKDOWN_SOURCES:-0}"
 PREF_DIR="${FAE_PREFERENCE_DATA_DIR:-$TRAINING_DATA_DIR/mlx_tune/$MODEL_TAG}"
 OUTPUT_DIR="${FAE_PREFERENCE_OUTPUT_DIR:-$PROJECT_ROOT/training/adapters/${MODEL_TAG}-${METHOD}-${RUN_STAMP}}"
 MERGED_OUTPUT_DIR="${FAE_PREFERENCE_MERGED_OUTPUT_DIR:-$PROJECT_ROOT/training/models/${MODEL_TAG}-${METHOD}-${RUN_STAMP}}"
@@ -86,10 +88,17 @@ run_uv_python() {
 
 if [[ "$SKIP_PREPARE" != "1" ]]; then
     log "Preparing training data"
-    run_uv_python "$SCRIPT_DIR/prepare_training_data.py" \
+    PREPARE_CMD=(
+        "$SCRIPT_DIR/prepare_training_data.py"
         --source-dir "$PROJECT_ROOT" \
         --output-dir "$TRAINING_DATA_DIR" \
+        --imports-dir "$IMPORTS_DIR" \
         --split
+    )
+    if [[ "$SKIP_MARKDOWN_SOURCES" == "1" ]]; then
+        PREPARE_CMD+=(--skip-markdown-sources)
+    fi
+    run_uv_python "${PREPARE_CMD[@]}"
 else
     log "Skipping training-data preparation"
 fi

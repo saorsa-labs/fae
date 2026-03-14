@@ -106,6 +106,8 @@ while [[ "$remaining" -gt 0 ]]; do
     for name in \
         FAE_BASE_MODEL \
         FAE_TRAINING_DATA_DIR \
+        FAE_IMPORTS_DIR \
+        FAE_SKIP_MARKDOWN_SOURCES \
         FAE_PREFERENCE_DATA_DIR \
         FAE_PREF_INPUT \
         FAE_PREF_LEARNING_RATE \

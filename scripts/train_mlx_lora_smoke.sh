@@ -37,6 +37,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 . "$SCRIPT_DIR/lib/model_cache.sh"
 TRAINING_DATA_DIR="${FAE_TRAINING_DATA_DIR:-$PROJECT_ROOT/training/data}"
+IMPORTS_DIR="${FAE_IMPORTS_DIR:-$PROJECT_ROOT/training/imports}"
+SKIP_MARKDOWN_SOURCES="${FAE_SKIP_MARKDOWN_SOURCES:-0}"
 RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 ADAPTER_PATH="${FAE_ADAPTER_PATH:-$PROJECT_ROOT/training/adapters/smoke-${MODEL_TAG}-${RUN_STAMP}}"
 
@@ -78,10 +80,17 @@ trap cleanup EXIT
 
 if [[ "$SKIP_PREPARE_DATA" != "1" ]]; then
     log "Preparing training data"
-    "${UV_RUN[@]}" python "$SCRIPT_DIR/prepare_training_data.py" \
+    PREPARE_CMD=(
+        "${UV_RUN[@]}" python "$SCRIPT_DIR/prepare_training_data.py"
         --source-dir "$PROJECT_ROOT" \
         --output-dir "$TRAINING_DATA_DIR" \
+        --imports-dir "$IMPORTS_DIR" \
         --split
+    )
+    if [[ "$SKIP_MARKDOWN_SOURCES" == "1" ]]; then
+        PREPARE_CMD+=(--skip-markdown-sources)
+    fi
+    "${PREPARE_CMD[@]}"
 else
     log "Skipping training-data preparation"
 fi

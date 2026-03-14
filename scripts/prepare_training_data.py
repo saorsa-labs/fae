@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Prepare Fae companion model training data from markdown source files.
+Prepare Fae companion model training data from markdown and canonical JSONL sources.
 
-Reads every `*-post-train-data.md` file in the project root.
+Reads:
+  - every `*-post-train-data.md` file in the project root
+  - every `*.jsonl` file under `training/imports/`
 
 Current sources include:
   - claude-post-train-data.md  → DPO preference pairs
   - codex-post-train-data.md   → SFT seed examples and JSON chat examples
   - tool-post-train-data.md    → tool-focused SFT + DPO examples
+  - training/imports/public/*.jsonl → imported canonical DPO/SFT rows
 
 Writes:
   - training/data/dpo.jsonl   — DPO preference pairs (prompt / chosen / rejected)
@@ -26,6 +29,7 @@ With --split flag, also writes:
 Usage:
   python3 scripts/prepare_training_data.py
   python3 scripts/prepare_training_data.py --split
+  python3 scripts/prepare_training_data.py --skip-markdown-sources --imports-dir /path/to/imports
   python3 scripts/prepare_training_data.py --source-dir /path/to/fae
 """
 
@@ -97,6 +101,13 @@ def discover_markdown_sources(source_dir: Path) -> list[Path]:
     return sorted(source_dir.glob("*-post-train-data.md"))
 
 
+def discover_imported_jsonl_sources(imports_dir: Path) -> list[Path]:
+    """Return all imported canonical JSONL sources in deterministic order."""
+    if not imports_dir.exists():
+        return []
+    return sorted(imports_dir.rglob("*.jsonl"))
+
+
 def extract_json_blocks(text: str) -> list[dict]:
     """Extract all fenced JSON blocks from markdown text. Returns list of parsed dicts."""
     pattern = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
@@ -132,6 +143,20 @@ def extract_text_content(content: object) -> str:
         return " ".join(parts)
 
     return ""
+
+
+def assistant_message_has_supervision(message: dict) -> bool:
+    """Return True when an assistant message carries trainable supervision.
+
+    Tool-use SFT rows may have assistant tool calls with empty textual content.
+    Those should still count as valid assistant supervision.
+    """
+    if message.get("role") != "assistant":
+        return False
+    if extract_text_content(message.get("content", "")).strip():
+        return True
+    tool_calls = message.get("tool_calls")
+    return isinstance(tool_calls, list) and len(tool_calls) > 0
 
 
 def extract_dpo_pairs(text: str) -> tuple[list[dict], list[str]]:
@@ -241,12 +266,7 @@ def extract_sft_examples_from_json_blocks(text: str) -> tuple[list[dict], list[s
             errors.append(f"SFT block {i+1}: messages contains non-message entries, skipping")
             continue
 
-        assistant_msgs = [
-            m
-            for m in msgs
-            if m.get("role") == "assistant"
-            and extract_text_content(m.get("content", "")).strip()
-        ]
+        assistant_msgs = [m for m in msgs if assistant_message_has_supervision(m)]
         if not assistant_msgs:
             errors.append(f"SFT block {i+1}: no assistant messages with content, skipping")
             continue
@@ -257,6 +277,73 @@ def extract_sft_examples_from_json_blocks(text: str) -> tuple[list[dict], list[s
         examples.append(example)
 
     return examples, errors
+
+
+def load_imported_jsonl_records(path: Path) -> tuple[list[dict], list[dict], list[str]]:
+    """Load canonical DPO/SFT rows from JSONL.
+
+    DPO rows must contain: prompt, chosen, rejected
+    SFT rows must contain: messages
+    """
+    dpo_pairs: list[dict] = []
+    sft_examples: list[dict] = []
+    errors: list[str] = []
+
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            raw = line.strip()
+            if not raw:
+                continue
+
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                errors.append(f"{path.name}:{line_number}: JSON parse error: {exc}")
+                continue
+
+            if all(key in record for key in ("prompt", "chosen", "rejected")):
+                prompt = record.get("prompt")
+                chosen = record.get("chosen")
+                rejected = record.get("rejected")
+                if not isinstance(prompt, list) or not isinstance(chosen, list) or not isinstance(rejected, list):
+                    errors.append(
+                        f"{path.name}:{line_number}: DPO row must use message arrays for prompt/chosen/rejected"
+                    )
+                    continue
+                if any(not isinstance(m, dict) for m in prompt + chosen + rejected):
+                    errors.append(f"{path.name}:{line_number}: DPO row contains non-message entries")
+                    continue
+                chosen_text = " ".join(
+                    extract_text_content(m.get("content", "")) for m in chosen if m.get("role") == "assistant"
+                )
+                rejected_text = " ".join(
+                    extract_text_content(m.get("content", "")) for m in rejected if m.get("role") == "assistant"
+                )
+                if not chosen_text.strip() or not rejected_text.strip():
+                    errors.append(
+                        f"{path.name}:{line_number}: DPO row must include assistant content in chosen and rejected"
+                    )
+                    continue
+                dpo_pairs.append(record)
+                continue
+
+            if "messages" in record:
+                messages = record.get("messages")
+                if not isinstance(messages, list) or not messages:
+                    errors.append(f"{path.name}:{line_number}: SFT row must include a non-empty messages array")
+                    continue
+                if any(not isinstance(m, dict) for m in messages):
+                    errors.append(f"{path.name}:{line_number}: SFT row contains non-message entries")
+                    continue
+                if not any(assistant_message_has_supervision(m) for m in messages):
+                    errors.append(f"{path.name}:{line_number}: SFT row has no assistant supervision")
+                    continue
+                sft_examples.append(record)
+                continue
+
+            errors.append(f"{path.name}:{line_number}: unrecognized record shape")
+
+    return dpo_pairs, sft_examples, errors
 
 
 def extract_sft_examples_from_seed_section(text: str) -> tuple[list[dict], list[str]]:
@@ -409,9 +496,20 @@ def main() -> int:
         help="Output directory for JSONL files. Defaults to <source-dir>/training/data/.",
     )
     parser.add_argument(
+        "--imports-dir",
+        type=Path,
+        default=None,
+        help="Directory containing imported canonical JSONL files. Defaults to <source-dir>/training/imports/.",
+    )
+    parser.add_argument(
         "--split",
         action="store_true",
         help="Also write 90/10 train/val splits.",
+    )
+    parser.add_argument(
+        "--skip-markdown-sources",
+        action="store_true",
+        help="Do not read `*-post-train-data.md` files; use imported JSONL only.",
     )
     parser.add_argument(
         "--verbose",
@@ -423,15 +521,18 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     source_dir = args.source_dir or script_dir.parent
     output_dir = args.output_dir or (source_dir / "training" / "data")
+    imports_dir = args.imports_dir or (source_dir / "training" / "imports")
 
     print(f"Source directory: {source_dir}")
     print(f"Output directory: {output_dir}")
+    print(f"Imports directory: {imports_dir}")
     print()
 
-    source_files = discover_markdown_sources(source_dir)
-    if not source_files:
+    source_files = [] if args.skip_markdown_sources else discover_markdown_sources(source_dir)
+    imported_files = discover_imported_jsonl_sources(imports_dir)
+    if not source_files and not imported_files:
         print(
-            f"ERROR: No *-post-train-data.md files found in {source_dir}",
+            f"ERROR: No training data sources found in {source_dir} or {imports_dir}",
             file=sys.stderr,
         )
         return 1
@@ -441,6 +542,16 @@ def main() -> int:
         text = path.read_text(encoding="utf-8")
         file_texts[path] = text
         print(f"Read {len(text):,} chars from {path.name}")
+    for path in imported_files:
+        if path.is_relative_to(source_dir):
+            display_path = path.relative_to(source_dir)
+        else:
+            display_path = path
+        print(f"Discovered imported JSONL source {display_path}")
+    imported_records = {
+        path: load_imported_jsonl_records(path)
+        for path in imported_files
+    }
 
     print()
     print("=== DPO extraction ===")
@@ -454,6 +565,16 @@ def main() -> int:
         dpo_errors.extend([f"{path.name}: {err}" for err in errors])
         if pairs:
             dpo_counts[path.name] = len(pairs)
+
+    for path, (imported_dpo, _, errors) in imported_records.items():
+        dpo_pairs.extend(imported_dpo)
+        dpo_errors.extend(errors)
+        if imported_dpo:
+            if path.is_relative_to(source_dir):
+                display_name = str(path.relative_to(source_dir))
+            else:
+                display_name = str(path)
+            dpo_counts[display_name] = len(imported_dpo)
 
     for name, count in dpo_counts.items():
         print(f"{name}: {count} DPO pairs")
@@ -483,6 +604,15 @@ def main() -> int:
         all_sft_errors.extend([f"{path.name}: {err}" for err in errs])
         if sft_from_seed:
             print(f"{path.name}: {len(sft_from_seed)} seed SFT examples")
+
+    for path, (_, imported_sft, errors) in imported_records.items():
+        all_sft_examples.extend(imported_sft)
+        if imported_sft:
+            if path.is_relative_to(source_dir):
+                display_name = path.relative_to(source_dir)
+            else:
+                display_name = path
+            print(f"{display_name}: {len(imported_sft)} imported SFT rows")
 
     sft_from_dpo, skipped_tool_sensitive = derive_sft_examples_from_dpo_pairs(dpo_pairs)
     if sft_from_dpo:
@@ -546,11 +676,16 @@ def main() -> int:
     if total_errors > 0 and not args.verbose:
         print("  (run with --verbose to see all errors)")
 
-    if len(dpo_pairs) == 0:
+    if len(dpo_pairs) == 0 and len(all_sft_examples) == 0:
         print()
         print("WARNING: No DPO pairs were extracted. Check that the source file contains")
         print("  JSON blocks with 'prompt', 'chosen', and 'rejected' keys.")
         return 1
+
+    if len(dpo_pairs) == 0:
+        print()
+        print("WARNING: No DPO pairs were extracted.")
+        print("  SFT-only output was generated successfully.")
 
     return 0
 

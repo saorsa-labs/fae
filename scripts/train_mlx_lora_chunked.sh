@@ -17,6 +17,8 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 TRAINING_DATA_DIR="${FAE_TRAINING_DATA_DIR:-$PROJECT_ROOT/training/data}"
+IMPORTS_DIR="${FAE_IMPORTS_DIR:-$PROJECT_ROOT/training/imports}"
+SKIP_MARKDOWN_SOURCES="${FAE_SKIP_MARKDOWN_SOURCES:-0}"
 RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 MODEL_TAG="qwen35-${TARGET_MODEL}"
 ADAPTER_PATH="${FAE_ADAPTER_PATH:-$PROJECT_ROOT/training/adapters/chunked-${MODEL_TAG}-${RUN_STAMP}}"
@@ -45,10 +47,17 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 log "Preparing split training data once for chunked run"
-uv run --python 3.12 --with mlx-lm python "$SCRIPT_DIR/prepare_training_data.py" \
+PREPARE_CMD=(
+    uv run --python 3.12 --with mlx-lm python "$SCRIPT_DIR/prepare_training_data.py"
     --source-dir "$PROJECT_ROOT" \
     --output-dir "$TRAINING_DATA_DIR" \
-    --split >/dev/null
+    --imports-dir "$IMPORTS_DIR" \
+    --split
+)
+if [[ "$SKIP_MARKDOWN_SOURCES" == "1" ]]; then
+    PREPARE_CMD+=(--skip-markdown-sources)
+fi
+"${PREPARE_CMD[@]}" >/dev/null
 
 mkdir -p "$(dirname "$ADAPTER_PATH")"
 
@@ -96,7 +105,9 @@ while [[ "$remaining" -gt 0 ]]; do
         FAE_GRAD_ACCUMULATION_STEPS \
         FAE_DISABLE_VALIDATION \
         FAE_TASKPOLICY_BACKGROUND \
-        FAE_TRAINING_DATA_DIR
+        FAE_TRAINING_DATA_DIR \
+        FAE_IMPORTS_DIR \
+        FAE_SKIP_MARKDOWN_SOURCES
     do
         if [[ -n "${!name:-}" ]]; then
             chunk_env+=("$name=${!name}")
