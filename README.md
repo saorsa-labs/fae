@@ -96,7 +96,7 @@ For a deep technical analysis of how Fae learns, adapts, and grows with her user
 
 Fae can delegate complex coding tasks to external AI agents — Claude Code, Codex, Gemini CLI, Copilot, and any [ACP-compatible agent](https://agentclientprotocol.com) — via the bundled `acpx` client. Fae understands your intent, routes the task to the right specialist, monitors progress, and synthesises the result. The local LLM handles personality and judgment; the external agent handles code.
 
-See the **[ACP Integration Design](docs/specs/acp-integration-design.md)** for the protocol architecture and the **[Continuous Self-Improvement Architecture](docs/specs/continuous-self-improvement-architecture.md)** for how ACP, Forge, memory, training, and subagent delegation compose into a closed self-improvement loop.
+See the **[ACP Integration Design](docs/specs/acp-integration-design.md)** for the protocol architecture, the **[Continuous Self-Improvement Architecture](docs/specs/continuous-self-improvement-architecture.md)** for how all capabilities compose into a closed self-improvement loop, and the **[Memory→Training Bridge](docs/specs/memory-to-training-bridge.md)** for how Fae's conversations become personalised model weights.
 
 ### Skill-First Extensibility (Project Preference)
 
