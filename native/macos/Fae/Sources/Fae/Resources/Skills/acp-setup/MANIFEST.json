@@ -1,0 +1,22 @@
+{
+  "name": "acp-setup",
+  "version": "1.0.0",
+  "capabilities": [
+    "process",
+    "network"
+  ],
+  "allowedTools": [
+    "bash",
+    "activate_skill"
+  ],
+  "allowedDomains": [
+    "registry.npmjs.org",
+    "bun.sh"
+  ],
+  "riskTier": "medium",
+  "files": {
+    "SKILL.md": "9a956284e3c1df6a16228832504f8d51f5eb62594f96ca00c69fe0f16215aef3",
+    "scripts/install_acpx.py": "83d427c2a6e19182f477e17a09d2c3f066baed34474b085ac430366da2ecfa26",
+    "scripts/status.py": "3aa2f5a98e4b233bc283353d58621f9db8a667bb3ee19cc948153995c5b58dbe"
+  }
+}

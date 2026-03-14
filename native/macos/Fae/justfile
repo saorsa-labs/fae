@@ -332,13 +332,8 @@ bundle:
     cp "$PRODUCTS/Fae" "$APP_BUNDLE/Contents/MacOS/Fae"
     chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
 
-    # Bundle acpx (ACP agent client) if available
-    ACPX_SRC="$(dirname "$PRODUCTS")/../../Resources/Binaries/acpx"
-    if [ -f "$ACPX_SRC" ]; then
-        cp "$ACPX_SRC" "$APP_BUNDLE/Contents/MacOS/acpx"
-        chmod +x "$APP_BUNDLE/Contents/MacOS/acpx"
-        echo "  Bundled acpx"
-    fi
+    # acpx (ACP agent client) is installed on-demand by Fae at runtime.
+    # For local dev, run `just build-acpx` then copy manually if needed.
 
     # Fix rpaths: remove absolute xcode build-dir paths, add @executable_path/../Frameworks.
     # The debug binary has LC_RPATH entries like /Users/.../Debug/PackageFrameworks baked in
@@ -442,15 +437,6 @@ _sign-bundle app_bundle:
 
     # Entitlements.plist lives at the project root (3 levels up from native/macos/Fae/).
     ENTITLEMENTS="$(cd "../../.." && pwd)/Entitlements.plist"
-
-    # Sign acpx auxiliary binary (before main executable)
-    if [ -f "$APP_BUNDLE/Contents/MacOS/acpx" ]; then
-        echo "=== Signing acpx ==="
-        codesign --force --options runtime \
-            --sign "$MACOS_SIGNING_IDENTITY" \
-            --timestamp \
-            "$APP_BUNDLE/Contents/MacOS/acpx"
-    fi
 
     echo "=== Signing main executable ==="
     codesign --force --options runtime \
