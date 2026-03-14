@@ -1,3 +1,5 @@
 .build/
 .swiftpm/
 Package.resolved
+# Built binaries (build from source: just build-acpx)
+Resources/Binaries/

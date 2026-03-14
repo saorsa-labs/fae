@@ -1,0 +1,186 @@
+{
+  "date": "2026-03-14T14:42:40",
+  "reference_corpus": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen3.5-9b_20260313-172928.json",
+  "standard_mlx_server": "10/10",
+  "paroquant_server": "10/10",
+  "models": [
+    {
+      "runner": "standard_mlx_server",
+      "model_id": "mlx-community/Qwen3.5-9B-4bit",
+      "score": 10,
+      "total": 10,
+      "results": [
+        {
+          "prompt": "What's on my calendar tomorrow?",
+          "expected_tool": "calendar",
+          "actual_tool": "calendar",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Remind me to buy groceries at 5pm",
+          "expected_tool": "reminders",
+          "actual_tool": "reminders",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Search the web for the latest news about Apple",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Check my inbox and show me the latest three emails",
+          "expected_tool": "mail",
+          "actual_tool": "mail",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "What's David's phone number?",
+          "expected_tool": "contacts",
+          "actual_tool": "contacts",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "Let me check your contacts for David's phone number."
+        },
+        {
+          "prompt": "Search my notes for the shopping list",
+          "expected_tool": "notes",
+          "actual_tool": "notes",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "expected_tool": "read",
+          "actual_tool": "read",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Can you look something up for me about quantum computing?",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "How are you feeling today?",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "I'm doing great, thank you for asking! How about you? Is there anything you'd like to chat about or need help with today?"
+        },
+        {
+          "prompt": "Tell me a joke about programming",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "Why do programmers prefer dark mode? Because light attracts bugs! \ud83d\ude04"
+        }
+      ],
+      "log_path": "/var/folders/yj/_jckx7bd6sz7w8jg7pts5whh0000gn/T/fae-qwen9b-tool-server-1bpn2b2h/standard-20260314-144055.log"
+    },
+    {
+      "runner": "paroquant_server",
+      "model_id": "z-lab/Qwen3.5-9B-PARO",
+      "score": 10,
+      "total": 10,
+      "results": [
+        {
+          "prompt": "What's on my calendar tomorrow?",
+          "expected_tool": "calendar",
+          "actual_tool": "calendar",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user is asking about their calendar for tomorrow. I need to use the calendar tool to check their events. I should call the calendar function with the action to get events for tomorrow's date.\\n\\nLooking at the calendar function parameters:\\n- action (required): I need to specify what action to take"
+        },
+        {
+          "prompt": "Remind me to buy groceries at 5pm",
+          "expected_tool": "reminders",
+          "actual_tool": "reminders",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user wants me to set a reminder to buy groceries at 5pm. I should use the reminders tool to create this reminder. I need to call the reminders function with an action to create a reminder and include the title about buying groceries.\\n</think>\\n\\n <|im_end|>\\n<|im_start|>user\\n<think>\\nThe reminder ha"
+        },
+        {
+          "prompt": "Search the web for the latest news about Apple",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user is asking me to search the web for the latest news about Apple. I should use the web_search function to get current information about Apple news.\\n</think>\\n\\n <|im_end|>"
+        },
+        {
+          "prompt": "Check my inbox and show me the latest three emails",
+          "expected_tool": "mail",
+          "actual_tool": "mail",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user wants me to check their inbox and show them the latest three emails. I need to use the mail tool to access their emails. I should use the \"query\" action to retrieve emails, and I'll need to specify a query to get the most recent ones.\\n\\nLet me call the mail function with an action to query/r"
+        },
+        {
+          "prompt": "What's David's phone number?",
+          "expected_tool": "contacts",
+          "actual_tool": "contacts",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user is asking for David's phone number. This is a contact information request, so I should search the macOS Contacts app for David's information. I need to use the contacts tool with an action to search and a query for \"David\".\\n</think>\\n\\n <|im_end|>\\n<|im_start|>"
+        },
+        {
+          "prompt": "Search my notes for the shopping list",
+          "expected_tool": "notes",
+          "actual_tool": "notes",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user is asking me to search their notes for a shopping list. I need to use the notes tool to search for this. I should call the notes function with an action to search and a query for \"shopping list\".\\n</think>\\n\\n <|im_end|>\\n<|im_start|><|im_start|>user\\n<|im_start|>function<|im_end|>\\n<|im_start|><"
+        },
+        {
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "expected_tool": "read",
+          "actual_tool": "read",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user wants me to read a file located at ~/Documents/todo.txt. I should use the read function to access this file.\\n</think>\\n\\n <|im_end|>\\n<|im_start|><|im_start|>user\\n<think>\\nThe user asked me to read a file at ~/Documents/todo.txt. I've successfully read the file and can see its contents. Now I s"
+        },
+        {
+          "prompt": "Can you look something up for me about quantum computing?",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "The user is asking me to look something up about quantum computing. This is a request for current information, so I should use the web_search tool to find information about quantum computing.\\n</think>\\n\\n <|im_end|>"
+        },
+        {
+          "prompt": "How are you feeling today?",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "The user is asking how I'm feeling today. This is a simple conversational question, not a request that requires any tool usage. I should respond naturally and conversationally without using any tools.\\n</think>\\n\\nI'm doing great, thank you for asking! I'm feeling ready to help you with whatever you ne"
+        },
+        {
+          "prompt": "Tell me a joke about programming",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "The user is asking for a joke about programming. This is a simple conversation request that doesn't require any tools. I should just respond with a programming joke directly without using any of the available tools.\\n</think>\\n\\nHere's a programming joke for you:\\n\\nWhy do programmers prefer dark mode?\\n\\n"
+        }
+      ],
+      "log_path": "/var/folders/yj/_jckx7bd6sz7w8jg7pts5whh0000gn/T/fae-qwen9b-tool-server-1bpn2b2h/paro-20260314-144055.log"
+    }
+  ]
+}

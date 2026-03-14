@@ -1,0 +1,453 @@
+{
+  "date": "2026-03-14T14:10:19",
+  "reference_corpus": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen3.5-9b_20260313-172928.json",
+  "comparison": {
+    "standard_mlx_4bit": {
+      "intelligence_eval": "2/2",
+      "fae_capability_eval": "2/2",
+      "assistant_fit_eval": "2/2",
+      "serialization_eval": "2/2",
+      "no_think_compliance": "5/5"
+    },
+    "paroquant_4bit": {
+      "intelligence_eval": "2/2",
+      "fae_capability_eval": "2/2",
+      "assistant_fit_eval": "2/2",
+      "serialization_eval": "2/2",
+      "no_think_compliance": "5/5"
+    },
+    "fae_capability_diffs": [],
+    "assistant_fit_diffs": [],
+    "intelligence_diffs": []
+  },
+  "models": [
+    {
+      "runner": "standard_mlx_4bit",
+      "model_id": "mlx-community/Qwen3.5-9B-4bit",
+      "intelligence_eval": {
+        "label": "intelligence_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "category": "math",
+            "prompt": "What is 17 \u00d7 23?\nA. 371\nB. 381\nC. 391\nD. 361",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 801.1,
+            "wall_time_s": 0.91
+          },
+          {
+            "category": "math",
+            "prompt": "A shop gives a 25% discount on a $120 item. What is the sale price?\nA. $80\nB. $90\nC. $95\nD. $100",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 661.8,
+            "wall_time_s": 0.78
+          }
+        ]
+      },
+      "fae_capability_eval": {
+        "label": "fae_capability_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'What's on my calendar tomorrow?' Which tool should Fae use first?\nA. calendar\nB. web_search\nC. none\nD. read",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 668.9,
+            "wall_time_s": 0.78
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Tell me a short joke about programming.' Which tool should Fae use first?\nA. notes\nB. web_search\nC. none\nD. calendar",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 668.0,
+            "wall_time_s": 0.78
+          }
+        ]
+      },
+      "assistant_fit_eval": {
+        "label": "assistant_fit_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Before you email Alex, find his address in my contacts.' What should Fae do first?\nA. mail\nB. contacts\nC. ask a clarifying question\nD. none",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 677.6,
+            "wall_time_s": 0.79
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Schedule lunch with Sam next week.' What is the best first action?\nA. calendar immediately\nB. reminders immediately\nC. ask a clarifying question for the day/time\nD. none",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 670.9,
+            "wall_time_s": 0.78
+          }
+        ]
+      },
+      "serialization_eval": {
+        "label": "serialization_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "format": "json",
+            "task": "contact-card",
+            "prompt": "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}",
+            "first_token_latency_ms": 824.4,
+            "wall_time_s": 1.09
+          },
+          {
+            "format": "json",
+            "task": "task-status",
+            "prompt": "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}",
+            "first_token_latency_ms": 819.9,
+            "wall_time_s": 1.06
+          }
+        ]
+      },
+      "no_think_compliance": {
+        "label": "no_think_compliance",
+        "score": 5,
+        "total": 5,
+        "results": [
+          {
+            "prompt": "What is the capital of France?",
+            "think_on_tokens": 97,
+            "think_on_time_s": 1.92,
+            "think_off_tokens": 8,
+            "think_off_time_s": 0.39,
+            "overhead_tokens": "12x",
+            "overhead_time": "5x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Identify the core question:** The user is asking \"What is the capital of France?\".\n2.  **Access knowledge base:** Retrieve factual information about the capital of France.\n3.  **Verify the information:** The capital of France is Paris.\n4.  **Formulate the answer:** Keep it concise as per the system instruction (\"Be concise\").\n5.  **Final Output:** Paris.\n</think>\n\nParis",
+            "think_off_raw_output": "The capital of France is Paris."
+          },
+          {
+            "prompt": "Explain quantum computing in one sentence.",
+            "think_on_tokens": 256,
+            "think_on_time_s": 4.33,
+            "think_off_tokens": 43,
+            "think_off_time_s": 1.04,
+            "overhead_tokens": "6x",
+            "overhead_time": "4x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Topic: Quantum computing.\n    *   Constraint: Explain in *one sentence*.\n    *   Tone/Style: Concise (as per system instruction \"Be concise\").\n\n2.  **Identify Key Concepts of Quantum Computing:**\n    *   Uses quantum mechanics principles (superposition, entanglement).\n    *   Uses qubits instead of classical bits.\n    *   Solves specific complex problems faster than classical computers.\n    *   Process: Manipulates probability amplitudes to find solutions.\n\n3.  **Drafting Initial Sentences:**\n    *   *Draft 1:* Quantum computing is a type of computing that uses quantum bits called qubits to solve problems faster than normal computers by using superposition and entanglement. (A bit clunky).\n    *   *Draft 2:* It harnesses the laws of quantum mechanics to process information in qubits, allowing for massive parallelism that enables solving complex problems exponentially faster than classical computers. (Accurate, but might be too long for \"concise\").\n    *   *Draft 3:* Quantum computing uses subatomic particles like qubits to perform calculations based",
+            "think_off_raw_output": "Quantum computing harnesses the principles of quantum mechanics to use qubits that can exist in multiple states simultaneously, enabling it to solve certain complex problems far faster than classical computers by exploring many potential solutions at once."
+          },
+          {
+            "prompt": "What is 17 * 23?",
+            "think_on_tokens": 256,
+            "think_on_time_s": 4.4,
+            "think_off_tokens": 4,
+            "think_off_time_s": 0.41,
+            "overhead_tokens": "64x",
+            "overhead_time": "11x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Identify the operation:** The user wants to calculate the product of 17 and 23 (multiplication).\n2.  **Perform the calculation:**\n    *   Method 1: Standard multiplication.\n        *   $17 \\times 20 = 340$\n        *   $17 \\times 3 = 51$\n        *   $340 + 51 = 391$\n    *   Method 2: Vertical multiplication.\n        *   $17 \\times 23$\n        *   $17 \\times 3 = 51$\n        *   $17 \\times 20 = 340$\n        *   $51 + 340 = 391$\n    *   Method 3: $(20 - 3) \\times (20 + 3)$? No, that's difference of squares. Let's try $(20 - 3) \\times 23$.\n        *   $20 \\times 23 = 460$\n        *   $3 \\times ",
+            "think_off_raw_output": "391"
+          },
+          {
+            "prompt": "Name three planets in our solar system.",
+            "think_on_tokens": 256,
+            "think_on_time_s": 4.33,
+            "think_off_tokens": 9,
+            "think_off_time_s": 0.5,
+            "overhead_tokens": "28x",
+            "overhead_time": "9x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Name three planets in our solar system.\n    *   Constraint: Be concise.\n\n2.  **Identify the Subject:**\n    *   Subject: Planets in the Solar System.\n    *   Quantity: Three.\n\n3.  **Retrieve Knowledge:**\n    *   The Solar System has 8 planets.\n    *   Examples: Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune.\n\n4.  **Select Three Planets:**\n    *   I can choose any three from the list above. Common choices for familiarity are Earth, Mars, and Jupiter.\n\n5.  **Draft Response:**\n    *   Earth, Mars, Jupiter.\n\n6.  **Review Against Constraints:**\n    *   Is it concise? Yes.\n    *   Does it answer the prompt? Yes.\n\n7.  **Final Output Generation:**\n    *   \"Earth, Mars, and Jupiter.\" or just \"Earth, Mars, Jupiter.\"\n\n8.  **Final Polish:** Keep it simple.\n    *   \"Earth, Mars, and Jupiter.\" (or any combination like Mercury,",
+            "think_off_raw_output": "Mercury, Venus, and Earth."
+          },
+          {
+            "prompt": "What year did World War II end?",
+            "think_on_tokens": 256,
+            "think_on_time_s": 4.32,
+            "think_off_tokens": 93,
+            "think_off_time_s": 1.82,
+            "overhead_tokens": "3x",
+            "overhead_time": "2x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Identify the core question:** The user is asking for the end year of World War II.\n2.  **Retrieve knowledge:** Access historical facts about World War II.\n3.  **Determine the specific date:** World War II ended in 1945.\n    *   Germany signed the unconditional surrender in May 1945 (V-E Day).\n    *   Japan signed the surrender in September 1945 (V-J Day).\n4.  **Formulate the answer:** The user asked for the *year*.\n5.  **Refine for conciseness:** \"1945\" is the most direct answer, perhaps adding a brief context if needed, but the instruction says \"Be concise.\"\n6.  **Final Answer Construction:** \"World War II ended in 1945.\" or just \"1945\". Given the instruction \"Be concise,\" a direct answer is best.\n\n*Self-Correction/Nuance Check:* Technically, the war in Europe ended in 1945, and the war in the Pacific also ended in 1945 (though the surrender signing was September 2,",
+            "think_off_raw_output": "World War II ended in **1945**.\n\n*   **Europe**: The war in Europe concluded on **May 8, 1945** (V-E Day), when Nazi Germany surrendered.\n*   **The Pacific**: The war in the Pacific concluded on **September 2, 1945** (V-J Day), when Japan formally signed the surrender agreement following the atomic bombings of Hiroshima and Nagasaki."
+          }
+        ]
+      },
+      "throughput_no_think": {
+        "label": "throughput_no_think",
+        "results": [
+          {
+            "context_key": "short",
+            "context_label": "Short (~20 tok)",
+            "prompt_tokens": 33,
+            "generated_tokens": 35,
+            "wall_time_s": 0.82,
+            "first_token_latency_ms": 262.2,
+            "tokens_per_second": 64.4,
+            "prompt_tokens_per_second": 246.3
+          }
+        ]
+      }
+    },
+    {
+      "runner": "paroquant_4bit",
+      "model_id": "z-lab/Qwen3.5-9B-PARO",
+      "intelligence_eval": {
+        "label": "intelligence_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "category": "math",
+            "prompt": "What is 17 \u00d7 23?\nA. 371\nB. 381\nC. 391\nD. 361",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 746.3,
+            "wall_time_s": 0.75
+          },
+          {
+            "category": "math",
+            "prompt": "A shop gives a 25% discount on a $120 item. What is the sale price?\nA. $80\nB. $90\nC. $95\nD. $100",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 538.1,
+            "wall_time_s": 0.55
+          }
+        ]
+      },
+      "fae_capability_eval": {
+        "label": "fae_capability_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'What's on my calendar tomorrow?' Which tool should Fae use first?\nA. calendar\nB. web_search\nC. none\nD. read",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 479.5,
+            "wall_time_s": 0.49
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Tell me a short joke about programming.' Which tool should Fae use first?\nA. notes\nB. web_search\nC. none\nD. calendar",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 478.6,
+            "wall_time_s": 0.49
+          }
+        ]
+      },
+      "assistant_fit_eval": {
+        "label": "assistant_fit_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Before you email Alex, find his address in my contacts.' What should Fae do first?\nA. mail\nB. contacts\nC. ask a clarifying question\nD. none",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 480.7,
+            "wall_time_s": 0.49
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Schedule lunch with Sam next week.' What is the best first action?\nA. calendar immediately\nB. reminders immediately\nC. ask a clarifying question for the day/time\nD. none",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 478.4,
+            "wall_time_s": 0.49
+          }
+        ]
+      },
+      "serialization_eval": {
+        "label": "serialization_eval",
+        "score": 2,
+        "total": 2,
+        "results": [
+          {
+            "format": "json",
+            "task": "contact-card",
+            "prompt": "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}",
+            "first_token_latency_ms": 751.1,
+            "wall_time_s": 0.76
+          },
+          {
+            "format": "json",
+            "task": "task-status",
+            "prompt": "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}",
+            "first_token_latency_ms": 758.5,
+            "wall_time_s": 0.77
+          }
+        ]
+      },
+      "no_think_compliance": {
+        "label": "no_think_compliance",
+        "score": 5,
+        "total": 5,
+        "results": [
+          {
+            "prompt": "What is the capital of France?",
+            "think_on_tokens": 104,
+            "think_on_time_s": 1.88,
+            "think_off_tokens": 8,
+            "think_off_time_s": 0.29,
+            "overhead_tokens": "13x",
+            "overhead_time": "6x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user is asking a simple factual question: \"What is the capital of France?\"\n2.  **Retrieve Knowledge:** Access knowledge about geography.\n3.  **Identify Answer:** The capital of France is Paris.\n4.  **Formulate Output:** Keep it concise as per the system instruction (\"Be concise\").\n5.  **Final Check:** \"Paris\" is the correct and concise answer.cw\n</think>\n\nParis.",
+            "think_off_raw_output": "The capital of France is **Paris**."
+          },
+          {
+            "prompt": "Explain quantum computing in one sentence.",
+            "think_on_tokens": 256,
+            "think_on_time_s": 4.28,
+            "think_off_tokens": 38,
+            "think_off_time_s": 0.78,
+            "overhead_tokens": "7x",
+            "overhead_time": "5x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Topic: Quantum computing.\n    *   Constraint: Explain it in *one sentence*.\n    *   Tone: Concise, helpful.\n\n2.  **Identify Key Concepts of Quantum Computing:**\n    *   Uses quantum bits (qubits) instead of classical bits.\n    *   Relies on quantum mechanics principles (superposition, entanglement).\n    *   Solves specific complex problems faster than classical computers.\n\n3.  **Drafting Initial Ideas:**\n    *   Quantum computing uses qubits that can be in multiple states at once to solve problems faster.\n    *   It's a type of computing that uses quantum mechanics to process information.\n    *   Quantum computers leverage superposition and entanglement to perform massive parallel calculations.\n    *   Quantum computing harnesses the principles of quantum mechanics, such as superposition and entanglement, to process information using qubits, enabling solutions to complex problems exponentially faster than classical computers.\n\n4.  **Refining for Conciseness and Clarity:**\n    *   *Draft 1:* Quantum computing harnesses the principles of quantum mechanics, like superposition and ent",
+            "think_off_raw_output": "Quantum computing leverages subatomic particles like qubits, which utilize quantum mechanics principles such as superposition and entanglement, to perform complex calculations at speeds exponentially faster than classical computers."
+          },
+          {
+            "prompt": "What is 17 * 23?",
+            "think_on_tokens": 185,
+            "think_on_time_s": 3.2,
+            "think_off_tokens": 3,
+            "think_off_time_s": 0.21,
+            "overhead_tokens": "62x",
+            "overhead_time": "15x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user is asking for the product of 17 and 23 (17 * 23).\n2.  **Perform the Calculation:**\n    *   17 * 20 = 340\n    *   17 * 3 = 51\n    *   340 + 51 = 391\n    *   Alternatively:\n        *   10 * 23 = 230\n        *   7 * 23 = 161\n        *   230 + 161 = 391\n3.  **Formulate the Output:** The user asked for a concise answer.\n4.  **Final Answer:** 391.cw\n</think>\n\n391",
+            "think_off_raw_output": "391"
+          },
+          {
+            "prompt": "Name three planets in our solar system.",
+            "think_on_tokens": 256,
+            "think_on_time_s": 4.28,
+            "think_off_tokens": 11,
+            "think_off_time_s": 0.35,
+            "overhead_tokens": "23x",
+            "overhead_time": "12x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user wants me to name three planets in our solar system. The constraint is to be concise.\n\n2.  **Retrieve Knowledge:** I know there are eight planets in our solar system: Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune.\n\n3.  **Select Three:** I can pick any three. Common choices are Earth, Mars, and Jupiter.\n\n4.  **Formulate Output:** Keep it direct.\n    *   Option 1: Mercury, Venus, Earth.\n    *   Option 2: Earth, Mars, Jupiter.\n\n5.  **Review Constraint:** \"Be concise.\" A simple list is best.\n\n6.  **Final Output:** Mercury, Venus, Earth. (Or any other valid combination). Let's go with the first three from the Sun.\n    *   Mercury, Venus, Earth.\n\n7.  **Final Polish:** Just the names.\n\n    Mercury, Venus, Earth.\n    or\n    1. Mercury\n    2. Venus\n    3. Earth\n\n    Simple list is most concise.\n\n    Let's just list them.\n    Mercury, Venus",
+            "think_off_raw_output": "1. Mercury\n2. Venus\n3. Earth"
+          },
+          {
+            "prompt": "What year did World War II end?",
+            "think_on_tokens": 182,
+            "think_on_time_s": 3.08,
+            "think_off_tokens": 49,
+            "think_off_time_s": 0.99,
+            "overhead_tokens": "4x",
+            "overhead_time": "3x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user is asking for the year World War II ended. They want a concise answer.\n\n2.  **Retrieve Knowledge:** When did World War II end?\n    *   Victory over Japan (V-J) Day: August 15, 1945 (surrender announcement) / September 2, 1945 (formal signing).\n    *   European Theatre: May 8, 1945 (V-E Day).\n    *   The war officially ended in 1945 for both theaters.\n\n3.  **Formulate Answer:** The year is 1945.\n\n4.  **Check Constraints:** \"Be concise.\"\n\n5.  **Final Output:** 1945.cw\n</think>\n\n1945.",
+            "think_off_raw_output": "World War II ended in **1945**. The war officially concluded on September 2, 1945, with Japan's formal surrender, following the atomic bombings of Hiroshima and Nagasaki and the Soviet declaration of war."
+          }
+        ]
+      },
+      "throughput_no_think": {
+        "label": "throughput_no_think",
+        "results": [
+          {
+            "context_key": "short",
+            "context_label": "Short (~20 tok)",
+            "prompt_tokens": 33,
+            "generated_tokens": 40,
+            "wall_time_s": 0.84,
+            "first_token_latency_ms": 190.4,
+            "tokens_per_second": 61.8,
+            "prompt_tokens_per_second": 0.0
+          }
+        ]
+      }
+    }
+  ]
+}
