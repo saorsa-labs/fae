@@ -237,6 +237,10 @@ def extract_sft_examples_from_json_blocks(text: str) -> tuple[list[dict], list[s
             errors.append(f"SFT block {i+1}: empty or invalid messages array, skipping")
             continue
 
+        if any(not isinstance(m, dict) for m in msgs):
+            errors.append(f"SFT block {i+1}: messages contains non-message entries, skipping")
+            continue
+
         assistant_msgs = [
             m
             for m in msgs

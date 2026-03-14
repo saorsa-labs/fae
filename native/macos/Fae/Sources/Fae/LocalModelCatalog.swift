@@ -1,4 +1,5 @@
 import Foundation
+import FaeInference
 
 struct LocalModelCatalog {
     struct VoiceOption {
@@ -92,37 +93,6 @@ struct LocalModelCatalog {
     }
 
     static func isModelCached(modelID: String) -> Bool {
-        let parts = modelID.split(separator: "/", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return false }
-
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser
-
-        let libraryCache = home
-            .appendingPathComponent("Library/Caches/models")
-            .appendingPathComponent(parts[0])
-            .appendingPathComponent(parts[1])
-
-        if hasMLXModelPayload(at: libraryCache) {
-            return true
-        }
-
-        let hubCache = home
-            .appendingPathComponent(".cache/huggingface/hub")
-            .appendingPathComponent("models--\(parts[0])--\(parts[1])")
-
-        return fm.fileExists(atPath: hubCache.path)
-    }
-
-    private static func hasMLXModelPayload(at directory: URL) -> Bool {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: directory.path) else { return false }
-        guard let contents = try? fm.contentsOfDirectory(atPath: directory.path) else {
-            return false
-        }
-
-        let hasConfig = contents.contains("config.json")
-        let hasWeights = contents.contains { $0.hasSuffix(".safetensors") }
-        return hasConfig && hasWeights
+        localModelDirectoryURL(from: modelID) != nil
     }
 }

@@ -35,6 +35,8 @@ Current benchmark docs live at the repository root so people can see both what w
 
 `FaeBenchmark` now compiles against the same shared `FaeInference` / `MLXLLMEngine` path as the main app. Use the `just benchmark*` recipes or `just build-benchmark` so the Xcode-built binary picks up the required Metal bundle and the current `mlx-swift-lm` / Qwen behavior.
 
+Canonical local model cache: `~/.cache/huggingface/hub`. The app runtime, training scripts, and benchmark path now resolve model IDs from that shared cache first. `~/Library/Caches/models/...` is legacy-only and can be deduplicated with `bash scripts/cleanup_legacy_model_caches.sh --apply`.
+
 ## Notes
 
 - iPhone/Watch session continuation still requires matching companion targets using the same activity type/payload contract.

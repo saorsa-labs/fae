@@ -1,14 +1,96 @@
 import Foundation
 import MLXLMCommon
 
+private func repoParts(from modelID: String) -> (org: String, repo: String)? {
+    let parts = modelID.split(separator: "/", maxSplits: 1).map(String.init)
+    guard parts.count == 2 else { return nil }
+    return (parts[0], parts[1])
+}
+
+private func hasModelPayload(at directory: URL) -> Bool {
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: directory.path) else { return false }
+    guard let contents = try? fm.contentsOfDirectory(atPath: directory.path) else {
+        return false
+    }
+
+    let hasConfig = contents.contains("config.json")
+    let hasWeights = contents.contains { $0.hasSuffix(".safetensors") || $0.hasSuffix(".gguf") }
+    return hasConfig && hasWeights
+}
+
+private func huggingFaceHubCacheDirectory(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+) -> URL {
+    if let hubCache = environment["HF_HUB_CACHE"], !hubCache.isEmpty {
+        return URL(fileURLWithPath: (hubCache as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    if let hfHome = environment["HF_HOME"], !hfHome.isEmpty {
+        return URL(fileURLWithPath: (hfHome as NSString).expandingTildeInPath, isDirectory: true)
+            .appendingPathComponent("hub", isDirectory: true)
+    }
+
+    return FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".cache", isDirectory: true)
+        .appendingPathComponent("huggingface", isDirectory: true)
+        .appendingPathComponent("hub", isDirectory: true)
+}
+
+private func cachedHuggingFaceSnapshotDirectory(for modelID: String) -> URL? {
+    guard let parts = repoParts(from: modelID) else { return nil }
+
+    let repoDirectory = huggingFaceHubCacheDirectory()
+        .appendingPathComponent("models--\(parts.org)--\(parts.repo)", isDirectory: true)
+    let refsDirectory = repoDirectory.appendingPathComponent("refs", isDirectory: true)
+    let snapshotsDirectory = repoDirectory.appendingPathComponent("snapshots", isDirectory: true)
+    let refFile = refsDirectory.appendingPathComponent("main", isDirectory: false)
+
+    if let snapshotRef = try? String(contentsOf: refFile, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       !snapshotRef.isEmpty
+    {
+        let snapshotDirectory = snapshotsDirectory.appendingPathComponent(snapshotRef, isDirectory: true)
+        if hasModelPayload(at: snapshotDirectory) {
+            return snapshotDirectory
+        }
+    }
+
+    guard let snapshotEntries = try? FileManager.default.contentsOfDirectory(
+        at: snapshotsDirectory,
+        includingPropertiesForKeys: nil
+    ) else {
+        return nil
+    }
+
+    return snapshotEntries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        .first(where: { hasModelPayload(at: $0) })
+}
+
+private func legacyModelCacheDirectory(for modelID: String) -> URL? {
+    guard let parts = repoParts(from: modelID) else { return nil }
+    let directory = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Caches", isDirectory: true)
+        .appendingPathComponent("models", isDirectory: true)
+        .appendingPathComponent(parts.org, isDirectory: true)
+        .appendingPathComponent(parts.repo, isDirectory: true)
+    return hasModelPayload(at: directory) ? directory : nil
+}
+
 public func localModelDirectoryURL(from modelID: String) -> URL? {
     let expanded = (modelID as NSString).expandingTildeInPath
     let url = URL(fileURLWithPath: expanded)
     var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-        return nil
+    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+        return url
     }
-    return url
+
+    if let snapshotDirectory = cachedHuggingFaceSnapshotDirectory(for: modelID) {
+        return snapshotDirectory
+    }
+
+    return legacyModelCacheDirectory(for: modelID)
 }
 
 private func localModelType(from directory: URL) -> String? {

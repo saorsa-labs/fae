@@ -19,6 +19,7 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/model_cache.sh"
 MACOS_DIR="$PROJECT_ROOT/native/macos/Fae"
 BENCH_BIN="$MACOS_DIR/.build/xcode-benchmark-derived/Build/Products/Debug/FaeBenchmark"
 BENCH_RESULTS_DIR="$PROJECT_ROOT/scripts/benchmark-results"
@@ -78,30 +79,6 @@ log() {
     echo "[$(date '+%H:%M:%S')] $*"
 }
 
-resolve_local_model_source() {
-    local model="$1"
-    if [[ -d "$model" ]]; then
-        printf '%s\n' "$model"
-        return 0
-    fi
-
-    if [[ "$model" == *"/"* ]]; then
-        local cache_root="$HOME/.cache/huggingface/hub/models--${model/\//--}"
-        local ref_file="$cache_root/refs/main"
-        if [[ -f "$ref_file" ]]; then
-            local snapshot
-            snapshot="$(<"$ref_file")"
-            local snapshot_dir="$cache_root/snapshots/$snapshot"
-            if [[ -d "$snapshot_dir" ]]; then
-                printf '%s\n' "$snapshot_dir"
-                return 0
-            fi
-        fi
-    fi
-
-    printf '%s\n' "$model"
-}
-
 prepare_adapter_dir() {
     local adapter_dir="$1"
     local checkpoint_file="$2"
@@ -125,7 +102,7 @@ fi
 
 mkdir -p "$FUSED_MODELS_DIR" "$BENCH_RESULTS_DIR"
 
-BASE_MODEL_SOURCE="$(resolve_local_model_source "$BASE_MODEL")"
+BASE_MODEL_SOURCE="$(fae_resolve_model_source "$BASE_MODEL")"
 ADAPTER_INPUT_DIR="$(prepare_adapter_dir "$ADAPTER_DIR" "$CHECKPOINT_FILE")"
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
@@ -157,8 +134,10 @@ fuse_status=$?
 set -e
 
 if [[ ! -f "$FUSED_PATH/model.safetensors" ]]; then
-    echo "ERROR: fuse failed and no fused model was produced"
-    exit "$fuse_status"
+    if [[ ! -f "$FUSED_PATH/model.safetensors.index.json" ]] && ! find "$FUSED_PATH" -maxdepth 1 -name 'model-*.safetensors' | grep -q .; then
+        echo "ERROR: fuse failed and no fused model was produced"
+        exit "$fuse_status"
+    fi
 fi
 
 if [[ $fuse_status -ne 0 ]]; then
