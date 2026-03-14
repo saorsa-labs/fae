@@ -4,11 +4,17 @@
 # ///
 """Install acpx — the ACP agent client.
 
-Tries multiple installation methods in order:
-1. Detect existing installation (npx acpx, bun x acpx, or PATH binary)
-2. Install via bun (preferred — fast, self-contained)
-3. Install via npm (fallback — requires Node.js)
-4. Build standalone binary via bun build --compile (no runtime deps)
+Designed for computer-illiterate users: Fae handles EVERYTHING.
+
+Installation cascade (tries each until one works):
+1. Detect existing installation (PATH, npx, bun x, ~/.local/bin)
+2. Install via bun global (if bun exists)
+3. Install via npm global (if npm exists)
+4. Install bun first (single curl, no deps), then install acpx via bun
+5. Build standalone binary via bun build --compile (last resort)
+
+Step 4 is the key: even on a fresh Mac with nothing installed,
+curl + bun install handles everything. No user action needed.
 """
 
 import json
@@ -20,6 +26,7 @@ from pathlib import Path
 
 ACPX_VERSION = "0.3.0"
 FAE_BIN_DIR = Path.home() / ".local" / "bin"
+BUN_INSTALL_URL = "https://bun.sh/install"
 
 
 def run(cmd: list[str], timeout: int = 120) -> tuple[int, str, str]:
@@ -96,6 +103,38 @@ def install_via_npm() -> dict | None:
         acpx = shutil.which("acpx")
         if acpx:
             return {"method": "npm_global", "path": acpx, "version": ACPX_VERSION}
+    return None
+
+
+def install_bun_then_acpx() -> dict | None:
+    """Install bun (zero deps, single curl), then install acpx via bun.
+
+    This is the zero-dependency path for users who have nothing installed.
+    macOS ships with curl, so this always works.
+    """
+    bun_path = shutil.which("bun") or str(Path.home() / ".bun" / "bin" / "bun")
+    if not Path(bun_path).exists():
+        # Install bun via curl (official installer, no deps)
+        code, out, err = run(
+            ["/bin/bash", "-c", f"curl -fsSL {BUN_INSTALL_URL} | bash"],
+            timeout=120
+        )
+        if code != 0:
+            return None
+        bun_path = str(Path.home() / ".bun" / "bin" / "bun")
+        if not Path(bun_path).exists():
+            return None
+
+    # Now install acpx via bun
+    code, out, err = run([bun_path, "install", "-g", f"acpx@{ACPX_VERSION}"])
+    if code == 0:
+        # Check where it landed
+        acpx = shutil.which("acpx")
+        if acpx:
+            return {"method": "bun_auto_install", "path": acpx, "version": ACPX_VERSION}
+        bun_acpx = Path.home() / ".bun" / "bin" / "acpx"
+        if bun_acpx.exists():
+            return {"method": "bun_auto_install", "path": str(bun_acpx), "version": ACPX_VERSION}
     return None
 
 
@@ -178,6 +217,10 @@ def main(args: dict) -> dict:
     if not result and preferred in ("auto", "npm"):
         tried.append("npm")
         result = install_via_npm()
+
+    if not result and preferred in ("auto", "bun_auto"):
+        tried.append("bun_auto_install")
+        result = install_bun_then_acpx()
 
     if not result and preferred in ("auto", "standalone"):
         tried.append("standalone")
