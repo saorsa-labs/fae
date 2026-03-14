@@ -30,7 +30,11 @@ Fae's current recommended local path is still the base Qwen3.5 family:
 
 - `Qwen3.5 4B` on `16–31 GB` systems
 - `Qwen3.5 9B` on `32+ GB` systems
-- `Qwen3.5 27B` and `35B-A3B` as manual quality tiers
+- `Qwen3.5 27B` as the current highest loadable manual quality tier
+
+Current runtime note:
+
+- External PARO baselines are promising at `9B` and `27B`, but Fae's Swift-native runtime cannot load PARO checkpoints yet, so they are benchmark-only for now.
 
 That product direction is reflected in:
 

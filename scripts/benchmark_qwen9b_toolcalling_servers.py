@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """
-Compare 9B tool-calling through local OpenAI-compatible servers.
+Compare Qwen3.5 tool-calling through local OpenAI-compatible servers.
 
-This benchmarks:
-- standard MLX server with mlx-community/Qwen3.5-9B-4bit
-- ParoQuant MLX server with z-lab/Qwen3.5-9B-PARO
-
-The goal is to measure actual tool-call selection, which the direct sidecar
-text benchmark cannot cover.
+This benchmarks a standard MLX server against a ParoQuant-backed server for the
+same model size. The goal is to measure actual tool-call selection, which the
+direct sidecar text benchmark cannot cover.
 """
 
 from __future__ import annotations
@@ -30,6 +27,7 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = PROJECT_ROOT / "scripts" / "benchmark-results" / "qwen3.5-9b_20260313-172928.json"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "scripts" / "benchmark-results"
+QWEN_SIZE_RE = re.compile(r"Qwen3(?:\.|_)?5-(0\.8B|2B|4B|9B|27B|35B-A3B|34B-A3B)", re.IGNORECASE)
 
 TOOL_CALLING_SYSTEM_PROMPT = (
     "You are Fae, a personal AI companion running on macOS. When the user's request requires a tool, "
@@ -310,6 +308,15 @@ def extract_tool_from_content(output: str) -> tuple[str, str]:
     return "none", "none"
 
 
+def infer_output_prefix(model_id: str, fallback_label: str) -> str:
+    match = QWEN_SIZE_RE.search(model_id)
+    if match:
+        size = match.group(1).lower()
+        return f"qwen35-{size}"
+    safe = re.sub(r"[^a-z0-9]+", "-", fallback_label.lower()).strip("-")
+    return safe or "benchmark"
+
+
 def run_tool_suite(server: ServerHarness, corpus: list[dict[str, Any]]) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
 
@@ -441,7 +448,8 @@ def main() -> None:
         "models": [standard_results, paro_results],
     }
 
-    out_path = output_dir / f"qwen35-9b-toolcalling-mlx-vs-paro_{stamp}.json"
+    prefix = infer_output_prefix(args.standard_model, args.standard_label)
+    out_path = output_dir / f"{prefix}-toolcalling-mlx-vs-paro_{stamp}.json"
     out_path.write_text(json.dumps(comparison, indent=2))
     print(out_path)
 

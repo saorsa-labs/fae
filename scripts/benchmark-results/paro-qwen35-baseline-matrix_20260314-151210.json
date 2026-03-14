@@ -1,0 +1,99 @@
+{
+  "date": "2026-03-14T15:12:10+00:00",
+  "runs": [
+    {
+      "size": "2b",
+      "text_result": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35-2b-mlx-vs-paroquant_20260314-151606.json",
+      "tool_result": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35-2b-toolcalling-mlx-vs-paro_20260314-151607.json",
+      "text_comparison": {
+        "qwen35_2b_standard": {
+          "intelligence_eval": "37/50",
+          "fae_capability_eval": "18/20",
+          "assistant_fit_eval": "18/20",
+          "serialization_eval": "6/9",
+          "no_think_compliance": "5/5"
+        },
+        "qwen35_2b_paro": {
+          "intelligence_eval": "37/50",
+          "fae_capability_eval": "18/20",
+          "assistant_fit_eval": "17/20",
+          "serialization_eval": "9/9",
+          "no_think_compliance": "5/5"
+        },
+        "fae_capability_diffs": [],
+        "assistant_fit_diffs": [
+          {
+            "prompt": "User says: 'Tell me something encouraging before my meeting.' What should Fae do first?\nA. notes\nB. web_search\nC. none\nD. reminders",
+            "left_correct": false,
+            "right_correct": false,
+            "left_actual_answer": "B",
+            "right_actual_answer": "A",
+            "expected_answer": "C"
+          },
+          {
+            "prompt": "User says: 'Return exactly two comma-separated words: north,south' Which answer best follows the instruction?\nA. north south\nB. north,south\nC. north, south\nD. north,south,east",
+            "left_correct": true,
+            "right_correct": false,
+            "left_actual_answer": "B",
+            "right_actual_answer": "A",
+            "expected_answer": "B"
+          }
+        ],
+        "intelligence_diffs": [
+          {
+            "prompt": "Solve: 3x + 5 = 20.\nA. 3\nB. 5\nC. 7\nD. 10",
+            "left_correct": false,
+            "right_correct": false,
+            "left_actual_answer": "D",
+            "right_actual_answer": "A",
+            "expected_answer": "B"
+          },
+          {
+            "prompt": "If 8 notebooks cost $24, how much does 1 notebook cost?\nA. $2\nB. $3\nC. $4\nD. $5",
+            "left_correct": false,
+            "right_correct": false,
+            "left_actual_answer": "C",
+            "right_actual_answer": "A",
+            "expected_answer": "B"
+          },
+          {
+            "prompt": "If today is Monday, what day will it be in 10 days?\nA. Wednesday\nB. Thursday\nC. Friday\nD. Saturday",
+            "left_correct": false,
+            "right_correct": false,
+            "left_actual_answer": "D",
+            "right_actual_answer": "A",
+            "expected_answer": "B"
+          },
+          {
+            "prompt": "Which option does not belong?\nA. Triangle\nB. Square\nC. Circle\nD. Table",
+            "left_correct": false,
+            "right_correct": true,
+            "left_actual_answer": "A",
+            "right_actual_answer": "D",
+            "expected_answer": "D"
+          },
+          {
+            "prompt": "Five people are in a race. Ana finished before Bo. Bo finished before Cy. Who finished ahead of Cy?\nA. Only Bo\nB. Only Ana\nC. Ana and Bo\nD. Cannot tell",
+            "left_correct": false,
+            "right_correct": false,
+            "left_actual_answer": "D",
+            "right_actual_answer": "A",
+            "expected_answer": "C"
+          },
+          {
+            "prompt": "You flip a fair coin twice. How many possible outcomes are there?\nA. 2\nB. 3\nC. 4\nD. 6",
+            "left_correct": true,
+            "right_correct": false,
+            "left_actual_answer": "C",
+            "right_actual_answer": "D",
+            "expected_answer": "C"
+          }
+        ]
+      },
+      "tool_scores": {
+        "qwen35_2b_standard_server": "9/10",
+        "qwen35_2b_paro_server": "9/10"
+      }
+    }
+  ]
+}

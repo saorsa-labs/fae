@@ -37,6 +37,14 @@ Current benchmark docs live at the repository root so people can see both what w
 
 Canonical local model cache: `~/.cache/huggingface/hub`. The app runtime, training scripts, and benchmark path now resolve model IDs from that shared cache first. `~/Library/Caches/models/...` is legacy-only and can be deduplicated with `bash scripts/cleanup_legacy_model_caches.sh --apply`.
 
+Current loadable text-model ladder in the app:
+
+- `Auto`: `Qwen3.5 2B` / `4B` / `9B` by RAM
+- manual quality mode: `Qwen3.5 27B`
+- legacy `35B-A3B` preset now maps to `27B`
+
+Sidecar PARO benchmarks currently favor `9B` and `27B`, but `mlx-swift-lm` in Fae cannot load those PARO checkpoints yet, so PARO remains benchmark-only for now.
+
 ## Notes
 
 - iPhone/Watch session continuation still requires matching companion targets using the same activity type/payload contract.

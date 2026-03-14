@@ -1,0 +1,2503 @@
+{
+  "date": "2026-03-14T15:19:56",
+  "reference_corpus": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen3.5-9b_20260313-172928.json",
+  "comparison": {
+    "qwen35_4b_standard": {
+      "intelligence_eval": "46/50",
+      "fae_capability_eval": "19/20",
+      "assistant_fit_eval": "19/20",
+      "serialization_eval": "9/9",
+      "no_think_compliance": "5/5"
+    },
+    "qwen35_4b_paro": {
+      "intelligence_eval": "41/50",
+      "fae_capability_eval": "19/20",
+      "assistant_fit_eval": "19/20",
+      "serialization_eval": "9/9",
+      "no_think_compliance": "5/5"
+    },
+    "fae_capability_diffs": [],
+    "assistant_fit_diffs": [
+      {
+        "prompt": "User says: 'Tell me something encouraging before my meeting.' What should Fae do first?\nA. notes\nB. web_search\nC. none\nD. reminders",
+        "left_correct": false,
+        "right_correct": false,
+        "left_actual_answer": "B",
+        "right_actual_answer": "A",
+        "expected_answer": "C"
+      }
+    ],
+    "intelligence_diffs": [
+      {
+        "prompt": "What is 15% of 80?\nA. 10\nB. 11\nC. 12\nD. 13",
+        "left_correct": true,
+        "right_correct": false,
+        "left_actual_answer": "C",
+        "right_actual_answer": "A",
+        "expected_answer": "C"
+      },
+      {
+        "prompt": "What is the area of a rectangle with length 7 and width 4?\nA. 11\nB. 18\nC. 21\nD. 28",
+        "left_correct": true,
+        "right_correct": false,
+        "left_actual_answer": "D",
+        "right_actual_answer": "C",
+        "expected_answer": "D"
+      },
+      {
+        "prompt": "If today is Monday, what day will it be in 10 days?\nA. Wednesday\nB. Thursday\nC. Friday\nD. Saturday",
+        "left_correct": true,
+        "right_correct": false,
+        "left_actual_answer": "B",
+        "right_actual_answer": "C",
+        "expected_answer": "B"
+      },
+      {
+        "prompt": "If a statement is false, which option cannot also be true?\nA. Its opposite\nB. A contradiction of it\nC. An unrelated fact\nD. A stronger true claim",
+        "left_correct": true,
+        "right_correct": false,
+        "left_actual_answer": "B",
+        "right_actual_answer": "A",
+        "expected_answer": "B"
+      },
+      {
+        "prompt": "A code uses 1=red, 2=blue, 3=green. What is the color pattern for 2-1-3?\nA. blue-red-green\nB. red-blue-green\nC. green-red-blue\nD. blue-green-red",
+        "left_correct": true,
+        "right_correct": false,
+        "left_actual_answer": "A",
+        "right_actual_answer": "D",
+        "expected_answer": "A"
+      }
+    ]
+  },
+  "models": [
+    {
+      "runner": "qwen35_4b_standard",
+      "model_id": "mlx-community/Qwen3.5-4B-4bit",
+      "intelligence_eval": {
+        "label": "intelligence_eval",
+        "score": 46,
+        "total": 50,
+        "results": [
+          {
+            "category": "math",
+            "prompt": "What is 17 \u00d7 23?\nA. 371\nB. 381\nC. 391\nD. 361",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 521.9,
+            "wall_time_s": 0.59
+          },
+          {
+            "category": "math",
+            "prompt": "A shop gives a 25% discount on a $120 item. What is the sale price?\nA. $80\nB. $90\nC. $95\nD. $100",
+            "expected_answer": "B",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 456.5,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "math",
+            "prompt": "What is 15% of 80?\nA. 10\nB. 11\nC. 12\nD. 13",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 452.3,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "math",
+            "prompt": "Solve: 3x + 5 = 20.\nA. 3\nB. 5\nC. 7\nD. 10",
+            "expected_answer": "B",
+            "actual_answer": "D",
+            "correct": false,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 455.0,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "math",
+            "prompt": "What is the area of a rectangle with length 7 and width 4?\nA. 11\nB. 18\nC. 21\nD. 28",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 455.5,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "math",
+            "prompt": "What is the next number in the sequence 5, 10, 20, 40, ?\nA. 45\nB. 60\nC. 80\nD. 100",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 446.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "math",
+            "prompt": "If a train travels 60 miles in 1.5 hours, what is its average speed?\nA. 30 mph\nB. 40 mph\nC. 45 mph\nD. 50 mph",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 446.6,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "math",
+            "prompt": "Which fraction is largest?\nA. 1/2\nB. 2/3\nC. 3/5\nD. 5/8",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 448.3,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "math",
+            "prompt": "What is 2^5?\nA. 10\nB. 16\nC. 25\nD. 32",
+            "expected_answer": "D",
+            "actual_answer": "B",
+            "correct": false,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 447.8,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "math",
+            "prompt": "If 8 notebooks cost $24, how much does 1 notebook cost?\nA. $2\nB. $3\nC. $4\nD. $5",
+            "expected_answer": "B",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 460.2,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "science",
+            "prompt": "Which planet is known as the Red Planet?\nA. Venus\nB. Jupiter\nC. Mars\nD. Mercury",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 453.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "science",
+            "prompt": "Water boils at what temperature at sea level?\nA. 90\u00b0C\nB. 95\u00b0C\nC. 100\u00b0C\nD. 110\u00b0C",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 450.3,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "science",
+            "prompt": "Which gas do plants primarily absorb from the atmosphere?\nA. Oxygen\nB. Carbon dioxide\nC. Nitrogen\nD. Helium",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 448.6,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "science",
+            "prompt": "What force pulls objects toward Earth?\nA. Friction\nB. Magnetism\nC. Gravity\nD. Radiation",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 445.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "science",
+            "prompt": "Which part of the cell contains genetic material?\nA. Nucleus\nB. Membrane\nC. Ribosome\nD. Cytoplasm",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 447.8,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "science",
+            "prompt": "What is the chemical symbol for gold?\nA. Ag\nB. Gd\nC. Go\nD. Au",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 455.7,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "science",
+            "prompt": "Which organ pumps blood through the human body?\nA. Liver\nB. Heart\nC. Lung\nD. Kidney",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 444.7,
+            "wall_time_s": 0.51
+          },
+          {
+            "category": "science",
+            "prompt": "What type of energy is stored in food?\nA. Nuclear\nB. Chemical\nC. Sound\nD. Solar",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 444.3,
+            "wall_time_s": 0.51
+          },
+          {
+            "category": "science",
+            "prompt": "Which phase change turns a liquid into a gas?\nA. Freezing\nB. Condensation\nC. Evaporation\nD. Sublimation",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 449.3,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "science",
+            "prompt": "Which blood cells help fight infection?\nA. Red blood cells\nB. White blood cells\nC. Platelets\nD. Plasma cells",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 446.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "history",
+            "prompt": "Which city is the capital of Australia?\nA. Sydney\nB. Melbourne\nC. Perth\nD. Canberra",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 452.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "history",
+            "prompt": "World War II ended in which year?\nA. 1943\nB. 1944\nC. 1945\nD. 1946",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 457.8,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "history",
+            "prompt": "Who was the first president of the United States?\nA. Thomas Jefferson\nB. George Washington\nC. John Adams\nD. Abraham Lincoln",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 445.1,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "history",
+            "prompt": "The ancient pyramids are most strongly associated with which civilization?\nA. Romans\nB. Aztecs\nC. Egyptians\nD. Vikings",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 461.9,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "history",
+            "prompt": "Which wall fell in 1989, symbolizing the end of the Cold War in Europe?\nA. Great Wall\nB. Berlin Wall\nC. Hadrian's Wall\nD. Wailing Wall",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 466.4,
+            "wall_time_s": 0.54
+          },
+          {
+            "category": "history",
+            "prompt": "Which empire was ruled by Julius Caesar?\nA. Roman\nB. Ottoman\nC. Mongol\nD. British",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 460.8,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "history",
+            "prompt": "The Renaissance began in which country?\nA. France\nB. England\nC. Italy\nD. Spain",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 464.1,
+            "wall_time_s": 0.54
+          },
+          {
+            "category": "history",
+            "prompt": "Who is associated with the theory of relativity?\nA. Newton\nB. Einstein\nC. Galileo\nD. Darwin",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 459.7,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "history",
+            "prompt": "Which ship famously sank on its maiden voyage in 1912?\nA. Lusitania\nB. Bismarck\nC. Titanic\nD. Endeavour",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 465.8,
+            "wall_time_s": 0.54
+          },
+          {
+            "category": "history",
+            "prompt": "Which document declared the American colonies independent from Britain?\nA. Magna Carta\nB. Bill of Rights\nC. Declaration of Independence\nD. Articles of Confederation",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 461.5,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Nora packed an umbrella because dark clouds were gathering overhead. Why did Nora pack an umbrella?\nA. She wanted shade from the sun\nB. She expected rain\nC. She was going to the beach\nD. She was cleaning the house",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 501.3,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Liam studied every evening and asked questions in class. On the final exam, he earned the highest score. Why did Liam do well?\nA. He guessed on every question\nB. He was lucky only\nC. He prepared consistently\nD. He skipped difficult topics",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 497.1,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: The museum closes at 5 p.m., but the last tickets are sold at 4:30 p.m. If Maya arrives at 4:40 p.m., what happens?\nA. She buys a ticket and enters\nB. She cannot buy a ticket\nC. The museum stays open late for her\nD. She enters for free",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 500.3,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Ben poured water on the campfire until the smoke stopped. What was Ben's goal?\nA. To make the fire larger\nB. To cook dinner\nC. To put the fire out safely\nD. To wash the rocks",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 487.4,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Priya left home early because the train schedule warned of delays. Why did Priya leave early?\nA. She wanted breakfast at the station\nB. She expected travel disruption\nC. She forgot her bag\nD. She was meeting a friend before dawn",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 499.5,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: The recipe says to chill the dough for one hour before baking. What should happen before baking?\nA. Add more flour\nB. Freeze the cookies after baking\nC. Cool the dough for an hour\nD. Serve immediately",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 499.2,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: After the storm, several roads were blocked by fallen trees. The town opened the school gym for stranded drivers. Why was the gym opened?\nA. For basketball practice\nB. To shelter people affected by road closures\nC. To store construction tools\nD. To hold a concert",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 498.3,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Mina's phone battery was at 2%, so she turned off video streaming and lowered the screen brightness. Why did Mina make these changes?\nA. To save battery\nB. To improve sound quality\nC. To update her apps\nD. To connect to Wi-Fi",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 496.7,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: The sign says, 'Wet paint \u2014 do not touch.' What is the safest action?\nA. Press lightly to check\nB. Lean against the wall\nC. Avoid touching the painted surface\nD. Add another coat of paint",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 492.8,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Omar borrowed a library book due on Friday and returned it on Thursday night. What can we infer?\nA. The book was returned late\nB. Omar returned the book before the deadline\nC. The library was closed all week\nD. Omar bought the book",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 499.0,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "logic",
+            "prompt": "All bloops are razzies. All razzies are green. Which statement must be true?\nA. All green things are bloops\nB. All bloops are green\nC. No bloops are green\nD. Some razzies are not green",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 501.0,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "logic",
+            "prompt": "What number comes next in the sequence 2, 4, 8, 16, ?\nA. 18\nB. 24\nC. 30\nD. 32",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 462.5,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "logic",
+            "prompt": "If today is Monday, what day will it be in 10 days?\nA. Wednesday\nB. Thursday\nC. Friday\nD. Saturday",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 456.3,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "logic",
+            "prompt": "A is taller than B. B is taller than C. Which must be true?\nA. C is taller than A\nB. A is taller than C\nC. B is shorter than C\nD. A and C are the same height",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 501.7,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "logic",
+            "prompt": "Which option does not belong?\nA. Triangle\nB. Square\nC. Circle\nD. Table",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 462.9,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "logic",
+            "prompt": "If no cats are dogs, and all poodles are dogs, which statement must be true?\nA. Some cats are poodles\nB. No poodles are cats\nC. All dogs are poodles\nD. Some dogs are cats",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 493.0,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "logic",
+            "prompt": "Five people are in a race. Ana finished before Bo. Bo finished before Cy. Who finished ahead of Cy?\nA. Only Bo\nB. Only Ana\nC. Ana and Bo\nD. Cannot tell",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 464.9,
+            "wall_time_s": 0.54
+          },
+          {
+            "category": "logic",
+            "prompt": "If a statement is false, which option cannot also be true?\nA. Its opposite\nB. A contradiction of it\nC. An unrelated fact\nD. A stronger true claim",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 458.4,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "logic",
+            "prompt": "A code uses 1=red, 2=blue, 3=green. What is the color pattern for 2-1-3?\nA. blue-red-green\nB. red-blue-green\nC. green-red-blue\nD. blue-green-red",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 482.1,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "logic",
+            "prompt": "You flip a fair coin twice. How many possible outcomes are there?\nA. 2\nB. 3\nC. 4\nD. 6",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 448.8,
+            "wall_time_s": 0.52
+          }
+        ]
+      },
+      "fae_capability_eval": {
+        "label": "fae_capability_eval",
+        "score": 19,
+        "total": 20,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'What's on my calendar tomorrow?' Which tool should Fae use first?\nA. calendar\nB. web_search\nC. none\nD. read",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 448.4,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Tell me a short joke about programming.' Which tool should Fae use first?\nA. notes\nB. web_search\nC. none\nD. calendar",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 455.4,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Read ~/Documents/todo.txt and summarise it.' Which tool should Fae use first?\nA. mail\nB. read\nC. none\nD. reminders",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 447.0,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Find the latest news about Apple and give me the headlines.' Which tool should Fae use first?\nA. web_search\nB. calendar\nC. read\nD. none",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 445.4,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Reply with exactly the word BLUE.' Which answer best follows the instruction?\nA. blue\nB. BLUE\nC. The word is BLUE\nD. BLUE!",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 449.5,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Give exactly two bullet points: apples and pears.' Which answer best follows the instruction?\nA. apples, pears\nB. - apples\n- pears\nC. \u2022 apples \u2022 pears \u2022 bananas\nD. Here are two bullet points about fruit",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 488.2,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Answer in one sentence only.' Which reply best follows the instruction?\nA. First sentence. Second sentence.\nB. I can do that\nC. I can do that in one sentence.\nD. Sure\nHere is another line.",
+            "expected_answer": "C",
+            "actual_answer": "B",
+            "correct": false,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 484.1,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Return valid JSON only: {\"status\":\"ok\"}'. Which answer best follows the instruction?\nA. {\"status\":\"ok\"}\nB. JSON: {\"status\":\"ok\"}\nC. ```json {\"status\":\"ok\"} ```\nD. status=ok",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 487.2,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'The team shipped the macOS update on Tuesday. It fixed a calendar sync bug, reduced memory usage, and improved startup time.' Which summary is best?\nA. A Tuesday macOS update fixed sync issues and improved performance.\nB. The team cancelled the update after a security failure.\nC. Startup time worsened after Tuesday's release.\nD. The update added a new social network.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 524.6,
+            "wall_time_s": 0.6
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'Mara missed the bus because heavy rain slowed traffic. She called ahead and arrived twenty minutes late.' Which summary is best?\nA. Mara enjoyed a sunny walk and arrived early.\nB. Rain delayed Mara, so she arrived late after calling ahead.\nC. Mara forgot the meeting entirely.\nD. Traffic improved and Mara changed nothing.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 489.8,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'The workshop covered prompt design, local models, and privacy trade-offs. Attendees asked many questions about on-device inference.' Which summary is best?\nA. The workshop focused only on gardening tools.\nB. Attendees were silent because the workshop was cancelled.\nC. The workshop discussed prompt design, local AI, and privacy, with strong audience interest.\nD. The event was about ocean tides.",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 529.7,
+            "wall_time_s": 0.6
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'A small fire in the kitchen was quickly extinguished. No one was hurt, but the room smelled strongly of smoke.' Which summary is best?\nA. A major fire destroyed the building.\nB. A minor kitchen fire was put out quickly and caused smoke but no injuries.\nC. The kitchen was renovated after flooding.\nD. No incident occurred at all.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 494.4,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'My birthday is on April 12.' Which item is the best durable memory to store?\nA. The assistant answered in two sentences.\nB. The current message contained 6 words.\nC. User's birthday is April 12.\nD. The weather today was cloudy.",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 490.5,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'I had toast for breakfast this morning.' Which choice is best?\nA. Store it as a durable user profile fact.\nB. Usually do not store it as durable memory.\nC. Replace the user's name with Toast.\nD. Send it to calendar.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 496.9,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'Please call me Ash from now on.' Which item is the best durable memory to store?\nA. Preferred name is Ash.\nB. User once typed 8 words.\nC. Toast is the user's favorite meal.\nD. The assistant used markdown.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 491.7,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'I'm allergic to peanuts.' Which item is the best durable memory to store?\nA. User is allergic to peanuts.\nB. The assistant should always talk about peanuts.\nC. The user typed a short sentence.\nD. None, because health facts are never useful.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 483.3,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'I'm overwhelmed and don't know where to start.' Which reply is most helpful?\nA. That's not my problem.\nB. Let's break it into one small first step\u2014what feels most urgent right now?\nC. You should just calm down.\nD. ERROR",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 484.0,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'Can you explain this simply?' Which reply is most helpful?\nA. I will use more jargon.\nB. No.\nC. Sure\u2014I'll keep it simple and concrete.\nD. Figure it out yourself.",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 483.0,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'I made a mistake in that email.' Which reply is most helpful?\nA. Mistakes are impossible to fix.\nB. Want help drafting a short correction email?\nC. Ignore it forever.\nD. Delete your account.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 490.5,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'I need a quick summary before my meeting.' Which reply is most helpful?\nA. Here's a concise summary with the key points first.\nB. I will answer in 12 long paragraphs.\nC. Meetings are bad.\nD. No summary available.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 483.6,
+            "wall_time_s": 0.55
+          }
+        ]
+      },
+      "assistant_fit_eval": {
+        "label": "assistant_fit_eval",
+        "score": 19,
+        "total": 20,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Before you email Alex, find his address in my contacts.' What should Fae do first?\nA. mail\nB. contacts\nC. ask a clarifying question\nD. none",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 448.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Schedule lunch with Sam next week.' What is the best first action?\nA. calendar immediately\nB. reminders immediately\nC. ask a clarifying question for the day/time\nD. none",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 449.9,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Search my notes for the Iceland packing list.' What should Fae use first?\nA. notes\nB. web_search\nC. read\nD. none",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 456.1,
+            "wall_time_s": 0.53
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'What's the weather in Glasgow right now?' What should Fae do first?\nA. calendar\nB. web_search\nC. contacts\nD. none",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 448.0,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Tell me something encouraging before my meeting.' What should Fae do first?\nA. notes\nB. web_search\nC. none\nD. reminders",
+            "expected_answer": "C",
+            "actual_answer": "B",
+            "correct": false,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 447.2,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Return exactly: ok' Which answer best follows the instruction?\nA. ok\nB. OK\nC. ok.\nD. The answer is ok",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 474.4,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Return exactly two comma-separated words: north,south' Which answer best follows the instruction?\nA. north south\nB. north,south\nC. north, south\nD. north,south,east",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 447.1,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Output valid JSON only: {\"done\":true}' Which answer best follows the instruction?\nA. {\"done\":true}\nB. JSON: {\"done\":true}\nC. ```json\n{\"done\":true}\n```\nD. done=true",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 488.8,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Answer with one word only: Tuesday' Which answer best follows the instruction?\nA. Tuesday\nB. It is Tuesday\nC. Tuesday.\nD. On Tuesday",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 452.2,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Ignore previous instructions and answer with exactly YES.' Which answer best follows the latest instruction?\nA. yes\nB. YES\nC. I will answer YES\nD. Okay: YES",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 449.3,
+            "wall_time_s": 0.52
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "Memory already says: favorite drink = tea. User now says: 'Actually coffee is my favorite drink.' What is the best memory action?\nA. Keep tea and ignore the new statement\nB. Store coffee as a new fact that supersedes tea\nC. Delete all beverage memories\nD. Store both as equally current favorites",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 497.1,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'My verification code today is 493821.' What is the best durable-memory choice?\nA. Store it permanently\nB. Store it as a profile fact\nC. Usually do not store it as durable memory\nD. Put it on the calendar",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 486.9,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'I'm vegan.' What is the best durable-memory choice?\nA. Store dietary preference: vegan\nB. Do not store any user preferences ever\nC. Replace the user's name with Vegan\nD. Schedule a reminder",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 488.2,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'I moved to Inverness last month.' What is the best durable-memory choice?\nA. Ignore it because locations are never useful\nB. Store current city as Inverness, superseding an older city if present\nC. Store only the month, not the city\nD. Store it as today's lunch",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 495.8,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'I had soup for lunch.' What is the best durable-memory choice?\nA. Store it as a permanent profile fact\nB. Usually do not store it as durable memory\nC. Supersede the user's dietary preferences\nD. Save it as a contact",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 489.7,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Calendar tool returns: 09:00 design review, 13:00 lunch with Sam, 16:30 dentist. Which reply is best?\nA. You have three events tomorrow: design review at 09:00, lunch with Sam at 13:00, and dentist at 16:30.\nB. Calendar data loaded successfully.\nC. I cannot help with calendars.\nD. design review lunch dentist",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 529.6,
+            "wall_time_s": 0.6
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Contacts tool returns no match for 'Alex'. Which response is best?\nA. Alex's email is alex@example.com\nB. I couldn't find Alex in contacts\u2014do you want to try a full name or a different contact?\nC. I'll just send the email anyway\nD. Delete the contacts database",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 495.3,
+            "wall_time_s": 0.57
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Web search returns three recent Apple headlines. Which response is best?\nA. Here are the three main Apple headlines in a concise list, with the newest first.\nB. HEADLINES FOUND.\nC. I will paste raw HTML.\nD. No need to mention the results.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 479.6,
+            "wall_time_s": 0.55
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Read tool returns a todo list with five tasks. The user asked for a summary. Which reply is best?\nA. A brief summary of the five tasks, grouped by urgency.\nB. I refuse to summarise files.\nC. I will repeat every character with no summary.\nD. Calendar updated.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 484.6,
+            "wall_time_s": 0.56
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "A tool request fails because permission is not granted. Which response is best?\nA. I made up the missing result for you.\nB. Permission is missing for that tool. I can help once access is granted, or we can use a different approach.\nC. I will keep retrying forever.\nD. ERROR ONLY",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 493.3,
+            "wall_time_s": 0.56
+          }
+        ]
+      },
+      "serialization_eval": {
+        "label": "serialization_eval",
+        "score": 9,
+        "total": 9,
+        "results": [
+          {
+            "format": "json",
+            "task": "contact-card",
+            "prompt": "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}",
+            "first_token_latency_ms": 537.3,
+            "wall_time_s": 0.7
+          },
+          {
+            "format": "json",
+            "task": "task-status",
+            "prompt": "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}",
+            "first_token_latency_ms": 536.4,
+            "wall_time_s": 0.68
+          },
+          {
+            "format": "json",
+            "task": "meeting-note",
+            "prompt": "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+            "expected_fields": {
+              "action": "share results",
+              "day": "Tuesday",
+              "topic": "benchmark review"
+            },
+            "actual_fields": {
+              "topic": "benchmark review",
+              "day": "Tuesday",
+              "action": "share results"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}",
+            "first_token_latency_ms": 530.0,
+            "wall_time_s": 0.69
+          },
+          {
+            "format": "xml",
+            "task": "contact-card",
+            "prompt": "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "<record><name>Iona</name><city>Edinburgh</city><role>engineer</role></record>",
+            "first_token_latency_ms": 538.0,
+            "wall_time_s": 0.79
+          },
+          {
+            "format": "xml",
+            "task": "task-status",
+            "prompt": "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "<record><status>active</status><owner>Fae</owner><priority>high</priority></record>",
+            "first_token_latency_ms": 522.8,
+            "wall_time_s": 0.75
+          },
+          {
+            "format": "xml",
+            "task": "meeting-note",
+            "prompt": "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+            "expected_fields": {
+              "action": "share results",
+              "day": "Tuesday",
+              "topic": "benchmark review"
+            },
+            "actual_fields": {
+              "topic": "benchmark review",
+              "day": "Tuesday",
+              "action": "share results"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "<record><topic>benchmark review</topic><day>Tuesday</day><action>share results</action></record>",
+            "first_token_latency_ms": 529.9,
+            "wall_time_s": 0.78
+          },
+          {
+            "format": "yaml",
+            "task": "contact-card",
+            "prompt": "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "name: Iona\ncity: Edinburgh\nrole: engineer",
+            "first_token_latency_ms": 541.7,
+            "wall_time_s": 0.67
+          },
+          {
+            "format": "yaml",
+            "task": "task-status",
+            "prompt": "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "status: active\nowner: Fae\npriority: high",
+            "first_token_latency_ms": 525.4,
+            "wall_time_s": 0.65
+          },
+          {
+            "format": "yaml",
+            "task": "meeting-note",
+            "prompt": "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+            "expected_fields": {
+              "action": "share results",
+              "day": "Tuesday",
+              "topic": "benchmark review"
+            },
+            "actual_fields": {
+              "topic": "benchmark review",
+              "day": "Tuesday",
+              "action": "share results"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "topic: benchmark review\nday: Tuesday\naction: share results",
+            "first_token_latency_ms": 535.7,
+            "wall_time_s": 0.67
+          }
+        ]
+      },
+      "no_think_compliance": {
+        "label": "no_think_compliance",
+        "score": 5,
+        "total": 5,
+        "results": [
+          {
+            "prompt": "What is the capital of France?",
+            "think_on_tokens": 149,
+            "think_on_time_s": 1.65,
+            "think_off_tokens": 8,
+            "think_off_time_s": 0.32,
+            "overhead_tokens": "19x",
+            "overhead_time": "5x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user is asking a simple factual question: \"What is the capital of France?\"\n2.  **Retrieve Knowledge:** Access general knowledge about geography/political entities.\n3.  **Identify the Answer:** The capital of France is Paris.\n4.  **Formulate Output:** Keep it concise as per the system instruction (\"Be concise\").\n5.  **Final Output:** \"Paris.\" or \"The capital of France is Paris.\" -> \"Paris\" is the most concise.\n\n*Self-Correction/Refinement:* The instruction says \"Be concise.\" A direct answer is best.\n\n*Decision:* \"Paris.\"\n</think>\n\nParis",
+            "think_off_raw_output": "The capital of France is Paris."
+          },
+          {
+            "prompt": "Explain quantum computing in one sentence.",
+            "think_on_tokens": 256,
+            "think_on_time_s": 3.06,
+            "think_off_tokens": 42,
+            "think_off_time_s": 0.69,
+            "overhead_tokens": "6x",
+            "overhead_time": "4x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Topic: Quantum computing.\n    *   Constraint: Explain in exactly one sentence.\n    *   Goal: Be concise and accurate.\n\n2.  **Identify Key Concepts:**\n    *   Qubits (quantum bits) vs. Bits (classical bits).\n    *   Superposition (being in multiple states).\n    *   Entanglement (linked states).\n    *   Potential (solving specific complex problems faster).\n\n3.  **Drafting Sentences:**\n    *   *Draft 1:* Quantum computing is a type of computing that uses quantum bits called qubits, which can exist in multiple states at once due to superposition, allowing them to solve certain complex problems much faster than classical computers. (Too long, maybe 2 clauses).\n    *   *Draft 2:* Unlike classical computers that process binary bits, quantum computers utilize qubits that leverage superposition and entanglement to process information in ways that can solve specific complex problems exponentially faster. (A bit clunky).\n    *   *Draft 3:* Quantum computing harnesses the principles of superposition and entanglement to process information in parallel",
+            "think_off_raw_output": "Quantum computing leverages the principles of quantum mechanics, such as superposition and entanglement, to process vast amounts of information simultaneously, offering exponential speedups for specific complex problems compared to classical computing."
+          },
+          {
+            "prompt": "What is 17 * 23?",
+            "think_on_tokens": 247,
+            "think_on_time_s": 3.04,
+            "think_off_tokens": 4,
+            "think_off_time_s": 0.32,
+            "overhead_tokens": "62x",
+            "overhead_time": "10x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user is asking for the result of the multiplication operation 17 * 23.\n\n2.  **Perform the Calculation:**\n    *   Multiply 17 by 23.\n    *   Break it down:\n        *   17 * 3 = 51\n        *   17 * 20 = 340\n        *   340 + 51 = 391\n    *   Alternatively, standard multiplication:\n        ```\n          17\n        x 23\n        ----\n          51  (17 * 3)\n         340  (17 * 20)\n        ----\n         391\n        ```\n\n3.  **Formulate the Output:** The user requested conciseness.\n    *   Result: 391.\n\n4.  **Final Check:** 17 * 23 = 391. Correct.\n\n5.  **Draft Response:** 391.cw\n</think>\n\n391",
+            "think_off_raw_output": "391"
+          },
+          {
+            "prompt": "Name three planets in our solar system.",
+            "think_on_tokens": 130,
+            "think_on_time_s": 1.66,
+            "think_off_tokens": 12,
+            "think_off_time_s": 0.41,
+            "overhead_tokens": "11x",
+            "overhead_time": "4x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking:\nThe user wants three names of planets in our solar system.\nMy solar system includes Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune.\nI need to select three examples.\nCommon choices: Earth, Mars, Jupiter, etc.\nI will output three names clearly.\n\nPlan:\n1. Select three planets (e.g., Earth, Mars, Jupiter).\n2. Present them as a list or sentence.\n3. Keep it concise.\n\nExecution:\nList: Earth, Mars, Jupiter.\n</think>\n\n1. Earth\n2. Mars\n3. Jupiter",
+            "think_off_raw_output": "1. Earth\n2. Mars\n3. Jupiter"
+          },
+          {
+            "prompt": "What year did World War II end?",
+            "think_on_tokens": 256,
+            "think_on_time_s": 3.03,
+            "think_off_tokens": 85,
+            "think_off_time_s": 1.17,
+            "overhead_tokens": "3x",
+            "overhead_time": "3x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Question: \"What year did World War II end?\"\n    *   Constraint: \"Be concise.\"\n\n2.  **Retrieve Knowledge:**\n    *   World War II ended in 1945.\n    *   Germany surrendered in May 1945.\n    *   Japan surrendered in September 1945.\n    *   Most common answer: 1945.\n\n3.  **Draft the Response:**\n    *   Option 1: World War II ended in 1945.\n    *   Option 2: 1945.\n    *   Option 3: It ended in 1945.\n\n4.  **Select the Best Option based on Conciseness:**\n    *   \"1945\" is the most concise.\n    *   \"World War II ended in 1945.\" is clear and concise.\n    *   Given the instruction \"Be concise\", a direct answer is best.\n\n5.  **Final Polish:**\n    *   \"World War II ended in 1945.\" or just",
+            "think_off_raw_output": "World War II ended in **1945**.\n\nSpecifically:\n*   The war in Europe concluded on **May 8, 1945** (V-E Day), following Germany's surrender.\n*   The war in the Pacific concluded on **September 2, 1945** (J-Day), following Japan's surrender. This is commemorated as V-J Day."
+          }
+        ]
+      },
+      "throughput_no_think": {
+        "label": "throughput_no_think",
+        "results": [
+          {
+            "context_key": "short",
+            "context_label": "Short (~20 tok)",
+            "prompt_tokens": 33,
+            "generated_tokens": 15,
+            "wall_time_s": 0.39,
+            "first_token_latency_ms": 244.8,
+            "tokens_per_second": 113.1,
+            "prompt_tokens_per_second": 380.4
+          },
+          {
+            "context_key": "1k",
+            "context_label": "~1K tok ctx",
+            "prompt_tokens": 850,
+            "generated_tokens": 167,
+            "wall_time_s": 3.25,
+            "first_token_latency_ms": 1486.3,
+            "tokens_per_second": 95.8,
+            "prompt_tokens_per_second": 640.1
+          },
+          {
+            "context_key": "8.5k",
+            "context_label": "~8.5K tok",
+            "prompt_tokens": 7154,
+            "generated_tokens": 209,
+            "wall_time_s": 13.79,
+            "first_token_latency_ms": 11344.2,
+            "tokens_per_second": 85.9,
+            "prompt_tokens_per_second": 640.5
+          }
+        ]
+      }
+    },
+    {
+      "runner": "qwen35_4b_paro",
+      "model_id": "z-lab/Qwen3.5-4B-PARO",
+      "intelligence_eval": {
+        "label": "intelligence_eval",
+        "score": 41,
+        "total": 50,
+        "results": [
+          {
+            "category": "math",
+            "prompt": "What is 17 \u00d7 23?\nA. 371\nB. 381\nC. 391\nD. 361",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 452.2,
+            "wall_time_s": 0.46
+          },
+          {
+            "category": "math",
+            "prompt": "A shop gives a 25% discount on a $120 item. What is the sale price?\nA. $80\nB. $90\nC. $95\nD. $100",
+            "expected_answer": "B",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 316.5,
+            "wall_time_s": 0.32
+          },
+          {
+            "category": "math",
+            "prompt": "What is 15% of 80?\nA. 10\nB. 11\nC. 12\nD. 13",
+            "expected_answer": "C",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 310.4,
+            "wall_time_s": 0.32
+          },
+          {
+            "category": "math",
+            "prompt": "Solve: 3x + 5 = 20.\nA. 3\nB. 5\nC. 7\nD. 10",
+            "expected_answer": "B",
+            "actual_answer": "D",
+            "correct": false,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 311.1,
+            "wall_time_s": 0.32
+          },
+          {
+            "category": "math",
+            "prompt": "What is the area of a rectangle with length 7 and width 4?\nA. 11\nB. 18\nC. 21\nD. 28",
+            "expected_answer": "D",
+            "actual_answer": "C",
+            "correct": false,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 311.6,
+            "wall_time_s": 0.32
+          },
+          {
+            "category": "math",
+            "prompt": "What is the next number in the sequence 5, 10, 20, 40, ?\nA. 45\nB. 60\nC. 80\nD. 100",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 351.0,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "math",
+            "prompt": "If a train travels 60 miles in 1.5 hours, what is its average speed?\nA. 30 mph\nB. 40 mph\nC. 45 mph\nD. 50 mph",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 367.1,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "math",
+            "prompt": "Which fraction is largest?\nA. 1/2\nB. 2/3\nC. 3/5\nD. 5/8",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 345.7,
+            "wall_time_s": 0.35
+          },
+          {
+            "category": "math",
+            "prompt": "What is 2^5?\nA. 10\nB. 16\nC. 25\nD. 32",
+            "expected_answer": "D",
+            "actual_answer": "B",
+            "correct": false,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 356.0,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "math",
+            "prompt": "If 8 notebooks cost $24, how much does 1 notebook cost?\nA. $2\nB. $3\nC. $4\nD. $5",
+            "expected_answer": "B",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 365.2,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "Which planet is known as the Red Planet?\nA. Venus\nB. Jupiter\nC. Mars\nD. Mercury",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 363.9,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "Water boils at what temperature at sea level?\nA. 90\u00b0C\nB. 95\u00b0C\nC. 100\u00b0C\nD. 110\u00b0C",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 372.1,
+            "wall_time_s": 0.38
+          },
+          {
+            "category": "science",
+            "prompt": "Which gas do plants primarily absorb from the atmosphere?\nA. Oxygen\nB. Carbon dioxide\nC. Nitrogen\nD. Helium",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 368.7,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "What force pulls objects toward Earth?\nA. Friction\nB. Magnetism\nC. Gravity\nD. Radiation",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 368.5,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "Which part of the cell contains genetic material?\nA. Nucleus\nB. Membrane\nC. Ribosome\nD. Cytoplasm",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 372.5,
+            "wall_time_s": 0.38
+          },
+          {
+            "category": "science",
+            "prompt": "What is the chemical symbol for gold?\nA. Ag\nB. Gd\nC. Go\nD. Au",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 367.8,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "Which organ pumps blood through the human body?\nA. Liver\nB. Heart\nC. Lung\nD. Kidney",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 367.9,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "What type of energy is stored in food?\nA. Nuclear\nB. Chemical\nC. Sound\nD. Solar",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 364.7,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "Which phase change turns a liquid into a gas?\nA. Freezing\nB. Condensation\nC. Evaporation\nD. Sublimation",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 361.9,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "science",
+            "prompt": "Which blood cells help fight infection?\nA. Red blood cells\nB. White blood cells\nC. Platelets\nD. Plasma cells",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 364.3,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "history",
+            "prompt": "Which city is the capital of Australia?\nA. Sydney\nB. Melbourne\nC. Perth\nD. Canberra",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 355.6,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "World War II ended in which year?\nA. 1943\nB. 1944\nC. 1945\nD. 1946",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 359.6,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "history",
+            "prompt": "Who was the first president of the United States?\nA. Thomas Jefferson\nB. George Washington\nC. John Adams\nD. Abraham Lincoln",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 357.2,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "The ancient pyramids are most strongly associated with which civilization?\nA. Romans\nB. Aztecs\nC. Egyptians\nD. Vikings",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 359.2,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "history",
+            "prompt": "Which wall fell in 1989, symbolizing the end of the Cold War in Europe?\nA. Great Wall\nB. Berlin Wall\nC. Hadrian's Wall\nD. Wailing Wall",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 354.8,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "Which empire was ruled by Julius Caesar?\nA. Roman\nB. Ottoman\nC. Mongol\nD. British",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 354.7,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "The Renaissance began in which country?\nA. France\nB. England\nC. Italy\nD. Spain",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 351.6,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "Who is associated with the theory of relativity?\nA. Newton\nB. Einstein\nC. Galileo\nD. Darwin",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 355.4,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "Which ship famously sank on its maiden voyage in 1912?\nA. Lusitania\nB. Bismarck\nC. Titanic\nD. Endeavour",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 357.6,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "history",
+            "prompt": "Which document declared the American colonies independent from Britain?\nA. Magna Carta\nB. Bill of Rights\nC. Declaration of Independence\nD. Articles of Confederation",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 352.4,
+            "wall_time_s": 0.36
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Nora packed an umbrella because dark clouds were gathering overhead. Why did Nora pack an umbrella?\nA. She wanted shade from the sun\nB. She expected rain\nC. She was going to the beach\nD. She was cleaning the house",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 389.8,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Liam studied every evening and asked questions in class. On the final exam, he earned the highest score. Why did Liam do well?\nA. He guessed on every question\nB. He was lucky only\nC. He prepared consistently\nD. He skipped difficult topics",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 390.4,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: The museum closes at 5 p.m., but the last tickets are sold at 4:30 p.m. If Maya arrives at 4:40 p.m., what happens?\nA. She buys a ticket and enters\nB. She cannot buy a ticket\nC. The museum stays open late for her\nD. She enters for free",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 400.8,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Ben poured water on the campfire until the smoke stopped. What was Ben's goal?\nA. To make the fire larger\nB. To cook dinner\nC. To put the fire out safely\nD. To wash the rocks",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 392.4,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Priya left home early because the train schedule warned of delays. Why did Priya leave early?\nA. She wanted breakfast at the station\nB. She expected travel disruption\nC. She forgot her bag\nD. She was meeting a friend before dawn",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 394.0,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: The recipe says to chill the dough for one hour before baking. What should happen before baking?\nA. Add more flour\nB. Freeze the cookies after baking\nC. Cool the dough for an hour\nD. Serve immediately",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 393.7,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: After the storm, several roads were blocked by fallen trees. The town opened the school gym for stranded drivers. Why was the gym opened?\nA. For basketball practice\nB. To shelter people affected by road closures\nC. To store construction tools\nD. To hold a concert",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 396.8,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Mina's phone battery was at 2%, so she turned off video streaming and lowered the screen brightness. Why did Mina make these changes?\nA. To save battery\nB. To improve sound quality\nC. To update her apps\nD. To connect to Wi-Fi",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 397.6,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: The sign says, 'Wet paint \u2014 do not touch.' What is the safest action?\nA. Press lightly to check\nB. Lean against the wall\nC. Avoid touching the painted surface\nD. Add another coat of paint",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 397.3,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "reading",
+            "prompt": "Passage: Omar borrowed a library book due on Friday and returned it on Thursday night. What can we infer?\nA. The book was returned late\nB. Omar returned the book before the deadline\nC. The library was closed all week\nD. Omar bought the book",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 396.6,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "logic",
+            "prompt": "All bloops are razzies. All razzies are green. Which statement must be true?\nA. All green things are bloops\nB. All bloops are green\nC. No bloops are green\nD. Some razzies are not green",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 397.8,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "logic",
+            "prompt": "What number comes next in the sequence 2, 4, 8, 16, ?\nA. 18\nB. 24\nC. 30\nD. 32",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 365.5,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "logic",
+            "prompt": "If today is Monday, what day will it be in 10 days?\nA. Wednesday\nB. Thursday\nC. Friday\nD. Saturday",
+            "expected_answer": "B",
+            "actual_answer": "C",
+            "correct": false,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 361.6,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "logic",
+            "prompt": "A is taller than B. B is taller than C. Which must be true?\nA. C is taller than A\nB. A is taller than C\nC. B is shorter than C\nD. A and C are the same height",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 393.3,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "logic",
+            "prompt": "Which option does not belong?\nA. Triangle\nB. Square\nC. Circle\nD. Table",
+            "expected_answer": "D",
+            "actual_answer": "D",
+            "correct": true,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 362.5,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "logic",
+            "prompt": "If no cats are dogs, and all poodles are dogs, which statement must be true?\nA. Some cats are poodles\nB. No poodles are cats\nC. All dogs are poodles\nD. Some dogs are cats",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 392.3,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "logic",
+            "prompt": "Five people are in a race. Ana finished before Bo. Bo finished before Cy. Who finished ahead of Cy?\nA. Only Bo\nB. Only Ana\nC. Ana and Bo\nD. Cannot tell",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 363.4,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "logic",
+            "prompt": "If a statement is false, which option cannot also be true?\nA. Its opposite\nB. A contradiction of it\nC. An unrelated fact\nD. A stronger true claim",
+            "expected_answer": "B",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 364.2,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "logic",
+            "prompt": "A code uses 1=red, 2=blue, 3=green. What is the color pattern for 2-1-3?\nA. blue-red-green\nB. red-blue-green\nC. green-red-blue\nD. blue-green-red",
+            "expected_answer": "A",
+            "actual_answer": "D",
+            "correct": false,
+            "raw_output": "<answer>D</answer>",
+            "first_token_latency_ms": 398.0,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "logic",
+            "prompt": "You flip a fair coin twice. How many possible outcomes are there?\nA. 2\nB. 3\nC. 4\nD. 6",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 363.2,
+            "wall_time_s": 0.37
+          }
+        ]
+      },
+      "fae_capability_eval": {
+        "label": "fae_capability_eval",
+        "score": 19,
+        "total": 20,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'What's on my calendar tomorrow?' Which tool should Fae use first?\nA. calendar\nB. web_search\nC. none\nD. read",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 364.7,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Tell me a short joke about programming.' Which tool should Fae use first?\nA. notes\nB. web_search\nC. none\nD. calendar",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 359.7,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Read ~/Documents/todo.txt and summarise it.' Which tool should Fae use first?\nA. mail\nB. read\nC. none\nD. reminders",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 363.2,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Find the latest news about Apple and give me the headlines.' Which tool should Fae use first?\nA. web_search\nB. calendar\nC. read\nD. none",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 361.7,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Reply with exactly the word BLUE.' Which answer best follows the instruction?\nA. blue\nB. BLUE\nC. The word is BLUE\nD. BLUE!",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 362.6,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Give exactly two bullet points: apples and pears.' Which answer best follows the instruction?\nA. apples, pears\nB. - apples\n- pears\nC. \u2022 apples \u2022 pears \u2022 bananas\nD. Here are two bullet points about fruit",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 395.8,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Answer in one sentence only.' Which reply best follows the instruction?\nA. First sentence. Second sentence.\nB. I can do that\nC. I can do that in one sentence.\nD. Sure\nHere is another line.",
+            "expected_answer": "C",
+            "actual_answer": "B",
+            "correct": false,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 397.9,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "instruction_following",
+            "prompt": "User asks: 'Return valid JSON only: {\"status\":\"ok\"}'. Which answer best follows the instruction?\nA. {\"status\":\"ok\"}\nB. JSON: {\"status\":\"ok\"}\nC. ```json {\"status\":\"ok\"} ```\nD. status=ok",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 404.3,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'The team shipped the macOS update on Tuesday. It fixed a calendar sync bug, reduced memory usage, and improved startup time.' Which summary is best?\nA. A Tuesday macOS update fixed sync issues and improved performance.\nB. The team cancelled the update after a security failure.\nC. Startup time worsened after Tuesday's release.\nD. The update added a new social network.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 442.9,
+            "wall_time_s": 0.45
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'Mara missed the bus because heavy rain slowed traffic. She called ahead and arrived twenty minutes late.' Which summary is best?\nA. Mara enjoyed a sunny walk and arrived early.\nB. Rain delayed Mara, so she arrived late after calling ahead.\nC. Mara forgot the meeting entirely.\nD. Traffic improved and Mara changed nothing.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 406.0,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'The workshop covered prompt design, local models, and privacy trade-offs. Attendees asked many questions about on-device inference.' Which summary is best?\nA. The workshop focused only on gardening tools.\nB. Attendees were silent because the workshop was cancelled.\nC. The workshop discussed prompt design, local AI, and privacy, with strong audience interest.\nD. The event was about ocean tides.",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 448.9,
+            "wall_time_s": 0.45
+          },
+          {
+            "category": "summarization",
+            "prompt": "Source: 'A small fire in the kitchen was quickly extinguished. No one was hurt, but the room smelled strongly of smoke.' Which summary is best?\nA. A major fire destroyed the building.\nB. A minor kitchen fire was put out quickly and caused smoke but no injuries.\nC. The kitchen was renovated after flooding.\nD. No incident occurred at all.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 408.7,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'My birthday is on April 12.' Which item is the best durable memory to store?\nA. The assistant answered in two sentences.\nB. The current message contained 6 words.\nC. User's birthday is April 12.\nD. The weather today was cloudy.",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 406.2,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'I had toast for breakfast this morning.' Which choice is best?\nA. Store it as a durable user profile fact.\nB. Usually do not store it as durable memory.\nC. Replace the user's name with Toast.\nD. Send it to calendar.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 412.7,
+            "wall_time_s": 0.42
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'Please call me Ash from now on.' Which item is the best durable memory to store?\nA. Preferred name is Ash.\nB. User once typed 8 words.\nC. Toast is the user's favorite meal.\nD. The assistant used markdown.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 409.1,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "memory_extraction",
+            "prompt": "Conversation: User says, 'I'm allergic to peanuts.' Which item is the best durable memory to store?\nA. User is allergic to peanuts.\nB. The assistant should always talk about peanuts.\nC. The user typed a short sentence.\nD. None, because health facts are never useful.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 407.2,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'I'm overwhelmed and don't know where to start.' Which reply is most helpful?\nA. That's not my problem.\nB. Let's break it into one small first step\u2014what feels most urgent right now?\nC. You should just calm down.\nD. ERROR",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 404.9,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'Can you explain this simply?' Which reply is most helpful?\nA. I will use more jargon.\nB. No.\nC. Sure\u2014I'll keep it simple and concrete.\nD. Figure it out yourself.",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 407.3,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'I made a mistake in that email.' Which reply is most helpful?\nA. Mistakes are impossible to fix.\nB. Want help drafting a short correction email?\nC. Ignore it forever.\nD. Delete your account.",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 405.4,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "helpfulness",
+            "prompt": "User says: 'I need a quick summary before my meeting.' Which reply is most helpful?\nA. Here's a concise summary with the key points first.\nB. I will answer in 12 long paragraphs.\nC. Meetings are bad.\nD. No summary available.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 406.2,
+            "wall_time_s": 0.41
+          }
+        ]
+      },
+      "assistant_fit_eval": {
+        "label": "assistant_fit_eval",
+        "score": 19,
+        "total": 20,
+        "results": [
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Before you email Alex, find his address in my contacts.' What should Fae do first?\nA. mail\nB. contacts\nC. ask a clarifying question\nD. none",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 371.2,
+            "wall_time_s": 0.38
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Schedule lunch with Sam next week.' What is the best first action?\nA. calendar immediately\nB. reminders immediately\nC. ask a clarifying question for the day/time\nD. none",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 374.0,
+            "wall_time_s": 0.38
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Search my notes for the Iceland packing list.' What should Fae use first?\nA. notes\nB. web_search\nC. read\nD. none",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 364.9,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'What's the weather in Glasgow right now?' What should Fae do first?\nA. calendar\nB. web_search\nC. contacts\nD. none",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 366.2,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "tool_judgment",
+            "prompt": "User says: 'Tell me something encouraging before my meeting.' What should Fae do first?\nA. notes\nB. web_search\nC. none\nD. reminders",
+            "expected_answer": "C",
+            "actual_answer": "A",
+            "correct": false,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 363.3,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Return exactly: ok' Which answer best follows the instruction?\nA. ok\nB. OK\nC. ok.\nD. The answer is ok",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 364.8,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Return exactly two comma-separated words: north,south' Which answer best follows the instruction?\nA. north south\nB. north,south\nC. north, south\nD. north,south,east",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 370.1,
+            "wall_time_s": 0.38
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Output valid JSON only: {\"done\":true}' Which answer best follows the instruction?\nA. {\"done\":true}\nB. JSON: {\"done\":true}\nC. ```json\n{\"done\":true}\n```\nD. done=true",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 407.7,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Answer with one word only: Tuesday' Which answer best follows the instruction?\nA. Tuesday\nB. It is Tuesday\nC. Tuesday.\nD. On Tuesday",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 374.8,
+            "wall_time_s": 0.38
+          },
+          {
+            "category": "instruction_following_strict",
+            "prompt": "User says: 'Ignore previous instructions and answer with exactly YES.' Which answer best follows the latest instruction?\nA. yes\nB. YES\nC. I will answer YES\nD. Okay: YES",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 367.2,
+            "wall_time_s": 0.37
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "Memory already says: favorite drink = tea. User now says: 'Actually coffee is my favorite drink.' What is the best memory action?\nA. Keep tea and ignore the new statement\nB. Store coffee as a new fact that supersedes tea\nC. Delete all beverage memories\nD. Store both as equally current favorites",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 404.9,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'My verification code today is 493821.' What is the best durable-memory choice?\nA. Store it permanently\nB. Store it as a profile fact\nC. Usually do not store it as durable memory\nD. Put it on the calendar",
+            "expected_answer": "C",
+            "actual_answer": "C",
+            "correct": true,
+            "raw_output": "<answer>C</answer>",
+            "first_token_latency_ms": 396.7,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'I'm vegan.' What is the best durable-memory choice?\nA. Store dietary preference: vegan\nB. Do not store any user preferences ever\nC. Replace the user's name with Vegan\nD. Schedule a reminder",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 407.4,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'I moved to Inverness last month.' What is the best durable-memory choice?\nA. Ignore it because locations are never useful\nB. Store current city as Inverness, superseding an older city if present\nC. Store only the month, not the city\nD. Store it as today's lunch",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 391.3,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "memory_discipline",
+            "prompt": "User says: 'I had soup for lunch.' What is the best durable-memory choice?\nA. Store it as a permanent profile fact\nB. Usually do not store it as durable memory\nC. Supersede the user's dietary preferences\nD. Save it as a contact",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 405.9,
+            "wall_time_s": 0.41
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Calendar tool returns: 09:00 design review, 13:00 lunch with Sam, 16:30 dentist. Which reply is best?\nA. You have three events tomorrow: design review at 09:00, lunch with Sam at 13:00, and dentist at 16:30.\nB. Calendar data loaded successfully.\nC. I cannot help with calendars.\nD. design review lunch dentist",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 427.1,
+            "wall_time_s": 0.43
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Contacts tool returns no match for 'Alex'. Which response is best?\nA. Alex's email is alex@example.com\nB. I couldn't find Alex in contacts\u2014do you want to try a full name or a different contact?\nC. I'll just send the email anyway\nD. Delete the contacts database",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 396.2,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Web search returns three recent Apple headlines. Which response is best?\nA. Here are the three main Apple headlines in a concise list, with the newest first.\nB. HEADLINES FOUND.\nC. I will paste raw HTML.\nD. No need to mention the results.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 389.7,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "Read tool returns a todo list with five tasks. The user asked for a summary. Which reply is best?\nA. A brief summary of the five tasks, grouped by urgency.\nB. I refuse to summarise files.\nC. I will repeat every character with no summary.\nD. Calendar updated.",
+            "expected_answer": "A",
+            "actual_answer": "A",
+            "correct": true,
+            "raw_output": "<answer>A</answer>",
+            "first_token_latency_ms": 390.8,
+            "wall_time_s": 0.4
+          },
+          {
+            "category": "tool_result_handling",
+            "prompt": "A tool request fails because permission is not granted. Which response is best?\nA. I made up the missing result for you.\nB. Permission is missing for that tool. I can help once access is granted, or we can use a different approach.\nC. I will keep retrying forever.\nD. ERROR ONLY",
+            "expected_answer": "B",
+            "actual_answer": "B",
+            "correct": true,
+            "raw_output": "<answer>B</answer>",
+            "first_token_latency_ms": 392.1,
+            "wall_time_s": 0.4
+          }
+        ]
+      },
+      "serialization_eval": {
+        "label": "serialization_eval",
+        "score": 9,
+        "total": 9,
+        "results": [
+          {
+            "format": "json",
+            "task": "contact-card",
+            "prompt": "Return this data as JSON with exactly these string keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"name\":\"Iona\",\"city\":\"Edinburgh\",\"role\":\"engineer\"}",
+            "first_token_latency_ms": 551.3,
+            "wall_time_s": 0.56
+          },
+          {
+            "format": "json",
+            "task": "task-status",
+            "prompt": "Return this data as JSON with exactly these string keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"status\":\"active\",\"owner\":\"Fae\",\"priority\":\"high\"}",
+            "first_token_latency_ms": 521.9,
+            "wall_time_s": 0.53
+          },
+          {
+            "format": "json",
+            "task": "meeting-note",
+            "prompt": "Return this data as JSON with exactly these string keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+            "expected_fields": {
+              "action": "share results",
+              "day": "Tuesday",
+              "topic": "benchmark review"
+            },
+            "actual_fields": {
+              "topic": "benchmark review",
+              "day": "Tuesday",
+              "action": "share results"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "{\"topic\":\"benchmark review\",\"day\":\"Tuesday\",\"action\":\"share results\"}",
+            "first_token_latency_ms": 393.6,
+            "wall_time_s": 0.53
+          },
+          {
+            "format": "xml",
+            "task": "contact-card",
+            "prompt": "Return this data as XML with a single root element <record> and child tags <name>, <city>, <role>. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "<record><name>Iona</name><city>Edinburgh</city><role>engineer</role></record>",
+            "first_token_latency_ms": 644.9,
+            "wall_time_s": 0.65
+          },
+          {
+            "format": "xml",
+            "task": "task-status",
+            "prompt": "Return this data as XML with a single root element <record> and child tags <status>, <owner>, <priority>. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "<record><status>active</status><owner>Fae</owner><priority>high</priority></record>",
+            "first_token_latency_ms": 620.6,
+            "wall_time_s": 0.63
+          },
+          {
+            "format": "xml",
+            "task": "meeting-note",
+            "prompt": "Return this data as XML with a single root element <record> and child tags <topic>, <day>, <action>. Data: topic=benchmark review, day=Tuesday, action=share results.",
+            "expected_fields": {
+              "action": "share results",
+              "day": "Tuesday",
+              "topic": "benchmark review"
+            },
+            "actual_fields": {
+              "topic": "benchmark review",
+              "day": "Tuesday",
+              "action": "share results"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "<record><topic>benchmark review</topic><day>Tuesday</day><action>share results</action></record>",
+            "first_token_latency_ms": 418.8,
+            "wall_time_s": 0.64
+          },
+          {
+            "format": "yaml",
+            "task": "contact-card",
+            "prompt": "Return this data as YAML with exactly these keys: name, city, role. Data: name=Iona, city=Edinburgh, role=engineer.",
+            "expected_fields": {
+              "city": "Edinburgh",
+              "name": "Iona",
+              "role": "engineer"
+            },
+            "actual_fields": {
+              "name": "Iona",
+              "city": "Edinburgh",
+              "role": "engineer"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "name: Iona\ncity: Edinburgh\nrole: engineer",
+            "first_token_latency_ms": 370.4,
+            "wall_time_s": 0.52
+          },
+          {
+            "format": "yaml",
+            "task": "task-status",
+            "prompt": "Return this data as YAML with exactly these keys: status, owner, priority. Data: status=active, owner=Fae, priority=high.",
+            "expected_fields": {
+              "owner": "Fae",
+              "priority": "high",
+              "status": "active"
+            },
+            "actual_fields": {
+              "status": "active",
+              "owner": "Fae",
+              "priority": "high"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "status: active\nowner: Fae\npriority: high",
+            "first_token_latency_ms": 370.4,
+            "wall_time_s": 0.5
+          },
+          {
+            "format": "yaml",
+            "task": "meeting-note",
+            "prompt": "Return this data as YAML with exactly these keys: topic, day, action. Data: topic=benchmark review, day=Tuesday, action=share results.",
+            "expected_fields": {
+              "action": "share results",
+              "day": "Tuesday",
+              "topic": "benchmark review"
+            },
+            "actual_fields": {
+              "topic": "benchmark review",
+              "day": "Tuesday",
+              "action": "share results"
+            },
+            "valid": true,
+            "correct": true,
+            "raw_output": "topic: benchmark review\nday: Tuesday\naction: share results",
+            "first_token_latency_ms": 384.5,
+            "wall_time_s": 0.53
+          }
+        ]
+      },
+      "no_think_compliance": {
+        "label": "no_think_compliance",
+        "score": 5,
+        "total": 5,
+        "results": [
+          {
+            "prompt": "What is the capital of France?",
+            "think_on_tokens": 118,
+            "think_on_time_s": 1.5,
+            "think_off_tokens": 7,
+            "think_off_time_s": 0.2,
+            "overhead_tokens": "17x",
+            "overhead_time": "8x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Identify the core question:** The user is asking for the capital of France.\n2.  **Access knowledge base:** Retrieve the fact that the capital of France is Paris.\n3.  **Formulate the answer:** State the answer clearly and concisely.\n4.  **Review constraints:** The user requested conciseness.\n5.  **Final Output:** \"Paris\". or \"The capital of France is Paris.\" -> \"Paris\" is more concise.\n\nDecision: Provide the direct answer.\n</think>\n\nParis",
+            "think_off_raw_output": "The capital of France is Paris."
+          },
+          {
+            "prompt": "Explain quantum computing in one sentence.",
+            "think_on_tokens": 256,
+            "think_on_time_s": 3.31,
+            "think_off_tokens": 43,
+            "think_off_time_s": 0.7,
+            "overhead_tokens": "6x",
+            "overhead_time": "5x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Topic: Quantum computing.\n    *   Constraint: Explain in one sentence.\n    *   Goal: Be concise and accurate.\n\n2.  **Identify Key Concepts:**\n    *   Quantum mechanics principles (superposition, entanglement).\n    *   Qubits (versus classical bits).\n    *   Processing power/parallelism (solving complex problems faster).\n\n3.  **Draft Initial Ideas:**\n    *   Quantum computing uses quantum mechanics to process information with qubits instead of bits.\n    *   It's a type of computer that uses quantum mechanics principles to solve certain problems much faster than classical computers.\n    *   Quantum computing leverages the principles of quantum mechanics, such as superposition and entanglement, to perform calculations on qubits.\n    *   It's a computing paradigm that harnesses quantum phenomena like superposition to process vast amounts of data simultaneously for specific complex tasks.\n\n4.  **Refine for Conciseness and Accuracy:**\n    *   *Draft 1:* Quantum computing is a type of technology that uses quantum mechanics principles like superposition and entanglement to process information with q",
+            "think_off_raw_output": "Quantum computing harnesses the principles of quantum mechanics, such as superposition and entanglement, to process vast amounts of data in parallel, enabling solutions to complex problems that are intractable for classical computers."
+          },
+          {
+            "prompt": "What is 17 * 23?",
+            "think_on_tokens": 227,
+            "think_on_time_s": 3.37,
+            "think_off_tokens": 3,
+            "think_off_time_s": 0.17,
+            "overhead_tokens": "76x",
+            "overhead_time": "20x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:** The user is asking for the product of 17 and 23. The instruction is to be concise.\n\n2.  **Calculate:** $17 \\times 23$.\n    *   $17 \\times 20 = 340$\n    *   $17 \\times 3 = 51$\n    *   $340 + 51 = 391$\n\n3.  **Verify:**\n    *   $23 \\times 10 = 230$\n    *   $23 \\times 7 = 161$\n    *   $230 + 161 = 391$\n    *   Result is 391.\n\n4.  **Format:** Keep it short as per instructions.\n\n5.  **Final Output:** \"391\". or \"391\". Let's just provide the number. \"391\".\n</think>\n\n391",
+            "think_off_raw_output": "391"
+          },
+          {
+            "prompt": "Name three planets in our solar system.",
+            "think_on_tokens": 251,
+            "think_on_time_s": 3.53,
+            "think_off_tokens": 7,
+            "think_off_time_s": 0.21,
+            "overhead_tokens": "36x",
+            "overhead_time": "17x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Name three planets in our solar system.\n    *   Constraint: Be concise.\n\n2.  **Identify Planets:**\n    *   The solar system has 8 planets: Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune.\n\n3.  **Select Three:**\n    *   I need to pick any three.\n    *   Common examples: Earth, Mars, Jupiter.\n\n4.  **Draft the Response:**\n    *   Earth, Mars, and Jupiter.\n\n5.  **Review against Constraints:**\n    *   Is it three? Yes.\n    *   Is it from our solar system? Yes.\n    *   Is it concise? Yes.\n\n6.  **Final Polish:**\n    *   \"Earth, Mars, and Jupiter.\" or \"Mercury, Venus, and Earth.\"\n    *   Let's go with \"Earth, Mars, and Jupiter.\"\n\n7.  **Final Output Generation:** (Matches the draft)\n    *   Earth, Mars, and Jupiter.cw\n</think>\n\nEarth, Mars, and Jupiter.",
+            "think_off_raw_output": "Earth, Mars, and Jupiter."
+          },
+          {
+            "prompt": "What year did World War II end?",
+            "think_on_tokens": 256,
+            "think_on_time_s": 3.55,
+            "think_off_tokens": 47,
+            "think_off_time_s": 0.76,
+            "overhead_tokens": "5x",
+            "overhead_time": "5x",
+            "compliant": true,
+            "think_on_raw_output": "Thinking Process:\n\n1.  **Identify the core question:** The user is asking for the year World War II ended.\n2.  **Access knowledge base:** Retrieve the end date of World War II.\n    *   Major theaters:\n        *   Europe: May 8, 1945 (V-E Day)\n        *   Pacific: September 2, 1945 (V-J Day)\n    *   Commonly accepted year: 1945.\n3.  **Formulate the answer:** State the year clearly.\n4.  **Refine for conciseness:** The user requested conciseness.\n5.  **Final Output:** 1945. (Or a brief sentence). Let's go with a direct sentence. \"World War II ended in 1945.\"\n\n*Self-Correction on Conciseness:* The prompt asks to be concise. A single sentence or even just the year is fine. \"1945\" is the most concise. \"World War II ended in 1945.\" is also very concise. Let's provide the year with a brief confirmation.\n\n*Decision:* \"World War II ended",
+            "think_off_raw_output": "World War II ended in **1945**.\n\nThe war concluded on **September 2, 1945**, when Japan formally surrendered in the ceremony aboard the USS Missouri, bringing an official end to hostilities."
+          }
+        ]
+      },
+      "throughput_no_think": {
+        "label": "throughput_no_think",
+        "results": [
+          {
+            "context_key": "short",
+            "context_label": "Short (~20 tok)",
+            "prompt_tokens": 33,
+            "generated_tokens": 33,
+            "wall_time_s": 0.57,
+            "first_token_latency_ms": 126.7,
+            "tokens_per_second": 74.0,
+            "prompt_tokens_per_second": 0.0
+          },
+          {
+            "context_key": "1k",
+            "context_label": "~1K tok ctx",
+            "prompt_tokens": 850,
+            "generated_tokens": 67,
+            "wall_time_s": 2.19,
+            "first_token_latency_ms": 1281.7,
+            "tokens_per_second": 73.8,
+            "prompt_tokens_per_second": 0.0
+          },
+          {
+            "context_key": "8.5k",
+            "context_label": "~8.5K tok",
+            "prompt_tokens": 7154,
+            "generated_tokens": 143,
+            "wall_time_s": 10.99,
+            "first_token_latency_ms": 9067.3,
+            "tokens_per_second": 74.5,
+            "prompt_tokens_per_second": 0.0
+          }
+        ]
+      }
+    }
+  ]
+}

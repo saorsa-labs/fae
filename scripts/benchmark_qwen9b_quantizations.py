@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-External A/B benchmark for Qwen3.5-9B quantizations.
+External A/B benchmark for Qwen3.5 standard MLX vs ParoQuant quantizations.
 
-This compares the current standard MLX 4-bit checkpoint against the ParoQuant
-4-bit checkpoint using the same prompt corpus taken from Fae's stored targeted
+This compares a standard MLX 4-bit checkpoint against a ParoQuant 4-bit
+checkpoint using the same prompt corpus taken from Fae's stored targeted
 benchmark artifact. It intentionally stays outside the app runtime so we can
-measure the quantization delta before deciding whether ParoQuant support belongs
+measure quantization deltas before deciding whether ParoQuant support belongs
 in Fae itself.
 """
 
@@ -75,6 +75,7 @@ MCQ_PATTERNS = [
 ]
 
 THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+QWEN_SIZE_RE = re.compile(r"Qwen3(?:\.|_)?5-(0\.8B|2B|4B|9B|27B|35B-A3B|34B-A3B)", re.IGNORECASE)
 
 
 @dataclass
@@ -108,6 +109,15 @@ class BaseRunner:
         enable_thinking: bool,
     ) -> GenerationMetrics:
         raise NotImplementedError
+
+
+def infer_output_prefix(model_id: str, fallback_label: str) -> str:
+    match = QWEN_SIZE_RE.search(model_id)
+    if match:
+        size = match.group(1).lower()
+        return f"qwen35-{size}"
+    safe = re.sub(r"[^a-z0-9]+", "-", fallback_label.lower()).strip("-")
+    return safe or "benchmark"
 
 
 class StandardMLXRunner(BaseRunner):
@@ -677,7 +687,8 @@ async def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_path = args.output_dir / f"qwen35-9b-mlx-vs-paroquant_{stamp}.json"
+    prefix = infer_output_prefix(args.standard_model, args.standard_label)
+    out_path = args.output_dir / f"{prefix}-mlx-vs-paroquant_{stamp}.json"
     out_path.write_text(json.dumps(output, indent=2))
     print(out_path)
 

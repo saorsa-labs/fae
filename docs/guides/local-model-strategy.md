@@ -1,6 +1,6 @@
 # Local Model Strategy
 
-Last updated: March 13, 2026
+Last updated: March 14, 2026
 
 This is the current canonical guide for Fae's local model stack.
 
@@ -36,14 +36,26 @@ These are available as explicit user choices, but they are not selected by `Auto
 
 | Preset | Model | RAM guidance | Why manual-only |
 |---|---|---|---|
-| `Qwen3.5 27B` | `mlx-community/Qwen3.5-27B-4bit` | `32+ GB` | Better quality, but much slower first-turn latency |
-| `Qwen3.5 35B-A3B` | `mlx-community/Qwen3.5-35B-A3B-4bit` | `48+ GB` | Highest local quality tier, but too latency-heavy for default use |
+| `Qwen3.5 27B` | `mlx-community/Qwen3.5-27B-4bit` | `32+ GB` | Highest local quality tier currently supported by Fae's Swift runtime. Better quality than 9B, but much slower first-turn latency |
+
+Legacy compatibility alias:
+
+- `qwen3_5_35b_a3b` now resolves to `Qwen3.5 27B`
 
 ### Current recommendation
 
 - default local mode: `Qwen3.5 4B`
 - higher-quality local mode: `Qwen3.5 9B`
+- highest loadable manual quality tier: `Qwen3.5 27B`
 - compact fallback: `Qwen3.5 2B`
+
+### ParoQuant status
+
+Sidecar PARO benchmarks currently look strongest at `9B` and `27B`, but Fae's Swift-native runtime cannot load PARO checkpoints yet. So the app continues to ship the standard MLX Qwen3.5 checkpoints for now:
+
+- `Qwen3.5 9B` remains the highest automatic tier
+- `Qwen3.5 27B` is the current manual quality tier
+- PARO stays benchmark-only until Swift runtime support lands
 
 ## Vision model strategy
 

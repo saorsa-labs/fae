@@ -38,19 +38,13 @@ struct LocalModelCatalog {
             label: "Qwen3.5 9B",
             value: "qwen3_5_9b",
             ram: "24+ GB",
-            description: "Higher-quality single-model option. Better reasoning and tool behavior, but slower than 4B. Auto uses this on 32+ GB Macs."
+            description: "Best current loadable quality/runtime balance in Fae's Swift stack. Better reasoning and tool behavior than 4B, while remaining responsive enough for daily use."
         ),
         .init(
             label: "Qwen3.5 27B",
             value: "qwen3_5_27b",
             ram: "32+ GB",
-            description: "Manual quality mode for larger-RAM Macs. Stronger reasoning, but much slower first-turn latency."
-        ),
-        .init(
-            label: "Qwen3.5 35B-A3B",
-            value: "qwen3_5_35b_a3b",
-            ram: "48+ GB",
-            description: "Largest local quality mode. Keep it manual-only unless you explicitly prefer quality over responsiveness."
+            description: "Highest local quality tier currently supported by Fae's native Swift runtime. Best for larger-RAM Macs when you explicitly want higher quality over first-turn latency."
         ),
     ]
 

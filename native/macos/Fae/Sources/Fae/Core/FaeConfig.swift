@@ -365,7 +365,9 @@ struct FaeConfig: Codable {
     static func canonicalVoiceModelPreset(_ preset: String) -> String {
         switch preset.lowercased() {
         case "qwen3_5_35b_a3b":
-            return "qwen3_5_35b_a3b"
+            // Legacy high-RAM preset. Route it to 27B until Swift-side PARO support
+            // lands and the former 35B-A3B tier is revisited.
+            return "qwen3_5_27b"
         case "qwen3_5_27b":
             return "qwen3_5_27b"
         case "qwen3_5_27b_opus_distilled":
@@ -409,8 +411,6 @@ struct FaeConfig: Codable {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
         switch canonicalVoiceModelPreset(preset) {
-        case "qwen3_5_35b_a3b":
-            return ("mlx-community/Qwen3.5-35B-A3B-4bit", 32_768)
         case "qwen3_5_27b":
             return ("mlx-community/Qwen3.5-27B-4bit", 32_768)
         case "qwen3_5_27b_opus_distilled":

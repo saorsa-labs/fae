@@ -1,0 +1,186 @@
+{
+  "date": "2026-03-14T15:16:37",
+  "reference_corpus": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen3.5-9b_20260313-172928.json",
+  "qwen35_2b_standard_server": "9/10",
+  "qwen35_2b_paro_server": "9/10",
+  "models": [
+    {
+      "runner": "qwen35_2b_standard_server",
+      "model_id": "mlx-community/Qwen3.5-2B-4bit",
+      "score": 9,
+      "total": 10,
+      "results": [
+        {
+          "prompt": "What's on my calendar tomorrow?",
+          "expected_tool": "calendar",
+          "actual_tool": "calendar",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Remind me to buy groceries at 5pm",
+          "expected_tool": "reminders",
+          "actual_tool": "reminders",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "I'll remind you to buy groceries at 5pm."
+        },
+        {
+          "prompt": "Search the web for the latest news about Apple",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Check my inbox and show me the latest three emails",
+          "expected_tool": "mail",
+          "actual_tool": "mail",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "I'll check your inbox for the latest three emails."
+        },
+        {
+          "prompt": "What's David's phone number?",
+          "expected_tool": "contacts",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": false,
+          "raw_response_preview": "I don't have access to David's phone number. I can search the web for this information."
+        },
+        {
+          "prompt": "Search my notes for the shopping list",
+          "expected_tool": "notes",
+          "actual_tool": "notes",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "expected_tool": "read",
+          "actual_tool": "read",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": ""
+        },
+        {
+          "prompt": "Can you look something up for me about quantum computing?",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "I'll search for information about quantum computing for you."
+        },
+        {
+          "prompt": "How are you feeling today?",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "I'm Fae, a personal AI companion running on macOS. How are you feeling today?"
+        },
+        {
+          "prompt": "Tell me a joke about programming",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "Here's a joke about programming:\\n\\nWhy did the programmer break up with their girlfriend?\\n\\nBecause they were getting a 404 error! \ud83d\ude04"
+        }
+      ],
+      "log_path": "/var/folders/yj/_jckx7bd6sz7w8jg7pts5whh0000gn/T/fae-qwen9b-tool-server-ltq_85vn/standard-20260314-151607.log"
+    },
+    {
+      "runner": "qwen35_2b_paro_server",
+      "model_id": "z-lab/Qwen3.5-2B-PARO",
+      "score": 9,
+      "total": 10,
+      "results": [
+        {
+          "prompt": "What's on my calendar tomorrow?",
+          "expected_tool": "calendar",
+          "actual_tool": "calendar",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "Remind me to buy groceries at 5pm",
+          "expected_tool": "reminders",
+          "actual_tool": "calendar",
+          "tool_call_source": "api_tool_call",
+          "correct": false,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "Search the web for the latest news about Apple",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "Check my inbox and show me the latest three emails",
+          "expected_tool": "mail",
+          "actual_tool": "mail",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "What's David's phone number?",
+          "expected_tool": "contacts",
+          "actual_tool": "contacts",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "Search my notes for the shopping list",
+          "expected_tool": "notes",
+          "actual_tool": "notes",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "expected_tool": "read",
+          "actual_tool": "read",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "Can you look something up for me about quantum computing?",
+          "expected_tool": "web_search",
+          "actual_tool": "web_search",
+          "tool_call_source": "api_tool_call",
+          "correct": true,
+          "raw_response_preview": "<|im_end|>"
+        },
+        {
+          "prompt": "How are you feeling today?",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "I'm an AI, so I don't have feelings, but I'm functioning well and ready to help you! How about you?<|im_end|>"
+        },
+        {
+          "prompt": "Tell me a joke about programming",
+          "expected_tool": "none",
+          "actual_tool": "none",
+          "tool_call_source": "none",
+          "correct": true,
+          "raw_response_preview": "Here's a joke about programming:\\n\\nWhy did the Python developer go to the doctor?\\nBecause he had a \"bug\" in his code! \ud83d\udc1b<|im_end|>"
+        }
+      ],
+      "log_path": "/var/folders/yj/_jckx7bd6sz7w8jg7pts5whh0000gn/T/fae-qwen9b-tool-server-ltq_85vn/paro-20260314-151607.log"
+    }
+  ]
+}

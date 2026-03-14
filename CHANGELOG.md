@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.102] - 2026-03-14
+
+### Changed
+
+- **Local model ladder refreshed for manual testing**:
+  - the app now treats `Qwen3.5 27B` as the highest advertised local quality tier
+  - the legacy `Qwen3.5-35B-A3B` preset now resolves to `Qwen3.5 27B`
+  - `Auto` remains the standard Swift-native `2B` / `4B` / `9B` path
+- **PARO benchmark tooling generalized**:
+  - PARO comparison scripts now emit size-aware artifact names instead of hardcoded `9B` filenames
+  - benchmark result set now includes `2B`, `4B`, `9B`, and `27B` MLX-vs-PARO baselines
+
+### Documented
+
+- **Swift runtime boundary for PARO**:
+  - external PARO baselines are now documented as promising for `9B` and `27B`
+  - the app docs and release checklists now make clear that Fae's current `mlx-swift-lm` runtime cannot load PARO checkpoints yet, so PARO remains benchmark-only for now
+
+### Cleaned
+
+- Removed stale local training outputs, PARO cache snapshots, duplicate benchmark artifacts, and Python cache directories to recover disk space before manual testing.
+
 ## [v0.8.74] - 2026-03-03
 
 ### Added

@@ -7,6 +7,9 @@ TARGET_MODEL="${1:-9b}"
 METHOD="${2:-orpo}"
 
 case "$TARGET_MODEL" in
+    0.8b|0_8b|mini)
+        MODEL_TAG="qwen35-0.8b"
+        ;;
     2b|tiny)
         MODEL_TAG="qwen35-2b"
         ;;
@@ -16,11 +19,14 @@ case "$TARGET_MODEL" in
     9b|8b|medium)
         MODEL_TAG="qwen35-9b"
         ;;
+    27b|xl|quality)
+        MODEL_TAG="qwen35-27b"
+        ;;
     35b-a3b|34b-a3b|large)
         MODEL_TAG="qwen35-35b-a3b"
         ;;
     *)
-        echo "Usage: $0 [2b|4b|8b|9b|34b-a3b|35b-a3b|tiny|small|medium|large] [dpo|orpo]"
+        echo "Usage: $0 [0.8b|2b|4b|8b|9b|27b|34b-a3b|35b-a3b|mini|tiny|small|medium|xl|quality|large] [dpo|orpo]"
         exit 1
         ;;
 esac

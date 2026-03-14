@@ -1,0 +1,42 @@
+{
+  "date": "2026-03-14T15:56:06+00:00",
+  "runs": [
+    {
+      "size": "27b",
+      "text_result": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35-27b-mlx-vs-paroquant_20260314-160913.json",
+      "tool_result": "/Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/qwen35-27b-toolcalling-mlx-vs-paro_20260314-160913.json",
+      "text_comparison": {
+        "qwen35_27b_standard": {
+          "intelligence_eval": "47/50",
+          "fae_capability_eval": "20/20",
+          "assistant_fit_eval": "20/20",
+          "serialization_eval": "9/9",
+          "no_think_compliance": "5/5"
+        },
+        "qwen35_27b_paro": {
+          "intelligence_eval": "48/50",
+          "fae_capability_eval": "20/20",
+          "assistant_fit_eval": "20/20",
+          "serialization_eval": "9/9",
+          "no_think_compliance": "5/5"
+        },
+        "fae_capability_diffs": [],
+        "assistant_fit_diffs": [],
+        "intelligence_diffs": [
+          {
+            "prompt": "If a statement is false, which option cannot also be true?\nA. Its opposite\nB. A contradiction of it\nC. An unrelated fact\nD. A stronger true claim",
+            "left_correct": false,
+            "right_correct": true,
+            "left_actual_answer": "D",
+            "right_actual_answer": "B",
+            "expected_answer": "B"
+          }
+        ]
+      },
+      "tool_scores": {
+        "qwen35_27b_standard_server": "9/10",
+        "qwen35_27b_paro_server": "10/10"
+      }
+    }
+  ]
+}

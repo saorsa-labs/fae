@@ -30,7 +30,10 @@ User-facing text model presets:
 - `qwen3_5_4b`
 - `qwen3_5_9b`
 - `qwen3_5_27b`
-- `qwen3_5_35b_a3b`
+
+Legacy alias still accepted for compatibility:
+
+- `qwen3_5_35b_a3b` → resolves to `qwen3_5_27b`
 
 `Auto (Recommended)` resolves by RAM:
 
@@ -40,7 +43,9 @@ User-facing text model presets:
 | `16–31 GB` | `Qwen3.5 4B` |
 | `32+ GB` | `Qwen3.5 9B` |
 
-The larger `27B` and `35B-A3B` presets are explicit quality modes, not automatic defaults.
+`Qwen3.5 27B` is the current highest local quality tier in the Swift runtime. The old `35B-A3B` preset is treated as a legacy alias to `27B`.
+
+ParoQuant `9B` / `27B` checkpoints benchmark well in sidecar tests, but they are not yet loadable through Fae's current `mlx-swift-lm` runtime path.
 
 ## Supported vision presets
 

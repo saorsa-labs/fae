@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: March 13, 2026
+Last updated: March 14, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae.
 
@@ -59,6 +59,7 @@ Suggested screenshot root:
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
 - [ ] The active local text model and configured vision model are visible in Settings without truncation.
 - [ ] The runtime reports the expected local text model, context size, and tool mode.
+- [ ] The active local text model matches the current loadable ladder under test: `2B` / `4B` / `9B` on the standard MLX path, with `27B` as the manual quality tier. PARO checkpoints remain sidecar-only until Swift runtime support exists.
 - [ ] On a cache-cleared or clean-install machine, first local text-model load completes without `Worker command timed out: load` while model download is in progress.
 - [ ] Any stale onboarding, memory, scheduler, or approval state needed for the scenario is reset intentionally through the test server.
 

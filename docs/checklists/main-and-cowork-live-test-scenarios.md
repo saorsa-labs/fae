@@ -1,6 +1,6 @@
 # Main And Cowork Live Test Scenarios
 
-Last updated: March 13, 2026
+Last updated: March 14, 2026
 
 This document is the step-by-step live validation companion to
 [`docs/checklists/app-release-validation.md`](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md).
@@ -18,6 +18,8 @@ Current local product path:
 - single Qwen3.5 text model
 - on-demand Qwen3-VL vision model
 - legacy dual / concierge mode treated as compatibility-only, not default behavior
+- highest loadable local quality tier is currently `Qwen3.5 27B`
+- PARO checkpoints remain sidecar-benchmark only until Swift runtime support exists
 
 ## Required setup
 
@@ -50,6 +52,7 @@ Acceptance:
 - The main surface is visually coherent within 3 seconds.
 - On a true first run, the intro crawl appears after license acceptance and before the live conversation surface unlocks.
 - The active local text model is visible in the runtime or settings and matches expectations.
+- The active local text model matches the current loadable ladder under test: `2B`, `4B`, `9B`, or manual `27B`.
 - On a clean-install or cache-cleared run, local text-model startup can wait through first-download latency without tripping a worker load timeout.
 - The startup progress bar stays visible through download, model load, verification, and warmup.
 - The default startup path is the single-model Qwen3.5 flow rather than an implicit concierge boot.
