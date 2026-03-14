@@ -63,13 +63,37 @@ fi
 # --- Step 1: Generate + prepare data ---
 section "Step 1: Generate Training Data"
 T0=$(date +%s)
+# Generate synthetic conversations in flat format
 python3 "$SCRIPT_DIR/generate_synthetic_training_data.py" --output "$WORKDIR/data/conversations.jsonl" --count "$N_CONV" --with-dpo --seed 42
-python3 "$SCRIPT_DIR/prepare_training_data.py" --input "$WORKDIR/data/conversations.jsonl" --outdir "$WORKDIR/training"
-SFT=$(wc -l < "$WORKDIR/training/sft_train.jsonl" | tr -d ' ')
-DPO=$(wc -l < "$WORKDIR/training/dpo_train.jsonl" 2>/dev/null | tr -d ' ' || echo 0)
-cp "$WORKDIR/training/sft_train.jsonl" "$WORKDIR/training/train.jsonl"
+
+# Convert flat messages to canonical SFT format (messages array per conversation)
+# and place as train.jsonl for mlx_lm
+python3 -c "
+import json, sys
+lines = [json.loads(l) for l in open('$WORKDIR/data/conversations.jsonl') if l.strip()]
+convos, cur = [], []
+for msg in lines:
+    if msg['role'] == 'system':
+        if cur: convos.append(cur)
+        cur = [msg]
+    else:
+        cur.append({k: v for k, v in msg.items() if k != 'rejected'})
+if cur: convos.append(cur)
+sft = 0
+with open('$WORKDIR/training/train.jsonl', 'w') as f:
+    for c in convos:
+        if len(c) >= 3:
+            f.write(json.dumps({'messages': c}) + '\n')
+            sft += 1
+print(f'Converted {sft} SFT examples from {len(convos)} conversations')
+"
+SFT=$(wc -l < "$WORKDIR/training/train.jsonl" | tr -d ' ')
+DPO=0
 T1=$(date +%s)
-(( SFT > 0 )) && { pass_ "$SFT SFT + $DPO DPO examples ($((T1-T0))s)"; record "Data" "PASS" "$((T1-T0))s"; } || { fail_ "No SFT data"; record "Data" "FAIL" "0s"; exit 1; }
+# Validate first example structure
+VALID=$(head -1 "$WORKDIR/training/train.jsonl" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print("ok" if "messages" in d and len(d["messages"])>=3 else "bad")' 2>/dev/null)
+T1=$(date +%s)
+(( SFT > 0 )) && [[ "$VALID" == "ok" ]] && { pass_ "$SFT SFT examples ($((T1-T0))s)"; record "Data" "PASS" "$((T1-T0))s"; } || { fail_ "No valid SFT data"; record "Data" "FAIL" "0s"; exit 1; }
 
 # --- Step 2: LoRA Training ---
 section "Step 2: LoRA Training"
@@ -78,7 +102,7 @@ if [[ "$SKIP_TRAIN" == "true" ]]; then warn "Skipped"; record "Training" "SKIP" 
 else
     set +e
     python3 -m mlx_lm.lora --model "$MODEL" --train --data "$WORKDIR/training" \
-        --iters "$ITERS" --batch-size 1 --lora-layers 4 --adapter-path "$WORKDIR/adapter" --lr 2e-4 2>&1 | tee "$WORKDIR/train.log"
+        --iters "$ITERS" --batch-size 1 --num-layers 4 --adapter-path "$WORKDIR/adapter" --learning-rate 2e-4 2>&1 | tee "$WORKDIR/train.log"
     RC=$?; set -e; T1=$(date +%s)
     if [[ $RC -eq 0 ]] && [[ -d "$WORKDIR/adapter" ]]; then
         SZ=$(du -sh "$WORKDIR/adapter" | cut -f1)
