@@ -62,6 +62,7 @@ UV_RUN=(
 )
 
 RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
+SOURCE_DIR="${FAE_SOURCE_DIR:-$PROJECT_ROOT}"
 TRAINING_DATA_DIR="${FAE_TRAINING_DATA_DIR:-$PROJECT_ROOT/training/data}"
 IMPORTS_DIR="${FAE_IMPORTS_DIR:-$PROJECT_ROOT/training/imports}"
 SKIP_MARKDOWN_SOURCES="${FAE_SKIP_MARKDOWN_SOURCES:-0}"
@@ -100,7 +101,7 @@ if [[ "$SKIP_PREPARE" != "1" ]]; then
     log "Preparing training data"
     PREPARE_CMD=(
         "$SCRIPT_DIR/prepare_training_data.py"
-        --source-dir "$PROJECT_ROOT" \
+        --source-dir "$SOURCE_DIR" \
         --output-dir "$TRAINING_DATA_DIR" \
         --imports-dir "$IMPORTS_DIR" \
         --split

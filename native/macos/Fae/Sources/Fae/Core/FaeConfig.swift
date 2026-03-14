@@ -364,6 +364,8 @@ struct FaeConfig: Codable {
 
     static func canonicalVoiceModelPreset(_ preset: String) -> String {
         switch preset.lowercased() {
+        case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
+            return "qwen3_5_2b"
         case "qwen3_5_35b_a3b":
             // Legacy high-RAM preset. Route it to 27B until Swift-side PARO support
             // lands and the former 35B-A3B tier is revisited.

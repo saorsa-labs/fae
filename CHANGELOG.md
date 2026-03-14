@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.103] - 2026-03-14
+
+### Added
+
+- **Reproducible `saorsa-1.1-tiny` retrain workflow**:
+  - the MLX preference trainers now accept `FAE_SOURCE_DIR`, so historical markdown-only post-training slices can be replayed exactly instead of always re-reading the whole repo root
+  - the fresh exact 2B retrain benchmark artifact is now checked in at `scripts/benchmark-results/qwen35-2b-orpo16fullmlp-exact_targeted_20260314-2004.json`
+- **`saorsa-1.1-tiny` publish assets**:
+  - added a tracked model card at `docs/model-cards/saorsa-1.1-tiny/README.md`
+  - expanded Hugging Face upload tooling to prefer tracked model cards and use locally cached HF auth when available
+
+### Changed
+
+- **Low-RAM 2B candidate refreshed for the next publish attempt**:
+  - retrained the `Qwen3.5-2B-4bit` ORPO candidate using the original `530` DPO / `481` SFT markdown slice
+  - current exact delta vs base is `9/10 -> 10/10` tool calling, `7/20 -> 9/20` assistant fit, `9/20 -> 9/20` Fae capability, with serialization and `/no_think` unchanged
+- **App runtime kept on the safe loadable ladder**:
+  - `Auto` still ships the standard Swift-native `2B` / `4B` / `9B` path until `saorsa-labs/saorsa-1.1-tiny` can actually be published
+  - runtime aliasing and Qwen-compatible tool-call handling now recognize `saorsa-1.1` model IDs so the app is ready once that repo exists
+
 ## [v0.8.102] - 2026-03-14
 
 ### Changed

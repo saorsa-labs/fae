@@ -7,13 +7,13 @@
 Upload Fae companion model artifacts to HuggingFace.
 
 Uploads:
-  - Model weights, tokenizer, and config → saorsa-labs/saorsa1-tiny-pre-release
+  - Model weights, tokenizer, and config → saorsa-labs/saorsa-1.1-tiny
   - Training data JSONL files           → saorsa-labs/fae-training-data (dataset repo)
 
 Usage:
   HF_TOKEN=your_token python3 scripts/upload_to_hf.py \\
       --model-path models/sft-merged/ \\
-      --repo-id saorsa-labs/saorsa1-tiny-pre-release
+      --repo-id saorsa-labs/saorsa-1.1-tiny
 
   # Upload as public:
   HF_TOKEN=your_token python3 scripts/upload_to_hf.py \\
@@ -46,8 +46,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--repo-id",
-        default="saorsa-labs/saorsa1-tiny-pre-release",
-        help="HuggingFace model repo ID (default: saorsa-labs/saorsa1-tiny-pre-release).",
+        default="saorsa-labs/saorsa-1.1-tiny",
+        help="HuggingFace model repo ID (default: saorsa-labs/saorsa-1.1-tiny).",
     )
     parser.add_argument(
         "--dataset-repo-id",
@@ -72,7 +72,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--commit-message",
-        default="Upload saorsa1-tiny-pre-release (MLX LoRA SFT fine-tune)",
+        default="Upload saorsa-1.1-tiny",
         help="Commit message for the model upload.",
     )
     args = parser.parse_args()
@@ -82,7 +82,7 @@ def main() -> int:
     # if the package is missing, rather than a bare ImportError at the top)
     # ------------------------------------------------------------------
     try:
-        from huggingface_hub import HfApi, create_repo
+        from huggingface_hub import HfApi, create_repo, get_token
     except ImportError:
         print(
             "ERROR: huggingface_hub is not installed.\n"
@@ -96,9 +96,11 @@ def main() -> int:
     # ------------------------------------------------------------------
     hf_token = os.environ.get("HF_TOKEN", "").strip()
     if not hf_token:
+        hf_token = (get_token() or "").strip()
+    if not hf_token:
         print(
-            "ERROR: HF_TOKEN environment variable is not set.\n"
-            "  Set it before running: export HF_TOKEN=your_token",
+            "ERROR: no Hugging Face token available.\n"
+            "  Set HF_TOKEN or log in with huggingface_hub first.",
             file=sys.stderr,
         )
         return 1
@@ -164,9 +166,11 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Upload model card README if it exists in the project
     # ------------------------------------------------------------------
-    # Derive the model card path from the repo ID (e.g. saorsa-labs/saorsa1-worker-pre-release → saorsa1-worker-pre-release)
+    # Prefer tracked docs/model-cards content, then fall back to the legacy training/models path.
     model_name = args.repo_id.split("/")[-1]
-    model_card_path = project_root / "training" / "models" / model_name / "README.md"
+    model_card_path = project_root / "docs" / "model-cards" / model_name / "README.md"
+    if not model_card_path.exists():
+        model_card_path = project_root / "training" / "models" / model_name / "README.md"
     if model_card_path.exists():
         print(f"Uploading model card from: {model_card_path}")
         try:

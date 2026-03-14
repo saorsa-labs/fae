@@ -114,6 +114,7 @@ public func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
 
     let lower = modelID.lowercased()
     return lower.contains("qwen")
+        || lower.contains("saorsa-1.1")
         || lower.contains("saorsa1-worker")
         || lower.contains("saorsa1-tiny")
 }

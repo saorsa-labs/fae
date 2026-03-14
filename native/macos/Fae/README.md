@@ -39,7 +39,7 @@ Canonical local model cache: `~/.cache/huggingface/hub`. The app runtime, traini
 
 Current loadable text-model ladder in the app:
 
-- `Auto`: `Qwen3.5 2B` / `4B` / `9B` by RAM
+- `Auto`: `Qwen3.5 2B` / `Qwen3.5 4B` / `Qwen3.5 9B` by RAM
 - manual quality mode: `Qwen3.5 27B`
 - legacy `35B-A3B` preset now maps to `27B`
 

@@ -434,7 +434,7 @@ final class ConversationBridgeController: ObservableObject {
         let lower = model.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
             return ("Loading ears to listen…", 10)
-        } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
+        } else if lower.contains("qwen") || lower.contains("saorsa") || lower.contains("llm") || lower.contains("mistral") {
             return ("Loading brain to think — this takes a moment…", 30)
         } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
             return ("Loading voice to speak with…", 85)
@@ -448,7 +448,7 @@ final class ConversationBridgeController: ObservableObject {
         let lower = model.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
             return "Ears ready — Fae can listen ✓"
-        } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
+        } else if lower.contains("qwen") || lower.contains("saorsa") || lower.contains("llm") || lower.contains("mistral") {
             return "Brain ready — Fae can think ✓"
         } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
             return "Voice ready — Fae can speak ✓"
@@ -500,7 +500,7 @@ final class ConversationBridgeController: ObservableObject {
         let lower = repoId.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
             return "Downloading speech recognition…"
-        } else if lower.contains("qwen") || lower.contains("llm") || lower.contains("mistral") {
+        } else if lower.contains("qwen") || lower.contains("saorsa") || lower.contains("llm") || lower.contains("mistral") {
             return "Downloading Fae's brain…"
         } else if lower.contains("kokoro") || lower.contains("tts") || lower.contains("voice") {
             return "Downloading Fae's voice…"
