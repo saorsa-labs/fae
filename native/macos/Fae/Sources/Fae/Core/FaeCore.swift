@@ -1751,6 +1751,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
             persistConfig(reason: "config.patch.awareness.enhanced_briefing")
             refreshAwarenessRuntime(restartSchedulerTasks: false)
 
+        case "awareness.proactive_lite":
+            guard let enabled = value as? Bool else { return }
+            config.awareness.proactiveLiteEnabled = enabled
+            persistConfig(reason: "config.patch.awareness.proactive_lite")
+            refreshAwarenessRuntime(restartSchedulerTasks: true)
+
         case "awareness.pause_on_battery":
             guard let enabled = value as? Bool else { return }
             config.awareness.pauseOnBattery = enabled

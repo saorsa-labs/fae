@@ -340,6 +340,9 @@ struct FaeConfig: Codable {
         var overnightWorkEnabled: Bool = true
         /// Enhanced morning briefing with calendar, mail, research.
         var enhancedBriefingEnabled: Bool = true
+        /// Tier 1 proactive features (morning briefing, overnight research) run
+        /// without requiring full awareness consent. Defaults to true.
+        var proactiveLiteEnabled: Bool = true
         /// Pause observations when on battery power.
         var pauseOnBattery: Bool = true
         /// Pause observations under thermal pressure.
@@ -1001,6 +1004,9 @@ struct FaeConfig: Codable {
                 case "enhancedBriefingEnabled", "enhanced_briefing":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.awareness.enhancedBriefingEnabled = v
+                case "proactiveLiteEnabled", "proactive_lite":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.awareness.proactiveLiteEnabled = v
                 case "pauseOnBattery", "pause_on_battery":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.awareness.pauseOnBattery = v
@@ -1167,6 +1173,7 @@ struct FaeConfig: Codable {
         lines.append("screenIntervalSeconds = \(awareness.screenIntervalSeconds)")
         lines.append("overnightWorkEnabled = \(awareness.overnightWorkEnabled ? "true" : "false")")
         lines.append("enhancedBriefingEnabled = \(awareness.enhancedBriefingEnabled ? "true" : "false")")
+        lines.append("proactiveLiteEnabled = \(awareness.proactiveLiteEnabled ? "true" : "false")")
         lines.append("pauseOnBattery = \(awareness.pauseOnBattery ? "true" : "false")")
         lines.append("pauseOnThermalPressure = \(awareness.pauseOnThermalPressure ? "true" : "false")")
         lines.append("consentGrantedAt = \(encodeStringOrNil(awareness.consentGrantedAt))")

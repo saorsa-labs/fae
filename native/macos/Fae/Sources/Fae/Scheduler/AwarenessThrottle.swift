@@ -27,9 +27,17 @@ struct AwarenessThrottle: Sendable {
         taskId: String,
         lastUserSeenAt: Date? = nil
     ) -> ThrottleDecision {
-        // Master gate: awareness must be enabled with valid consent.
-        guard config.enabled, config.consentGrantedAt != nil else {
-            return .skip(reason: "Awareness not enabled or no consent")
+        // Tier 1 tasks (briefing, overnight research) run with proactiveLiteEnabled alone.
+        // Tier 2 tasks (camera, screen) require full awareness consent.
+        let isTier1 = taskId == "enhanced_morning_briefing" || taskId == "overnight_work"
+        if isTier1 {
+            guard config.proactiveLiteEnabled || (config.enabled && config.consentGrantedAt != nil) else {
+                return .skip(reason: "Proactive lite disabled and no awareness consent")
+            }
+        } else {
+            guard config.enabled, config.consentGrantedAt != nil else {
+                return .skip(reason: "Awareness not enabled or no consent")
+            }
         }
 
         // Battery check.

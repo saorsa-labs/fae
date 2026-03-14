@@ -909,24 +909,16 @@ actor FaeScheduler {
             ))
         }
 
-        // 2. Morning briefing not set up.
-        let hasBriefingConsent = awarenessConfig.consentGrantedAt != nil
-        if !hasBriefingConsent || !awarenessConfig.enhancedBriefingEnabled {
+        // 2. Morning briefing and overnight research are Tier 1 (on by default).
+        // Only suggest if user has explicitly disabled proactiveLiteEnabled.
+        if !awarenessConfig.proactiveLiteEnabled && !awarenessConfig.enhancedBriefingEnabled {
             items.append((
                 id: "morning_briefing",
-                contextHint: "Morning briefing is not active. It delivers a brief, warm summary of calendar, mail, reminders, and research findings each morning when the user first arrives."
+                contextHint: "Morning briefing is disabled. It delivers a brief, warm summary of calendar, mail, reminders, and research findings each morning when you first arrive."
             ))
         }
 
-        // 3. Overnight research not enabled.
-        if !hasBriefingConsent || !awarenessConfig.overnightWorkEnabled {
-            items.append((
-                id: "overnight_research",
-                contextHint: "Overnight research is not enabled. Fae can quietly research topics the user cares about during quiet hours and surface findings in the morning briefing."
-            ))
-        }
-
-        // 4. Vision disabled on capable hardware.
+        // 3. Vision disabled on capable hardware.
         if ramGB >= 24, !visionEnabled {
             items.append((
                 id: "vision",
@@ -1296,7 +1288,9 @@ actor FaeScheduler {
     func notifyUserDetectedPostQuietHours() async {
         let hour = Calendar.current.component(.hour, from: Date())
         guard hour >= 7, !morningBriefingDelivered else { return }
-        guard awarenessConfig.enabled, awarenessConfig.enhancedBriefingEnabled else { return }
+        // Tier 1 (proactiveLiteEnabled) OR Tier 2 (full awareness consent)
+        guard awarenessConfig.proactiveLiteEnabled ||
+              (awarenessConfig.enabled && awarenessConfig.enhancedBriefingEnabled) else { return }
         await runEnhancedMorningBriefing()
     }
 
@@ -1304,7 +1298,9 @@ actor FaeScheduler {
     func checkMorningBriefingFallback() async {
         let hour = Calendar.current.component(.hour, from: Date())
         guard hour >= 7, hour < 12, !morningBriefingDelivered else { return }
-        guard awarenessConfig.enabled, awarenessConfig.enhancedBriefingEnabled else { return }
+        // Tier 1 (proactiveLiteEnabled) OR Tier 2 (full awareness consent)
+        guard awarenessConfig.proactiveLiteEnabled ||
+              (awarenessConfig.enabled && awarenessConfig.enhancedBriefingEnabled) else { return }
         await runEnhancedMorningBriefing()
     }
 
@@ -1335,7 +1331,7 @@ actor FaeScheduler {
         // Skip legacy briefing when enhanced awareness briefing is enabled.
         if hour == config.morningBriefingHour,
            minute < 2,
-           !(awarenessConfig.enabled && awarenessConfig.enhancedBriefingEnabled)
+           !(awarenessConfig.proactiveLiteEnabled || (awarenessConfig.enabled && awarenessConfig.enhancedBriefingEnabled))
         {
             await runDailyIfNeeded("morning_briefing") { await runMorningBriefing() }
         }
@@ -1373,7 +1369,7 @@ actor FaeScheduler {
 
         // Awareness: enhanced_morning_briefing — deferred until user detected after 07:00.
         // This is a fallback check; primary trigger is notifyUserDetectedPostQuietHours().
-        if awarenessConfig.enabled, awarenessConfig.enhancedBriefingEnabled,
+        if (awarenessConfig.proactiveLiteEnabled || (awarenessConfig.enabled && awarenessConfig.enhancedBriefingEnabled)),
            hour >= 7, hour < 12, !morningBriefingDelivered, minute < 2 {
             // If camera is disabled, try fallback on the 5-minute scheduler tick.
             if !awarenessConfig.cameraEnabled {
