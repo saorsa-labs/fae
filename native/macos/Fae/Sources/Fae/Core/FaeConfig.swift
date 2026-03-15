@@ -418,12 +418,14 @@ struct FaeConfig: Codable {
         case "qwen3_5_0_8b":
             return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
         default: // "auto"
-            if totalGB >= 32 {
-                return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
+            if totalGB >= 64 {
+                return ("mlx-community/Qwen3.5-27B-4bit", 131_072)
+            } else if totalGB >= 32 {
+                return ("mlx-community/Qwen3.5-27B-4bit", 32_768)
             } else if totalGB >= 16 {
                 return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
             } else {
-                return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
+                return ("saorsa-labs/saorsa-1.1-tiny", 32_768)
             }
         }
     }

@@ -37,13 +37,14 @@ Legacy alias still accepted for compatibility:
 
 `Auto (Recommended)` resolves by RAM:
 
-| System RAM | Auto text model |
-|---|---|
-| `8–15 GB` | `Qwen3.5 2B` |
-| `16–31 GB` | `Qwen3.5 4B` |
-| `32+ GB` | `Qwen3.5 9B` |
+| System RAM | Auto text model | Context |
+|---|---|---|
+| `<16 GB` | `saorsa-1.1-tiny` (fine-tuned 2B) | 32K |
+| `16–31 GB` | `Qwen3.5 4B` | 32K |
+| `32–63 GB` | `Qwen3.5 27B` | 32K |
+| `64+ GB` | `Qwen3.5 27B` | 128K |
 
-`Qwen3.5 27B` is the current highest local quality tier in the Swift runtime. The old `35B-A3B` preset is treated as a legacy alias to `27B`.
+The old `35B-A3B` preset is treated as a legacy alias to `27B`.
 
 ParoQuant `9B` / `27B` checkpoints benchmark well in sidecar tests, but they are not yet loadable through Fae's current `mlx-swift-lm` runtime path.
 

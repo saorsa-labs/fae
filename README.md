@@ -295,18 +295,17 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Current local default:
-- Fae now prioritizes a single local Qwen3.5 text model.
+- Fae runs a single local Qwen3.5 text model.
 - `auto` text model selection:
-  - `8–15 GB`: `Qwen3.5 2B`
+  - `<16 GB`: `saorsa-1.1-tiny` (fine-tuned Qwen3.5 2B)
   - `16–31 GB`: `Qwen3.5 4B`
-  - `32+ GB`: `Qwen3.5 9B`
-- manual quality tiers:
-  - `Qwen3.5 27B` on `32+ GB`
+  - `32–63 GB`: `Qwen3.5 27B` (32K context)
+  - `64+ GB`: `Qwen3.5 27B` (128K context)
 - `auto` vision selection:
   - `<16 GB`: disabled
   - `16–31 GB`: `Qwen3-VL-4B` `4-bit`
   - `32+ GB`: `Qwen3-VL-4B` `8-bit`
-- the dual / concierge path remains only as a legacy compatibility path and is not the recommended local architecture
+- the dual-model system has been removed; Fae uses a single-model pipeline
 - external PARO benchmarks currently favor `Qwen3.5 9B` and `27B`, but Fae's Swift-native runtime cannot load PARO checkpoints yet, so the app still ships the standard MLX Qwen3.5 ladder
 - canonical local model guide: [Local model strategy](docs/guides/local-model-strategy.md)
 

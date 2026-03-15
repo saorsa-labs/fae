@@ -98,8 +98,10 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Fae runs a single LLM in-process via `MLXLLMEngine`. Auto mode selects based on system RAM:
-- ≥12 GiB → Qwen3.5-2B (32K context, lightweight prompt)
-- <12 GiB → Qwen3.5-0.8B (32K context, lightweight prompt)
+- ≥64 GiB → Qwen3.5-27B (128K context)
+- ≥32 GiB → Qwen3.5-27B (32K context)
+- ≥16 GiB → Qwen3.5-4B (32K context)
+- <16 GiB → saorsa-1.1-tiny (fine-tuned 2B, 32K context)
 
 All Qwen3.5 models have a native `max_position_embeddings` of **262,144**. Fae caps context at
 practical limits to keep KV-cache RAM manageable: 32K for 0.8B–4B, 128K for 9B–35B.
@@ -1310,8 +1312,10 @@ Auto mode selects based on system RAM (Qwen3.5 at every tier):
 
 | System RAM | Auto Model | Context |
 |------------|-----------|---------|
-| ≥12 GB | Qwen3.5-2B | 32K |
-| <12 GB | Qwen3.5-0.8B | 32K |
+| ≥64 GB | Qwen3.5-27B | 128K |
+| ≥32 GB | Qwen3.5-27B | 32K |
+| ≥16 GB | Qwen3.5-4B | 32K |
+| <16 GB | saorsa-1.1-tiny (fine-tuned 2B) | 32K |
 
 All Qwen3.5 models have native `max_position_embeddings` = **262,144**. Fae caps at practical
 limits to control KV-cache RAM.
