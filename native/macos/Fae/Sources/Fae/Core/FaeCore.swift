@@ -120,8 +120,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     private static func isLowResidentMemoryProfileEnabled() -> Bool {
-        CommandLine.arguments.contains("--test-server")
-            || ProcessInfo.processInfo.environment["FAE_LOW_MEMORY_TEST_PROFILE"] == "1"
+        // Only force the low-memory profile when explicitly requested via env var,
+        // not on every --test-server launch. High-RAM machines should test with the
+        // model they'd actually run in production.
+        ProcessInfo.processInfo.environment["FAE_LOW_MEMORY_TEST_PROFILE"] == "1"
     }
 
     private let sttEngine = MLXSTTEngine()
@@ -2426,6 +2428,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "channels": [
                         "enabled": config.channels.enabled,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ]
+        case "training":
+            return [
+                "payload": [
+                    "training": [
+                        "enabled": config.training.enabled,
+                        "consent_granted_at": config.training.consentGrantedAt as Any,
+                        "auto_train_enabled": config.training.autoTrainEnabled,
+                        "last_training_run_at": config.training.lastTrainingRunAt as Any,
+                        "personal_adapter_path": config.training.personalAdapterPath as Any,
+                        "previous_adapter_path": config.training.previousAdapterPath as Any,
+                        "last_benchmark_score": config.training.lastBenchmarkScore as Any,
                     ] as [String: Any],
                 ] as [String: Any],
             ]
