@@ -1,9 +1,9 @@
 phase: "13-cowork"
 name: "CoWork Pipeline"
-description: "Validates dual-model runtime fields in /status and basic CoWork routing behavior"
+description: "Validates single-model runtime fields in /status and basic CoWork behavior"
 tests:
   - id: "cowork-001"
-    name: "/status exposes dual-model runtime fields"
+    name: "/status exposes local model runtime fields"
     class: deterministic
     timeout_s: 10
     setup: []
@@ -13,45 +13,31 @@ tests:
       - action: "http_get"
         url: "/status"
     criteria:
-      - name: "has_dualModelEnabled"
-        check: "body.dualModelEnabled != null"
       - name: "has_operatorLoaded"
         check: "body.operatorLoaded != null"
-      - name: "has_conciergeLoaded"
-        check: "body.conciergeLoaded != null"
-      - name: "has_currentRoute"
-        check: "body.currentRoute != null"
-      - name: "has_fallbackReason"
-        check: "body.fallbackReason != null"
-      - name: "has_operatorWorkerRestarts"
-        check: "body.operatorWorkerRestarts is int"
-      - name: "has_conciergeWorkerRestarts"
-        check: "body.conciergeWorkerRestarts is int"
+      - name: "has_pipeline"
+        check: "body.pipeline == 'running'"
+      - name: "has_modelLabel"
+        check: "body.modelLabel != null"
     pass_threshold: 1.0
 
   - id: "cowork-002"
-    name: "Toggle dualModelEnabled=false reflects in /status"
+    name: "Model is loaded and running"
     class: deterministic
     timeout_s: 15
-    setup:
-      - action: "http_post"
-        url: "/config"
-        body: {"key": "llm.dual_model_enabled", "value": "false"}
-    teardown:
-      - action: "http_post"
-        url: "/config"
-        body: {"key": "llm.dual_model_enabled", "value": "true"}
+    setup: []
+    teardown: []
     phrasings: []
     steps:
       - action: "http_get"
         url: "/status"
     criteria:
-      - name: "dual_model_disabled_in_status"
-        check: "body.dualModelEnabled == false"
+      - name: "operator_is_loaded"
+        check: "body.operatorLoaded == true"
     pass_threshold: 1.0
 
   - id: "cowork-003"
-    name: "Rich prompt routes to concierge or operator with response"
+    name: "Rich prompt produces a response"
     class: deterministic
     timeout_s: 60
     setup:
@@ -67,11 +53,7 @@ tests:
         text: "Fae, can you summarize the key principles of good software design?"
       - action: "wait_generation"
         max_wait_s: 60
-      - action: "http_get"
-        url: "/status"
     criteria:
-      - name: "route_is_known_value"
-        check: "body.currentRoute == 'concierge' or body.currentRoute == 'operator'"
       - name: "response_generated"
         check: "assistant_response_length > 0"
     pass_threshold: 1.0
@@ -93,13 +75,9 @@ tests:
         text: "Fae, tell me about the latest news in machine learning"
       - action: "wait_generation"
         max_wait_s: 60
-      - action: "http_get"
-        url: "/status"
     criteria:
       - name: "response_generated"
         check: "assistant_response_length > 0"
-      - name: "route_is_known_value"
-        check: "body.currentRoute == 'operator' or body.currentRoute == 'concierge'"
     pass_threshold: 1.0
 
   - id: "cowork-005"
@@ -129,21 +107,4 @@ tests:
         check: "assistant_response_length > 0"
       - name: "recalls_language"
         check: "assistant_response_contains_any(['TypeScript', 'typescript'])"
-    pass_threshold: 1.0
-
-  - id: "cowork-006"
-    name: "Worker restart counts are non-negative integers"
-    class: deterministic
-    timeout_s: 10
-    setup: []
-    teardown: []
-    phrasings: []
-    steps:
-      - action: "http_get"
-        url: "/status"
-    criteria:
-      - name: "operator_restarts_non_negative"
-        check: "body.operatorWorkerRestarts >= 0"
-      - name: "concierge_restarts_non_negative"
-        check: "body.conciergeWorkerRestarts >= 0"
     pass_threshold: 1.0
