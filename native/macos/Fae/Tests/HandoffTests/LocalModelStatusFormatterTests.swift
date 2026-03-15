@@ -20,7 +20,7 @@ final class LocalModelStatusFormatterTests: XCTestCase {
     func testStackSummaryFallsBackToPreset() {
         let summary = LocalModelStatusFormatter.stackSummary(
             loadedModelId: nil,
-            preset: "qwen3_5_2b"
+            preset: "qwen3_5_4b"
         )
         XCTAssertTrue(summary.contains("Qwen3.5"))
     }

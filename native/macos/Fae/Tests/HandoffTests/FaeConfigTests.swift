@@ -160,17 +160,20 @@ final class FaeConfigTests: XCTestCase {
     }
 
     func testLegacyModelPresetAliasesResolveToSaorsaWeights() {
-        let worker = FaeConfig.recommendedModel(
+        // Unknown legacy presets now fall back to auto mode
+        let legacy27b = FaeConfig.recommendedModel(
             totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
             preset: "qwen3_5_27b"
         )
-        XCTAssertEqual(worker.modelId, "mlx-community/Qwen3.5-27B-4bit")
+        // Falls back to auto → 35B-A3B on 64 GB
+        XCTAssertEqual(legacy27b.modelId, "mlx-community/Qwen3.5-35B-A3B-4bit")
 
-        let tiny = FaeConfig.recommendedModel(
+        let legacyTiny = FaeConfig.recommendedModel(
             totalMemoryBytes: UInt64(8) * 1024 * 1024 * 1024,
             preset: "qwen3_5_0_8b"
         )
-        XCTAssertEqual(tiny.modelId, "mlx-community/Qwen3.5-0.8B-4bit")
+        // Falls back to auto → saorsa-1.1-tiny on 8 GB
+        XCTAssertEqual(legacyTiny.modelId, "saorsa-labs/saorsa-1.1-tiny")
 
     }
 
