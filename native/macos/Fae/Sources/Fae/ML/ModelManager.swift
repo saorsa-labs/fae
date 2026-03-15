@@ -170,14 +170,13 @@ actor ModelManager {
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.35))
         let isMultimodal = FaeConfig.isMultimodalLLM(modelId: modelId)
         do {
-            if isMultimodal, let mlxLLM = llm as? MLXLLMEngine {
-                NSLog("ModelManager: multimodal LLM detected — loading via VLMModelFactory for shared container")
-                var vlmConfig = ModelConfiguration(id: modelId)
-                vlmConfig.toolCallFormat = .xmlFunction
-                let container = try await VLMModelFactory.shared.loadContainer(configuration: vlmConfig)
-                await mlxLLM.attachContainer(container)
-                sharedMultimodalContainer = container
-                NSLog("ModelManager: shared multimodal container ready (LLM + VLM from single load)")
+            if isMultimodal, llm is MLXLLMEngine {
+                // Qwen3.5 MoE models are natively multimodal but vision inference through
+                // the 35B MoE is impractically slow (~3 min per screenshot). Load as text-only
+                // LLM — vision uses the lightweight on-demand Qwen3-VL-4B which is ~10x faster
+                // for image processing. See: https://github.com/ml-explore/mlx-swift-lm/issues/148
+                NSLog("ModelManager: multimodal LLM detected — loading as text-only (vision via on-demand VLM for speed)")
+                try await llm.load(modelID: modelId)
             } else {
                 try await llm.load(modelID: modelId)
             }
