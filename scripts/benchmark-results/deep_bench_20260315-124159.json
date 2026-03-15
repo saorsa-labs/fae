@@ -1,0 +1,2820 @@
+{
+  "metadata": {
+    "benchmark": "mlx_deep_benchmark",
+    "date": "2026-03-15 12:41:59",
+    "hardware": {
+      "arch": "arm64",
+      "ram_gb": 96,
+      "max_metal": 83494174720
+    }
+  },
+  "models": {
+    "saorsa-1.1-tiny": {
+      "model_id": "saorsa-labs/saorsa-1.1-tiny",
+      "weight_memory": {
+        "metal_bytes": 1059315912,
+        "rss_mb": 1389.0
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": null,
+          "ttft_ms": 570.4,
+          "generation_tps": 190.9,
+          "prompt_tps": 1505.9,
+          "kv_cache_delta_bytes": 1039664068,
+          "peak_metal_bytes": 2099504296,
+          "rss_mb": 1407.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": null,
+          "ttft_ms": 1079.2,
+          "generation_tps": 193.1,
+          "prompt_tps": 1728.2,
+          "kv_cache_delta_bytes": 1299978172,
+          "peak_metal_bytes": 2359818400,
+          "rss_mb": 1409.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": null,
+          "ttft_ms": 2136.6,
+          "generation_tps": 188.8,
+          "prompt_tps": 1834.2,
+          "kv_cache_delta_bytes": 1453430952,
+          "peak_metal_bytes": 2513271180,
+          "rss_mb": 1411.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": null,
+          "ttft_ms": 4600.1,
+          "generation_tps": 157.2,
+          "prompt_tps": 1742.6,
+          "kv_cache_delta_bytes": 1765645880,
+          "peak_metal_bytes": 2825486108,
+          "rss_mb": 1415.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": null,
+          "ttft_ms": 9414.8,
+          "generation_tps": 155.6,
+          "prompt_tps": 1721.5,
+          "kv_cache_delta_bytes": 2413813856,
+          "peak_metal_bytes": 3473654084,
+          "rss_mb": 1426.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": null,
+          "ttft_ms": 20258.6,
+          "generation_tps": 125.8,
+          "prompt_tps": 1608.8,
+          "kv_cache_delta_bytes": 1564676244,
+          "peak_metal_bytes": 2624516472,
+          "rss_mb": 1446.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 8,
+          "ttft_ms": 671.6,
+          "generation_tps": 190.8,
+          "prompt_tps": 1279.0,
+          "kv_cache_delta_bytes": 1040221124,
+          "peak_metal_bytes": 2100061352,
+          "rss_mb": 1687.4,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": 8,
+          "ttft_ms": 1161.6,
+          "generation_tps": 187.9,
+          "prompt_tps": 1605.6,
+          "kv_cache_delta_bytes": 1308891068,
+          "peak_metal_bytes": 2368731296,
+          "rss_mb": 1688.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 8,
+          "ttft_ms": 2278.1,
+          "generation_tps": 174.5,
+          "prompt_tps": 1720.3,
+          "kv_cache_delta_bytes": 1437767908,
+          "peak_metal_bytes": 2497608136,
+          "rss_mb": 1688.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": 8,
+          "ttft_ms": 4530.7,
+          "generation_tps": 170.3,
+          "prompt_tps": 1769.3,
+          "kv_cache_delta_bytes": 1722441332,
+          "peak_metal_bytes": 2782281560,
+          "rss_mb": 1689.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": 8,
+          "ttft_ms": 9566.6,
+          "generation_tps": 154.2,
+          "prompt_tps": 1694.2,
+          "kv_cache_delta_bytes": 2323767416,
+          "peak_metal_bytes": 3383607644,
+          "rss_mb": 1691.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": 8,
+          "ttft_ms": 22067.9,
+          "generation_tps": 127.6,
+          "prompt_tps": 1476.9,
+          "kv_cache_delta_bytes": 1460441272,
+          "peak_metal_bytes": 2520281500,
+          "rss_mb": 1692.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 4,
+          "ttft_ms": 606.4,
+          "generation_tps": 187.8,
+          "prompt_tps": 1416.5,
+          "kv_cache_delta_bytes": 1042318276,
+          "peak_metal_bytes": 2102158504,
+          "rss_mb": 1731.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": 4,
+          "ttft_ms": 1121.7,
+          "generation_tps": 190.1,
+          "prompt_tps": 1662.6,
+          "kv_cache_delta_bytes": 1305286588,
+          "peak_metal_bytes": 2365126816,
+          "rss_mb": 1731.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 4,
+          "ttft_ms": 2173.5,
+          "generation_tps": 182.7,
+          "prompt_tps": 1803.1,
+          "kv_cache_delta_bytes": 1426331876,
+          "peak_metal_bytes": 2486172104,
+          "rss_mb": 1732.9,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": 4,
+          "ttft_ms": 4462.7,
+          "generation_tps": 173.8,
+          "prompt_tps": 1796.2,
+          "kv_cache_delta_bytes": 1696325236,
+          "peak_metal_bytes": 2756165464,
+          "rss_mb": 1733.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": 4,
+          "ttft_ms": 9497.1,
+          "generation_tps": 158.6,
+          "prompt_tps": 1706.6,
+          "kv_cache_delta_bytes": 2272387192,
+          "peak_metal_bytes": 3332227420,
+          "rss_mb": 1734.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": 4,
+          "ttft_ms": 21981.9,
+          "generation_tps": 128.3,
+          "prompt_tps": 1482.7,
+          "kv_cache_delta_bytes": 1486262456,
+          "peak_metal_bytes": 2546102684,
+          "rss_mb": 1734.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": true,
+          "detail": "expected=calendar, got=calendar"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": true,
+          "detail": "expected=contacts, got=contacts"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": false,
+          "detail": "expected=none, got=web_search"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": true,
+          "detail": "parsed=list"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=4"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": true,
+          "detail": "word_count=3"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": true,
+          "detail": "line_count=5"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": true,
+          "detail": "response='Yes'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": true,
+          "detail": "caps_ratio=100%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": true,
+          "detail": "response='\ud83e\udd17' len=1"
+        }
+      ]
+    },
+    "qwen3.5-0.8b": {
+      "model_id": "mlx-community/Qwen3.5-0.8B-4bit",
+      "weight_memory": {
+        "metal_bytes": 423938294,
+        "rss_mb": 1981.8
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": null,
+          "ttft_ms": 305.5,
+          "generation_tps": 313.2,
+          "prompt_tps": 2811.4,
+          "kv_cache_delta_bytes": 1165916610,
+          "peak_metal_bytes": 1590362808,
+          "rss_mb": 1982.4,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": null,
+          "ttft_ms": 522.4,
+          "generation_tps": 304.6,
+          "prompt_tps": 3570.2,
+          "kv_cache_delta_bytes": 1382143964,
+          "peak_metal_bytes": 1806590162,
+          "rss_mb": 1982.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": null,
+          "ttft_ms": 985.7,
+          "generation_tps": 297.1,
+          "prompt_tps": 3975.9,
+          "kv_cache_delta_bytes": 1454142208,
+          "peak_metal_bytes": 1878588406,
+          "rss_mb": 1982.4,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": null,
+          "ttft_ms": 1979.6,
+          "generation_tps": 258.1,
+          "prompt_tps": 4049.4,
+          "kv_cache_delta_bytes": 1648425848,
+          "peak_metal_bytes": 2072872046,
+          "rss_mb": 1982.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": null,
+          "ttft_ms": 4254.5,
+          "generation_tps": 211.6,
+          "prompt_tps": 3809.6,
+          "kv_cache_delta_bytes": 2301508420,
+          "peak_metal_bytes": 2725954618,
+          "rss_mb": 1453.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": null,
+          "ttft_ms": 10598.7,
+          "generation_tps": 156.3,
+          "prompt_tps": 3075.2,
+          "kv_cache_delta_bytes": 1522733204,
+          "peak_metal_bytes": 1947179402,
+          "rss_mb": 998.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 130904,
+          "kv_bits": null,
+          "ttft_ms": 91159.1,
+          "generation_tps": 67.1,
+          "prompt_tps": 1436.0,
+          "kv_cache_delta_bytes": 3162145890,
+          "peak_metal_bytes": 3586592088,
+          "rss_mb": 1109.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 8,
+          "ttft_ms": 317.7,
+          "generation_tps": 286.1,
+          "prompt_tps": 2703.6,
+          "kv_cache_delta_bytes": 1165916610,
+          "peak_metal_bytes": 1590362808,
+          "rss_mb": 1108.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": 8,
+          "ttft_ms": 527.9,
+          "generation_tps": 299.0,
+          "prompt_tps": 3532.5,
+          "kv_cache_delta_bytes": 1382143964,
+          "peak_metal_bytes": 1806590162,
+          "rss_mb": 1108.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 8,
+          "ttft_ms": 1014.0,
+          "generation_tps": 284.3,
+          "prompt_tps": 3865.0,
+          "kv_cache_delta_bytes": 1489105788,
+          "peak_metal_bytes": 1913551986,
+          "rss_mb": 1108.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": 8,
+          "ttft_ms": 2108.2,
+          "generation_tps": 262.5,
+          "prompt_tps": 3802.3,
+          "kv_cache_delta_bytes": 1603264118,
+          "peak_metal_bytes": 2027710316,
+          "rss_mb": 1108.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": 8,
+          "ttft_ms": 4729.8,
+          "generation_tps": 220.5,
+          "prompt_tps": 3426.8,
+          "kv_cache_delta_bytes": 2207514746,
+          "peak_metal_bytes": 2631960944,
+          "rss_mb": 1108.4,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": 8,
+          "ttft_ms": 12251.2,
+          "generation_tps": 168.6,
+          "prompt_tps": 2660.4,
+          "kv_cache_delta_bytes": 1542066360,
+          "peak_metal_bytes": 1966512558,
+          "rss_mb": 1108.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 130904,
+          "kv_bits": 8,
+          "ttft_ms": 114331.1,
+          "generation_tps": 72.3,
+          "prompt_tps": 1145.0,
+          "kv_cache_delta_bytes": 2503379128,
+          "peak_metal_bytes": 2927825326,
+          "rss_mb": 1109.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 4,
+          "ttft_ms": 312.8,
+          "generation_tps": 301.3,
+          "prompt_tps": 2746.3,
+          "kv_cache_delta_bytes": 1165916610,
+          "peak_metal_bytes": 1590362808,
+          "rss_mb": 1108.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": 4,
+          "ttft_ms": 525.4,
+          "generation_tps": 305.3,
+          "prompt_tps": 3549.8,
+          "kv_cache_delta_bytes": 1382143964,
+          "peak_metal_bytes": 1806590162,
+          "rss_mb": 1108.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 4,
+          "ttft_ms": 1012.8,
+          "generation_tps": 288.9,
+          "prompt_tps": 3869.6,
+          "kv_cache_delta_bytes": 1474622332,
+          "peak_metal_bytes": 1899068530,
+          "rss_mb": 1108.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": 4,
+          "ttft_ms": 2109.4,
+          "generation_tps": 258.0,
+          "prompt_tps": 3800.2,
+          "kv_cache_delta_bytes": 1577148022,
+          "peak_metal_bytes": 2001594220,
+          "rss_mb": 1108.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": 4,
+          "ttft_ms": 4751.9,
+          "generation_tps": 224.7,
+          "prompt_tps": 3410.8,
+          "kv_cache_delta_bytes": 2155536506,
+          "peak_metal_bytes": 2579982704,
+          "rss_mb": 1108.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": 4,
+          "ttft_ms": 12302.1,
+          "generation_tps": 171.4,
+          "prompt_tps": 2649.4,
+          "kv_cache_delta_bytes": 1409683640,
+          "peak_metal_bytes": 1834129838,
+          "rss_mb": 1108.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 130904,
+          "kv_bits": 4,
+          "ttft_ms": 116178.0,
+          "generation_tps": 75.5,
+          "prompt_tps": 1126.8,
+          "kv_cache_delta_bytes": 1967425720,
+          "peak_metal_bytes": 2391871918,
+          "rss_mb": 1109.1,
+          "status": "ok"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": true,
+          "detail": "expected=calendar, got=calendar"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": false,
+          "detail": "expected=contacts, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": false,
+          "detail": "expected=none, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": false,
+          "detail": "expected=none, got=web_search"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": true,
+          "detail": "parsed=list"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=3"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": false,
+          "detail": "word_count=5"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": true,
+          "detail": "line_count=5"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": true,
+          "detail": "response='Yes'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": true,
+          "detail": "caps_ratio=100%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": true,
+          "detail": "response='\ud83d\ude2e' len=1"
+        }
+      ]
+    },
+    "qwen3.5-2b": {
+      "model_id": "mlx-community/Qwen3.5-2B-4bit",
+      "weight_memory": {
+        "metal_bytes": 1059315958,
+        "rss_mb": 1862.0
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": null,
+          "ttft_ms": 563.5,
+          "generation_tps": 187.5,
+          "prompt_tps": 1524.5,
+          "kv_cache_delta_bytes": 1039664068,
+          "peak_metal_bytes": 2099504314,
+          "rss_mb": 1861.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": null,
+          "ttft_ms": 1109.7,
+          "generation_tps": 192.8,
+          "prompt_tps": 1680.7,
+          "kv_cache_delta_bytes": 1299978172,
+          "peak_metal_bytes": 2359818418,
+          "rss_mb": 1861.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": null,
+          "ttft_ms": 2136.1,
+          "generation_tps": 186.9,
+          "prompt_tps": 1834.6,
+          "kv_cache_delta_bytes": 1453430952,
+          "peak_metal_bytes": 2513271198,
+          "rss_mb": 1861.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": null,
+          "ttft_ms": 4349.9,
+          "generation_tps": 173.5,
+          "prompt_tps": 1842.8,
+          "kv_cache_delta_bytes": 1765645880,
+          "peak_metal_bytes": 2825486126,
+          "rss_mb": 1861.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": null,
+          "ttft_ms": 9006.6,
+          "generation_tps": 147.6,
+          "prompt_tps": 1799.6,
+          "kv_cache_delta_bytes": 2413813856,
+          "peak_metal_bytes": 3473654102,
+          "rss_mb": 1861.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": null,
+          "ttft_ms": 20242.6,
+          "generation_tps": 127.1,
+          "prompt_tps": 1610.1,
+          "kv_cache_delta_bytes": 1564676244,
+          "peak_metal_bytes": 2624516490,
+          "rss_mb": 1861.4,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 8,
+          "ttft_ms": 583.2,
+          "generation_tps": 191.4,
+          "prompt_tps": 1472.8,
+          "kv_cache_delta_bytes": 1044120516,
+          "peak_metal_bytes": 2103960762,
+          "rss_mb": 1864.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": 8,
+          "ttft_ms": 1087.2,
+          "generation_tps": 191.5,
+          "prompt_tps": 1715.4,
+          "kv_cache_delta_bytes": 1308891068,
+          "peak_metal_bytes": 2368731314,
+          "rss_mb": 1864.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 8,
+          "ttft_ms": 2156.7,
+          "generation_tps": 182.1,
+          "prompt_tps": 1817.1,
+          "kv_cache_delta_bytes": 1437767908,
+          "peak_metal_bytes": 2497608154,
+          "rss_mb": 1864.4,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": 8,
+          "ttft_ms": 4436.7,
+          "generation_tps": 171.3,
+          "prompt_tps": 1806.8,
+          "kv_cache_delta_bytes": 1722441332,
+          "peak_metal_bytes": 2782281578,
+          "rss_mb": 1864.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": 8,
+          "ttft_ms": 9484.0,
+          "generation_tps": 154.9,
+          "prompt_tps": 1709.0,
+          "kv_cache_delta_bytes": 2323767416,
+          "peak_metal_bytes": 3383607662,
+          "rss_mb": 1864.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": 8,
+          "ttft_ms": 21991.2,
+          "generation_tps": 122.0,
+          "prompt_tps": 1482.1,
+          "kv_cache_delta_bytes": 1460441272,
+          "peak_metal_bytes": 2520281518,
+          "rss_mb": 1864.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 4,
+          "ttft_ms": 569.0,
+          "generation_tps": 183.8,
+          "prompt_tps": 1509.7,
+          "kv_cache_delta_bytes": 1042318276,
+          "peak_metal_bytes": 2102158522,
+          "rss_mb": 1864.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1865,
+          "kv_bits": 4,
+          "ttft_ms": 1076.3,
+          "generation_tps": 189.3,
+          "prompt_tps": 1732.8,
+          "kv_cache_delta_bytes": 1305286588,
+          "peak_metal_bytes": 2365126834,
+          "rss_mb": 1864.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 4,
+          "ttft_ms": 2161.2,
+          "generation_tps": 178.5,
+          "prompt_tps": 1813.3,
+          "kv_cache_delta_bytes": 1426331876,
+          "peak_metal_bytes": 2486172122,
+          "rss_mb": 1864.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8016,
+          "kv_bits": 4,
+          "ttft_ms": 4434.4,
+          "generation_tps": 169.4,
+          "prompt_tps": 1807.7,
+          "kv_cache_delta_bytes": 1696325236,
+          "peak_metal_bytes": 2756165482,
+          "rss_mb": 1864.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16208,
+          "kv_bits": 4,
+          "ttft_ms": 9456.3,
+          "generation_tps": 146.1,
+          "prompt_tps": 1714.0,
+          "kv_cache_delta_bytes": 2272387192,
+          "peak_metal_bytes": 3332227438,
+          "rss_mb": 1864.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32593,
+          "kv_bits": 4,
+          "ttft_ms": 21913.6,
+          "generation_tps": 127.6,
+          "prompt_tps": 1487.3,
+          "kv_cache_delta_bytes": 1486229688,
+          "peak_metal_bytes": 2546069934,
+          "rss_mb": 1864.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": true,
+          "detail": "expected=calendar, got=calendar"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": true,
+          "detail": "expected=contacts, got=contacts"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": false,
+          "detail": "expected=none, got=web_search"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": true,
+          "detail": "parsed=list"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=8"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": false,
+          "detail": "word_count=1"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": true,
+          "detail": "line_count=5"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": true,
+          "detail": "response='Yes'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": true,
+          "detail": "caps_ratio=100%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": true,
+          "detail": "response='\ud83e\udd16' len=1"
+        }
+      ]
+    },
+    "qwen3.5-4b": {
+      "model_id": "mlx-community/Qwen3.5-4B-4bit",
+      "weight_memory": {
+        "metal_bytes": 2367528502,
+        "rss_mb": 3202.2
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": null,
+          "ttft_ms": 1255.6,
+          "generation_tps": 103.8,
+          "prompt_tps": 682.6,
+          "kv_cache_delta_bytes": 1238975340,
+          "peak_metal_bytes": 3607011746,
+          "rss_mb": 3203.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": null,
+          "ttft_ms": 2584.2,
+          "generation_tps": 104.2,
+          "prompt_tps": 720.9,
+          "kv_cache_delta_bytes": 1757977940,
+          "peak_metal_bytes": 4126014346,
+          "rss_mb": 3203.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": null,
+          "ttft_ms": 5318.9,
+          "generation_tps": 101.4,
+          "prompt_tps": 736.4,
+          "kv_cache_delta_bytes": 2056683160,
+          "peak_metal_bytes": 4424719566,
+          "rss_mb": 3203.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": null,
+          "ttft_ms": 10972.1,
+          "generation_tps": 95.9,
+          "prompt_tps": 730.4,
+          "kv_cache_delta_bytes": 2449202892,
+          "peak_metal_bytes": 4817239298,
+          "rss_mb": 3203.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": null,
+          "ttft_ms": 23057.1,
+          "generation_tps": 85.0,
+          "prompt_tps": 702.9,
+          "kv_cache_delta_bytes": 3195355492,
+          "peak_metal_bytes": 5563391898,
+          "rss_mb": 3203.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": null,
+          "ttft_ms": 51476.0,
+          "generation_tps": 71.6,
+          "prompt_tps": 633.1,
+          "kv_cache_delta_bytes": 2874495082,
+          "peak_metal_bytes": 5242531488,
+          "rss_mb": 3203.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 8,
+          "ttft_ms": 1320.0,
+          "generation_tps": 99.5,
+          "prompt_tps": 649.3,
+          "kv_cache_delta_bytes": 1238975340,
+          "peak_metal_bytes": 3607011746,
+          "rss_mb": 3202.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 8,
+          "ttft_ms": 2656.9,
+          "generation_tps": 100.6,
+          "prompt_tps": 701.2,
+          "kv_cache_delta_bytes": 1757977940,
+          "peak_metal_bytes": 4126014346,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 8,
+          "ttft_ms": 5447.4,
+          "generation_tps": 95.6,
+          "prompt_tps": 719.1,
+          "kv_cache_delta_bytes": 2021293804,
+          "peak_metal_bytes": 4389330210,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 8,
+          "ttft_ms": 11417.4,
+          "generation_tps": 87.7,
+          "prompt_tps": 701.9,
+          "kv_cache_delta_bytes": 2343100204,
+          "peak_metal_bytes": 4711136610,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": 8,
+          "ttft_ms": 24625.3,
+          "generation_tps": 75.7,
+          "prompt_tps": 658.1,
+          "kv_cache_delta_bytes": 3008847660,
+          "peak_metal_bytes": 5376884066,
+          "rss_mb": 3202.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": 8,
+          "ttft_ms": 56223.9,
+          "generation_tps": 60.8,
+          "prompt_tps": 579.7,
+          "kv_cache_delta_bytes": 2437845152,
+          "peak_metal_bytes": 4805881558,
+          "rss_mb": 3202.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 4,
+          "ttft_ms": 1270.7,
+          "generation_tps": 102.3,
+          "prompt_tps": 674.4,
+          "kv_cache_delta_bytes": 1238975340,
+          "peak_metal_bytes": 3607011746,
+          "rss_mb": 3202.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 4,
+          "ttft_ms": 2609.1,
+          "generation_tps": 99.5,
+          "prompt_tps": 714.0,
+          "kv_cache_delta_bytes": 1757977940,
+          "peak_metal_bytes": 4126014346,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 4,
+          "ttft_ms": 5467.4,
+          "generation_tps": 95.1,
+          "prompt_tps": 716.4,
+          "kv_cache_delta_bytes": 2002419436,
+          "peak_metal_bytes": 4370455842,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 4,
+          "ttft_ms": 11514.6,
+          "generation_tps": 85.7,
+          "prompt_tps": 696.0,
+          "kv_cache_delta_bytes": 2286207416,
+          "peak_metal_bytes": 4654243822,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": 4,
+          "ttft_ms": 25005.1,
+          "generation_tps": 75.5,
+          "prompt_tps": 648.1,
+          "kv_cache_delta_bytes": 2870632236,
+          "peak_metal_bytes": 5238668642,
+          "rss_mb": 3202.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": 4,
+          "ttft_ms": 57188.0,
+          "generation_tps": 59.8,
+          "prompt_tps": 569.9,
+          "kv_cache_delta_bytes": 2138771948,
+          "peak_metal_bytes": 4506808354,
+          "rss_mb": 3202.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": true,
+          "detail": "expected=calendar, got=calendar"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": true,
+          "detail": "expected=contacts, got=contacts"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": true,
+          "detail": "parsed=list"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=12"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": false,
+          "detail": "word_count=74"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": false,
+          "detail": "line_count=11"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": false,
+          "detail": "response='Thinking Process:\n\n1.  **Analy'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": false,
+          "detail": "caps_ratio=13%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": false,
+          "detail": "response='Thinking P' len=462"
+        }
+      ]
+    },
+    "qwen3.5-9b": {
+      "model_id": "mlx-community/Qwen3.5-9B-4bit",
+      "weight_memory": {
+        "metal_bytes": 5038041654,
+        "rss_mb": 5832.8
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": null,
+          "ttft_ms": 2249.9,
+          "generation_tps": 62.6,
+          "prompt_tps": 380.9,
+          "kv_cache_delta_bytes": 1098007420,
+          "peak_metal_bytes": 6136573362,
+          "rss_mb": 5831.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": null,
+          "ttft_ms": 4836.4,
+          "generation_tps": 62.1,
+          "prompt_tps": 385.2,
+          "kv_cache_delta_bytes": 1616256340,
+          "peak_metal_bytes": 6654822282,
+          "rss_mb": 5831.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": null,
+          "ttft_ms": 10516.9,
+          "generation_tps": 60.2,
+          "prompt_tps": 372.4,
+          "kv_cache_delta_bytes": 1941788960,
+          "peak_metal_bytes": 6980354902,
+          "rss_mb": 5831.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": null,
+          "ttft_ms": 20670.2,
+          "generation_tps": 59.4,
+          "prompt_tps": 387.7,
+          "kv_cache_delta_bytes": 2295677284,
+          "peak_metal_bytes": 7334243226,
+          "rss_mb": 5831.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": null,
+          "ttft_ms": 41441.3,
+          "generation_tps": 55.0,
+          "prompt_tps": 391.1,
+          "kv_cache_delta_bytes": 3054092644,
+          "peak_metal_bytes": 8092658586,
+          "rss_mb": 5831.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": null,
+          "ttft_ms": 88716.8,
+          "generation_tps": 49.9,
+          "prompt_tps": 367.4,
+          "kv_cache_delta_bytes": 2847098978,
+          "peak_metal_bytes": 7885664920,
+          "rss_mb": 5831.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 8,
+          "ttft_ms": 2268.0,
+          "generation_tps": 62.3,
+          "prompt_tps": 377.9,
+          "kv_cache_delta_bytes": 1098007420,
+          "peak_metal_bytes": 6136573362,
+          "rss_mb": 5826.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 8,
+          "ttft_ms": 4691.3,
+          "generation_tps": 61.5,
+          "prompt_tps": 397.1,
+          "kv_cache_delta_bytes": 1616256340,
+          "peak_metal_bytes": 6654822282,
+          "rss_mb": 5826.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 8,
+          "ttft_ms": 9777.3,
+          "generation_tps": 59.3,
+          "prompt_tps": 400.6,
+          "kv_cache_delta_bytes": 1906465152,
+          "peak_metal_bytes": 6945031094,
+          "rss_mb": 5826.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 8,
+          "ttft_ms": 20256.8,
+          "generation_tps": 56.8,
+          "prompt_tps": 395.6,
+          "kv_cache_delta_bytes": 2240208672,
+          "peak_metal_bytes": 7278774614,
+          "rss_mb": 5826.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": 8,
+          "ttft_ms": 42445.6,
+          "generation_tps": 51.5,
+          "prompt_tps": 381.8,
+          "kv_cache_delta_bytes": 2905956128,
+          "peak_metal_bytes": 7944522070,
+          "rss_mb": 5826.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": 8,
+          "ttft_ms": 92680.5,
+          "generation_tps": 43.8,
+          "prompt_tps": 351.6,
+          "kv_cache_delta_bytes": 2339786888,
+          "peak_metal_bytes": 7378352830,
+          "rss_mb": 5826.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 4,
+          "ttft_ms": 2311.9,
+          "generation_tps": 61.3,
+          "prompt_tps": 370.7,
+          "kv_cache_delta_bytes": 1098007420,
+          "peak_metal_bytes": 6136573362,
+          "rss_mb": 5826.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 4,
+          "ttft_ms": 4804.0,
+          "generation_tps": 60.5,
+          "prompt_tps": 387.8,
+          "kv_cache_delta_bytes": 1616256340,
+          "peak_metal_bytes": 6654822282,
+          "rss_mb": 5826.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 4,
+          "ttft_ms": 10034.7,
+          "generation_tps": 59.0,
+          "prompt_tps": 390.3,
+          "kv_cache_delta_bytes": 1881495936,
+          "peak_metal_bytes": 6920061878,
+          "rss_mb": 5826.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 4,
+          "ttft_ms": 20656.4,
+          "generation_tps": 56.1,
+          "prompt_tps": 388.0,
+          "kv_cache_delta_bytes": 2177490720,
+          "peak_metal_bytes": 7216056662,
+          "rss_mb": 5826.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": 4,
+          "ttft_ms": 42898.4,
+          "generation_tps": 51.7,
+          "prompt_tps": 377.8,
+          "kv_cache_delta_bytes": 2767740704,
+          "peak_metal_bytes": 7806306646,
+          "rss_mb": 5826.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": 4,
+          "ttft_ms": 92777.0,
+          "generation_tps": 44.2,
+          "prompt_tps": 351.3,
+          "kv_cache_delta_bytes": 2020987012,
+          "peak_metal_bytes": 7059552954,
+          "rss_mb": 5826.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": true,
+          "detail": "expected=calendar, got=calendar"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": true,
+          "detail": "expected=contacts, got=contacts"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": false,
+          "detail": "json_error: Expecting value: line 1 column 1 (char 0)"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=13"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": false,
+          "detail": "word_count=68"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": false,
+          "detail": "line_count=11"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": false,
+          "detail": "response='Thinking Process:\n\n1.  **Analy'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": false,
+          "detail": "caps_ratio=18%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": false,
+          "detail": "response='Thinking P' len=485"
+        }
+      ]
+    },
+    "qwen3.5-27b": {
+      "model_id": "mlx-community/Qwen3.5-27B-4bit",
+      "weight_memory": {
+        "metal_bytes": 15133593142,
+        "rss_mb": 15541.5
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": null,
+          "ttft_ms": 7870.7,
+          "generation_tps": 19.9,
+          "prompt_tps": 108.9,
+          "kv_cache_delta_bytes": 1638043038,
+          "peak_metal_bytes": 16772144084,
+          "rss_mb": 15542.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": null,
+          "ttft_ms": 16527.2,
+          "generation_tps": 20.7,
+          "prompt_tps": 112.7,
+          "kv_cache_delta_bytes": 2726796628,
+          "peak_metal_bytes": 17860897674,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": null,
+          "ttft_ms": 33720.5,
+          "generation_tps": 20.7,
+          "prompt_tps": 116.2,
+          "kv_cache_delta_bytes": 3219390520,
+          "peak_metal_bytes": 18353491566,
+          "rss_mb": 15542.9,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": null,
+          "ttft_ms": 69236.6,
+          "generation_tps": 20.3,
+          "prompt_tps": 115.7,
+          "kv_cache_delta_bytes": 3856089860,
+          "peak_metal_bytes": 18990190906,
+          "rss_mb": 15543.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16384,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32768,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "skipped_progressive"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "skipped_progressive"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 8,
+          "ttft_ms": 7624.5,
+          "generation_tps": 21.0,
+          "prompt_tps": 112.4,
+          "kv_cache_delta_bytes": 1638043038,
+          "peak_metal_bytes": 16772144084,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 8,
+          "ttft_ms": 16246.5,
+          "generation_tps": 20.8,
+          "prompt_tps": 114.7,
+          "kv_cache_delta_bytes": 2726796628,
+          "peak_metal_bytes": 17860897674,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 8,
+          "ttft_ms": 34018.8,
+          "generation_tps": 20.2,
+          "prompt_tps": 115.1,
+          "kv_cache_delta_bytes": 3152543980,
+          "peak_metal_bytes": 18286645026,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 8,
+          "ttft_ms": 70606.1,
+          "generation_tps": 19.1,
+          "prompt_tps": 113.5,
+          "kv_cache_delta_bytes": 3663414200,
+          "peak_metal_bytes": 18797515246,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16384,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32768,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "skipped_progressive"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "skipped_progressive"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 4,
+          "ttft_ms": 7601.7,
+          "generation_tps": 20.6,
+          "prompt_tps": 112.7,
+          "kv_cache_delta_bytes": 1638043038,
+          "peak_metal_bytes": 16772144084,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 4,
+          "ttft_ms": 16271.7,
+          "generation_tps": 20.6,
+          "prompt_tps": 114.5,
+          "kv_cache_delta_bytes": 2726796628,
+          "peak_metal_bytes": 17860897674,
+          "rss_mb": 15542.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 4,
+          "ttft_ms": 34458.2,
+          "generation_tps": 19.7,
+          "prompt_tps": 113.7,
+          "kv_cache_delta_bytes": 3116892396,
+          "peak_metal_bytes": 18250993442,
+          "rss_mb": 15542.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 4,
+          "ttft_ms": 71535.3,
+          "generation_tps": 18.8,
+          "prompt_tps": 112.0,
+          "kv_cache_delta_bytes": 3560653752,
+          "peak_metal_bytes": 18694754798,
+          "rss_mb": 15542.8,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16384,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32768,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "skipped_progressive"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "skipped_progressive"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": false,
+          "detail": "expected=calendar, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": true,
+          "detail": "expected=contacts, got=contacts"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": false,
+          "detail": "json_error: Expecting value: line 1 column 1 (char 0)"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=9"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": false,
+          "detail": "word_count=73"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": false,
+          "detail": "line_count=12"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": false,
+          "detail": "response='Thinking Process:\n\n1.  **Analy'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": false,
+          "detail": "caps_ratio=11%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": false,
+          "detail": "response='Thinking P' len=509"
+        }
+      ]
+    },
+    "qwen3.5-35b-a3b": {
+      "model_id": "NexVeridian/Qwen3.5-35B-A3B-4bit",
+      "weight_memory": {
+        "metal_bytes": 19508789430,
+        "rss_mb": 20333.0
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": null,
+          "ttft_ms": 1330.6,
+          "generation_tps": 89.9,
+          "prompt_tps": 644.1,
+          "kv_cache_delta_bytes": 1018017600,
+          "peak_metal_bytes": 20527314934,
+          "rss_mb": 20333.9,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": null,
+          "ttft_ms": 2479.4,
+          "generation_tps": 83.6,
+          "prompt_tps": 751.4,
+          "kv_cache_delta_bytes": 1736169448,
+          "peak_metal_bytes": 21245466782,
+          "rss_mb": 20333.9,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": null,
+          "ttft_ms": 5170.9,
+          "generation_tps": 82.8,
+          "prompt_tps": 757.5,
+          "kv_cache_delta_bytes": 2009928924,
+          "peak_metal_bytes": 21519226258,
+          "rss_mb": 20333.9,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": null,
+          "ttft_ms": 10540.9,
+          "generation_tps": 79.8,
+          "prompt_tps": 760.3,
+          "kv_cache_delta_bytes": 2321685088,
+          "peak_metal_bytes": 21830982422,
+          "rss_mb": 20334.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": null,
+          "ttft_ms": 22712.2,
+          "generation_tps": 74.5,
+          "prompt_tps": 713.5,
+          "kv_cache_delta_bytes": 3035668644,
+          "peak_metal_bytes": 22544965978,
+          "rss_mb": 20318.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": null,
+          "ttft_ms": 60911.0,
+          "generation_tps": 63.3,
+          "prompt_tps": 535.1,
+          "kv_cache_delta_bytes": 1873879208,
+          "peak_metal_bytes": 21383176542,
+          "rss_mb": 20282.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": null,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 8,
+          "ttft_ms": 1372.3,
+          "generation_tps": 75.5,
+          "prompt_tps": 624.5,
+          "kv_cache_delta_bytes": 1018017600,
+          "peak_metal_bytes": 20527314934,
+          "rss_mb": 20283.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 8,
+          "ttft_ms": 2544.5,
+          "generation_tps": 74.4,
+          "prompt_tps": 732.2,
+          "kv_cache_delta_bytes": 1736169448,
+          "peak_metal_bytes": 21245466782,
+          "rss_mb": 20283.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 8,
+          "ttft_ms": 5271.4,
+          "generation_tps": 71.9,
+          "prompt_tps": 743.1,
+          "kv_cache_delta_bytes": 1988351316,
+          "peak_metal_bytes": 21497648650,
+          "rss_mb": 20283.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 8,
+          "ttft_ms": 11102.9,
+          "generation_tps": 71.2,
+          "prompt_tps": 721.8,
+          "kv_cache_delta_bytes": 2290834172,
+          "peak_metal_bytes": 21800131506,
+          "rss_mb": 20283.2,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": 8,
+          "ttft_ms": 24421.3,
+          "generation_tps": 61.5,
+          "prompt_tps": 663.6,
+          "kv_cache_delta_bytes": 2890571964,
+          "peak_metal_bytes": 22399869298,
+          "rss_mb": 20267.6,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": 8,
+          "ttft_ms": 68218.8,
+          "generation_tps": 49.2,
+          "prompt_tps": 477.7,
+          "kv_cache_delta_bytes": 1671366592,
+          "peak_metal_bytes": 21180663926,
+          "rss_mb": 20253.5,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 8,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        },
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 857,
+          "kv_bits": 4,
+          "ttft_ms": 1374.7,
+          "generation_tps": 81.6,
+          "prompt_tps": 623.4,
+          "kv_cache_delta_bytes": 1018017600,
+          "peak_metal_bytes": 20527314934,
+          "rss_mb": 20252.0,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 2,
+          "context_size_tokens": 1863,
+          "kv_bits": 4,
+          "ttft_ms": 2495.7,
+          "generation_tps": 77.9,
+          "prompt_tps": 746.5,
+          "kv_cache_delta_bytes": 1736169448,
+          "peak_metal_bytes": 21245466782,
+          "rss_mb": 20252.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3917,
+          "kv_bits": 4,
+          "ttft_ms": 5235.2,
+          "generation_tps": 72.0,
+          "prompt_tps": 748.2,
+          "kv_cache_delta_bytes": 1973769556,
+          "peak_metal_bytes": 21483066890,
+          "rss_mb": 20252.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 8,
+          "context_size_tokens": 8014,
+          "kv_bits": 4,
+          "ttft_ms": 11063.5,
+          "generation_tps": 70.3,
+          "prompt_tps": 724.4,
+          "kv_cache_delta_bytes": 2253183740,
+          "peak_metal_bytes": 21762481074,
+          "rss_mb": 20252.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 16,
+          "context_size_tokens": 16206,
+          "kv_bits": 4,
+          "ttft_ms": 24807.7,
+          "generation_tps": 61.4,
+          "prompt_tps": 653.3,
+          "kv_cache_delta_bytes": 2809831612,
+          "peak_metal_bytes": 22319128946,
+          "rss_mb": 20253.7,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 32,
+          "context_size_tokens": 32591,
+          "kv_bits": 4,
+          "ttft_ms": 68227.8,
+          "generation_tps": 49.0,
+          "prompt_tps": 477.7,
+          "kv_cache_delta_bytes": 1488767616,
+          "peak_metal_bytes": 20998064950,
+          "rss_mb": 20202.1,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 128,
+          "context_size_tokens": 131072,
+          "kv_bits": 4,
+          "ttft_ms": 0,
+          "generation_tps": 0,
+          "prompt_tps": 0,
+          "kv_cache_delta_bytes": 0,
+          "peak_metal_bytes": 0,
+          "rss_mb": 0,
+          "status": "timeout"
+        }
+      ],
+      "accuracy": [
+        {
+          "category": "tool_calling",
+          "prompt": "What's on my calendar tomorrow?",
+          "passed": false,
+          "detail": "expected=calendar, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Remind me to buy groceries at 5pm",
+          "passed": true,
+          "detail": "expected=reminders, got=reminders"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Search the web for the latest news about Apple",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Send an email to john@example.com saying I'll be late",
+          "passed": true,
+          "detail": "expected=mail, got=mail"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "What's David's phone number?",
+          "passed": true,
+          "detail": "expected=contacts, got=contacts"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Create a note called Shopping List with milk, eggs, bread",
+          "passed": true,
+          "detail": "expected=notes, got=notes"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Read the file at ~/Documents/todo.txt",
+          "passed": true,
+          "detail": "expected=read, got=read"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Can you look something up for me about quantum computing?",
+          "passed": true,
+          "detail": "expected=web_search, got=web_search"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "How are you feeling today?",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "tool_calling",
+          "prompt": "Tell me a joke about programming",
+          "passed": true,
+          "detail": "expected=none, got=none"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is the capital of France?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Explain quantum computing in one sentence.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What is 17 * 23?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "Name three planets in our solar system.",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "no_think",
+          "prompt": "What year did World War II end?",
+          "passed": true,
+          "detail": "think_chars=0"
+        },
+        {
+          "category": "json",
+          "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+          "passed": false,
+          "detail": "json_error: Expecting value: line 1 column 1 (char 0)"
+        },
+        {
+          "category": "xml",
+          "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+          "passed": true,
+          "detail": "has_xml_tags=True"
+        },
+        {
+          "category": "yaml",
+          "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+          "passed": true,
+          "detail": "yaml_lines=11"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond with exactly 3 words.",
+          "passed": false,
+          "detail": "word_count=74"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "List 5 colors, one per line, no numbering.",
+          "passed": false,
+          "detail": "line_count=12"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Answer only yes or no: Is Paris in France?",
+          "passed": false,
+          "detail": "response='Thinking Process:\n\n1.  **Analy'"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+          "passed": false,
+          "detail": "caps_ratio=16%"
+        },
+        {
+          "category": "instruction_following",
+          "prompt": "Reply with a single emoji only.",
+          "passed": false,
+          "detail": "response='Thinking P' len=487"
+        }
+      ]
+    }
+  }
+}

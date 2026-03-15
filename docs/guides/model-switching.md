@@ -26,14 +26,9 @@ Examples:
 User-facing text model presets:
 
 - `auto`
-- `qwen3_5_2b`
+- `saorsa_1_1_tiny`
 - `qwen3_5_4b`
-- `qwen3_5_9b`
-- `qwen3_5_27b`
-
-Legacy alias still accepted for compatibility:
-
-- `qwen3_5_35b_a3b` → resolves to `qwen3_5_27b`
+- `qwen3_5_35b_a3b` (medium — MoE: 35B total, 3B active per token)
 
 `Auto (Recommended)` resolves by RAM:
 
@@ -41,18 +36,23 @@ Legacy alias still accepted for compatibility:
 |---|---|---|
 | `<16 GB` | `saorsa-1.1-tiny` (fine-tuned 2B) | 32K |
 | `16–31 GB` | `Qwen3.5 4B` | 32K |
-| `32–63 GB` | `Qwen3.5 27B` | 32K |
-| `64+ GB` | `Qwen3.5 27B` | 128K |
+| `32–63 GB` | `Qwen3.5 35B-A3B` MoE | 32K |
+| `64+ GB` | `Qwen3.5 35B-A3B` MoE | 128K |
 
-The old `35B-A3B` preset is treated as a legacy alias to `27B`.
+The 35B-A3B uses Gated DeltaNet + sparse MoE (256 experts, 8+1 active). Only 3B parameters activate per token, so inference speed is comparable to a 3B dense model despite 35B total knowledge. Natively multimodal (text + vision).
 
-ParoQuant `9B` / `27B` checkpoints benchmark well in sidecar tests, but they are not yet loadable through Fae's current `mlx-swift-lm` runtime path.
+Legacy compatibility aliases:
+
+- `qwen3_5_2b` resolves to `saorsa_1_1_tiny`
+- `qwen3_5_9b` resolves to `qwen3_5_4b`
+- `qwen3_5_27b` resolves to `qwen3_5_35b_a3b`
 
 ## Supported vision presets
 
 User-facing vision presets:
 
 - `auto`
+- `qwen3_5_35b_a3b_vlm` (uses same 35B-A3B model for vision — 64+ GB)
 - `qwen3_vl_4b_4bit`
 - `qwen3_vl_4b_8bit`
 
@@ -62,7 +62,8 @@ User-facing vision presets:
 |---|---|
 | `<16 GB` | disabled |
 | `16–31 GB` | `Qwen3-VL-4B (4-bit)` |
-| `32+ GB` | `Qwen3-VL-4B (8-bit)` |
+| `32–63 GB` | `Qwen3-VL-4B (8-bit)` |
+| `64+ GB` | `Qwen3.5 35B-A3B` (natively multimodal) |
 
 ## Persistence
 

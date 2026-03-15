@@ -288,25 +288,25 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3.5 single-model local stack: `2B`, `4B`, or `9B` via `Auto`; `27B` as the manual quality tier | MLX | 4-bit | Main conversation, reasoning, tool use |
+| LLM | Fae text stack: `saorsa-1.1-tiny` (trained Qwen3.5 2B), `Qwen3.5 4B`, or `Qwen3.5 35B-A3B` via `Auto` | MLX | 4-bit | Main conversation, reasoning, tool use |
 | TTS | Kokoro-82M | KokoroSwift / MLX | mixed | Text-to-speech |
 | VLM | Qwen3-VL-4B on-demand (`4-bit` or `8-bit`) | MLXVLM | 4/8-bit | Vision — screen/camera understanding (on-demand) |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
-Current local default:
-- Fae runs a single local Qwen3.5 text model.
+Current local default — Fae three-tier text stack:
+- Fae runs a single local text model.
 - `auto` text model selection:
   - `<16 GB`: `saorsa-1.1-tiny` (fine-tuned Qwen3.5 2B)
   - `16–31 GB`: `Qwen3.5 4B`
-  - `32–63 GB`: `Qwen3.5 27B` (32K context)
-  - `64+ GB`: `Qwen3.5 27B` (128K context)
+  - `32–63 GB`: `Qwen3.5 35B-A3B` MoE (32K context) — 35B total, only 3B active per token
+  - `64+ GB`: `Qwen3.5 35B-A3B` MoE (128K context) — frontier intelligence at fast speed
 - `auto` vision selection:
   - `<16 GB`: disabled
   - `16–31 GB`: `Qwen3-VL-4B` `4-bit`
-  - `32+ GB`: `Qwen3-VL-4B` `8-bit`
+  - `32–63 GB`: `Qwen3-VL-4B` `8-bit`
+  - `64+ GB`: `Qwen3.5 35B-A3B` (natively multimodal — same model as text LLM)
 - the dual-model system has been removed; Fae uses a single-model pipeline
-- external PARO benchmarks currently favor `Qwen3.5 9B` and `27B`, but Fae's Swift-native runtime cannot load PARO checkpoints yet, so the app still ships the standard MLX Qwen3.5 ladder
 - canonical local model guide: [Local model strategy](docs/guides/local-model-strategy.md)
 
 ### Benchmark reports

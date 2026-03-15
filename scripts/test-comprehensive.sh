@@ -1541,8 +1541,8 @@ main() {
     dim "  Warming up LLM (first generation)..."
     fae_set_config "tool_mode" "full_no_approval"
     fae_inject "Fae, say hello"
-    fae_wait_generation 120
-    fae_wait_speech_complete 30 || yellow "  Warning: warm-up speech timed out after 30s"
+    fae_wait_generation 300
+    fae_wait_speech_complete 60 || yellow "  Warning: warm-up speech timed out after 60s"
     fae_post "/reset" "{}"
     fae_set_config "tool_mode" "off"
     sleep 2

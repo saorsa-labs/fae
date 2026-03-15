@@ -207,9 +207,16 @@ For a first run, SFT establishes the companion register and DPO sharpens the ant
 
 ```bash
 pip install mlx-lm huggingface_hub
+hf auth login
 ```
 
-You also need a HuggingFace account with write access to `saorsa-labs` and an `HF_TOKEN` in your environment.
+You also need a HuggingFace account with write access to `saorsa-labs`.
+
+Preferred auth path:
+
+- Run `hf auth login` once on the machine and let `huggingface_hub` reuse the cached login.
+- Use `HF_TOKEN` only as an override for CI or one-off scripted runs.
+- For cloud `9B` / `27B` runs, use the dedicated [HF Jobs Training](hf-jobs-training.md) lane.
 
 ### Step 1: Prepare training data
 
@@ -265,12 +272,14 @@ For the first run, SFT alone is a meaningful improvement. Run DPO as a second pa
 ### Step 5: Upload to HuggingFace
 
 ```bash
-HF_TOKEN=your_token python3 scripts/upload_to_hf.py \
+python3 scripts/upload_to_hf.py \
   --model-path models/sft-merged/ \
   --repo-id saorsa-labs/saorsa1-tiny-pre-release
 ```
 
 This uploads the model weights, tokenizer, and config to HuggingFace, and uploads the training JSONL files to `saorsa-labs/fae-training-data`.
+
+If you need to override the cached CLI login for automation, set `HF_TOKEN` in the environment before running the command.
 
 ### Step 6: Test in Fae
 

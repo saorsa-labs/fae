@@ -1,0 +1,47 @@
+{
+  "metadata": {
+    "benchmark": "mlx_deep_benchmark",
+    "date": "2026-03-15 10:12:42",
+    "hardware": {
+      "arch": "arm64",
+      "ram_gb": 96,
+      "max_metal": 83494174720
+    }
+  },
+  "models": {
+    "saorsa-1.1-tiny": {
+      "model_id": "saorsa-labs/saorsa-1.1-tiny",
+      "weight_memory": {
+        "metal_bytes": 1059315912,
+        "rss_mb": 1465.9
+      },
+      "memory_sweep": [
+        {
+          "context_size_k": 1,
+          "context_size_tokens": 859,
+          "kv_bits": 4,
+          "ttft_ms": 656.8,
+          "generation_tps": 191.4,
+          "prompt_tps": 1307.9,
+          "kv_cache_delta_bytes": 1042318276,
+          "peak_metal_bytes": 2102158504,
+          "rss_mb": 1481.3,
+          "status": "ok"
+        },
+        {
+          "context_size_k": 4,
+          "context_size_tokens": 3919,
+          "kv_bits": 4,
+          "ttft_ms": 2287.7,
+          "generation_tps": 180.9,
+          "prompt_tps": 1713.1,
+          "kv_cache_delta_bytes": 1426331876,
+          "peak_metal_bytes": 2486172104,
+          "rss_mb": 1483.3,
+          "status": "ok"
+        }
+      ],
+      "accuracy": []
+    }
+  }
+}

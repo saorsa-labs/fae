@@ -79,9 +79,9 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  │ 1.7B 4bit │ │ MLX 4bit   │ │ 82M MLX   │ │ Core ML    │  │
 │  └───────────┘ └────────────┘ └───────────┘ └────────────┘  │
 │  ┌───────────┐                                               │
-│  │ VLM       │ ← on-demand, not loaded at startup            │
-│  │ Qwen3-VL  │                                               │
-│  │ 4B/8B 4bit│                                               │
+│  │ VLM       │ ← shared with LLM on 32+ GB (35B-A3B)        │
+│  │ 35B-A3B   │   or Qwen3-VL-4B on 16 GB (on-demand)        │
+│  │ multimodal│                                               │
 │  └───────────┘                                               │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -91,28 +91,28 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |--------|-------|-----------|-----------|---------|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Qwen3.5 (0.8B–35B-A3B) | MLX | 4-bit | Conversation, tool use |
+| LLM | Qwen3.5 (2B / 4B / 35B-A3B) | MLX | 4-bit | Conversation, tool use |
 | TTS | Kokoro-82M (hexgrad) | KokoroSwift/MLX | float32 | Text-to-speech (pre-computed voice embeddings, 24 kHz) |
-| VLM | Qwen3-VL (4B/8B) | MLXVLM | 4-bit/8-bit | Vision — screen + camera understanding (on-demand) |
+| VLM | 35B-A3B (shared) or Qwen3-VL-4B | MLXVLM | 4-bit | Vision — 35B-A3B shares text LLM on 32+ GB; Qwen3-VL-4B on 16 GB |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Fae runs a single LLM in-process via `MLXLLMEngine`. Auto mode selects based on system RAM:
-- ≥64 GiB → Qwen3.5-27B (128K context)
-- ≥32 GiB → Qwen3.5-27B (32K context)
+- ≥64 GiB → Qwen3.5-35B-A3B MoE (128K context, natively multimodal)
+- ≥32 GiB → Qwen3.5-35B-A3B MoE (32K context, natively multimodal)
 - ≥16 GiB → Qwen3.5-4B (32K context)
-- <16 GiB → saorsa-1.1-tiny (fine-tuned 2B, 32K context)
+- <16 GiB → saorsa-1.1-tiny (our fine-tuned Qwen3.5-2B, 32K context)
 
-All Qwen3.5 models have a native `max_position_embeddings` of **262,144**. Fae caps context at
-practical limits to keep KV-cache RAM manageable: 32K for 0.8B–4B, 128K for 9B–35B.
+The 35B-A3B is a Mixture-of-Experts model: 35B total parameters, only 3B active per token.
+This makes it **4x faster than the dense 27B** while delivering frontier quality. On 32+ GB
+systems, the text LLM and VLM share the same model container (zero extra RAM for vision).
 
-Manual presets span the full Qwen3.5 lineup:
-- `qwen3_5_35b_a3b` → Qwen3.5-35B-A3B (128K / native 262K)
-- `qwen3_5_27b` → Qwen3.5-27B (128K / native 262K)
-- `qwen3_5_9b` → Qwen3.5-9B (128K / native 262K)
-- `qwen3_5_4b` → Qwen3.5-4B (32K / native 262K)
-- `qwen3_5_2b` → Qwen3.5-2B (32K / native 262K)
-- `qwen3_5_0_8b` → Qwen3.5-0.8B (32K / native 262K)
+Three supported model tiers:
+- `qwen3_5_35b_a3b` → Qwen3.5-35B-A3B (128K / native 262K) — flagship, multimodal
+- `qwen3_5_4b` → Qwen3.5-4B (32K / native 262K) — balanced
+- `saorsa_1_1_tiny` → saorsa-1.1-tiny (32K / native 262K) — fine-tuned 2B, compact
+
+Unknown presets fall back to auto mode.
 
 Context window is now properly wired from model selection through to the pipeline.
 `FaeConfig.recommendedMaxHistory()` scales conversation history with context size
@@ -468,15 +468,17 @@ Fae can see the screen and interact with apps via on-device vision (Qwen3-VL) an
 
 ### VLM engine (on-demand)
 
-The VLM does **not** load at startup — it loads on-demand when a vision tool first fires, to conserve RAM for the core STT+LLM+TTS pipeline.
+On 32+ GB systems, the text LLM (35B-A3B) is natively multimodal — it handles vision
+directly via the shared model container. Zero additional RAM for vision.
 
-RAM-tiered model selection:
+On 16 GB systems, a separate Qwen3-VL-4B loads on-demand when a vision tool first fires.
+Below 16 GB, vision is disabled (not enough headroom).
 
 | System RAM | VLM Model | Notes |
 |-----------|-----------|-------|
-| 48+ GB | Qwen3-VL-8B (8-bit) | Alongside text LLM |
-| 24-47 GB | Qwen3-VL-4B (4-bit) | Alongside text LLM |
-| <24 GB | Disabled (nil) | Not enough headroom |
+| 32+ GB | 35B-A3B (shared with text LLM) | Zero extra RAM — same container |
+| 16-31 GB | Qwen3-VL-4B (4-bit) | Separate on-demand load |
+| <16 GB | Disabled (nil) | Not enough headroom |
 
 Config: `[vision]` section in config.toml. Enable via Settings > Models or `self_config(adjust_setting, vision.enabled, true)`.
 

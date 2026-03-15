@@ -65,5 +65,44 @@
     "Search for the best coffee shops near me.",
     "Send a message to Sarah saying I'm running 10 minutes late.",
     "Write a haiku about the ocean."
+  ],
+  "structured_output": [
+    {
+      "format": "json",
+      "prompt": "List 3 planets in our solar system as a JSON array of objects, each with 'name' and 'position' (distance from sun) keys. Output only the JSON, no explanation.",
+      "validator": "json"
+    },
+    {
+      "format": "xml",
+      "prompt": "List 3 planets in our solar system as XML with a root <planets> element containing <planet> children, each with <name> and <position> sub-elements. Output only the XML, no explanation.",
+      "validator": "xml"
+    },
+    {
+      "format": "yaml",
+      "prompt": "List 3 planets in our solar system as YAML with each planet having 'name' and 'position' keys. Output only the YAML, no explanation.",
+      "validator": "yaml"
+    }
+  ],
+  "instruction_following": [
+    {
+      "prompt": "Respond with exactly 3 words.",
+      "check": "word_count_3"
+    },
+    {
+      "prompt": "List 5 colors, one per line, no numbering.",
+      "check": "line_count_5"
+    },
+    {
+      "prompt": "Answer only yes or no: Is Paris in France?",
+      "check": "yes_or_no"
+    },
+    {
+      "prompt": "Respond in ALL CAPS: What is the capital of Japan?",
+      "check": "all_caps"
+    },
+    {
+      "prompt": "Reply with a single emoji only.",
+      "check": "single_emoji"
+    }
   ]
 }

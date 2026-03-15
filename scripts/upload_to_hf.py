@@ -11,21 +11,30 @@ Uploads:
   - Training data JSONL files           → saorsa-labs/fae-training-data (dataset repo)
 
 Usage:
-  HF_TOKEN=your_token python3 scripts/upload_to_hf.py \\
+  hf auth login
+  python3 scripts/upload_to_hf.py \\
       --model-path models/sft-merged/ \\
       --repo-id saorsa-labs/saorsa-1.1-tiny
 
   # Upload as public:
-  HF_TOKEN=your_token python3 scripts/upload_to_hf.py \\
+  python3 scripts/upload_to_hf.py \\
       --model-path models/sft-merged/ \\
       --public
 
   # Skip training data upload:
-  HF_TOKEN=your_token python3 scripts/upload_to_hf.py \\
+  python3 scripts/upload_to_hf.py \\
       --model-path models/sft-merged/ \\
       --no-upload-data
 
-Reads HF_TOKEN from environment. Never pass the token as a command-line argument.
+  # Optional override:
+  HF_TOKEN=your_token python3 scripts/upload_to_hf.py \\
+      --model-path models/sft-merged/
+
+Auth priority:
+  1. `HF_TOKEN` environment override
+  2. Existing `hf auth login` / huggingface_hub cached login
+
+Never pass the token as a command-line argument.
 """
 
 import argparse
@@ -92,7 +101,7 @@ def main() -> int:
         return 1
 
     # ------------------------------------------------------------------
-    # Read HF_TOKEN
+    # Read Hugging Face auth
     # ------------------------------------------------------------------
     hf_token = os.environ.get("HF_TOKEN", "").strip()
     if not hf_token:
@@ -100,7 +109,7 @@ def main() -> int:
     if not hf_token:
         print(
             "ERROR: no Hugging Face token available.\n"
-            "  Set HF_TOKEN or log in with huggingface_hub first.",
+            "  Run `hf auth login` first, or set HF_TOKEN as an override.",
             file=sys.stderr,
         )
         return 1

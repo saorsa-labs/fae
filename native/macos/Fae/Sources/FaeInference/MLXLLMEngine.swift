@@ -75,6 +75,19 @@ public actor MLXLLMEngine: LLMEngine {
         }
     }
 
+    /// Attach a pre-loaded ModelContainer (e.g. from VLMModelFactory for multimodal models).
+    ///
+    /// Used when the LLM model is natively multimodal (e.g. Qwen3.5-35B-A3B) and was loaded
+    /// via VLMModelFactory to enable sharing between text and vision pipelines.
+    public func attachContainer(_ sharedContainer: ModelContainer) {
+        container = sharedContainer
+        isLoaded = true
+        loadState = .loaded
+        sessionState = nil
+        lastCompletionInfo = nil
+        NSLog("MLXLLMEngine: attached shared container")
+    }
+
     public func setWiredMemoryTicketProvider(
         _ provider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
     ) {

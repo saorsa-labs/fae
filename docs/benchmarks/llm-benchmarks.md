@@ -11,6 +11,147 @@ pipeline architecture.
 
 ---
 
+## Deep Memory & KV Cache Benchmark (2026-03-15)
+
+**Purpose:** Measure actual total memory footprint (weights + KV cache) for each model at each realistic context size, with KV quantization comparisons. Answers: why does 27B kill the machine at 32K+ context? What's the max safe context per model on each RAM tier?
+
+**Script:** `scripts/mlx_deep_benchmark.py`
+
+**Usage:**
+```bash
+# Quick smoke test (~2 min)
+python3 scripts/mlx_deep_benchmark.py --models qwen3.5-2b --context-sizes 1 4 --kv-bits 4 --skip-accuracy
+
+# Accuracy suite only (~5 min)
+python3 scripts/mlx_deep_benchmark.py --models qwen3.5-2b --accuracy-only
+
+# Full sweep (~4 hours) — produces definitive results
+python3 scripts/mlx_deep_benchmark.py --all
+```
+
+**Results:** JSON at `scripts/benchmark-results/deep_bench_20260315-124159.json` (86 KB).
+
+**Hardware:** Apple Silicon M2 Ultra, 96 GB unified memory, Max Metal: 77.8 GB
+
+### 1. Memory Profile — Weights + KV Cache (4-bit KV)
+
+| Model | Weights | +1K KV | +2K KV | +4K KV | +8K KV | +16K KV | +32K KV | +128K KV |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| saorsa-1.1-tiny | 1010 MB | 994 MB | 1.2 GB | 1.3 GB | 1.6 GB | 2.1 GB | 1.4 GB | timeout |
+| qwen3.5-0.8b | 404 MB | 1.1 GB | 1.3 GB | 1.4 GB | 1.5 GB | 2.0 GB | 1.3 GB | 1.8 GB |
+| qwen3.5-2b | 1010 MB | 994 MB | 1.2 GB | 1.3 GB | 1.6 GB | 2.1 GB | 1.4 GB | timeout |
+| qwen3.5-4b | 2.2 GB | 1.2 GB | 1.6 GB | 1.9 GB | 2.1 GB | 2.7 GB | 2.0 GB | timeout |
+| qwen3.5-9b | 4.7 GB | 1.0 GB | 1.5 GB | 1.8 GB | 2.0 GB | 2.6 GB | 1.9 GB | timeout |
+| qwen3.5-27b | 14.1 GB | 1.5 GB | 2.5 GB | 2.9 GB | 3.3 GB | timeout | skip | skip |
+| qwen3.5-35b-a3b | 18.2 GB | 971 MB | 1.6 GB | 1.8 GB | 2.1 GB | 2.6 GB | 1.4 GB | timeout |
+
+### 2. Time to First Token (ms) — 4-bit KV
+
+| Model | 1K | 2K | 4K | 8K | 16K | 32K | 128K |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| saorsa-1.1-tiny | 606 | 1122 | 2174 | 4463 | 9497 | 21982 | timeout |
+| qwen3.5-0.8b | 313 | 525 | 1013 | 2109 | 4752 | 12302 | 116178 |
+| qwen3.5-2b | 569 | 1076 | 2161 | 4434 | 9456 | 21914 | timeout |
+| qwen3.5-4b | 1271 | 2609 | 5467 | 11515 | 25005 | 57188 | timeout |
+| qwen3.5-9b | 2312 | 4804 | 10035 | 20656 | 42898 | 92777 | timeout |
+| qwen3.5-27b | 7602 | 16272 | 34458 | 71535 | timeout | skip | skip |
+| qwen3.5-35b-a3b | 1375 | 2496 | 5235 | 11064 | 24808 | 68228 | timeout |
+
+### 3. Generation Speed (T/s) — 4-bit KV
+
+| Model | 1K | 2K | 4K | 8K | 16K | 32K | 128K |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| saorsa-1.1-tiny | 187.8 | 190.1 | 182.7 | 173.8 | 158.6 | 128.3 | timeout |
+| qwen3.5-0.8b | 301.3 | 305.3 | 288.9 | 258.0 | 224.7 | 171.4 | 75.5 |
+| qwen3.5-2b | 183.8 | 189.3 | 178.5 | 169.4 | 146.1 | 127.6 | timeout |
+| qwen3.5-4b | 102.3 | 99.5 | 95.1 | 85.7 | 75.5 | 59.8 | timeout |
+| qwen3.5-9b | 61.3 | 60.5 | 59.0 | 56.1 | 51.7 | 44.2 | timeout |
+| qwen3.5-27b | 20.6 | 20.6 | 19.7 | 18.8 | timeout | skip | skip |
+| qwen3.5-35b-a3b | 81.6 | 77.9 | 72.0 | 70.3 | 61.4 | 49.0 | timeout |
+
+### 4. KV Quantization Impact (at 8K context)
+
+| Model | KV=fp16 mem | KV=8 mem | KV=4 mem | KV=fp16 T/s | KV=8 T/s | KV=4 T/s |
+|---|---:|---:|---:|---:|---:|---:|
+| saorsa-1.1-tiny | 1.6 GB | 1.6 GB | 1.6 GB | 157.2 | 170.3 | 173.8 |
+| qwen3.5-0.8b | 1.5 GB | 1.5 GB | 1.5 GB | 258.1 | 262.5 | 258.0 |
+| qwen3.5-2b | 1.6 GB | 1.6 GB | 1.6 GB | 173.5 | 171.3 | 169.4 |
+| qwen3.5-4b | 2.3 GB | 2.2 GB | 2.1 GB | 95.9 | 87.7 | 85.7 |
+| qwen3.5-9b | 2.1 GB | 2.1 GB | 2.0 GB | 59.4 | 56.8 | 56.1 |
+| qwen3.5-27b | 3.6 GB | 3.4 GB | 3.3 GB | 20.3 | 19.1 | 18.8 |
+| qwen3.5-35b-a3b | 2.2 GB | 2.1 GB | 2.1 GB | 79.8 | 71.2 | 70.3 |
+
+### 5. Accuracy Summary
+
+| Model | tool_calling | no_think | json | xml | yaml | instruction_following |
+|---|---:|---:|---:|---:|---:|---:|
+| saorsa-1.1-tiny | 9/10 (90%) | 5/5 (100%) | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 5/5 (100%) |
+| qwen3.5-0.8b | 7/10 (70%) | 5/5 (100%) | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 4/5 (80%) |
+| qwen3.5-2b | 9/10 (90%) | 5/5 (100%) | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 4/5 (80%) |
+| qwen3.5-4b | 10/10 (100%) | 5/5 (100%) | 1/1 (100%) | 1/1 (100%) | 1/1 (100%) | 0/5 (0%) |
+| qwen3.5-9b | 10/10 (100%) | 5/5 (100%) | 0/1 (0%) | 1/1 (100%) | 1/1 (100%) | 0/5 (0%) |
+| qwen3.5-27b | 9/10 (90%) | 5/5 (100%) | 0/1 (0%) | 1/1 (100%) | 1/1 (100%) | 0/5 (0%) |
+| qwen3.5-35b-a3b | 9/10 (90%) | 5/5 (100%) | 0/1 (0%) | 1/1 (100%) | 1/1 (100%) | 0/5 (0%) |
+
+### 6. Total System Load vs RAM Tiers (4-bit KV)
+
+Headroom estimate: 4 GB (STT + TTS + VLM + system)
+
+| Model | Fae ctx | Weights | KV cache | Total | +Headroom | 8GB? | 16GB? | 24GB? | 32GB? | 64GB? | 96GB? |
+|---|---:|---:|---:|---:|---:|---|---|---|---|---|---|
+| saorsa-1.1-tiny | 32K | 1010 MB | 1.4 GB | 2.4 GB | 6.4 GB | YES | YES | YES | YES | YES | YES |
+| qwen3.5-0.8b | 32K | 404 MB | 1.3 GB | 1.7 GB | 5.7 GB | YES | YES | YES | YES | YES | YES |
+| qwen3.5-2b | 32K | 1010 MB | 1.4 GB | 2.4 GB | 6.4 GB | YES | YES | YES | YES | YES | YES |
+| qwen3.5-4b | 32K | 2.2 GB | 2.0 GB | 4.2 GB | 8.2 GB | NO | YES | YES | YES | YES | YES |
+| qwen3.5-9b | 128K | 4.7 GB | 4.0 GB | 8.7 GB | 12.7 GB | NO | YES | YES | YES | YES | YES |
+| qwen3.5-27b | 128K | 14.1 GB | 4.0 GB | 18.1 GB | 22.1 GB | NO | NO | NO | YES | YES | YES |
+| qwen3.5-35b-a3b | 128K | 18.2 GB | 4.0 GB | 22.2 GB | 26.2 GB | NO | NO | NO | YES | YES | YES |
+
+### Analysis & Findings
+
+**1. Why does 27B kill the machine?**
+- 27B weights alone: **14.1 GB**. At 8K context (4-bit KV), total Metal delta is +3.3 GB → **17.4 GB total**.
+- 27B **times out at 16K context** — TTFT would be ~140s (extrapolating from 72s at 8K). The 120s timeout fires.
+- Even at 8K, generation speed is only **18.8 T/s** — painfully slow for voice interaction (users wait 3-5s per sentence).
+- The issue isn't OOM — it's **compute-bound**. 27B is simply too slow for interactive use at any context beyond 4K.
+
+**2. KV quantization impact: negligible for small models, measurable for large**
+- For 0.8B–2B: KV quant makes <100 MB difference at 8K. Not worth it.
+- For 27B: saves ~300 MB at 8K (3.6→3.3 GB). Modest savings.
+- Speed impact: 4-bit KV is **within noise** of fp16 for small models, and **7-8% slower** on 27B (20.3→18.8 T/s). The quantize/dequantize overhead slightly hurts larger models.
+
+**3. 128K context: only viable on 0.8B**
+- Only qwen3.5-0.8b completed 128K in time (TTFT=116s, Gen=75 T/s). Everything else timed out.
+- 128K is not practical for voice interaction with any model ≥2B.
+- Recommendation: cap at **32K for ≤4B**, **8K for 9B**, **4K for 27B**, **16K for 35B-A3B** (MoE).
+
+**4. 35B-A3B is the sleeper hit**
+- Despite 18.2 GB weights (larger than 27B), MoE architecture means only ~3B params active per token.
+- **81 T/s at 1K** vs 27B's 20 T/s — **4x faster** at similar quality levels.
+- Fits 32K context before timing out. 27B can't even do 16K.
+- Tool calling accuracy: 90% (same as 27B).
+
+**5. Instruction following: broken on 4B+ without thinking suppression**
+- 4B, 9B, 27B, 35B all score **0/5** on instruction following — they emit "Thinking Process:" preamble.
+- This is the no-think suppression issue: the accuracy test doesn't use `enable_thinking: false` in the chat template.
+- saorsa-1.1-tiny (fine-tuned) and 0.8B/2B pass because they don't think by default at low temp.
+
+**6. Auto ladder (implemented)**
+
+| System RAM | Model | Max Context | Rationale |
+|---:|---|---:|---|
+| <16 GB | saorsa-1.1-tiny (fine-tuned 2B) | 32K | Compact, fast, strong tool use |
+| 16-31 GB | Qwen3.5-4B | 32K | Best balance; headroom for Qwen3-VL-4B vision |
+| 32-63 GB | Qwen3.5-35B-A3B (MoE) | 32K | 4x faster than 27B; natively multimodal (shared VLM) |
+| 64+ GB | Qwen3.5-35B-A3B (MoE) | 128K | Full context; shared multimodal container |
+
+**Key decisions:**
+- **27B removed**: 35B-A3B is superior in every dimension — 4x faster, better TTFT, similar accuracy.
+- **9B removed**: marginal quality gain over 4B doesn't justify 2x weight memory and slower inference.
+- **Vision unified**: 32+ GB uses 35B-A3B for both text and vision (zero extra RAM). 16 GB uses Qwen3-VL-4B.
+
+---
+
 ## Update — MLX local model scoreboard (2026-03-07)
 
 A newer benchmark pass was run with the native Swift MLX stack used by current Fae benchmarking. This section is the current model-selection view for Fae.

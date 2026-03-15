@@ -35,6 +35,7 @@ Fae's current recommended local path is still the base Qwen3.5 family:
 Current runtime note:
 
 - External PARO baselines are promising at `9B` and `27B`, but Fae's Swift-native runtime cannot load PARO checkpoints yet, so they are benchmark-only for now.
+- For fresh cloud-scale `9B` / `27B` post-training, see [HF Jobs Training](hf-jobs-training.md).
 
 That product direction is reflected in:
 

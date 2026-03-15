@@ -117,17 +117,15 @@ struct FaeConfig: Codable {
     /// This reclaims ~1,100 tokens and gives the model more headroom for generation
     /// and conversation history without changing tool availability.
     ///
-    /// Applies to the 0.8B and 2B model tiers. 4B and larger receive the full prompt.
-    /// Uses the model preset to distinguish 0.8B/2B from 4B even though both share
-    /// the same 32K context window after the context maximisation update.
+    /// Applies to saorsa-1.1-tiny (our fine-tuned 2B). 4B and larger receive the full prompt.
     var isLightweightContext: Bool {
         let preset = FaeConfig.canonicalVoiceModelPreset(llm.voiceModelPreset)
         switch preset {
-        case "qwen3_5_0_8b", "qwen3_5_2b", "qwen3_0_6b", "qwen3_1_7b":
+        case "saorsa_1_1_tiny":
             return true
         case "auto":
             let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
-            return totalGB < 24
+            return totalGB < 16  // Auto selects saorsa-1.1-tiny below 16 GB
         default:
             // Also honour manually configured very small contexts (e.g. developer overrides).
             return llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
@@ -370,28 +368,16 @@ struct FaeConfig: Codable {
 
     static func canonicalVoiceModelPreset(_ preset: String) -> String {
         switch preset.lowercased() {
-        case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
-            return "qwen3_5_2b"
         case "qwen3_5_35b_a3b":
-            // Legacy high-RAM preset. Route it to 27B until Swift-side PARO support
-            // lands and the former 35B-A3B tier is revisited.
-            return "qwen3_5_27b"
-        case "qwen3_5_27b":
-            return "qwen3_5_27b"
-        case "qwen3_5_27b_opus_distilled":
-            return "qwen3_5_27b_opus_distilled"
-        case "qwen3_5_9b", "qwen3_8b":
-            return "qwen3_5_9b"
-        case "qwen3_5_4b", "qwen3_4b":
+            return "qwen3_5_35b_a3b"
+        case "qwen3_5_4b":
             return "qwen3_5_4b"
-        case "saorsa1_worker", "saorsa1-worker", "qwen3_5_2b", "qwen3_1_7b":
-            return "qwen3_5_2b"
-        case "saorsa1_tiny", "saorsa1-tiny", "qwen3_5_0_8b", "qwen3_0_6b":
-            return "qwen3_5_0_8b"
+        case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
+            return "saorsa_1_1_tiny"
         case "auto":
             return "auto"
         default:
-            return preset.lowercased()
+            return "auto"
         }
     }
 
@@ -405,26 +391,26 @@ struct FaeConfig: Codable {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
         switch canonicalVoiceModelPreset(preset) {
-        case "qwen3_5_27b":
-            return ("mlx-community/Qwen3.5-27B-4bit", 32_768)
-        case "qwen3_5_27b_opus_distilled":
-            return ("mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit", 32_768)
-        case "qwen3_5_9b":
-            return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
+        case "qwen3_5_35b_a3b":
+            // MoE: 35B total, 3B active per token. ~18 GB 4-bit. Natively multimodal.
+            return ("mlx-community/Qwen3.5-35B-A3B-4bit", 131_072)
         case "qwen3_5_4b":
             return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
-        case "qwen3_5_2b":
-            return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
-        case "qwen3_5_0_8b":
-            return ("mlx-community/Qwen3.5-0.8B-4bit", 32_768)
+        case "saorsa_1_1_tiny":
+            // Our fine-tuned Qwen3.5-2B. Compact, fast, good tool use.
+            return ("saorsa-labs/saorsa-1.1-tiny", 32_768)
         default: // "auto"
-            if totalGB >= 64 {
-                return ("mlx-community/Qwen3.5-27B-4bit", 131_072)
-            } else if totalGB >= 32 {
-                return ("mlx-community/Qwen3.5-27B-4bit", 32_768)
+            if totalGB >= 32 {
+                // 35B-A3B MoE: frontier intelligence at 3B activation speed.
+                // Only 3B params active per token despite 35B total — 4x faster than dense 27B.
+                // Natively multimodal — no separate VLM needed.
+                // 64+ GB: full 128K context. 32-63 GB: 32K context (tighter headroom).
+                let ctx = totalGB >= 64 ? 131_072 : 32_768
+                return ("mlx-community/Qwen3.5-35B-A3B-4bit", ctx)
             } else if totalGB >= 16 {
                 return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
             } else {
+                // saorsa-1.1-tiny: our fine-tuned Qwen3.5-2B
                 return ("saorsa-labs/saorsa-1.1-tiny", 32_768)
             }
         }
@@ -451,14 +437,12 @@ struct FaeConfig: Codable {
     /// Based on research into Ollama, mistral.rs, and LM Studio optimizations.
     static func recommendedPrefillStepSize(modelId: String) -> Int {
         let modelLower = modelId.lowercased()
-        if modelLower.contains("35b") || modelLower.contains("32b") || modelLower.contains("27b") {
-            return 256  // Large MoE/dense models: smaller chunks
-        } else if modelLower.contains("14b") || modelLower.contains("9b") || modelLower.contains("8b") {
-            return 512  // Medium models: standard
+        if modelLower.contains("35b") || modelLower.contains("27b") {
+            return 256  // Large models: smaller chunks to avoid Metal spikes
         } else if modelLower.contains("4b") || modelLower.contains("3b") {
-            return 768  // Small-medium models: larger chunks
+            return 768  // 4B: larger chunks
         } else {
-            return 1024 // Small models (2B, 1B, 0.8B): maximize chunk size
+            return 1024 // 2B and smaller: maximize chunk size
         }
     }
 
@@ -491,6 +475,17 @@ struct FaeConfig: Codable {
         return "hexgrad/Kokoro-82M"
     }
 
+    /// Whether the given LLM model ID is natively multimodal (handles text + vision).
+    ///
+    /// When true, the model can be loaded via VLMModelFactory and shared between
+    /// the text LLM pipeline and vision pipeline, avoiding a duplicate load.
+    static func isMultimodalLLM(modelId: String) -> Bool {
+        // Qwen3.5 MoE models (35B-A3B, 122B-A10B, 397B-A17B) are natively multimodal.
+        modelId.contains("Qwen3.5") && modelId.contains("A3B") ||
+        modelId.contains("Qwen3.5") && modelId.contains("A10B") ||
+        modelId.contains("Qwen3.5") && modelId.contains("A17B")
+    }
+
     // MARK: - VLM Model Selection
 
     /// Select the appropriate VLM model based on system RAM and preset.
@@ -504,16 +499,21 @@ struct FaeConfig: Codable {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
         switch preset.lowercased() {
+        case "qwen3_5_35b_a3b_vlm":
+            // Same 35B-A3B MoE model used for text — natively multimodal.
+            // Shares the text LLM container (zero extra RAM) when text LLM is 35B-A3B.
+            return ("mlx-community/Qwen3.5-35B-A3B-4bit", 16_384)
         case "qwen3_vl_4b_8bit", "qwen3_vl_8b":
             return ("mlx-community/Qwen3-VL-4B-Instruct-8bit", 16_384)
         case "qwen3_vl_4b_4bit", "qwen3_vl_4b":
             return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
         default: // "auto"
-            // 32+ GB: Qwen3-VL-4B-Instruct 8-bit for higher-quality on-demand vision.
-            // 16-31 GB: Qwen3-VL-4B-Instruct 4-bit to preserve headroom beside 4B/9B text.
-            // <16 GB: disabled — not enough headroom for VLM + text LLM + STT + TTS.
+            // 32+ GB: Text LLM is 35B-A3B (natively multimodal) — share its container.
+            //         Zero additional RAM for vision.
+            // 16-31 GB: Text LLM is 4B (text-only) — load Qwen3-VL-4B separately.
+            // <16 GB: Text LLM is 2B — not enough headroom for a separate VLM.
             if totalGB >= 32 {
-                return ("mlx-community/Qwen3-VL-4B-Instruct-8bit", 16_384)
+                return ("mlx-community/Qwen3.5-35B-A3B-4bit", 16_384)
             } else if totalGB >= 16 {
                 return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
             } else {

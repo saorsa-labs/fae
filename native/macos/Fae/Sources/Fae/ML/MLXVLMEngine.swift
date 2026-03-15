@@ -29,6 +29,18 @@ actor MLXVLMEngine: VLMEngine {
         }
     }
 
+    /// Attach a pre-loaded ModelContainer for shared multimodal models.
+    ///
+    /// When the LLM is a natively multimodal model (e.g. Qwen3.5-35B-A3B), the container
+    /// is loaded once via VLMModelFactory and shared between text and vision pipelines,
+    /// avoiding a duplicate ~20 GB model load.
+    func attachSharedContainer(_ sharedContainer: ModelContainer) {
+        container = sharedContainer
+        isLoaded = true
+        loadState = .loaded
+        NSLog("MLXVLMEngine: attached shared container (no duplicate load)")
+    }
+
     func warmup() async {
         guard let container else { return }
         NSLog("MLXVLMEngine: starting warmup inference...")

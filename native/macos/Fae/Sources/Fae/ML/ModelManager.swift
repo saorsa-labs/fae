@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import MLXVLM
 
 // Use MLXLMCommon's WiredSumPolicy (extends MLX's WiredMemoryPolicy)
 typealias FaeWiredSumPolicy = MLXLMCommon.WiredSumPolicy
@@ -52,6 +53,11 @@ actor ModelManager {
     /// On-demand VLM engine — loaded only when vision tools are invoked.
     private var vlmEngine: MLXVLMEngine?
 
+    /// Shared multimodal container — set when the LLM is a natively multimodal model
+    /// (e.g. Qwen3.5-35B-A3B) loaded via VLMModelFactory. Avoids duplicate ~20 GB loads
+    /// by letting both the text LLM and vision pipelines share one container.
+    private var sharedMultimodalContainer: ModelContainer?
+
     /// Get a wired memory ticket for inference using measured or estimated budgets.
     func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
         guard let wiredPolicy else { return nil }
@@ -90,6 +96,17 @@ actor ModelManager {
             return nil
         }
         let engine = MLXVLMEngine()
+
+        // When the VLM model matches the already-loaded multimodal LLM, share the container
+        // instead of loading a duplicate ~20 GB model.
+        if let sharedContainer = sharedMultimodalContainer, modelId == loadedModelId {
+            await engine.attachSharedContainer(sharedContainer)
+            eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
+            self.vlmEngine = engine
+            NSLog("ModelManager: VLM sharing multimodal container with LLM — zero additional RAM (%@)", modelId)
+            return engine
+        }
+
         try await engine.load(modelID: modelId)
         eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
         self.vlmEngine = engine
@@ -98,8 +115,13 @@ actor ModelManager {
     }
 
     /// Unload the VLM engine to reclaim RAM.
+    ///
+    /// When using a shared multimodal container, this only drops the VLM reference —
+    /// the container stays alive via the LLM engine.
     func unloadVLM() {
         vlmEngine = nil
+        // Don't nil sharedMultimodalContainer here — LLM still uses it.
+        // It's cleared on LLM reload in loadAll().
         NSLog("ModelManager: VLM unloaded")
     }
 
@@ -138,10 +160,27 @@ actor ModelManager {
         }
 
         // LLM — critical engine, throw if it fails.
+        // For natively multimodal models (e.g. Qwen3.5-35B-A3B), load via VLMModelFactory
+        // so the same container can serve both text and vision queries without duplicate loads.
         eventBus.send(.runtimeProgress(stage: "llm", progress: 0.33))
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.35))
+        let isMultimodal = FaeConfig.isMultimodalLLM(modelId: modelId)
         do {
-            try await llm.load(modelID: modelId)
+            if isMultimodal, llm is MLXLLMEngine {
+                // VLMModelFactory currently crashes (SmallVector out of range) for Qwen3.5-35B-A3B.
+                // Load as text-only LLM until the MLX framework fix lands. Vision queries will
+                // use the separate on-demand VLM engine (Qwen3-VL-4B) on systems with enough RAM.
+                NSLog("ModelManager: multimodal LLM detected — loading as text-only (VLMModelFactory disabled pending MLX fix)")
+                try await llm.load(modelID: modelId)
+                // TODO: Re-enable shared container once mlx-swift-lm fixes SmallVector crash:
+                // var vlmConfig = ModelConfiguration(id: modelId)
+                // vlmConfig.toolCallFormat = .xmlFunction
+                // let container = try await VLMModelFactory.shared.loadContainer(configuration: vlmConfig)
+                // await mlxLLM.attachContainer(container)
+                // sharedMultimodalContainer = container
+            } else {
+                try await llm.load(modelID: modelId)
+            }
             loadedModelId = modelId
             eventBus.send(.modelLoaded(engine: "llm", modelId: modelId))
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.6))

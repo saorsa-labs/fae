@@ -20,31 +20,25 @@ struct LocalModelCatalog {
             label: "Auto (Recommended)",
             value: "auto",
             ram: "8+ GB",
-            description: "Picks Qwen3.5 2B, 4B, or 9B based on this Mac's RAM. Recommended for most users."
+            description: "Picks the best model for your Mac's RAM: 35B-A3B MoE on 32+ GB, 4B on 16+ GB, saorsa-1.1-tiny below."
         ),
         .init(
-            label: "Qwen3.5 2B",
-            value: "qwen3_5_2b",
+            label: "saorsa-1.1-tiny (2B)",
+            value: "saorsa_1_1_tiny",
             ram: "8+ GB",
-            description: "Lowest-memory fallback. Best when you need a compact local model."
+            description: "Our fine-tuned Qwen3.5-2B. Compact, fast inference, strong tool use. Best for Macs with limited RAM."
         ),
         .init(
             label: "Qwen3.5 4B",
             value: "qwen3_5_4b",
             ram: "16+ GB",
-            description: "Best default balance for Fae: strong tool use, good latency, and enough headroom for on-demand vision."
+            description: "Best balance for Fae: strong tool use, good latency, and enough headroom for on-demand vision."
         ),
         .init(
-            label: "Qwen3.5 9B",
-            value: "qwen3_5_9b",
-            ram: "24+ GB",
-            description: "Best current loadable quality/runtime balance in Fae's Swift stack. Better reasoning and tool behavior than 4B, while remaining responsive enough for daily use."
-        ),
-        .init(
-            label: "Qwen3.5 27B",
-            value: "qwen3_5_27b",
+            label: "Qwen3.5 35B-A3B (MoE)",
+            value: "qwen3_5_35b_a3b",
             ram: "32+ GB",
-            description: "Highest local quality tier currently supported by Fae's native Swift runtime. Best for larger-RAM Macs when you explicitly want higher quality over first-turn latency."
+            description: "Flagship model. 35B total with only 3B active per token — frontier intelligence at fast speed. Natively multimodal (text + vision). Recommended for 32+ GB Macs."
         ),
     ]
 
@@ -52,17 +46,17 @@ struct LocalModelCatalog {
         .init(
             label: "Auto",
             value: "auto",
-            description: "Selects the recommended Qwen3-VL tier for your RAM: 4-bit from 16 GB, 8-bit from 32 GB."
+            description: "Best vision for your RAM: 35B-A3B (shared with text LLM) on 32+ GB, Qwen3-VL-4B on 16+ GB."
         ),
         .init(
-            label: "Qwen3-VL-4B (8-bit)",
-            value: "qwen3_vl_4b_8bit",
-            description: "Higher-quality on-demand vision model. Best for 32+ GB systems."
+            label: "Qwen3.5 35B-A3B (shared)",
+            value: "qwen3_5_35b_a3b_vlm",
+            description: "Frontier multimodal vision using the same 35B-A3B text model — zero additional RAM. Requires 32+ GB."
         ),
         .init(
             label: "Qwen3-VL-4B (4-bit)",
             value: "qwen3_vl_4b_4bit",
-            description: "Lower-memory on-demand vision model. Best for 16-31 GB systems or tighter RAM."
+            description: "Lightweight on-demand vision model. Best for 16-31 GB systems alongside the 4B text model."
         ),
     ]
 

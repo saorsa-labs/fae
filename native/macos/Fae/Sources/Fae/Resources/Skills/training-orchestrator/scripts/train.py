@@ -33,7 +33,8 @@ def main():
     max_iters = params.get("max_iterations", None)
 
     if target == "auto":
-        ram_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1024**3)
+        ram_bytes = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).strip())
+        ram_gb = ram_bytes // (1024**3)
         if ram_gb >= 48:
             target = "medium"
         elif ram_gb >= 24:

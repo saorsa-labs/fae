@@ -39,11 +39,9 @@ Canonical local model cache: `~/.cache/huggingface/hub`. The app runtime, traini
 
 Current loadable text-model ladder in the app:
 
-- `Auto`: `Qwen3.5 2B` / `Qwen3.5 4B` / `Qwen3.5 9B` by RAM
-- manual quality mode: `Qwen3.5 27B`
-- legacy `35B-A3B` preset now maps to `27B`
-
-Sidecar PARO benchmarks currently favor `9B` and `27B`, but `mlx-swift-lm` in Fae cannot load those PARO checkpoints yet, so PARO remains benchmark-only for now.
+- `Auto`: `saorsa-1.1-tiny` / `Qwen3.5 4B` / `Qwen3.5 35B-A3B` by RAM
+- explicit presets: `saorsa-1.1-tiny`, `Qwen3.5 4B`, `Qwen3.5 35B-A3B`
+- legacy `9B` and `27B` presets are compatibility aliases only
 
 ## Notes
 

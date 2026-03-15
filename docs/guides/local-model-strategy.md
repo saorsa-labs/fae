@@ -1,6 +1,6 @@
 # Local Model Strategy
 
-Last updated: March 14, 2026
+Last updated: March 15, 2026
 
 This is the current canonical guide for Fae's local model stack.
 
@@ -18,7 +18,11 @@ Historical architecture notes under `docs/architecture/*dual-model*` are plannin
 
 ## Text model strategy
 
-Fae uses the Qwen3.5 MLX line for local text inference.
+Fae now uses a three-model local text suite:
+
+- `saorsa-1.1-tiny` — our trained `Qwen3.5 2B`
+- `Qwen3.5 4B` — the small local model
+- `Qwen3.5 35B-A3B` — the medium/high-capability MoE model
 
 ### Auto text model selection
 
@@ -26,36 +30,40 @@ Fae uses the Qwen3.5 MLX line for local text inference.
 
 | System RAM | Auto model | Context |
 |---|---|---:|
-| `8–15 GB` | `mlx-community/Qwen3.5-2B-4bit` | `32,768` |
+| `8–15 GB` | `saorsa-labs/saorsa-1.1-tiny` | `32,768` |
 | `16–31 GB` | `mlx-community/Qwen3.5-4B-4bit` | `32,768` |
-| `32+ GB` | `mlx-community/Qwen3.5-9B-4bit` | `32,768` |
+| `32–63 GB` | `mlx-community/Qwen3.5-35B-A3B-4bit` | `32,768` |
+| `64+ GB` | `mlx-community/Qwen3.5-35B-A3B-4bit` | `131,072` |
 
-### Manual text quality tiers
+### Manual text tiers
 
-These are available as explicit user choices, but they are not selected by `Auto`:
+These are the supported user-facing presets:
 
-| Preset | Model | RAM guidance | Why manual-only |
+| Preset | Model | RAM guidance | Role |
 |---|---|---|---|
-| `Qwen3.5 27B` | `mlx-community/Qwen3.5-27B-4bit` | `32+ GB` | Highest local quality tier currently supported by Fae's Swift runtime. Better quality than 9B, but much slower first-turn latency |
+| `saorsa-1.1-tiny` | `saorsa-labs/saorsa-1.1-tiny` | `8+ GB` | Compact trained fallback |
+| `Qwen3.5 4B` | `mlx-community/Qwen3.5-4B-4bit` | `16+ GB` | Small general model |
+| `Qwen3.5 35B-A3B` | `mlx-community/Qwen3.5-35B-A3B-4bit` | `32+ GB` | Medium/high-capability MoE model |
 
-Legacy compatibility alias:
+Legacy compatibility aliases:
 
-- `qwen3_5_35b_a3b` now resolves to `Qwen3.5 27B`
+- `qwen3_5_2b` resolves to `saorsa-1.1-tiny`
+- `qwen3_5_9b` resolves to `Qwen3.5 4B`
+- `qwen3_5_27b` resolves to `Qwen3.5 35B-A3B`
 
 ### Current recommendation
 
-- default local mode: `Qwen3.5 4B`
-- higher-quality local mode: `Qwen3.5 9B`
-- highest loadable manual quality tier: `Qwen3.5 27B`
-- compact fallback: `Qwen3.5 2B`
+- compact fallback: `saorsa-1.1-tiny`
+- small local default: `Qwen3.5 4B`
+- medium local default on larger Macs: `Qwen3.5 35B-A3B`
 
-### ParoQuant status
+### Current scope
 
-Sidecar PARO benchmarks currently look strongest at `9B` and `27B`, but Fae's Swift-native runtime cannot load PARO checkpoints yet. So the app continues to ship the standard MLX Qwen3.5 checkpoints for now:
+The current shipped suite intentionally does not include `9B` or `27B`.
 
-- `Qwen3.5 9B` remains the highest automatic tier
-- `Qwen3.5 27B` is the current manual quality tier
-- PARO stays benchmark-only until Swift runtime support lands
+- `9B` has been dropped from the active product ladder
+- `27B` has been dropped from the active product ladder
+- future larger-model work should start from the next Qwen3.5 large tier, not restore the old `9B/27B` path
 
 ## Vision model strategy
 

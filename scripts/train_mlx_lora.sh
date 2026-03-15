@@ -8,7 +8,8 @@
 #
 # PREREQUISITES:
 #   uv (install via: curl -LsSf https://astral.sh/uv/install.sh | sh)
-#   export HF_TOKEN=your_huggingface_token
+#   hf auth login   (preferred)
+#   # or: export HF_TOKEN=your_huggingface_token
 #
 # Uses uv to install mlx-lm 0.31.1+ in an isolated Python 3.12 environment.
 # This bypasses macOS system Python (3.9) which cannot run Qwen3.5 models,
@@ -72,6 +73,15 @@ check_command() {
     fi
 }
 
+hf_auth_available() {
+    if command -v hf &>/dev/null && hf auth whoami &>/dev/null; then
+        return 0
+    fi
+
+    $UV_RUN python -c "from huggingface_hub import get_token; raise SystemExit(0 if get_token() else 1)" \
+        &>/dev/null
+}
+
 # ---------------------------------------------------------------------------
 # Step 0: Check prerequisites
 # ---------------------------------------------------------------------------
@@ -93,11 +103,11 @@ fi
 MLX_LM_VERSION=$($UV_RUN python -c "import mlx_lm; print(getattr(mlx_lm, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
 log "mlx-lm version: $MLX_LM_VERSION (via uv Python 3.12)"
 
-# Check HF_TOKEN is set (needed for upload step)
-if [[ -z "${HF_TOKEN:-}" ]]; then
-    echo "WARNING: HF_TOKEN environment variable is not set."
-    echo "  Training will proceed, but the upload step will fail."
-    echo "  Set HF_TOKEN before running if you want to upload to HuggingFace."
+# Check Hugging Face auth is available for upload step
+if ! hf_auth_available; then
+    echo "WARNING: no Hugging Face auth detected."
+    echo "  Training will proceed, but the upload step will be skipped."
+    echo "  Run 'hf auth login' before running, or set HF_TOKEN as an override."
 fi
 
 log "Prerequisites OK"
@@ -254,10 +264,11 @@ echo
 
 log "=== Step 5: Uploading to HuggingFace ==="
 
-if [[ -z "${HF_TOKEN:-}" ]]; then
-    log "Skipping upload: HF_TOKEN not set"
+if ! hf_auth_available; then
+    log "Skipping upload: no Hugging Face auth detected"
     log "To upload manually, run:"
-    log "  HF_TOKEN=your_token python3 $SCRIPT_DIR/upload_to_hf.py \\"
+    log "  hf auth login"
+    log "  python3 $SCRIPT_DIR/upload_to_hf.py \\"
     log "    --model-path $SFT_MERGED_PATH \\"
     log "    --repo-id $HF_REPO"
 else

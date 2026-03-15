@@ -4,9 +4,12 @@ import SwiftUI
 struct SettingsTrainingTab: View {
     var commandSender: HostCommandSender?
 
-    @AppStorage("training.enabled") private var trainingEnabled: Bool = false
-    @AppStorage("training.lastTrainingRunAt") private var lastTrainingRunAt: String = ""
-    @AppStorage("training.personalAdapterPath") private var personalAdapterPath: String = ""
+    @State private var hydratingFromConfig = false
+    @State private var hasLoadedConfig = false
+
+    @State private var trainingEnabled: Bool = false
+    @State private var lastTrainingRunAt: String = ""
+    @State private var personalAdapterPath: String = ""
 
     @State private var showingConsentAlert = false
 
@@ -78,6 +81,14 @@ struct SettingsTrainingTab: View {
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            if !hasLoadedConfig {
+                hasLoadedConfig = true
+                Task { @MainActor in
+                    await hydrateFromBackendConfig()
+                }
+            }
+        }
     }
 
     private func patchConfig(_ key: String, _ value: Any) {
@@ -85,5 +96,29 @@ struct SettingsTrainingTab: View {
             name: "config.patch",
             payload: ["key": key, "value": value]
         )
+    }
+
+    @MainActor
+    private func hydrateFromBackendConfig() async {
+        guard let sender = commandSender as? FaeCore else { return }
+
+        hydratingFromConfig = true
+        defer { hydratingFromConfig = false }
+
+        if let response = await sender.queryCommand(name: "config.get", payload: ["key": "training"]) {
+            if let payload = response["payload"] as? [String: Any],
+               let training = payload["training"] as? [String: Any]
+            {
+                if let enabled = training["enabled"] as? Bool {
+                    trainingEnabled = enabled
+                }
+                if let lastRun = training["last_training_run_at"] as? String {
+                    lastTrainingRunAt = lastRun
+                }
+                if let adapterPath = training["personal_adapter_path"] as? String {
+                    personalAdapterPath = adapterPath
+                }
+            }
+        }
     }
 }
