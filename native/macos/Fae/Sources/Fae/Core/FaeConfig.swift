@@ -399,6 +399,7 @@ struct FaeConfig: Codable {
         case "auto":
             return "auto"
         default:
+            NSLog("FaeConfig: unknown model preset '%@' — falling back to auto", preset)
             return "auto"
         }
     }

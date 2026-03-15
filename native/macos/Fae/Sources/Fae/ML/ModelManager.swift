@@ -53,11 +53,6 @@ actor ModelManager {
     /// On-demand VLM engine — loaded only when vision tools are invoked.
     private var vlmEngine: MLXVLMEngine?
 
-    /// Shared multimodal container — set when the LLM is a natively multimodal model
-    /// (e.g. Qwen3.5-35B-A3B) loaded via VLMModelFactory. Avoids duplicate ~20 GB loads
-    /// by letting both the text LLM and vision pipelines share one container.
-    private var sharedMultimodalContainer: ModelContainer?
-
     /// Get a wired memory ticket for inference using measured or estimated budgets.
     func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
         guard let wiredPolicy else { return nil }
@@ -97,20 +92,6 @@ actor ModelManager {
         }
         let engine = MLXVLMEngine()
 
-        // When the LLM is a natively multimodal model loaded via VLMModelFactory, share
-        // its container for vision — zero additional RAM.
-        if let sharedContainer = sharedMultimodalContainer {
-            await engine.attachSharedContainer(sharedContainer)
-            let sharedModelId = loadedModelId ?? modelId
-            eventBus.send(.modelLoaded(engine: "vlm", modelId: sharedModelId))
-            self.vlmEngine = engine
-            NSLog("ModelManager: VLM sharing multimodal container with LLM — zero additional RAM (%@)", sharedModelId)
-            return engine
-        }
-        // Note: shared container path is currently unused because the 35B MoE LLM loads
-        // as text-only for memory efficiency. Kept for future use when MLX VLM memory
-        // usage improves for large MoE models.
-
         try await engine.load(modelID: modelId)
         eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
         self.vlmEngine = engine
@@ -124,8 +105,6 @@ actor ModelManager {
     /// the container stays alive via the LLM engine.
     func unloadVLM() {
         vlmEngine = nil
-        // Don't nil sharedMultimodalContainer here — LLM still uses it.
-        // It's cleared on LLM reload in loadAll().
         NSLog("ModelManager: VLM unloaded")
     }
 
@@ -164,22 +143,18 @@ actor ModelManager {
         }
 
         // LLM — critical engine, throw if it fails.
-        // For natively multimodal models (e.g. Qwen3.5-35B-A3B), load via VLMModelFactory
-        // so the same container can serve both text and vision queries without duplicate loads.
         eventBus.send(.runtimeProgress(stage: "llm", progress: 0.33))
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.35))
         let isMultimodal = FaeConfig.isMultimodalLLM(modelId: modelId)
         do {
-            if isMultimodal, llm is MLXLLMEngine {
-                // Qwen3.5 MoE models are natively multimodal but vision inference through
-                // the 35B MoE is impractically slow (~3 min per screenshot). Load as text-only
-                // LLM — vision uses the lightweight on-demand Qwen3-VL-4B which is ~10x faster
-                // for image processing. See: https://github.com/ml-explore/mlx-swift-lm/issues/148
+            // Qwen3.5 MoE models are natively multimodal but vision inference through
+            // the 35B MoE is impractically slow (~3 min per screenshot). Always load as
+            // text-only LLM — vision uses the lightweight on-demand Qwen3-VL-4B instead.
+            // See: https://github.com/ml-explore/mlx-swift-lm/issues/148
+            if isMultimodal {
                 NSLog("ModelManager: multimodal LLM detected — loading as text-only (vision via on-demand VLM for speed)")
-                try await llm.load(modelID: modelId)
-            } else {
-                try await llm.load(modelID: modelId)
             }
+            try await llm.load(modelID: modelId)
             loadedModelId = modelId
             eventBus.send(.modelLoaded(engine: "llm", modelId: modelId))
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.6))
