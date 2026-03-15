@@ -97,15 +97,19 @@ actor ModelManager {
         }
         let engine = MLXVLMEngine()
 
-        // When the VLM model matches the already-loaded multimodal LLM, share the container
-        // instead of loading a duplicate ~20 GB model.
-        if let sharedContainer = sharedMultimodalContainer, modelId == loadedModelId {
+        // When the LLM is a natively multimodal model loaded via VLMModelFactory, share
+        // its container for vision — zero additional RAM.
+        if let sharedContainer = sharedMultimodalContainer {
             await engine.attachSharedContainer(sharedContainer)
-            eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
+            let sharedModelId = loadedModelId ?? modelId
+            eventBus.send(.modelLoaded(engine: "vlm", modelId: sharedModelId))
             self.vlmEngine = engine
-            NSLog("ModelManager: VLM sharing multimodal container with LLM — zero additional RAM (%@)", modelId)
+            NSLog("ModelManager: VLM sharing multimodal container with LLM — zero additional RAM (%@)", sharedModelId)
             return engine
         }
+        // Note: shared container path is currently unused because the 35B MoE LLM loads
+        // as text-only for memory efficiency. Kept for future use when MLX VLM memory
+        // usage improves for large MoE models.
 
         try await engine.load(modelID: modelId)
         eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
@@ -166,18 +170,14 @@ actor ModelManager {
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.35))
         let isMultimodal = FaeConfig.isMultimodalLLM(modelId: modelId)
         do {
-            if isMultimodal, llm is MLXLLMEngine {
-                // VLMModelFactory currently crashes (SmallVector out of range) for Qwen3.5-35B-A3B.
-                // Load as text-only LLM until the MLX framework fix lands. Vision queries will
-                // use the separate on-demand VLM engine (Qwen3-VL-4B) on systems with enough RAM.
-                NSLog("ModelManager: multimodal LLM detected — loading as text-only (VLMModelFactory disabled pending MLX fix)")
-                try await llm.load(modelID: modelId)
-                // TODO: Re-enable shared container once mlx-swift-lm fixes SmallVector crash:
-                // var vlmConfig = ModelConfiguration(id: modelId)
-                // vlmConfig.toolCallFormat = .xmlFunction
-                // let container = try await VLMModelFactory.shared.loadContainer(configuration: vlmConfig)
-                // await mlxLLM.attachContainer(container)
-                // sharedMultimodalContainer = container
+            if isMultimodal, let mlxLLM = llm as? MLXLLMEngine {
+                NSLog("ModelManager: multimodal LLM detected — loading via VLMModelFactory for shared container")
+                var vlmConfig = ModelConfiguration(id: modelId)
+                vlmConfig.toolCallFormat = .xmlFunction
+                let container = try await VLMModelFactory.shared.loadContainer(configuration: vlmConfig)
+                await mlxLLM.attachContainer(container)
+                sharedMultimodalContainer = container
+                NSLog("ModelManager: shared multimodal container ready (LLM + VLM from single load)")
             } else {
                 try await llm.load(modelID: modelId)
             }
