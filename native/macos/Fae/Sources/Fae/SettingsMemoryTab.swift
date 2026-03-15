@@ -23,7 +23,7 @@ struct SettingsMemoryTab: View {
                             }
 
                         Stepper(value: $maxRecallResults, in: 3 ... 25) {
-                            Text("Recall depth: \(maxRecallResults) memories")
+                            Text("Remember up to \(maxRecallResults) things per conversation")
                         }
                         .onChange(of: maxRecallResults) { _, value in
                             commandSender?.sendCommand(
@@ -32,7 +32,7 @@ struct SettingsMemoryTab: View {
                             )
                         }
 
-                        Toggle("Auto-ingest inbox folder", isOn: $autoIngestInbox)
+                        Toggle("Import notes automatically", isOn: $autoIngestInbox)
                             .toggleStyle(.switch)
                             .onChange(of: autoIngestInbox) { _, value in
                                 commandSender?.sendCommand(
@@ -41,7 +41,7 @@ struct SettingsMemoryTab: View {
                                 )
                             }
 
-                        Toggle("Generate memory digests", isOn: $generateDigests)
+                        Toggle("Create daily summaries", isOn: $generateDigests)
                             .toggleStyle(.switch)
                             .onChange(of: generateDigests) { _, value in
                                 commandSender?.sendCommand(
@@ -50,7 +50,7 @@ struct SettingsMemoryTab: View {
                                 )
                             }
 
-                        Text("Fae automatically captures important context, ingests queued artifacts, and creates digest records for higher-level recall. Increase recall depth for richer context, decrease it for tighter responses.")
+                        Text("Fae remembers important things from your conversations. More memories per conversation means richer context but longer thinking time.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

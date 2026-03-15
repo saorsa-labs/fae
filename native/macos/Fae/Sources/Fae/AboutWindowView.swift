@@ -65,15 +65,11 @@ struct AboutWindowView: View {
             sectionHeader("Models")
 
             let config = FaeConfig.load()
-            let plan = FaeConfig.recommendedLocalModelStack(config: config)
+            let model = FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset)
 
-            infoRow("Mode", value: plan.dualModelActive ? "Dual model" : "Single model")
-            infoRow("Operator", value: formatModelName(plan.operatorModel.modelId))
-            if let concierge = plan.conciergeModel {
-                infoRow("Concierge", value: formatModelName(concierge.modelId))
-            }
-            infoRow("STT", value: formatModelName(plan.sttModelId))
-            infoRow("TTS", value: formatModelName(plan.ttsModelId))
+            infoRow("LLM", value: formatModelName(model.modelId))
+            infoRow("STT", value: "Qwen3-ASR-1.7B")
+            infoRow("TTS", value: "Kokoro-82M")
             infoRow("Speaker", value: "ECAPA-TDNN (Core ML)")
         }
     }
@@ -85,13 +81,12 @@ struct AboutWindowView: View {
             sectionHeader("System")
 
             let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
-            let config = FaeConfig.load()
-            let plan = FaeConfig.recommendedLocalModelStack(config: config)
-
             infoRow("RAM", value: "\(totalGB) GB")
             infoRow("macOS", value: ProcessInfo.processInfo.operatingSystemVersionString)
             infoRow("Chip", value: chipName)
-            infoRow("Context", value: "\(formatNumber(plan.operatorModel.contextSize)) tokens")
+            let config = FaeConfig.load()
+            let recommended = FaeConfig.recommendedModel(preset: config.llm.voiceModelPreset)
+            infoRow("Context", value: "\(formatNumber(recommended.contextSize)) tokens")
             infoRow("Pipeline", value: faeCore.pipelineState.label)
         }
     }

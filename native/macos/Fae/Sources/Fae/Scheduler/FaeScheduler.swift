@@ -136,6 +136,12 @@ actor FaeScheduler {
         awarenessConfig = config
     }
 
+    private var trainingConfig: FaeConfig.TrainingConfig = FaeConfig.TrainingConfig()
+
+    func setTrainingConfig(_ config: FaeConfig.TrainingConfig) {
+        trainingConfig = config
+    }
+
     func setVisionEnabled(_ enabled: Bool) {
         visionEnabled = enabled
     }
@@ -1250,6 +1256,76 @@ actor FaeScheduler {
         )
     }
 
+    // MARK: - Training Tasks
+
+    private func runTrainingDataExport() async {
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "training_data_export",
+            lastUserSeenAt: lastUserSeenAt
+        )
+
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: training_data_export skipped — %@", reason)
+            return
+        case .silentOnly, .normal:
+            break
+        }
+
+        let lastExport = trainingConfig.lastDataExportAt ?? ""
+        let prompt = """
+        [TRAINING DATA EXPORT] Activate the training-orchestrator skill, then run the export_data script \
+        with parameter last_export_timestamp="\(lastExport)". Report how many episodes were exported.
+        """
+        _ = await dispatchProactiveTask(
+            taskId: "training_data_export",
+            prompt: prompt,
+            urgency: .low,
+            defaultSilent: true,
+            throttle: throttle,
+            allowedTools: ["activate_skill", "run_skill"]
+        )
+    }
+
+    private func runTrainingCycle() async {
+        let throttle = AwarenessThrottle.check(
+            config: awarenessConfig,
+            taskId: "training_cycle",
+            lastUserSeenAt: lastUserSeenAt
+        )
+
+        switch throttle {
+        case .skip(let reason):
+            NSLog("FaeScheduler: training_cycle skipped — %@", reason)
+            return
+        case .silentOnly, .normal:
+            break
+        }
+
+        let preset = trainingConfig.trainingPreset
+        let target = trainingConfig.targetModelPreset
+        let maxIters = trainingConfig.maxIterationsPerRun
+        let lastScore = trainingConfig.lastBenchmarkScore.map { String($0) } ?? "none"
+
+        let prompt = """
+        [TRAINING CYCLE] Activate the training-orchestrator skill. \
+        Run the train script with target_model_preset="\(target)", training_preset="\(preset)", max_iterations=\(maxIters). \
+        Then poll check_status up to 3 times (wait between polls). \
+        If training completes, run evaluate with last_benchmark_score=\(lastScore), then run propose. \
+        Store the proposal as a .commitment memory so it appears in the morning briefing. \
+        If training is still running after 3 polls, store a memory "Training in progress, will check again later" and stop.
+        """
+        _ = await dispatchProactiveTask(
+            taskId: "training_cycle",
+            prompt: prompt,
+            urgency: .low,
+            defaultSilent: true,
+            throttle: throttle,
+            allowedTools: ["activate_skill", "run_skill"]
+        )
+    }
+
     private func runEnhancedMorningBriefing() async {
         guard !morningBriefingDelivered else { return }
 
@@ -1375,6 +1451,17 @@ actor FaeScheduler {
             if !awarenessConfig.cameraEnabled {
                 await runDailyIfNeeded("enhanced_morning_briefing") { await runEnhancedMorningBriefing() }
             }
+        }
+
+        // Training: data export — Sunday 01:00.
+        if weekday == 1, hour == 1, minute < 2,
+           trainingConfig.enabled, trainingConfig.consentGrantedAt != nil {
+            await runDailyIfNeeded("training_data_export") { await runTrainingDataExport() }
+        }
+        // Training: training cycle — Monday 02:00.
+        if weekday == 2, hour == 2, minute < 2,
+           trainingConfig.enabled, trainingConfig.autoTrainEnabled, trainingConfig.consentGrantedAt != nil {
+            await runDailyIfNeeded("training_cycle") { await runTrainingCycle() }
         }
 
         await runDueUserTasksIfNeeded(now: now)

@@ -128,6 +128,9 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "enhanced_morning_briefing": ["calendar", "reminders", "contacts", "mail", "notes", "activate_skill"],
         // capability_discovery: informational only — no surveillance, consent always true.
         "capability_discovery": ["activate_skill"],
+        // Training orchestration tasks.
+        "training_data_export": ["activate_skill", "run_skill"],
+        "training_cycle": ["activate_skill", "run_skill"],
     ]
 
     /// Tools that scheduler tasks can NEVER use regardless of allowlist.

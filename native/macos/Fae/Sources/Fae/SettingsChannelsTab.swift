@@ -90,7 +90,7 @@ struct SettingsChannelsTab: View {
                     .font(.footnote)
                 Text("2) She checks what is missing and asks only for required fields.")
                     .font(.footnote)
-                Text("3) Choose chat prompts (next_prompt) or guided forms (request_form).")
+                Text("3) Choose between a conversational or guided setup style.")
                     .font(.footnote)
                 Text("4) Fae saves settings and confirms when the channel is configured.")
                     .font(.footnote)

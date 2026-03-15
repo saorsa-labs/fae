@@ -684,12 +684,8 @@ final class RuntimeContractTests: XCTestCase {
                 "event": "pipeline.local_stack_status",
                 "payload": [
                     "operator_loaded": true,
-                    "concierge_loaded": false,
-                    "dual_model_active": false,
                     "current_route": "operator",
-                    "fallback_reason": "concierge_load_failed",
                     "operator_runtime": "worker_process",
-                    "concierge_runtime": "worker_process",
                 ] as [String: Any],
             ]
         )
@@ -701,62 +697,8 @@ final class RuntimeContractTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
 
         XCTAssertTrue(controller.localStack.operatorLoaded)
-        XCTAssertFalse(controller.localStack.conciergeLoaded)
         XCTAssertEqual(controller.localStack.currentRoute, "operator")
-        XCTAssertEqual(controller.localStack.fallbackReason, "concierge_load_failed")
         XCTAssertEqual(controller.localStack.operatorRuntime, "worker_process")
-    }
-
-    @MainActor
-    func testFaeCorePersistsDualModelEnabledPatch() async throws {
-        let url = FaeConfig.configFileURL
-        let fm = FileManager.default
-        let original = try? Data(contentsOf: url)
-
-        defer {
-            if let original {
-                try? original.write(to: url, options: .atomic)
-            } else {
-                try? fm.removeItem(at: url)
-            }
-        }
-
-        let core = FaeCore()
-
-        core.sendCommand(
-            name: "config.patch",
-            payload: ["key": "llm.dual_model_enabled", "value": false]
-        )
-        try await Task.sleep(nanoseconds: 150_000_000)
-
-        let reloaded = FaeConfig.load()
-        XCTAssertFalse(reloaded.llm.dualModelEnabled)
-    }
-
-    @MainActor
-    func testFaeCorePersistsConciergeModelPresetPatch() async throws {
-        let url = FaeConfig.configFileURL
-        let fm = FileManager.default
-        let original = try? Data(contentsOf: url)
-
-        defer {
-            if let original {
-                try? original.write(to: url, options: .atomic)
-            } else {
-                try? fm.removeItem(at: url)
-            }
-        }
-
-        let core = FaeCore()
-
-        core.sendCommand(
-            name: "config.patch",
-            payload: ["key": "llm.concierge_model_preset", "value": "auto"]
-        )
-        try await Task.sleep(nanoseconds: 150_000_000)
-
-        let reloaded = FaeConfig.load()
-        XCTAssertEqual(reloaded.llm.conciergeModelPreset, "auto")
     }
 
     private func loadRepositoryText(relativePath: String) throws -> String {

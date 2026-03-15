@@ -16,9 +16,6 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertFalse(config.startupIntroSeen)
         XCTAssertFalse(config.startupIntroSeenConfigured)
         XCTAssertEqual(config.llm.voiceModelPreset, "auto")
-        XCTAssertTrue(config.llm.dualModelEnabled)
-        XCTAssertEqual(config.llm.conciergeModelPreset, "auto")
-        XCTAssertEqual(config.llm.dualModelMinSystemRAMGB, 32)
         XCTAssertEqual(config.llm.remoteProviderPreset, "openrouter")
         XCTAssertEqual(config.llm.remoteBaseURL, "https://openrouter.ai/api")
         XCTAssertEqual(config.llm.remoteModel, "openai/gpt-4.1-mini")
@@ -83,9 +80,6 @@ final class FaeConfigTests: XCTestCase {
         original.llm.maxTokens = 1024
         original.llm.enableVision = true
         original.llm.voiceModelPreset = "qwen3_4b"
-        original.llm.dualModelEnabled = true
-        original.llm.conciergeModelPreset = "liquid_lfm2_24b_a2b"
-        original.llm.dualModelMinSystemRAMGB = 48
         original.llm.remoteProviderPreset = "openrouter"
         original.llm.remoteBaseURL = "https://openrouter.ai/api"
         original.llm.remoteModel = "anthropic/claude-sonnet-4"
@@ -127,9 +121,6 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.llm.maxTokens, 1024)
         XCTAssertTrue(loaded.llm.enableVision)
         XCTAssertEqual(loaded.llm.voiceModelPreset, "qwen3_4b")
-        XCTAssertTrue(loaded.llm.dualModelEnabled)
-        XCTAssertEqual(loaded.llm.conciergeModelPreset, "liquid_lfm2_24b_a2b")
-        XCTAssertEqual(loaded.llm.dualModelMinSystemRAMGB, 48)
         XCTAssertEqual(loaded.llm.remoteProviderPreset, "openrouter")
         XCTAssertEqual(loaded.llm.remoteBaseURL, "https://openrouter.ai/api")
         XCTAssertEqual(loaded.llm.remoteModel, "anthropic/claude-sonnet-4")
@@ -168,54 +159,6 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(preset8bit?.modelId, "mlx-community/Qwen3-VL-4B-Instruct-8bit")
     }
 
-    func testRecommendedLocalModelStackActivatesDualModeOnSupportedSystems() {
-        var config = FaeConfig()
-        config.llm.voiceModelPreset = "qwen3_5_2b"
-        config.llm.dualModelEnabled = true
-        config.llm.conciergeModelPreset = "liquid_lfm2_24b_a2b"
-        config.llm.dualModelMinSystemRAMGB = 32
-
-        let plan = FaeConfig.recommendedLocalModelStack(
-            config: config,
-            totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024
-        )
-
-        XCTAssertEqual(plan.mode, .dualModel)
-        XCTAssertTrue(plan.dualModelEligible)
-        XCTAssertTrue(plan.dualModelActive)
-        XCTAssertEqual(plan.operatorModel.modelId, "mlx-community/Qwen3.5-2B-4bit")
-        XCTAssertEqual(plan.conciergeModel?.modelId, "saorsa-labs/saorsa1-concierge-pre-release")
-        XCTAssertEqual(plan.ttsModelId, "hexgrad/Kokoro-82M")
-    }
-
-    func testShouldHoldStartupForConciergeHotLoadWhenEligibleAndHot() {
-        var config = FaeConfig()
-        config.llm.dualModelEnabled = true
-        config.llm.keepConciergeHot = true
-        config.llm.conciergeModelPreset = "auto"
-        config.llm.dualModelMinSystemRAMGB = 32
-
-        XCTAssertTrue(
-            FaeConfig.shouldHoldStartupForConciergeHotLoad(
-                config: config,
-                totalMemoryBytes: UInt64(96) * 1024 * 1024 * 1024
-            )
-        )
-    }
-
-    func testShouldNotHoldStartupForConciergeWhenHotLoadDisabled() {
-        var config = FaeConfig()
-        config.llm.dualModelEnabled = true
-        config.llm.keepConciergeHot = false
-
-        XCTAssertFalse(
-            FaeConfig.shouldHoldStartupForConciergeHotLoad(
-                config: config,
-                totalMemoryBytes: UInt64(96) * 1024 * 1024 * 1024
-            )
-        )
-    }
-
     func testLegacyModelPresetAliasesResolveToSaorsaWeights() {
         let worker = FaeConfig.recommendedModel(
             totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
@@ -229,24 +172,6 @@ final class FaeConfigTests: XCTestCase {
         )
         XCTAssertEqual(tiny.modelId, "mlx-community/Qwen3.5-0.8B-4bit")
 
-        let concierge = FaeConfig.recommendedConciergeModel(
-            totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
-            preset: "liquid_lfm2_24b_a2b"
-        )
-        XCTAssertEqual(concierge?.modelId, "saorsa-labs/saorsa1-concierge-pre-release")
-    }
-
-    func testApplyingTestServerMemoryProfileDisablesHotConcierge() {
-        var config = FaeConfig()
-        config.llm.dualModelEnabled = true
-        config.llm.keepConciergeHot = true
-        config.llm.allowConciergeDuringVoiceTurns = true
-
-        let adjusted = config.applyingTestServerMemoryProfile()
-
-        XCTAssertFalse(adjusted.llm.dualModelEnabled)
-        XCTAssertFalse(adjusted.llm.keepConciergeHot)
-        XCTAssertFalse(adjusted.llm.allowConciergeDuringVoiceTurns)
     }
 
     func testRecommendedEmbeddingTierPrefersLowerResidentMemory() {

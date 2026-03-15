@@ -14,8 +14,7 @@ struct SettingsOverviewTab: View {
 
     // System info
     @State private var systemRAM: UInt64 = 0
-    @State private var loadedOperatorModelName: String = "—"
-    @State private var loadedConciergeModelName: String?
+    @State private var loadedModelName: String = "—"
     @State private var memoryUsage: String = "—"
     @State private var tokensPerSecond: String = "—"
 
@@ -37,8 +36,8 @@ struct SettingsOverviewTab: View {
                     modelStackCard
 
                     statusCard(
-                        title: "KV Cache",
-                        value: kvQuantEnabled ? "4-bit" : "16-bit",
+                        title: "Memory Saver",
+                        value: kvQuantEnabled ? "On" : "Off",
                         icon: "bolt.fill",
                         color: kvQuantEnabled ? .green : .orange
                     )
@@ -143,14 +142,13 @@ struct SettingsOverviewTab: View {
                 Image(systemName: "cpu")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.purple)
-                Text("Stack")
+                Text("Models")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                modelRoleRow(title: "Operator", value: loadedOperatorModelName)
-                modelRoleRow(title: "Concierge", value: loadedConciergeModelName ?? "Off")
+                modelRoleRow(title: "Model", value: loadedModelName)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,7 +180,7 @@ struct SettingsOverviewTab: View {
 
             HStack(spacing: 12) {
                 quickToggle(
-                    title: "Thinking",
+                    title: "Deep Thinking",
                     icon: "brain",
                     isOn: $thinkingEnabled,
                     color: .orange
@@ -200,7 +198,7 @@ struct SettingsOverviewTab: View {
                 }
 
                 quickToggle(
-                    title: "Barge-In",
+                    title: "Interrupt",
                     icon: "hand.raised",
                     isOn: $bargeInEnabled,
                     color: .teal
@@ -209,7 +207,7 @@ struct SettingsOverviewTab: View {
                 }
 
                 quickToggle(
-                    title: "KV Quant",
+                    title: "Memory Saver",
                     icon: "bolt.fill",
                     isOn: $kvQuantEnabled,
                     color: .green
@@ -265,8 +263,8 @@ struct SettingsOverviewTab: View {
             VStack(spacing: 8) {
                 featureRow(
                     icon: "gauge.with.dots.needle.67percent",
-                    title: "Performance Tuning",
-                    description: "Configure KV cache quantization for 4x memory savings",
+                    title: "Performance",
+                    description: "Reduce memory usage so Fae can handle longer conversations",
                     tab: "Models & Performance → Performance"
                 )
 
@@ -279,8 +277,8 @@ struct SettingsOverviewTab: View {
 
                 featureRow(
                     icon: "network.badge.shield.half.filled",
-                    title: "Other LLMs",
-                    description: "Set up OpenRouter once and choose from many remote models safely",
+                    title: "Cloud Models",
+                    description: "Connect to powerful cloud models when you need more than local",
                     tab: "Other LLMs"
                 )
 
@@ -347,10 +345,10 @@ struct SettingsOverviewTab: View {
                     .foregroundStyle(.yellow)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("4-bit KV quantization is now enabled by default")
+                    Text("Memory optimization is on by default")
                         .font(.system(size: 12, weight: .medium))
 
-                    Text("This reduces memory usage by ~4x, allowing larger contexts and longer conversations without running out of RAM.")
+                    Text("This lets Fae handle longer conversations without running out of memory on your Mac.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -368,21 +366,11 @@ struct SettingsOverviewTab: View {
         systemRAM = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
 
         let config = FaeConfig.load()
-        let plan = FaeConfig.recommendedLocalModelStack(config: config)
         let defaults = UserDefaults.standard
-        let operatorModel = defaults.string(forKey: "fae.loaded_model_id") ?? plan.operatorModel.modelId
-        let conciergeModel = defaults.string(forKey: "fae.loaded_concierge_model_id")
-        let conciergeLoaded = defaults.bool(forKey: "fae.runtime.concierge_loaded")
-        let conciergeRuntime = defaults.string(forKey: "fae.runtime.concierge_runtime")
-        let conciergeWorkerLastError = defaults.string(forKey: "fae.runtime.concierge_worker_last_error")
-
-        loadedOperatorModelName = LocalModelStatusFormatter.shortModelName(operatorModel)
-        loadedConciergeModelName = LocalModelStatusFormatter.conciergeLabel(
-            plan: plan,
-            loadedConciergeModelId: conciergeModel,
-            conciergeLoaded: conciergeLoaded,
-            conciergeRuntime: conciergeRuntime,
-            conciergeWorkerLastError: conciergeWorkerLastError
+        let modelId = defaults.string(forKey: "fae.loaded_model_id")
+        loadedModelName = LocalModelStatusFormatter.stackSummary(
+            loadedModelId: modelId,
+            preset: config.llm.voiceModelPreset
         )
     }
 

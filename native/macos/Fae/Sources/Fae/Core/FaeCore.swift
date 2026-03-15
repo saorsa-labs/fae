@@ -125,8 +125,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     private let sttEngine = MLXSTTEngine()
-    private let llmEngine: any LLMEngine = WorkerLLMEngine(role: .operatorModel)
-    private let conciergeLLMEngine: any LLMEngine = WorkerLLMEngine(role: .conciergeModel)
+    private let llmEngine: any LLMEngine = MLXLLMEngine()
     private let ttsEngine: any TTSEngine = KokoroMLXTTSEngine()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
@@ -209,7 +208,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
 
                 UserDefaults.standard.set("worker_process", forKey: "fae.runtime.operator_runtime")
-                UserDefaults.standard.set("worker_process", forKey: "fae.runtime.concierge_runtime")
 
                 // Initialize memory system.
                 let memoryStore = try Self.createMemoryStore()
@@ -223,13 +221,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 let neuralEmbedder = NeuralEmbeddingEngine()
                 let ramGB = Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
                 let prefersLowResidentMemory = lowResidentMemoryProfileActive
-                    || (
-                        runtimeConfig.llm.dualModelEnabled
-                            && runtimeConfig.llm.keepConciergeHot
-                            && FaeConfig.isDualModelEligible(
-                                minimumSystemRAMGB: runtimeConfig.llm.dualModelMinSystemRAMGB
-                            )
-                    )
                 let embeddingTier = EmbeddingModelTier.recommendedTier(
                     ramGB: ramGB,
                     prefersLowResidentMemory: prefersLowResidentMemory
@@ -346,7 +337,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     playback: playbackManager,
                     sttEngine: sttEngine,
                     llmEngine: llmEngine,
-                    conciergeEngine: conciergeLLMEngine,
                     ttsEngine: ttsEngine,
                     config: pipelineConfig,
                     conversationState: conversationState,
@@ -365,18 +355,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
-
-                if FaeConfig.shouldHoldStartupForConciergeHotLoad(config: pipelineConfig) {
-                    NSLog("FaeCore: loading concierge before startup becomes ready")
-                    try await modelManager.loadConciergeIfNeeded(
-                        llm: conciergeLLMEngine,
-                        config: pipelineConfig,
-                        requireSuccess: true
-                    )
-                    NSLog("FaeCore: concierge ready for startup")
-                } else if pipelineConfig.llm.dualModelEnabled {
-                    NSLog("FaeCore: concierge hot-load disabled — leaving concierge cold until explicitly enabled")
-                }
 
                 // Sync barge-in setting from AppStorage on startup.
                 // bargeInEnabledLive defaults to nil, so we must explicitly
@@ -684,6 +662,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private func activateAlwaysOnSkills(skillManager: SkillManager) async {
         _ = await skillManager.activate(skillName: "window-control")
         await syncAwarenessSkills(skillManager: skillManager)
+        await syncTrainingSkills(skillManager: skillManager)
     }
 
     private func syncAwarenessSkills(skillManager: SkillManager) async {
@@ -711,6 +690,32 @@ final class FaeCore: ObservableObject, HostCommandSender {
             _ = await skillManager.activate(skillName: "morning-briefing-v2")
         } else {
             await skillManager.deactivate(skillName: "morning-briefing-v2")
+        }
+    }
+
+    // MARK: - Training Runtime
+
+    private func refreshTrainingRuntime() {
+        let training = config.training
+        let schedulerRef = scheduler
+        let skillMgr = skillManagerRef
+
+        Task {
+            if let schedulerRef {
+                await schedulerRef.setTrainingConfig(training)
+            }
+            if let skillMgr {
+                await syncTrainingSkills(skillManager: skillMgr)
+            }
+        }
+    }
+
+    private func syncTrainingSkills(skillManager: SkillManager) async {
+        let trainingEnabled = config.training.enabled && config.training.consentGrantedAt != nil
+        if trainingEnabled {
+            _ = await skillManager.activate(skillName: "training-orchestrator")
+        } else {
+            await skillManager.deactivate(skillName: "training-orchestrator")
         }
     }
 
@@ -1365,53 +1370,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 reloadLocalPipelineForModelChange(reason: "llm.voice_model_preset")
             }
 
-        case "llm.dual_model_enabled":
-            guard let enabled = value as? Bool else { return }
-            config.llm.dualModelEnabled = enabled
-            persistConfig(reason: "config.patch.llm.dual_model_enabled")
-            // Reactively stop or start the concierge worker so the change takes
-            // effect immediately — no app restart required.
-            Task { [weak self] in
-                guard let self else { return }
-                if enabled {
-                    do {
-                        try await self.modelManager.loadConciergeIfNeeded(
-                            llm: self.conciergeLLMEngine,
-                            config: self.config
-                        )
-                    } catch {
-                        NSLog("FaeCore: concierge enable failed: %@", error.localizedDescription)
-                    }
-                } else {
-                    await self.conciergeLLMEngine.shutdown()
-                    UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
-                    UserDefaults.standard.set("dual_model_disabled", forKey: "fae.runtime.fallback_reason")
-                    await self.modelManager.publishLocalStackStatus(currentRoute: nil)
-                }
-            }
-
-        case "llm.concierge_model_preset":
-            guard let value = sanitizedString(value), !value.isEmpty else { return }
-            let presetChanged = value != config.llm.conciergeModelPreset
-            config.llm.conciergeModelPreset = value
-            persistConfig(reason: "config.patch.llm.concierge_model_preset")
-            // When the preset changes while dual-model is active, reload the
-            // concierge worker with the new model — no restart required.
-            if presetChanged && config.llm.dualModelEnabled {
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.conciergeLLMEngine.shutdown()
-                    do {
-                        try await self.modelManager.loadConciergeIfNeeded(
-                            llm: self.conciergeLLMEngine,
-                            config: self.config
-                        )
-                    } catch {
-                        NSLog("FaeCore: concierge reload failed: %@", error.localizedDescription)
-                    }
-                }
-            }
-
         case "llm.remote_provider_preset":
             guard let value = sanitizedString(value), !value.isEmpty else { return }
             config.llm.remoteProviderPreset = value
@@ -1768,6 +1726,54 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.awareness.pauseOnThermalPressure = enabled
             persistConfig(reason: "config.patch.awareness.pause_on_thermal_pressure")
             refreshAwarenessRuntime(restartSchedulerTasks: false)
+
+        // MARK: Training
+        case "training.enabled":
+            guard let enabled = value as? Bool else { return }
+            if enabled && config.training.consentGrantedAt == nil {
+                NSLog("FaeCore: training.enabled ignored — no consent")
+                return
+            }
+            config.training.enabled = enabled
+            persistConfig(reason: "config.patch.training.enabled")
+            refreshTrainingRuntime()
+
+        case "training.consent_granted":
+            guard let granted = value as? Bool else { return }
+            if granted {
+                config.training.consentGrantedAt = ISO8601DateFormatter().string(from: Date())
+            } else {
+                config.training.consentGrantedAt = nil
+                config.training.enabled = false
+                config.training.autoTrainEnabled = false
+            }
+            persistConfig(reason: "config.patch.training.consent")
+            refreshTrainingRuntime()
+
+        case "training.auto_train_enabled":
+            guard let enabled = value as? Bool else { return }
+            config.training.autoTrainEnabled = enabled
+            persistConfig(reason: "config.patch.training.auto_train_enabled")
+            refreshTrainingRuntime()
+
+        case "training.target_model_preset":
+            guard let preset = value as? String,
+                  ["auto", "tiny", "small", "medium"].contains(preset)
+            else { return }
+            config.training.targetModelPreset = preset
+            persistConfig(reason: "config.patch.training.target_model_preset")
+
+        case "training.training_preset":
+            guard let preset = value as? String,
+                  ["smoke", "light", "standard", "deep"].contains(preset)
+            else { return }
+            config.training.trainingPreset = preset
+            persistConfig(reason: "config.patch.training.training_preset")
+
+        case "training.max_iterations":
+            guard let iters = value as? Int, (2...1000).contains(iters) else { return }
+            config.training.maxIterationsPerRun = iters
+            persistConfig(reason: "config.patch.training.max_iterations")
 
         default:
             NSLog("FaeCore: ignoring unknown config key '%@'", key)
@@ -2350,11 +2356,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 "payload": [
                     "llm": [
                         "voice_model_preset": config.llm.voiceModelPreset,
-                        "dual_model_enabled": config.llm.dualModelEnabled,
-                        "concierge_model_preset": config.llm.conciergeModelPreset,
-                        "dual_model_min_system_ram_gb": config.llm.dualModelMinSystemRAMGB,
-                        "keep_concierge_hot": config.llm.keepConciergeHot,
-                        "allow_concierge_during_voice_turns": config.llm.allowConciergeDuringVoiceTurns,
                         "thinking_enabled": config.llm.thinkingEnabled,
                         "thinking_level": config.llm.resolvedThinkingLevel.rawValue,
                         "kv_quant_bits": config.llm.kvQuantBits as Any,

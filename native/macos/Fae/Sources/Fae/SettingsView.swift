@@ -62,6 +62,11 @@ struct SettingsView: View {
                         Label("Awareness", systemImage: "eye")
                     }
 
+                SettingsTrainingTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Learning", systemImage: "graduationcap")
+                    }
+
                 SettingsMemoryTab(commandSender: commandSender)
                     .tabItem {
                         Label("Memory", systemImage: "brain")
@@ -110,6 +115,11 @@ struct SettingsView: View {
                 SettingsAwarenessTab(commandSender: commandSender)
                     .tabItem {
                         Label("Awareness", systemImage: "eye")
+                    }
+
+                SettingsTrainingTab(commandSender: commandSender)
+                    .tabItem {
+                        Label("Learning", systemImage: "graduationcap")
                     }
 
                 SettingsSchedulesTab(commandSender: commandSender)

@@ -18,9 +18,9 @@ enum PersonalityManager {
     //   - Memory integration style ("don't announce it")
     //   - TTS prose style instructions
     //
-    // Those behaviors are baked into saorsa1-tiny, saorsa1-worker, and
-    // saorsa1-concierge. Prompting them again here would fight the weights
-    // for no gain and waste context budget.
+    // Those behaviors are baked into the fine-tuned model weights.
+    // Prompting them again here would fight the weights for no gain
+    // and waste context budget.
     //
     // What stays: hard format rules TTS requires on every turn, operational
     // companion presence rules, honesty, and safety.

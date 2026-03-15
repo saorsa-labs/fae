@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files",
+    "user_conversations"
+  ],
+  "riskTier": "high",
+  "timeoutSeconds": 300,
+  "allowSubprocess": true,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {},
+    "signature": null
+  }
+}

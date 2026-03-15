@@ -36,12 +36,6 @@ actor ModelManager {
     /// The loaded operator LLM model ID (set after successful load).
     private(set) var loadedModelId: String?
 
-    /// The loaded concierge LLM model ID when dual-model mode is active.
-    private(set) var loadedConciergeModelId: String?
-
-    /// Whether the concierge model is currently active.
-    private(set) var dualModelActive: Bool = false
-
     /// The recommended context size (tokens) for the loaded operator model.
     private(set) var recommendedContextSize: Int = 16_384
 
@@ -128,13 +122,6 @@ actor ModelManager {
             ? min(recommendedContext, config.llm.contextSizeTokens)
             : recommendedContext
         self.recommendedContextSize = effectiveContext
-        loadedConciergeModelId = nil
-        dualModelActive = false
-        UserDefaults.standard.removeObject(forKey: "fae.loaded_concierge_model_id")
-        UserDefaults.standard.set(false, forKey: "fae.dual_model_active")
-        UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
-        UserDefaults.standard.removeObject(forKey: "fae.runtime.current_route")
-        UserDefaults.standard.set("pending_load", forKey: "fae.runtime.fallback_reason")
         var failedEngines: [String] = []
 
         // STT — degraded mode if it fails (text input only).
@@ -200,12 +187,8 @@ actor ModelManager {
             // Persist model ID for Settings UI
             UserDefaults.standard.set(modelId, forKey: "fae.loaded_model_id")
             UserDefaults.standard.set(true, forKey: "fae.runtime.operator_loaded")
-            UserDefaults.standard.set("single_model_pending_concierge", forKey: "fae.runtime.fallback_reason")
-            publishLocalStackStatus(currentRoute: nil)
         } catch {
             UserDefaults.standard.set(false, forKey: "fae.runtime.operator_loaded")
-            UserDefaults.standard.set("operator_load_failed", forKey: "fae.runtime.fallback_reason")
-            publishLocalStackStatus(currentRoute: nil)
             NSLog("ModelManager: LLM load failed (critical): %@", error.localizedDescription)
             throw MLEngineError.loadFailed("LLM", error)
         }
@@ -393,116 +376,6 @@ actor ModelManager {
         } else {
             NSLog("ModelManager: loaded in degraded mode — failed engines: %@", failedEngines.joined(separator: ", "))
         }
-    }
-
-    func loadConciergeIfNeeded(
-        llm: any LLMEngine,
-        config: FaeConfig,
-        requireSuccess: Bool = false
-    ) async throws {
-        guard config.llm.dualModelEnabled else {
-            UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
-            UserDefaults.standard.set("dual_model_disabled", forKey: "fae.runtime.fallback_reason")
-            publishLocalStackStatus(currentRoute: nil)
-            NSLog("ModelManager: dual-model disabled — concierge load skipped")
-            if requireSuccess {
-                throw MLEngineError.loadFailed(
-                    "Concierge",
-                    startupBlockingConciergeError("Dual-model mode is disabled.")
-                )
-            }
-            return
-        }
-
-        guard FaeConfig.isDualModelEligible(
-            minimumSystemRAMGB: config.llm.dualModelMinSystemRAMGB
-        ) else {
-            UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
-            UserDefaults.standard.set("insufficient_ram_for_concierge", forKey: "fae.runtime.fallback_reason")
-            publishLocalStackStatus(currentRoute: nil)
-            NSLog("ModelManager: dual-model ineligible on current RAM tier — concierge load skipped")
-            if requireSuccess {
-                throw MLEngineError.loadFailed(
-                    "Concierge",
-                    startupBlockingConciergeError("Insufficient RAM for concierge.")
-                )
-            }
-            return
-        }
-
-        guard let selection = FaeConfig.recommendedConciergeModel(preset: config.llm.conciergeModelPreset) else {
-            UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
-            UserDefaults.standard.set("no_concierge_model_selected", forKey: "fae.runtime.fallback_reason")
-            publishLocalStackStatus(currentRoute: nil)
-            NSLog("ModelManager: no concierge model selected")
-            if requireSuccess {
-                throw MLEngineError.loadFailed(
-                    "Concierge",
-                    startupBlockingConciergeError("No concierge model is selected.")
-                )
-            }
-            return
-        }
-
-        do {
-            eventBus.send(.runtimeProgress(stage: "concierge", progress: 0.0))
-            try await llm.load(modelID: selection.modelId)
-            loadedConciergeModelId = selection.modelId
-            dualModelActive = true
-            UserDefaults.standard.set(selection.modelId, forKey: "fae.loaded_concierge_model_id")
-            UserDefaults.standard.set(true, forKey: "fae.dual_model_active")
-            UserDefaults.standard.set(true, forKey: "fae.runtime.concierge_loaded")
-            UserDefaults.standard.set("none", forKey: "fae.runtime.fallback_reason")
-            eventBus.send(.modelLoaded(engine: "llm_concierge", modelId: selection.modelId))
-            eventBus.send(.runtimeProgress(stage: "concierge", progress: 1.0))
-            publishLocalStackStatus(currentRoute: nil)
-            NSLog("ModelManager: concierge model loaded %@", selection.modelId)
-        } catch {
-            dualModelActive = false
-            UserDefaults.standard.set(false, forKey: "fae.dual_model_active")
-            UserDefaults.standard.set(false, forKey: "fae.runtime.concierge_loaded")
-            UserDefaults.standard.set("concierge_load_failed", forKey: "fae.runtime.fallback_reason")
-            publishLocalStackStatus(currentRoute: nil)
-            NSLog("ModelManager: concierge load failed (continuing single-model): %@", error.localizedDescription)
-            if requireSuccess {
-                throw MLEngineError.loadFailed("Concierge", error)
-            }
-        }
-    }
-
-    func publishLocalStackStatus(currentRoute: String?) {
-        let payload: [String: Any] = [
-            "operator_loaded": UserDefaults.standard.bool(forKey: "fae.runtime.operator_loaded"),
-            "concierge_loaded": UserDefaults.standard.bool(forKey: "fae.runtime.concierge_loaded"),
-            "dual_model_active": UserDefaults.standard.bool(forKey: "fae.dual_model_active"),
-            "current_route": currentRoute ?? (UserDefaults.standard.string(forKey: "fae.runtime.current_route") ?? "operator"),
-            "fallback_reason": UserDefaults.standard.string(forKey: "fae.runtime.fallback_reason") ?? "unknown",
-            "operator_runtime": UserDefaults.standard.string(forKey: "fae.runtime.operator_runtime") ?? "in_process",
-            "concierge_runtime": UserDefaults.standard.string(forKey: "fae.runtime.concierge_runtime") ?? "in_process",
-            "operator_worker_restarts": UserDefaults.standard.integer(forKey: "fae.runtime.operator_worker_restarts"),
-            "concierge_worker_restarts": UserDefaults.standard.integer(forKey: "fae.runtime.concierge_worker_restarts"),
-            "operator_worker_last_error": UserDefaults.standard.string(forKey: "fae.runtime.operator_worker_last_error") as Any,
-            "concierge_worker_last_error": UserDefaults.standard.string(forKey: "fae.runtime.concierge_worker_last_error") as Any,
-        ]
-
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(
-                name: .faePipelineState,
-                object: nil,
-                userInfo: [
-                    "event": "pipeline.local_stack_status",
-                    "payload": payload,
-                ]
-            )
-        }
-    }
-
-    private func startupBlockingConciergeError(_ message: String) -> NSError {
-        NSError(
-            domain: "Fae.ModelManager",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
     }
 
     private func persistVoiceRuntimeStatus(source: String, lockApplied: Bool) {

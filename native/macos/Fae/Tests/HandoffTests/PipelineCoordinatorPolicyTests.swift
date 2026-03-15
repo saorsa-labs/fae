@@ -9,7 +9,7 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
 
         XCTAssertFalse(PipelineCoordinator.shouldShowToolModeUpgradePopup(reasonCode: "toolMode=off"))
         XCTAssertFalse(PipelineCoordinator.shouldShowToolModeUpgradePopup(reasonCode: "quick_voice_fast_path"))
-        XCTAssertFalse(PipelineCoordinator.shouldShowToolModeUpgradePopup(reasonCode: "concierge_route"))
+        XCTAssertFalse(PipelineCoordinator.shouldShowToolModeUpgradePopup(reasonCode: "proactive_turn"))
         XCTAssertFalse(PipelineCoordinator.shouldShowToolModeUpgradePopup(reasonCode: "unknown"))
     }
 

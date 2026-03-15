@@ -77,50 +77,99 @@ Fae recognises your voice and can distinguish you from others in the room using 
 
 Configure via `[speaker]` in config.toml. See [Voice Identity Guide](docs/guides/voice-identity.md).
 
-### Self-Modification
+### Self-Improvement & Adaptive Growth
 
-Fae can change her own personality and learn new skills:
+Fae is not a static assistant — she is a **companion agent** that learns, adapts, and grows with her user over time. The design principle is simple: **we build the harness, not the destination.** We don't know what Fae will become for any given user. A developer's Fae will look nothing like an artist's Fae or a parent's Fae. Our job is to ensure the mechanisms for growth are sound, the safety rails are firm, and the architecture doesn't impose a ceiling.
 
-- **Personality tuning** — say "be more cheerful", "less chatty", "speak formally" and Fae persists the preference via `self_config` tool.
-- **Directive** — critical overriding instructions stored at `~/Library/Application Support/fae/directive.md`, loaded on every prompt.
-- **Skills (v2)** — directory-based skills following the [Agent Skills](https://agentskills.io/specification) open standard. Built-in skills in the app bundle, personal skills at `~/Library/Application Support/fae/skills/`. Instruction skills inject context; executable skills run Python via `uv run --script`.
-- **Skill-first settings** — when possible, Fae prefers skill contracts over hardcoded app code paths. This lets her configure channels and behavior conversationally, ask for missing inputs in plain English, and adapt without users editing raw config.
-- **User-driven evolution** — users can ask Fae to change and extend behavior directly (create/update skills, reconfigure channels, adjust preferences) as long as the request is within policy and tool permissions.
-- **Skill management** — create, activate, run, and delete skills via dedicated tools (`activate_skill`, `run_skill`, `manage_skill`).
+#### Five Concurrent Improvement Loops
+
+Fae improves across five loops, each operating at a different timescale:
+
+| Loop | Timescale | Mechanism | Status |
+|------|-----------|-----------|--------|
+| **Turn-level** | Seconds | Memory recall → better context → better response → memory capture | Implemented |
+| **Session-level** | Minutes | User feedback → directive/skill/setting update → immediate behavior change | Implemented |
+| **Daily** | Hours | Overnight research on interests, morning briefings, skill proposals, capability discovery | Implemented |
+| **Weekly** | Days | Export conversation history → LoRA fine-tuning → evaluate → deploy improved model | Training scripts implemented; autonomous orchestration designed |
+| **Community** | Ongoing | Forge builds tools → Toolbox registers → Mesh shares with other Fae instances | Skills implemented |
+
+The composition is the key: each loop feeds the others. Memory improves tool use → tool use generates better training data → better models improve memory recall → the cycle continues. Meanwhile, Fae builds tools to solve problems she couldn't solve before, researches topics her user cares about, and shares what she learns with other Fae instances.
+
+#### Self-Modification
+
+Fae can change her own behavior across three layers:
+
+- **Live settings** (21 adjustable keys) — say "speak faster", "be more creative", "let me interrupt you" and Fae calls `self_config` to change parameters immediately. No restart required.
+- **Directives** — persistent standing orders at `~/Library/Application Support/fae/directive.md`, loaded every turn. "Always check my calendar before suggesting times", "Greet me in French." Safety-gated: 4000-char limit, jailbreak pattern detection.
+- **Skill self-modification** — Fae can create, update, and patch her own skills via `manage_skill`. If a user says "stop checking my mood on camera," Fae modifies the `proactive-awareness` skill's instructions. The change persists across restarts.
+- **Skill creation** — Fae can build entirely new skills (instruction or executable Python) to extend her own capabilities, either on request or proactively via the Forge.
+
+#### Memory-Driven Learning
+
+After every turn, Fae automatically extracts and stores: your name, preferences, interests, commitments, relationships, events, and the full conversation episode — 9 structured extraction patterns running without being asked. Before every turn, she recalls relevant memories using hybrid search (60% neural similarity + 40% lexical). An entity graph tracks people, organisations, and locations with typed relationships (works_at, lives_in, knows, reports_to).
+
+As SOUL.md says: *"Fae remembers without being asked to. That's the point."*
+
+#### Model Self-Training (The Personalisation Bridge)
+
+The most ambitious improvement loop: Fae can train improved versions of herself using her own conversation history.
+
+**What exists today:**
+- `prepare_training_data.py` — exports conversations to SFT and DPO format with quality scoring
+- `train_mlx_lora_chunked.sh` — LoRA fine-tuning on Qwen3.5 via MLX
+- `train_mlx_tune_preference.sh` — ORPO preference training from user corrections
+- `fuse_and_benchmark_candidate.sh` — evaluate and merge candidate models
+- Personalised benchmark generation from the user's own memory records
+
+**The autonomous pipeline (designed, not yet orchestrated):**
+1. Weekly: export high-quality conversation turns + implicit correction pairs (DPO)
+2. Overnight: LoRA training during quiet hours, resource-gated (power + thermal)
+3. Morning: benchmark new checkpoint against current model on both standard and personalised tests
+4. Proposal: "I trained an improved model overnight. It scores 82% vs 76% on our benchmarks — especially better at the Rust questions you've been asking. Want me to switch?"
+5. User decides. Never auto-deployed.
+
+Over months, the weights absorb the user's communication style, domain expertise, emotional calibration, and working patterns. The system prompt does less work because the model *thinks* in the user's style. This is the three-layer design (weights → soul → prompt) fully realised.
+
+See: [Memory→Training Bridge](docs/specs/memory-to-training-bridge.md), [Continuous Self-Improvement Architecture](docs/specs/continuous-self-improvement-architecture.md).
+
+#### Proactive Intelligence
+
+Fae doesn't wait to be spoken to:
+
+- **Camera presence** — detects you arriving, greets you warmly, notices mood (consent-gated)
+- **Screen monitoring** — understands your current work context silently (consent-gated)
+- **Overnight research** — searches the web about your interests during quiet hours
+- **Enhanced morning briefing** — calendar + mail + research findings + birthdays, triggered when you're first detected after 07:00
+- **Skill proposals** — detects repeated patterns and suggests new skills ("I noticed you keep asking about weather — want me to build a skill for that?")
+- **Capability discovery** — surfaces one undiscovered capability every few days, grounded in your actual behavior, never more than one per session
+- **Stale relationships** — gently reminds you about people you haven't mentioned in a while
+- **Noise control** — daily delivery budgets and quiet hours prevent Fae from ever becoming annoying
+
+All proactive features are gated by explicit consent, resource awareness (battery, thermal, quiet hours), and strict per-task tool allowlists. Fae earns presence over time — she doesn't demand it.
+
+#### Skill-First Extensibility
+
+**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
+
+- Skills follow the [Agent Skills](https://agentskills.io/specification) open standard
+- Three tiers: built-in (bundled), personal (user-created), community (imported)
+- Progressive disclosure: names + descriptions in base prompt, full body loaded only on activation
+- Tools: `activate_skill`, `run_skill`, `manage_skill`
+- **Forge** — tool creation workshop: scaffold Zig/Python/hybrid projects, compile, test, release
+- **Toolbox** — local registry with SHA-256 integrity verification
+- **Mesh** — peer-to-peer tool sharing via Bonjour/mDNS with TOFU trust model
 
 See [Self-Modification Guide](docs/guides/self-modification.md).
 
-For a deep technical analysis of how Fae learns, adapts, and grows with her user — including memory capture, proactive awareness, skill creation, and the growth loop — see **[Self-Improvement & Proactive Architecture](docs/guides/self-improvement-and-proactive-architecture.md)**.
+For the full technical analysis of all five improvement loops, memory capture, proactive awareness, skill creation, training pipeline, and the growth architecture — see **[Self-Improvement & Proactive Architecture](docs/guides/self-improvement-and-proactive-architecture.md)**.
+
+For how Fae compares to other AI assistant projects — including what makes the local-first approach unique and where the gaps are — see **[Landscape Analysis](docs/guides/self-improvement-and-proactive-architecture.md#11-landscape-analysis)** in that same document.
 
 ### Agent Orchestration (ACP)
 
 Fae can delegate complex coding tasks to external AI agents — Claude Code, Codex, Gemini CLI, Copilot, and any [ACP-compatible agent](https://agentclientprotocol.com) — via the bundled `acpx` client. Fae understands your intent, routes the task to the right specialist, monitors progress, and synthesises the result. The local LLM handles personality and judgment; the external agent handles code.
 
 See the **[ACP Integration Design](docs/specs/acp-integration-design.md)** for the protocol architecture, the **[Continuous Self-Improvement Architecture](docs/specs/continuous-self-improvement-architecture.md)** for how all capabilities compose into a closed self-improvement loop, and the **[Memory→Training Bridge](docs/specs/memory-to-training-bridge.md)** for how Fae's conversations become personalised model weights.
-
-### Skill-First Extensibility (Project Preference)
-
-**Canonical preference:** Prefer skill contracts over hardcoded code paths; prefer asking Fae conversationally for setup/changes over manual config editing.
-
-That means:
-
-- new integrations should be expressed as skills with explicit manifests/contracts,
-- setup should be conversational (ask for missing input, then apply),
-- settings UX should be generated from contracts rather than bespoke per-channel forms,
-- users should be able to ask Fae to change behavior directly instead of editing raw files.
-
-This keeps Fae more self-configurable and lets users request changes to more of the system safely.
-
-### Proactive Intelligence
-
-Fae doesn't just respond — she learns forward from your conversations and acts on what she discovers:
-
-- **Conversation mining** — extracts dates, birthdays, upcoming events, people mentioned, interests, and commitments.
-- **Morning briefings** — say "good morning" and Fae delivers a warm summary of upcoming commitments, people to reconnect with, and research she's done.
-- **Relationship tracking** — remembers who you mention, how you know them, and when you last talked about them.
-- **Background research** — uses web search to find information on topics you care about.
-- **Skill proposals** — when Fae notices patterns, she proposes new skills. Always asks before installing.
-- **Noise control** — daily delivery budgets and quiet hours prevent Fae from ever becoming annoying.
 
 ### Vision + Computer Use
 

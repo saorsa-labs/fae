@@ -422,7 +422,7 @@ actor SkillManager {
             throw SkillError.serializationFailed
         }
 
-        let timeoutSeconds = min(max(manifest.timeoutSeconds, 5), 120)
+        let timeoutSeconds = min(max(manifest.timeoutSeconds, 5), 600)
         let secretEnvironment = try Self.resolveSecretBindings(secretBindings)
         
         // Ensure uv is available, installing with user approval if needed

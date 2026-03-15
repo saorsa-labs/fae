@@ -20,6 +20,7 @@ struct FaeConfig: Codable {
     var skills: SkillsConfig = SkillsConfig()
     var vision: VisionConfig = VisionConfig()
     var awareness: AwarenessConfig = AwarenessConfig()
+    var training = TrainingConfig()
     var privacy: PrivacyConfig = PrivacyConfig()
     var userName: String?
     var licenseAccepted: Bool = false
@@ -67,16 +68,6 @@ struct FaeConfig: Codable {
         var maxHistoryMessages: Int = 10
         /// Operator / control model preset for the main local pipeline.
         var voiceModelPreset: String = "auto"
-        /// Enable the premium local dual-model stack when RAM allows.
-        var dualModelEnabled: Bool = true
-        /// Richer synthesis / concierge model preset.
-        var conciergeModelPreset: String = "auto"
-        /// Minimum installed system RAM required before concierge loading is attempted.
-        var dualModelMinSystemRAMGB: Int = 32
-        /// Keep the concierge model loaded in memory once available.
-        var keepConciergeHot: Bool = true
-        /// Allow the concierge model to answer rich foreground turns directly.
-        var allowConciergeDuringVoiceTurns: Bool = true
         /// Preferred remote provider preset for user-managed external sessions.
         var remoteProviderPreset: String = "openrouter"
         /// Preferred remote base URL for user-managed external sessions.
@@ -118,28 +109,6 @@ struct FaeConfig: Codable {
         var prefillStepSize: Int? = nil
     }
 
-    enum LocalPipelineMode: String, Codable {
-        case singleModel = "single_model"
-        case dualModel = "dual_model"
-    }
-
-    struct LocalLLMSelection: Equatable {
-        let role: String
-        let modelId: String
-        let contextSize: Int
-    }
-
-    struct LocalModelStackPlan: Equatable {
-        let mode: LocalPipelineMode
-        let dualModelEligible: Bool
-        let dualModelActive: Bool
-        let operatorModel: LocalLLMSelection
-        let conciergeModel: LocalLLMSelection?
-        let sttModelId: String
-        let ttsModelId: String
-        let visionModelId: String?
-    }
-
     /// True when the effective LLM context window is at or below 16K tokens.
     ///
     /// In lightweight mode the system prompt strips sections the small models cannot
@@ -167,9 +136,6 @@ struct FaeConfig: Codable {
 
     func applyingTestServerMemoryProfile() -> FaeConfig {
         var copy = self
-        copy.llm.dualModelEnabled = false
-        copy.llm.keepConciergeHot = false
-        copy.llm.allowConciergeDuringVoiceTurns = false
         copy.llm.voiceModelPreset = "qwen3_5_2b"
         copy.llm.contextSizeTokens = min(copy.llm.contextSizeTokens > 0 ? copy.llm.contextSizeTokens : 8_192, 8_192)
         copy.llm.maxKVCacheSize = min(copy.llm.maxKVCacheSize ?? 8_192, 8_192)
@@ -351,6 +317,23 @@ struct FaeConfig: Codable {
         var consentGrantedAt: String? = nil
     }
 
+    // MARK: - Training
+
+    struct TrainingConfig: Codable {
+        var enabled: Bool = false
+        var consentGrantedAt: String? = nil
+        var autoTrainEnabled: Bool = false
+        var targetModelPreset: String = "auto"
+        var trainingPreset: String = "light"
+        var maxIterationsPerRun: Int = 50
+        var lastDataExportAt: String? = nil
+        var lastTrainingRunAt: String? = nil
+        var lastBenchmarkScore: Float? = nil
+        var minEpisodesSinceLastExport: Int = 100
+        var personalAdapterPath: String? = nil
+        var previousAdapterPath: String? = nil
+    }
+
     // MARK: - Privacy
 
     struct PrivacyConfig: Codable {
@@ -358,6 +341,29 @@ struct FaeConfig: Codable {
         /// local_preferred: local-first with optional connected features.
         /// connected: enable connected features when allowed by tool mode.
         var mode: String = "local_preferred"
+    }
+
+    static func recommendedTrainingTarget() -> String {
+        let totalRAM = ProcessInfo.processInfo.physicalMemory
+        let ramGB = totalRAM / (1024 * 1024 * 1024)
+        if ramGB >= 48 { return "medium" }
+        if ramGB >= 24 { return "small" }
+        return "tiny"
+    }
+
+    static func trainingPresetParameters(_ preset: String) -> [String: Any] {
+        switch preset.lowercased() {
+        case "smoke":
+            return ["iters": 10, "batch_size": 1, "num_layers": 4, "learning_rate": 1e-4, "max_seq_length": 512]
+        case "light":
+            return ["iters": 50, "batch_size": 2, "num_layers": 8, "learning_rate": 5e-5, "max_seq_length": 1024]
+        case "standard":
+            return ["iters": 200, "batch_size": 4, "num_layers": 16, "learning_rate": 2e-5, "max_seq_length": 2048]
+        case "deep":
+            return ["iters": 500, "batch_size": 4, "num_layers": 32, "learning_rate": 1e-5, "max_seq_length": 2048]
+        default:
+            return trainingPresetParameters("light")
+        }
     }
 
     // MARK: - Model Selection
@@ -382,20 +388,6 @@ struct FaeConfig: Codable {
             return "qwen3_5_2b"
         case "saorsa1_tiny", "saorsa1-tiny", "qwen3_5_0_8b", "qwen3_0_6b":
             return "qwen3_5_0_8b"
-        case "auto":
-            return "auto"
-        default:
-            return preset.lowercased()
-        }
-    }
-
-    static func canonicalConciergeModelPreset(_ preset: String) -> String {
-        switch preset.lowercased() {
-        case "saorsa1_concierge", "saorsa1-concierge",
-             "liquid_lfm2_24b_a2b", "lfm2_24b_a2b", "liquid":
-            return "saorsa1-concierge"
-        case "off", "none", "disabled":
-            return "off"
         case "auto":
             return "auto"
         default:
@@ -434,73 +426,6 @@ struct FaeConfig: Codable {
                 return ("mlx-community/Qwen3.5-2B-4bit", 32_768)
             }
         }
-    }
-
-    static func recommendedConciergeModel(
-        totalMemoryBytes: UInt64? = nil,
-        preset: String = "auto"
-    ) -> (modelId: String, contextSize: Int)? {
-        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
-
-        switch canonicalConciergeModelPreset(preset) {
-        case "off":
-            return nil
-        case "saorsa1-concierge":
-            // Rich local synthesis model. Legacy Liquid preset aliases map here.
-            return ("saorsa-labs/saorsa1-concierge-pre-release", 131_072)
-        default: // auto
-            guard totalGB >= 32 else { return nil }
-            return ("saorsa-labs/saorsa1-concierge-pre-release", 131_072)
-        }
-    }
-
-    static func isDualModelEligible(
-        totalMemoryBytes: UInt64? = nil,
-        minimumSystemRAMGB: Int = 32
-    ) -> Bool {
-        let totalGB = Int((totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024))
-        return totalGB >= minimumSystemRAMGB
-    }
-
-    static func recommendedLocalModelStack(
-        config: FaeConfig = FaeConfig(),
-        totalMemoryBytes: UInt64? = nil
-    ) -> LocalModelStackPlan {
-        let operatorModel = recommendedModel(
-            totalMemoryBytes: totalMemoryBytes,
-            preset: config.llm.voiceModelPreset
-        )
-        let dualEligible = isDualModelEligible(
-            totalMemoryBytes: totalMemoryBytes,
-            minimumSystemRAMGB: config.llm.dualModelMinSystemRAMGB
-        )
-        let conciergeModel = dualEligible && config.llm.dualModelEnabled
-            ? recommendedConciergeModel(totalMemoryBytes: totalMemoryBytes, preset: config.llm.conciergeModelPreset)
-            : nil
-
-        return LocalModelStackPlan(
-            mode: conciergeModel == nil ? .singleModel : .dualModel,
-            dualModelEligible: dualEligible,
-            dualModelActive: conciergeModel != nil,
-            operatorModel: LocalLLMSelection(role: "operator", modelId: operatorModel.modelId, contextSize: operatorModel.contextSize),
-            conciergeModel: conciergeModel.map {
-                LocalLLMSelection(role: "concierge", modelId: $0.modelId, contextSize: $0.contextSize)
-            },
-            sttModelId: recommendedSTTModel(totalMemoryBytes: totalMemoryBytes),
-            ttsModelId: recommendedTTSModel(totalMemoryBytes: totalMemoryBytes),
-            visionModelId: recommendedVLMModel(totalMemoryBytes: totalMemoryBytes, preset: config.vision.modelPreset)?.modelId
-        )
-    }
-
-    static func shouldHoldStartupForConciergeHotLoad(
-        config: FaeConfig = FaeConfig(),
-        totalMemoryBytes: UInt64? = nil
-    ) -> Bool {
-        guard config.llm.keepConciergeHot else { return false }
-        return recommendedLocalModelStack(
-            config: config,
-            totalMemoryBytes: totalMemoryBytes
-        ).dualModelActive
     }
 
     /// Compute a sensible `maxHistoryMessages` from context size and generation budget.
@@ -795,21 +720,6 @@ struct FaeConfig: Codable {
                 case "voiceModelPreset":
                     guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.voiceModelPreset = v
-                case "dualModelEnabled", "dual_model_enabled":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.llm.dualModelEnabled = v
-                case "conciergeModelPreset", "concierge_model_preset":
-                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.llm.conciergeModelPreset = v
-                case "dualModelMinSystemRAMGB", "dual_model_min_system_ram_gb":
-                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.llm.dualModelMinSystemRAMGB = v
-                case "keepConciergeHot", "keep_concierge_hot":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.llm.keepConciergeHot = v
-                case "allowConciergeDuringVoiceTurns", "allow_concierge_during_voice_turns":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.llm.allowConciergeDuringVoiceTurns = v
                 case "remoteProviderPreset":
                     guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.remoteProviderPreset = v
@@ -1102,11 +1012,6 @@ struct FaeConfig: Codable {
         lines.append("repeatPenalty = \(formatFloat(llm.repeatPenalty))")
         lines.append("maxHistoryMessages = \(llm.maxHistoryMessages)")
         lines.append("voiceModelPreset = \(encodeString(llm.voiceModelPreset))")
-        lines.append("dualModelEnabled = \(llm.dualModelEnabled ? "true" : "false")")
-        lines.append("conciergeModelPreset = \(encodeString(llm.conciergeModelPreset))")
-        lines.append("dualModelMinSystemRAMGB = \(llm.dualModelMinSystemRAMGB)")
-        lines.append("keepConciergeHot = \(llm.keepConciergeHot ? "true" : "false")")
-        lines.append("allowConciergeDuringVoiceTurns = \(llm.allowConciergeDuringVoiceTurns ? "true" : "false")")
         lines.append("remoteProviderPreset = \(encodeString(llm.remoteProviderPreset))")
         lines.append("remoteBaseURL = \(encodeString(llm.remoteBaseURL))")
         lines.append("remoteModel = \(encodeString(llm.remoteModel))")

@@ -59,10 +59,10 @@ struct SettingsAboutTab: View {
                 .buttonStyle(.bordered)
                 .foregroundStyle(.red)
                 .disabled(isResetting)
-                Text("Choose between a normal app-data reset or a fuller erase that also removes Fae's external vault backup. Shared model caches are left untouched.")
+                Text("Choose between a normal reset or a full erase that also removes Fae's backup vault. Downloaded models are kept.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Note: on modern SSDs, deletion removes Fae-owned files from their normal locations but cannot guarantee secure overwrite.")
+                Text("Note: deleted files are removed from their normal locations but cannot be securely erased from the drive.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if isResetting {
@@ -84,7 +84,7 @@ struct SettingsAboutTab: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("Reset App Data removes Fae-owned conversations, memories, settings, local skills, forge state, and stored credentials. The full erase option also deletes ~/.fae-vault backups. Shared model downloads are not deleted.")
+                Text("Reset App Data removes conversations, memories, settings, skills, and stored credentials. The full erase also deletes Fae's backup vault. Downloaded models are not deleted.")
             }
 
             Section("Cross-Device Handoff") {

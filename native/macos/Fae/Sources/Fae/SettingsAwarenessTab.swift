@@ -83,7 +83,7 @@ struct SettingsAwarenessTab: View {
 
                 // MARK: - Screen Monitoring
                 Section("Screen Monitoring") {
-                    Toggle("Activity context awareness", isOn: Binding(
+                    Toggle("Understand what you're working on", isOn: Binding(
                         get: { screenEnabled },
                         set: { newValue in
                             screenEnabled = newValue
@@ -152,7 +152,7 @@ struct SettingsAwarenessTab: View {
                         }
                     ))
 
-                    Toggle("Pause on thermal pressure", isOn: Binding(
+                    Toggle("Pause when Mac is hot", isOn: Binding(
                         get: { pauseOnThermal },
                         set: { newValue in
                             pauseOnThermal = newValue
@@ -160,7 +160,7 @@ struct SettingsAwarenessTab: View {
                         }
                     ))
 
-                    Text("Observations pause automatically to conserve battery and prevent overheating.")
+                    Text("Fae pauses background observations to save battery and prevent your Mac from overheating.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

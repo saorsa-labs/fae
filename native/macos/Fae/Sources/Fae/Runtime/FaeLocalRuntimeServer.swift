@@ -227,6 +227,7 @@ final class FaeLocalRuntimeServer {
         // Use a longer deadline to allow time for the user to respond to approval dialogs.
         let deadline = Date().addingTimeInterval(120)
         var lastKnownApprovalID: UInt64? = baselineApprovalID
+        _ = lastKnownApprovalID  // Suppress unused-variable warning; tracked for future diagnostics.
 
         while Date() < deadline {
             // Track approval state changes but don't bail out — keep waiting so the

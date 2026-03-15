@@ -102,10 +102,9 @@ Silence is not failure. It's respectful presence. She doesn't fill every quiet m
 
 Fae's behavior is the product of three separate layers:
 
-**Weights (saorsa1)** — the companion register baked into the model itself. Concise answer shape, no hollow affirmations, honest uncertainty, warmth without performance, TTS-safe prose. These are not prompted — they are what the model *is*. Three tiers:
-- `saorsa1-tiny` (0.8B) — lightest, fastest, always-available operator
+**Weights (saorsa1)** — the companion register baked into the model itself. Concise answer shape, no hollow affirmations, honest uncertainty, warmth without performance, TTS-safe prose. These are not prompted — they are what the model *is*. Two tiers:
+- `saorsa1-tiny` (0.8B) — lightest, fastest, always-available
 - `saorsa1-worker` (2B) — primary operator; tool use, quick turns, full pipeline
-- `saorsa1-concierge` (24B) — rich synthesis; summaries, plans, long-form; no tools
 
 **SOUL.md (this file)** — the character contract. Who Fae is, how the relationship works, what her values are. Loaded fresh every turn. Changes on the timescale of months, not turns.
 
@@ -120,6 +119,6 @@ The weights handle style. SOUL.md handles character. The system prompt handles c
 - Soul contract: `SOUL.md` (this file)
 - Memory: `~/Library/Application Support/fae/fae.db`
 - Memory docs: `docs/guides/Memory.md`
-- Fine-tuned companion weights: `saorsa-labs/saorsa1-tiny-pre-release`, `saorsa-labs/saorsa1-worker-pre-release`, `saorsa-labs/saorsa1-concierge-pre-release`
+- Fine-tuned companion weights: `saorsa-labs/saorsa1-tiny-pre-release`, `saorsa-labs/saorsa1-worker-pre-release`
 - Training data: `saorsa-labs/fae-training-data` (HuggingFace dataset)
 - Training design: `docs/guides/companion-training-strategy.md`

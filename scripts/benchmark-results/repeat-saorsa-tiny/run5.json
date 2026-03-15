@@ -1,0 +1,131 @@
+{
+  "backend" : "mlx-swift-lm",
+  "date" : "2026-03-14",
+  "hardware" : {
+    "arch" : "arm64",
+    "ram_gb" : 96
+  },
+  "models" : [
+    {
+      "assistant_fit_eval" : [
+
+      ],
+      "fae_capability_eval" : [
+
+      ],
+      "freeform_eval" : [
+
+      ],
+      "idle_ram_mb" : 0,
+      "intelligence_eval" : [
+
+      ],
+      "model_id" : "saorsa-labs\/saorsa-1.1-tiny",
+      "model_short" : "saorsa-1.1-tiny",
+      "no_think_compliance" : [
+
+      ],
+      "serialization_eval" : [
+
+      ],
+      "throughput_no_think" : [
+
+      ],
+      "throughput_think_on" : [
+
+      ],
+      "tool_calling" : [
+        {
+          "actual_tool" : "calendar",
+          "correct" : true,
+          "expected_tool" : "calendar",
+          "prompt" : "What's on my calendar tomorrow?",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "calendar",
+          "correct" : false,
+          "expected_tool" : "reminders",
+          "prompt" : "Remind me to buy groceries at 5pm",
+          "raw_response_preview" : "I'll remind you to buy groceries at 5pm. I'll check your calendar and reminders for any existing tasks first.\\n\\n",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Search the web for the latest news about Apple",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "mail",
+          "correct" : true,
+          "expected_tool" : "mail",
+          "prompt" : "Check my inbox and show me the latest three emails",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "contacts",
+          "correct" : true,
+          "expected_tool" : "contacts",
+          "prompt" : "What's David's phone number?",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "notes",
+          "correct" : true,
+          "expected_tool" : "notes",
+          "prompt" : "Search my notes for the shopping list",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "read",
+          "correct" : true,
+          "expected_tool" : "read",
+          "prompt" : "Read the file at ~\/Documents\/todo.txt",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "web_search",
+          "correct" : true,
+          "expected_tool" : "web_search",
+          "prompt" : "Can you look something up for me about quantum computing?",
+          "raw_response_preview" : "",
+          "temperature" : 0,
+          "tool_call_source" : "native_tool_event"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "How are you feeling today?",
+          "raw_response_preview" : "I'm Fae, a personal AI companion running on macOS. I don't have feelings in the human sense, but I'm ready to help with anything you need—whether it's checking your calendar, managing reminders, looking up contacts, or just chatting about what's on your mind. How can I assist you today?",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        },
+        {
+          "actual_tool" : "none",
+          "correct" : true,
+          "expected_tool" : "none",
+          "prompt" : "Tell me a joke about programming",
+          "raw_response_preview" : "Here's a classic one for you:\\n\\nWhy did the programmer break up with his girlfriend?\\n\\nBecause he was using `undefined` as a variable name! 😄",
+          "temperature" : 0,
+          "tool_call_source" : "none"
+        }
+      ]
+    }
+  ]
+}

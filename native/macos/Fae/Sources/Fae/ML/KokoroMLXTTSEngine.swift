@@ -167,8 +167,7 @@ actor KokoroMLXTTSEngine: TTSEngine {
             embedding = nil
         }
         guard let e = embedding else { return nil }
-        await InferencePriorityController.shared.begin(.kokoroTTS)
-        defer { Task { await InferencePriorityController.shared.end(.kokoroTTS) } }
+        // Single-model pipeline — no GPU contention gating needed
         let (samples, _) = try tts.generateAudio(voice: e, language: .enUS, text: text, speed: speed)
         guard !samples.isEmpty else { return nil }
         return try Self.makePCMBuffer(from: samples)
@@ -205,12 +204,7 @@ actor KokoroMLXTTSEngine: TTSEngine {
         voiceInstruct: String?,
         continuation: AsyncThrowingStream<AVAudioPCMBuffer, Error>.Continuation
     ) async throws {
-        await InferencePriorityController.shared.begin(.kokoroTTS)
-        defer {
-            Task {
-                await InferencePriorityController.shared.end(.kokoroTTS)
-            }
-        }
+        // Single-model pipeline — no GPU contention gating needed
 
         guard let tts = kokoroTTS else { throw KokoroMLXError.notReady }
 

@@ -80,7 +80,7 @@ struct SettingsPersonalityTab: View {
             } header: {
                 Text("Heartbeat")
             } footer: {
-                Text("Behavioral prompt contract for proactive disclosure and approval style. Scheduler cadence and hard safety gates still come from runtime code and config.")
+                Text("Rules for when Fae speaks up on her own and how she asks for permission before taking actions.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

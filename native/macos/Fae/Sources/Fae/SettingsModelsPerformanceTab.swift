@@ -32,8 +32,6 @@ struct SettingsModelsPerformanceTab: View {
 
     // MARK: - Model Settings
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
-    @AppStorage("dualModelEnabled") private var dualModelEnabled: Bool = true
-    @AppStorage("conciergeModelPreset") private var conciergeModelPreset: String = "auto"
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
     @AppStorage("thinkingLevel") private var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
@@ -62,10 +60,6 @@ struct SettingsModelsPerformanceTab: View {
     @State private var wakeTemplateCount: Int = 0
 
     private let voiceModelOptions = LocalModelCatalog.voiceOptions
-
-    private let conciergeModelOptions: [(label: String, value: String, ram: String)] = [
-        ("Auto (Legacy)", "auto", "32+ GB"),
-    ]
 
     private let visionModelOptions = LocalModelCatalog.visionOptions
 
@@ -151,16 +145,9 @@ struct SettingsModelsPerformanceTab: View {
     private var modelsSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             // Local LLM stack
-            SettingsCard(title: "Local LLM Stack", icon: "cpu", color: .blue) {
+            SettingsCard(title: "Local Models", icon: "cpu", color: .blue) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Enable dual-model local pipeline", isOn: $dualModelEnabled)
-                        .onChange(of: dualModelEnabled) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("llm.dual_model_enabled", value: dualModelEnabled)
-                            showRestartNotice = true
-                        }
-
-                    Picker("Operator model", selection: $voiceModelPreset) {
+                    Picker("Model", selection: $voiceModelPreset) {
                         ForEach(voiceModelOptions, id: \.value) { opt in
                             HStack {
                                 Text(opt.label)
@@ -179,34 +166,11 @@ struct SettingsModelsPerformanceTab: View {
                         showRestartNotice = true
                     }
 
-                    if dualModelEnabled {
-                        Picker("Concierge model", selection: $conciergeModelPreset) {
-                            ForEach(conciergeModelOptions, id: \.value) { opt in
-                                HStack {
-                                    Text(opt.label)
-                                    Spacer()
-                                    Text(opt.ram)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .tag(opt.value)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: conciergeModelPreset) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("llm.concierge_model_preset", value: conciergeModelPreset)
-                            showRestartNotice = true
-                        }
-                    }
-
                     if let cacheStatus = LocalModelCatalog.voiceCacheStatus(for: voiceModelPreset) {
                         cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
                     }
 
-                    Text(dualModelEnabled
-                         ? "Single-model Qwen is the recommended path. Dual-model remains available as a legacy option."
-                         : "Single-model mode uses the selected Qwen3.5 operator model.")
+                    Text("Fae uses a single model for all tasks. Recommended for most setups.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -263,7 +227,7 @@ struct SettingsModelsPerformanceTab: View {
                         }
                     }
 
-                    Text("Vision loads an additional VLM on demand. Requires 24+ GB RAM.")
+                    Text("Vision lets Fae see your screen and camera. Loads an extra model on demand. Requires 24+ GB RAM.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -295,7 +259,7 @@ struct SettingsModelsPerformanceTab: View {
                         .frame(height: 40)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Active Stack")
+                        Text("Active Models")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Text(loadedModel)
@@ -308,11 +272,11 @@ struct SettingsModelsPerformanceTab: View {
             }
 
             // KV Cache Optimization
-            SettingsCard(title: "KV Cache Optimization", icon: "bolt.fill", color: .orange) {
+            SettingsCard(title: "Memory Optimization", icon: "bolt.fill", color: .orange) {
                 VStack(alignment: .leading, spacing: 16) {
                     // Enable/Disable Toggle
                     HStack {
-                        Toggle("Enable KV Cache Quantization", isOn: $kvQuantEnabled)
+                        Toggle("Reduce memory usage", isOn: $kvQuantEnabled)
                             .onChange(of: kvQuantEnabled) {
                                 guard !hydratingFromConfig else { return }
                                 patchConfig("llm.kv_quant_bits", value: kvQuantEnabled ? kvQuantBits : nil)
@@ -332,14 +296,14 @@ struct SettingsModelsPerformanceTab: View {
                     }
 
                     if kvQuantEnabled {
-                        // Quantization Bits
+                        // Compression level
                         HStack {
-                            Text("Quantization")
+                            Text("Compression")
                                 .font(.subheadline)
                             Spacer()
                             Picker("", selection: $kvQuantBits) {
-                                Text("4-bit (4x savings)").tag(4)
-                                Text("8-bit (2x savings)").tag(8)
+                                Text("High (4x savings)").tag(4)
+                                Text("Light (2x savings)").tag(8)
                             }
                             .pickerStyle(.segmented)
                             .frame(width: 220)
@@ -350,35 +314,17 @@ struct SettingsModelsPerformanceTab: View {
                             }
                         }
 
-                        // Start Threshold
-                        HStack {
-                            Text("Start After")
-                                .font(.subheadline)
-                            Spacer()
-                            Picker("", selection: $kvQuantStartTokens) {
-                                Text("256 tokens").tag(256)
-                                Text("512 tokens").tag(512)
-                                Text("1024 tokens").tag(1024)
-                            }
-                            .pickerStyle(.menu)
-                            .frame(width: 140)
-                            .onChange(of: kvQuantStartTokens) {
-                                guard !hydratingFromConfig else { return }
-                                patchConfig("llm.kv_quant_start_tokens", value: kvQuantStartTokens)
-                            }
-                        }
-
-                        Text("Initial context stays at full precision for better quality.")
+                        Text("Fae keeps the beginning of each conversation at full quality, then compresses older parts to save memory.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
             }
 
-            // Sliding Window
-            SettingsCard(title: "Context Window", icon: "arrow.left.arrow.right", color: .cyan) {
+            // Conversation Length
+            SettingsCard(title: "Conversation Length", icon: "arrow.left.arrow.right", color: .cyan) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Enable Sliding Window", isOn: $slidingWindowEnabled)
+                    Toggle("Limit conversation memory", isOn: $slidingWindowEnabled)
                         .onChange(of: slidingWindowEnabled) {
                             guard !hydratingFromConfig else { return }
                             patchConfig("llm.max_kv_cache_size", value: slidingWindowEnabled ? maxKVCacheSize : nil)
@@ -386,15 +332,14 @@ struct SettingsModelsPerformanceTab: View {
 
                     if slidingWindowEnabled {
                         HStack {
-                            Text("Window Size")
+                            Text("Remember last")
                                 .font(.subheadline)
                             Spacer()
                             Picker("", selection: $maxKVCacheSize) {
-                                Text("8K tokens").tag(8192)
-                                Text("16K tokens").tag(16384)
-                                Text("32K tokens").tag(32768)
-                                Text("64K tokens").tag(65536)
-                                Text("128K tokens").tag(131072)
+                                Text("Short").tag(8192)
+                                Text("Medium").tag(32768)
+                                Text("Long").tag(65536)
+                                Text("Very Long").tag(131072)
                             }
                             .pickerStyle(.menu)
                             .frame(width: 140)
@@ -405,56 +350,60 @@ struct SettingsModelsPerformanceTab: View {
                         }
                     }
 
-                    Text("Sliding window bounds memory for long conversations by rotating out old context.")
+                    Text("When enabled, Fae gradually forgets the oldest parts of long conversations to stay within memory limits.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            // Advanced
-            SettingsCard(title: "Advanced", icon: "slider.horizontal.3", color: .gray) {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Repetition Context
-                    HStack {
-                        Text("Repetition Penalty Window")
-                            .font(.subheadline)
-                        Spacer()
-                        Picker("", selection: $repetitionContextSize) {
-                            Text("20 tokens").tag(20)
-                            Text("64 tokens").tag(64)
-                            Text("128 tokens").tag(128)
+            // Advanced (collapsed by default)
+            DisclosureGroup {
+                SettingsCard(title: "Fine-Tuning", icon: "slider.horizontal.3", color: .gray) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Avoid repeating")
+                                .font(.subheadline)
+                            Spacer()
+                            Picker("", selection: $repetitionContextSize) {
+                                Text("Small window").tag(20)
+                                Text("Medium window").tag(64)
+                                Text("Large window").tag(128)
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 160)
+                            .onChange(of: repetitionContextSize) {
+                                guard !hydratingFromConfig else { return }
+                                patchConfig("llm.repetition_context_size", value: repetitionContextSize)
+                            }
                         }
-                        .pickerStyle(.menu)
-                        .frame(width: 140)
-                        .onChange(of: repetitionContextSize) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("llm.repetition_context_size", value: repetitionContextSize)
-                        }
-                    }
 
-                    // Prefill Step Size
-                    HStack {
-                        Text("Prefill Chunk Size")
-                            .font(.subheadline)
-                        Spacer()
-                        Picker("", selection: $prefillStepSize) {
-                            Text("Auto").tag(0)
-                            Text("256").tag(256)
-                            Text("512").tag(512)
-                            Text("1024").tag(1024)
+                        HStack {
+                            Text("Processing speed")
+                                .font(.subheadline)
+                            Spacer()
+                            Picker("", selection: $prefillStepSize) {
+                                Text("Auto").tag(0)
+                                Text("256").tag(256)
+                                Text("512").tag(512)
+                                Text("1024").tag(1024)
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 140)
+                            .onChange(of: prefillStepSize) {
+                                guard !hydratingFromConfig else { return }
+                                patchConfig("llm.prefill_step_size", value: prefillStepSize == 0 ? nil : prefillStepSize)
+                            }
                         }
-                        .pickerStyle(.menu)
-                        .frame(width: 140)
-                        .onChange(of: prefillStepSize) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("llm.prefill_step_size", value: prefillStepSize == 0 ? nil : prefillStepSize)
-                        }
-                    }
 
-                    Text("Larger repetition windows catch more patterns. Auto prefill adapts to model size.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Text("Larger windows help Fae avoid repeating herself. Auto processing speed is best for most setups.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+            } label: {
+                Text("Advanced")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -494,14 +443,14 @@ struct SettingsModelsPerformanceTab: View {
             // Voice Identity
             SettingsCard(title: "Voice Identity", icon: "person.wave.2", color: .pink) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Lock to Canonical Fae Voice", isOn: $voiceIdentityLock)
+                    Toggle("Always use Fae's default voice", isOn: $voiceIdentityLock)
                         .onChange(of: voiceIdentityLock) {
                             guard !hydratingFromConfig else { return }
                             patchConfig("tts.voice_identity_lock", value: voiceIdentityLock)
                             showRestartNotice = true
                         }
 
-                    Text("When enabled, Fae always uses the bundled fae.wav voice reference.")
+                    Text("When enabled, Fae always speaks in her standard voice.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -510,14 +459,14 @@ struct SettingsModelsPerformanceTab: View {
             // Wake Word
             SettingsCard(title: "Wake Word", icon: "waveform.badge.mic", color: .orange) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Enable Acoustic Wake Detection", isOn: $acousticWakeEnabled)
+                    Toggle("Listen for \"Hey Fae\"", isOn: $acousticWakeEnabled)
                         .onChange(of: acousticWakeEnabled) {
                             guard !hydratingFromConfig else { return }
                             patchConfig("conversation.acoustic_wake_enabled", value: acousticWakeEnabled)
                         }
 
                     HStack {
-                        Text("Trained wake samples")
+                        Text("Voice samples recorded")
                             .font(.subheadline)
                         Spacer()
                         Text("\(wakeTemplateCount)")
@@ -528,7 +477,7 @@ struct SettingsModelsPerformanceTab: View {
                     if acousticWakeEnabled {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text("Match Threshold")
+                                Text("Sensitivity")
                                     .font(.subheadline)
                                 Spacer()
                                 Text(String(format: "%.2f", acousticWakeThreshold))
@@ -546,10 +495,10 @@ struct SettingsModelsPerformanceTab: View {
 
                     Text(
                         wakeTemplateCount == 0
-                            ? "Acoustic wake detection uses your own ‘Hey Fae’ samples. Ask Fae to tune your wake phrase if you want audio-level wakeups before STT."
+                            ? "Fae can learn to recognise your voice saying \"Hey Fae\". Ask her to set up your wake phrase to get started."
                             : wakeTemplateCount == 1
-                                ? "Fae has one wake sample and is still learning. Add at least one more clean sample so the detector can require agreement across multiple examples."
-                                : "Uses your enrolled wake-phrase audio as a pre-STT wake detector with multi-sample agreement for fewer false positives. Text wake matching still stays on as a fallback."
+                                ? "Fae has one voice sample. Record at least one more so she can recognise your wake phrase more reliably."
+                                : "Fae listens for your voice saying \"Hey Fae\" using your recorded samples. She also responds to the text \"Fae\" as a backup."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -559,13 +508,13 @@ struct SettingsModelsPerformanceTab: View {
             // Barge-In
             SettingsCard(title: "Interaction", icon: "hand.raised", color: .teal) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Allow Barge-In (Interrupt Fae)", isOn: $bargeInEnabled)
+                    Toggle("Allow interrupting Fae", isOn: $bargeInEnabled)
                         .onChange(of: bargeInEnabled) {
                             guard !hydratingFromConfig else { return }
                             patchConfig("barge_in.enabled", value: bargeInEnabled)
                         }
 
-                    Text("Speak while Fae is talking to interrupt her. Disable if echo causes issues.")
+                    Text("Speak while Fae is talking to stop her and take over. Turn off if Fae's voice through speakers causes problems.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -588,7 +537,7 @@ struct SettingsModelsPerformanceTab: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Restart Required")
                     .font(.subheadline.weight(.semibold))
-                Text("Fae reloads the local pipeline automatically for model changes. First-time downloads can take a while.")
+                Text("Fae will restart automatically to apply model changes. First-time downloads may take a few minutes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -606,15 +555,10 @@ struct SettingsModelsPerformanceTab: View {
         systemRAM = "\(totalGB) GB"
 
         let config = FaeConfig.load()
-        let plan = FaeConfig.recommendedLocalModelStack(config: config)
         let defaults = UserDefaults.standard
         loadedModel = LocalModelStatusFormatter.stackSummary(
-            plan: plan,
-            loadedOperatorModelId: defaults.string(forKey: "fae.loaded_model_id"),
-            loadedConciergeModelId: defaults.string(forKey: "fae.loaded_concierge_model_id"),
-            conciergeLoaded: defaults.bool(forKey: "fae.runtime.concierge_loaded"),
-            conciergeRuntime: defaults.string(forKey: "fae.runtime.concierge_runtime"),
-            conciergeWorkerLastError: defaults.string(forKey: "fae.runtime.concierge_worker_last_error")
+            loadedModelId: defaults.string(forKey: "fae.loaded_model_id"),
+            preset: config.llm.voiceModelPreset
         )
 
         updateEstimatedSavings()
@@ -664,12 +608,6 @@ struct SettingsModelsPerformanceTab: View {
             {
                 if let preset = llm["voice_model_preset"] as? String {
                     voiceModelPreset = normalizedVoiceModelPreset(preset)
-                }
-                if let dualEnabled = llm["dual_model_enabled"] as? Bool {
-                    dualModelEnabled = dualEnabled
-                }
-                if let conciergePreset = llm["concierge_model_preset"] as? String {
-                    conciergeModelPreset = normalizedConciergeModelPreset(conciergePreset)
                 }
                 if let levelRaw = llm["thinking_level"] as? String,
                    let level = FaeThinkingLevel(rawValue: levelRaw)
@@ -766,10 +704,6 @@ struct SettingsModelsPerformanceTab: View {
         return voiceModelOptions.contains(where: { $0.value == canonical }) ? canonical : "auto"
     }
 
-    private func normalizedConciergeModelPreset(_ preset: String) -> String {
-        let canonical = FaeConfig.canonicalConciergeModelPreset(preset)
-        return conciergeModelOptions.contains(where: { $0.value == canonical }) ? canonical : "auto"
-    }
 }
 
 // MARK: - Settings Card Component

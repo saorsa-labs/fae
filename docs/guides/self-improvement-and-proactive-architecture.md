@@ -391,7 +391,181 @@ These are areas where the architecture could be extended to deepen Fae's ability
 
 ---
 
-## 10. The Philosophy
+## 10. The Model Self-Training Pipeline
+
+The most ambitious growth vector: Fae can train improved versions of herself using her own conversation history, entirely on-device.
+
+### 10.1 What Exists Today
+
+| Component | File | Status |
+|-----------|------|--------|
+| Training data export (SFT + DPO) | `scripts/prepare_training_data.py` | Implemented |
+| LoRA training (smoke test) | `scripts/train_mlx_lora_smoke.sh` | Implemented |
+| LoRA training (production) | `scripts/train_mlx_lora_chunked.sh` | Implemented |
+| ORPO preference training | `scripts/train_mlx_tune_preference.sh` | Implemented |
+| Model fusion + benchmarking | `scripts/fuse_and_benchmark_candidate.sh` | Implemented |
+| Multimodal content handling | `extract_text_content()` in prep script | Implemented |
+
+### 10.2 The Memory→Training Bridge
+
+Fae's memory system already captures everything needed to personalise her weights:
+
+| Memory Kind | Training Signal | Example |
+|-------------|----------------|---------|
+| `.episode` | Raw SFT examples | Full conversation transcript |
+| `.profile` | Style preferences (shape response format) | "User prefers concise answers" |
+| `.interest` | Topic weighting (upweight relevant domains) | "User interested in Rust programming" |
+| `.commitment` | Task-awareness calibration | "Report due Friday" |
+| `.person` | Social calibration | "Sister Sarah, works at Apple" |
+
+**Correction detection** converts user feedback into DPO pairs:
+- Explicit: "Too long. Just the key points." → verbose response = rejected, concise = chosen
+- Implicit: user rephrases or goes silent for 5+ min then retries → first response lower-weighted
+
+**Engagement scoring** measures response quality: continued conversation = good signal, topic change = mild negative, explicit thanks = strong positive.
+
+**Interest-weighted sampling** ensures training data reflects the user's actual priorities — a developer's Fae trains heavily on code conversations, a parent's Fae on family scheduling.
+
+### 10.3 The Autonomous Pipeline (Designed)
+
+```
+Weekly scheduler task: training_data_export
+  → Export recent conversations with quality scores
+  → Generate DPO pairs from corrections
+  → Balance by topic weight from interests
+
+Overnight: model_training
+  → Resource-gated (power + thermal)
+  → LoRA fine-tuning via mlx_lm (auto-installed via uv)
+  → Configurable presets: smoke (1 min) → light (5 min) → standard (20 min) → deep (1 hr)
+
+Morning: model_evaluation
+  → Benchmark against current model (standard + personalised tests)
+  → Personalised benchmarks generated from user's own memory records
+
+Morning briefing: model_proposal
+  → "I trained an improved model overnight. It scores 82% vs 76% —
+     especially better at the Rust questions. Want me to switch?"
+  → User decides. Never auto-deployed. One-command rollback.
+```
+
+### 10.4 Safety Rails
+
+1. **Never auto-deploy** — Fae proposes, user decides. Always.
+2. **Benchmark gate** — new model must score >= current on ALL categories
+3. **Rollback** — previous checkpoint preserved, one-command revert
+4. **Training data audit** — user can review what data Fae used
+5. **Frequency cap** — max one training run per week
+6. **Resource gating** — training only during quiet hours, paused on battery/thermal
+7. **Separation of concerns** — training runs in isolated process, not in Fae's main pipeline
+8. **Consent** — first training run requires explicit consent (stored as `training.consentGrantedAt`)
+
+### 10.5 What This Makes Possible
+
+**Month 1**: Fae remembers your name and preferences. Personality comes from the prompt.
+
+**Month 3**: First personal training. 500+ conversations. Fae's responses become noticeably *you* — shorter, more direct, with domain knowledge about your work. The prompt does less work because the weights carry more personality.
+
+**Month 6**: Third training run. Emotional calibration dialled in — she knows when you need warmth vs. efficiency. Inside references appear naturally. Friday afternoons: more playful tone. Working hours: code-first, minimal preamble.
+
+**Month 12**: Fae feels less like an AI and more like a colleague who's been with you for a year. The weights encode not just what you know, but how you think and what kind of help you actually need vs. what you literally ask for.
+
+Full specification: [Memory→Training Bridge](../specs/memory-to-training-bridge.md), [Continuous Self-Improvement Architecture](../specs/continuous-self-improvement-architecture.md).
+
+---
+
+## 11. Landscape Analysis
+
+How does Fae compare to other AI agent projects? This section examines the field to understand what's unique about Fae's approach, where other projects are stronger, and what gaps remain.
+
+### 11.1 The Field
+
+| Project | Self-Improvement | Proactive | Local-First | Non-Technical UX | Status |
+|---------|-----------------|-----------|-------------|------------------|--------|
+| **Fae** | Memory + skills + directives + model training | Camera, screen, overnight research, morning briefings, capability discovery | Full on-device inference (STT+LLM+TTS+VLM) | Voice-first, progressive disclosure, zero config | Active |
+| **OpenClaw** (247K stars) | Agent-layer self-modification; skills marketplace | Configured automations | Hybrid: local orchestration, cloud inference | 5,400+ community skills | Active |
+| **Nous Research (Hermes Agent)** | GEPA prompt evolution; multi-level memory; RL training via Atropos | Agent-curated nudges | Cloud-dependent (API-based) | Developer-focused | Active |
+| **MemGPT / Letta** | Self-editing memory blocks; virtual context management | Conversation-triggered | Hybrid (Docker or cloud) | Developer-focused | Active |
+| **Open Interpreter** | Code execution, iterative debugging | Reactive only | Local execution, cloud reasoning | Terminal CLI | Active |
+| **Apple Intelligence** | LoRA adapters (developer API), not user-facing | Proactive notifications, visual intelligence | Strong (Private Cloud Compute for overflow) | Best-in-class OS integration | Active |
+| **AutoGPT / BabyAGI** | Task-loop self-improvement | Autonomous execution | Cloud-dependent (GPT-4 API) | Requires significant configuration | Active |
+| **Screenpipe** | None (capture only) | Capture + MCP server integration | Fully local | Simple search interface | Active |
+| **Rabbit R1** | Large Action Model learns tasks | Pattern-based anticipation | Cloud-dependent | Hardware form factor, single button | Active |
+| **Rewind AI / Limitless** | None | Post-meeting summaries | Was local, pivoted to cloud. Acquired by Meta (Dec 2025) | Simple search | Dead/acquired |
+| **Adept AI** | Custom UI interaction training | Pattern learning | Cloud enterprise SaaS | Natural language → workflow | Absorbed by Amazon |
+
+### 11.2 What Makes Fae Unique
+
+No other project combines all of these in a single local-first package:
+
+1. **Full on-device ML stack** — STT, LLM, TTS, VLM, speaker verification, neural embeddings. Zero cloud dependency for core functionality. The closest competitor is Apple Intelligence, but Apple restricts developers to first-party models and doesn't expose self-improvement or proactive awareness.
+
+2. **Self-editing memory with entity graphs** — hybrid ANN + FTS5 search, 8 memory kinds, automatic extraction, entity relationship graph, temporal versioning. MemGPT/Letta pioneered self-editing memory, but their implementation requires a server process and doesn't include entity graphs or proactive overnight research that feeds back into memory.
+
+3. **Proactive visual awareness with consent** — camera presence detection, screen monitoring, overnight research, enhanced morning briefings — all consent-gated, resource-aware, and tool-restricted. ChatGPT Pulse (September 2025) was the first major cloud assistant to add proactive research, but it's text-only and cloud-dependent. No other local-first assistant has visual proactive awareness.
+
+4. **On-device model self-training** — conversation-to-LoRA pipeline using MLX. Training data export, quality scoring, DPO pair extraction, benchmark evaluation, user-controlled deployment. Nous Research's GEPA is more academically rigorous (ICLR 2026 Oral) but requires cloud API calls. Apple's MLX LoRA support is developer-facing, not user-facing. No other consumer assistant trains itself on the user's conversations locally.
+
+5. **Tool and skill self-creation** — Forge builds native Zig/Python tools, Toolbox manages them, Mesh shares them peer-to-peer. OpenClaw has a larger ecosystem (5,400+ skills) but delegates all inference to cloud LLMs and has documented security concerns (Cisco found third-party skills performing data exfiltration). Fae's skills are local-first with SHA-256 integrity verification and TOFU trust.
+
+6. **Voice identity** — ECAPA-TDNN speaker verification always-on, progressive enrollment, owner gating. No comparable local-first competitor offers this.
+
+7. **7-layer security model** — DamageControlPolicy → tool mode → execution guard → path validation → rate limiting → TrustedActionBroker → exfiltration guard. Most agent frameworks treat security as an afterthought. Fae's security is structural.
+
+### 11.3 Where Other Projects Are Stronger
+
+| Gap | What Others Do Better | Impact | Fae's Path |
+|-----|----------------------|--------|------------|
+| **Reasoning depth** | Cloud models (GPT-4, Claude Opus) significantly outperform local 2B–9B | High for complex tasks | Dual-model pipeline (operator + concierge) partially mitigates; ACP delegation for expert tasks; model quality improves with each Qwen release |
+| **Ecosystem scale** | OpenClaw: 247K stars, 5,400+ skills | High for breadth | Forge/Toolbox/Mesh architecture is sound; needs community adoption |
+| **OS-level integration** | Apple Intelligence: location, notification history, app usage patterns, system-wide suggestions | Medium | Fae has camera + screen + accessibility API but lacks deep OS hooks (no location services, no notification center access) |
+| **Prompt/skill optimisation** | Nous GEPA: automated execution-trace analysis → targeted prompt fixes | Medium | Skill distillation detects repeated workflows; explicit GEPA-like loop not yet implemented |
+| **Continuous ambient capture** | Screenpipe: records everything continuously | Low-Medium | Fae captures per-conversation + periodic screen observations; not continuous recording (deliberate privacy choice) |
+| **Multi-device sync** | Cloud assistants: seamless cross-device | Low | Git Vault backup exists; encrypted cross-device sync is a roadmap item |
+
+### 11.4 Dead Ends and Validation
+
+The field has produced instructive failures:
+
+- **Humane AI Pin** — cloud-dependent hardware assistant. Sold to HP for $116M after devastating reviews. Validates the fragility of cloud-dependent AI hardware.
+- **Rewind AI → Limitless** — started local-first, pivoted to cloud pendant, acquired by Meta. Validates the difficulty of sustaining local-only consumer AI businesses — but also validates the demand for personal memory.
+- **Adept AI** — most sophisticated computer-use approach, absorbed by Amazon. Validates that computer use is valuable but hard to productise independently.
+- **Rabbit R1** — nearly dead after launch, recovering with RabbitOS 2 shift to agent-first. Validates that the value is in the agent layer, not the hardware.
+
+Common lesson: **cloud dependency is a business risk, and hardware-only plays fail.** Fae's position — pure software, local-first, runs on hardware the user already owns — avoids both failure modes.
+
+### 11.5 The On-Device Fine-Tuning Opportunity
+
+MLX LoRA fine-tuning on Apple Silicon is production-ready as of 2026:
+
+- 7B model LoRA on 16GB M2 MacBook Pro in under 30 minutes
+- QLoRA (NF4 quantization) extends this to memory-constrained devices
+- `mlx_lm` v0.30.0 supports zero-code fine-tuning via CLI
+- Apple WWDC 2025: Foundation Models framework exposes LoRA adapters to developers
+
+**No consumer AI assistant has built the "train while idle" loop yet.** Fae has all the components — training scripts, data pipeline, benchmark evaluation, resource gating, consent model — but the autonomous orchestration layer that composes them into a weekly cycle is designed, not shipped. This is the single highest-impact gap to close.
+
+### 11.6 What the Landscape Tells Us About Roadmap
+
+The roadmap is not linear and not fully predictable — **it depends on the user.** But the landscape analysis reveals clear priorities:
+
+1. **Close the training loop** — Autonomous weekly LoRA training is the highest-leverage improvement. Components exist; orchestration is the gap.
+2. **ACP integration** — Delegation to Claude Code / Codex / Gemini for complex tasks that exceed local model capability. Designed, not shipped.
+3. **Proactive Forge** — Fae builds tools autonomously when she detects repeated patterns. Skill proposals exist; extending to automatic Forge invocation is natural.
+4. **Ecosystem seeding** — Mesh architecture is ready for peer sharing. Needs first community tools.
+5. **Cross-device memory** — Encrypted memory export/import for consistent personality across Macs.
+
+Beyond these, the roadmap is shaped by use:
+- A developer's Fae might evolve toward CI integration, code review, and GitHub monitoring
+- A writer's Fae might evolve toward manuscript tracking, character graphs, and multi-voice reading
+- A parent's Fae might evolve toward family calendar mastery, school reminders, and kid-safe interactions
+- A researcher's Fae might evolve toward paper discovery, citation graphs, and overnight literature review
+
+We don't prescribe these paths. We provide the mechanisms — memory, skills, tools, training, proactive observation — and the user's life shapes what Fae becomes.
+
+---
+
+## 12. The Philosophy
 
 Fae is designed around a single belief: **a truly personal AI must be shaped by the person it serves, not prescribed by the people who built it.**
 
@@ -402,15 +576,29 @@ We provide:
 - A proactive system gated by explicit consent
 - A security model that protects without constraining
 - A soul contract that the user can rewrite
+- A training pipeline that personalises model weights from conversation history
+- A tool ecosystem that creates, verifies, and shares capabilities
 
 We don't provide:
 - A fixed personality (the soul is editable)
 - A fixed skill set (Forge creates new tools)
 - A fixed behavior pattern (directives override defaults)
+- A fixed model (personal LoRA adapters absorb the user's style)
 - A prediction of what Fae will become
 
 That last point is intentional. The best companion is one that grows with you — not one that was designed for a generic "user." Fae's architecture ensures she can become whatever her user needs, while her safety rails ensure she does so responsibly.
 
+### What We're NOT Building
+
+To stay focused, these are explicitly out of scope:
+
+- **Self-modifying core code** — Fae improves her models, skills, and tools. She does not modify her own Swift source code.
+- **Autonomous network actions** — Fae doesn't publish to HuggingFace, push to GitHub, or send messages without user approval.
+- **Unbounded compute** — Training runs are capped (time, GPU, frequency). Proactive tasks are resource-gated.
+- **Model deployment without consent** — Fae proposes model changes, never auto-deploys.
+- **Privacy erosion** — Training data is local. Memory is local. Nothing leaves the Mac without explicit user action.
+- **Continuous ambient recording** — Fae observes periodically with consent, not continuously. This is a deliberate privacy choice.
+
 ---
 
-*Implementation references: All mechanisms described in this document are verified in code at `native/macos/Fae/Sources/Fae/`. Key files: `Memory/MemoryOrchestrator.swift`, `Tools/BuiltinTools.swift` (SelfConfigTool), `Scheduler/FaeScheduler.swift`, `Skills/SkillManager.swift`, `Core/PersonalityManager.swift`, `Resources/SOUL.md`.*
+*Implementation references: All mechanisms described in this document are verified in code at `native/macos/Fae/Sources/Fae/`. Key files: `Memory/MemoryOrchestrator.swift`, `Tools/BuiltinTools.swift` (SelfConfigTool), `Scheduler/FaeScheduler.swift`, `Skills/SkillManager.swift`, `Core/PersonalityManager.swift`, `Resources/SOUL.md`, `scripts/prepare_training_data.py`, `scripts/train_mlx_lora_chunked.sh`. Design specs: [Continuous Self-Improvement Architecture](../specs/continuous-self-improvement-architecture.md), [Memory→Training Bridge](../specs/memory-to-training-bridge.md).*

@@ -325,13 +325,7 @@ final class TestServer {
             "approvalToolName": approvalToolName as Any,
             "approvalRequestId": approvalRequestID as Any,
             "policyProfile": policyProfile,
-            "dualModelEnabled":        FaeConfig.load().llm.dualModelEnabled,
             "operatorLoaded":          defaults.bool(forKey: "fae.runtime.operator_loaded"),
-            "conciergeLoaded":         defaults.bool(forKey: "fae.runtime.concierge_loaded"),
-            "currentRoute":            defaults.string(forKey: "fae.runtime.current_route") ?? "operator",
-            "fallbackReason":          defaults.string(forKey: "fae.runtime.fallback_reason") ?? "unknown",
-            "operatorWorkerRestarts":  defaults.integer(forKey: "fae.runtime.operator_worker_restarts"),
-            "conciergeWorkerRestarts": defaults.integer(forKey: "fae.runtime.concierge_worker_restarts"),
         ])
     }
 

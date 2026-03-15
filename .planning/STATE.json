@@ -1,26 +1,23 @@
 {
-  "version": 18,
-  "project": "fae-python-skill-runtime",
+  "version": 1,
+  "project": "remove-dual-model",
   "active": false,
   "milestone": {
-    "number": 8,
-    "name": "Python Skill Runtime (v0.8.1)"
+    "number": 1,
+    "name": "Remove Dual-Model System"
   },
   "phase": {
-    "number": "8.8",
-    "name": "Channel Migration",
-    "plan": ".planning/PLAN-phase-8.8.md",
-    "status": "complete"
+    "number": "1.5",
+    "name": "Clean tests + update docs",
+    "plan": null
   },
   "progress": {
-    "total_tasks": 6,
-    "completed_tasks": 6,
-    "current_task": 6
+    "total_tasks": 2,
+    "completed_tasks": 2,
+    "current_task": null
   },
   "status": "milestone_complete",
-  "last_updated": "2026-02-22T12:00:00Z",
-  "review": {
-    "status": "passed",
-    "iteration": 3
-  }
+  "blocked_reason": null,
+  "last_updated": "2026-03-15T00:00:00Z",
+  "remaining_files": []
 }

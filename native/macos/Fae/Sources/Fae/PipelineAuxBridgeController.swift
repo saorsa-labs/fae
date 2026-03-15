@@ -53,16 +53,10 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     struct LocalStackDiagnostics: Sendable {
         var operatorLoaded: Bool = false
-        var conciergeLoaded: Bool = false
-        var dualModelActive: Bool = false
         var currentRoute: String = "operator"
-        var fallbackReason: String = "unknown"
         var operatorRuntime: String = "in_process"
-        var conciergeRuntime: String = "in_process"
         var operatorWorkerRestarts: Int = 0
-        var conciergeWorkerRestarts: Int = 0
         var operatorWorkerLastError: String?
-        var conciergeWorkerLastError: String?
         var lastUpdatedAt: Date?
     }
 
@@ -73,7 +67,7 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// Latest voice attention diagnostics for the Settings > Diagnostics screen.
     @Published var voiceAttention: VoiceAttentionDiagnostics = VoiceAttentionDiagnostics()
 
-    /// Current dual-model runtime diagnostics for Settings > Diagnostics.
+    /// Current local model runtime diagnostics for Settings > Diagnostics.
     @Published var localStack: LocalStackDiagnostics = LocalStackDiagnostics()
 
     /// Native canvas store for the SwiftUI canvas window.
@@ -107,16 +101,10 @@ final class PipelineAuxBridgeController: ObservableObject {
         subscribe()
         localStack = LocalStackDiagnostics(
             operatorLoaded: UserDefaults.standard.bool(forKey: "fae.runtime.operator_loaded"),
-            conciergeLoaded: UserDefaults.standard.bool(forKey: "fae.runtime.concierge_loaded"),
-            dualModelActive: UserDefaults.standard.bool(forKey: "fae.dual_model_active"),
             currentRoute: UserDefaults.standard.string(forKey: "fae.runtime.current_route") ?? "operator",
-            fallbackReason: UserDefaults.standard.string(forKey: "fae.runtime.fallback_reason") ?? "unknown",
             operatorRuntime: UserDefaults.standard.string(forKey: "fae.runtime.operator_runtime") ?? "in_process",
-            conciergeRuntime: UserDefaults.standard.string(forKey: "fae.runtime.concierge_runtime") ?? "in_process",
             operatorWorkerRestarts: UserDefaults.standard.integer(forKey: "fae.runtime.operator_worker_restarts"),
-            conciergeWorkerRestarts: UserDefaults.standard.integer(forKey: "fae.runtime.concierge_worker_restarts"),
             operatorWorkerLastError: UserDefaults.standard.string(forKey: "fae.runtime.operator_worker_last_error"),
-            conciergeWorkerLastError: UserDefaults.standard.string(forKey: "fae.runtime.concierge_worker_last_error"),
             lastUpdatedAt: nil
         )
     }
@@ -258,12 +246,6 @@ final class PipelineAuxBridgeController: ObservableObject {
 
         case "verify_complete":
             status = "Models loaded — preparing first response…"
-
-        case "concierge":
-            let progress = userInfo["progress"] as? Double ?? 0.0
-            status = progress >= 1.0
-                ? "Concierge ready — richer synthesis available"
-                : "Loading concierge model…"
 
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
@@ -509,16 +491,10 @@ final class PipelineAuxBridgeController: ObservableObject {
     private func handleLocalStackStatus(payload: [String: Any]) {
         localStack = LocalStackDiagnostics(
             operatorLoaded: payload["operator_loaded"] as? Bool ?? false,
-            conciergeLoaded: payload["concierge_loaded"] as? Bool ?? false,
-            dualModelActive: payload["dual_model_active"] as? Bool ?? false,
             currentRoute: payload["current_route"] as? String ?? "operator",
-            fallbackReason: payload["fallback_reason"] as? String ?? "unknown",
             operatorRuntime: payload["operator_runtime"] as? String ?? "in_process",
-            conciergeRuntime: payload["concierge_runtime"] as? String ?? "in_process",
             operatorWorkerRestarts: payload["operator_worker_restarts"] as? Int ?? 0,
-            conciergeWorkerRestarts: payload["concierge_worker_restarts"] as? Int ?? 0,
             operatorWorkerLastError: payload["operator_worker_last_error"] as? String,
-            conciergeWorkerLastError: payload["concierge_worker_last_error"] as? String,
             lastUpdatedAt: Date()
         )
     }
