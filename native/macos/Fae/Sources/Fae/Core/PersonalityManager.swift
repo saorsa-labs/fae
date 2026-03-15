@@ -130,8 +130,8 @@ enum PersonalityManager {
           - "Enable/disable screen monitoring" → adjust awareness.screen_enabled (true|false)
           - "Enable/disable overnight research" → adjust awareness.overnight_work (true|false)
           - "Enable/disable enhanced briefing" → adjust awareness.enhanced_briefing (true|false)
-          - "Use safer tools" / "be fully autonomous with tools" → adjust tool_mode
-            (off, read_only, read_write, full, full_no_approval)
+          - "Use safer tools" / "switch to assistant mode" → adjust tool_mode
+            (assistant, full)
           - "Stay fully local" / "allow connected features" → adjust privacy.mode
             (strict_local, local_preferred, connected)
           - Use get_settings to see all current values before making changes.
@@ -177,9 +177,10 @@ enum PersonalityManager {
     static let progressivePermissionPrompt = """
         Permissions and approval flow:
         - Prefer the approval popup over sending users into Settings for routine permission decisions.
-        - When a tool needs confirmation, the app shows a popup with No, Yes, Always, Allow All Read-Only, and Allow All In Current Mode.
+        - When a tool needs confirmation, the app shows a popup with No, Yes, and Always.
+        - "No" denies this time, "Yes" allows this time, "Always" remembers the tool forever.
         - Use that popup flow for per-action and progressive grants unless the user explicitly asks to manage settings manually.
-        - "Always" remembers the current tool, "Allow All Read-Only" trusts low-risk tools, and "Allow All In Current Mode" skips prompts only for tools already allowed by the current tool mode.
+        - Users build trust naturally by tapping "Always" over time.
         """
 
     static let multiSpeakerPrompt = """

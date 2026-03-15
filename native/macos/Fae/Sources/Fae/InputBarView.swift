@@ -14,6 +14,7 @@ struct InputBarView: View {
     @State private var messageText: String = ""
     @State private var isSendAnimating: Bool = false
     @FocusState private var isTextFieldFocused: Bool
+    @AppStorage("inputBarControlsExpanded") private var controlsExpanded: Bool = true
 
     /// Heather accent colour.
     private static let heather = Color(
@@ -38,10 +39,50 @@ struct InputBarView: View {
                 .animation(.easeInOut(duration: 0.2), value: conversation.isGenerating)
             }
 
-            // Action pills
+            // Controls row: collapsible access/thinking + always-visible cowork
             HStack(spacing: 8) {
-                toolModePill
-                thinkingTogglePill
+                // Collapsible controls
+                VStack(spacing: 4) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            controlsExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: controlsExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 8, weight: .semibold))
+                            Text("Controls")
+                                .font(.system(size: 10, weight: .medium))
+                            Spacer()
+                        }
+                        .foregroundColor(.secondary.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+
+                    if controlsExpanded {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Access")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                    .textCase(.uppercase)
+                                    .tracking(0.5)
+                                toolModePill
+                            }
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Thinking")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(.secondary)
+                                    .textCase(.uppercase)
+                                    .tracking(0.5)
+                                thinkingTogglePill
+                            }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+
+                Spacer()
                 coworkPill
             }
         }
@@ -211,24 +252,15 @@ struct InputBarView: View {
 
     // MARK: - Tool Mode Pill
 
-    /// Simplified 3-state quick picker: Ask / Read only / Full.
-    /// "Ask" = off (no tools); "Read only" = read_only; "Full" = full.
-    /// Colour-coded: Read only → orange, Full → red.
+    /// Two-state quick picker: Assistant / Full.
+    /// "Assistant" = read-only; "Full" = full access with approval popups.
+    /// Colour-coded: Assistant → orange, Full → red.
     private var toolModePill: some View {
         Menu {
             Button {
-                faeCore.patchConfig(key: "tool_mode", payload: ["value": "off"])
+                faeCore.patchConfig(key: "tool_mode", payload: ["value": "assistant"])
             } label: {
-                if faeCore.toolMode == "off" {
-                    Label("Ask", systemImage: "checkmark")
-                } else {
-                    Label("Ask", systemImage: "questionmark.bubble")
-                }
-            }
-            Button {
-                faeCore.patchConfig(key: "tool_mode", payload: ["value": "read_only"])
-            } label: {
-                if faeCore.toolMode == "read_only" {
+                if faeCore.toolMode == "assistant" {
                     Label("Read only", systemImage: "checkmark")
                 } else {
                     Label("Read only", systemImage: "book")
@@ -237,10 +269,10 @@ struct InputBarView: View {
             Button {
                 faeCore.patchConfig(key: "tool_mode", payload: ["value": "full"])
             } label: {
-                if ["read_write", "full", "full_no_approval"].contains(faeCore.toolMode) {
-                    Label("Full", systemImage: "checkmark")
+                if faeCore.toolMode == "full" {
+                    Label("Everything", systemImage: "checkmark")
                 } else {
-                    Label("Full", systemImage: "wrench.and.screwdriver")
+                    Label("Everything", systemImage: "wrench.and.screwdriver")
                 }
             }
         } label: {
@@ -272,17 +304,15 @@ struct InputBarView: View {
 
     private var toolModeLabel: String {
         switch faeCore.toolMode {
-        case "off":   return "Ask"
-        case "read_only": return "Read only"
-        default:      return "Full"
+        case "assistant": return "Read only"
+        default:          return "Everything"
         }
     }
 
     private var toolModeColor: Color {
         switch faeCore.toolMode {
-        case "off":       return Color.primary.opacity(0.35)
-        case "read_only": return .orange
-        default:          return .red
+        case "assistant": return .orange
+        default:          return .green
         }
     }
 

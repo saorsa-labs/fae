@@ -25,7 +25,7 @@ final class EndToEndApprovalProgressionTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .balanced,
+
             argumentSummary: "Write a file to disk"
         )
 
@@ -63,7 +63,7 @@ final class EndToEndApprovalProgressionTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .balanced,
+
             argumentSummary: "Run bash command"
         )
 
@@ -84,7 +84,7 @@ final class EndToEndApprovalProgressionTests: XCTestCase {
                 livenessScore: 1.0,
                 explicitUserAuthorization: false,
                 hasCapabilityTicket: true,
-                policyProfile: .balanced,
+    
                 argumentSummary: "Run bash command"
             )
         )
@@ -111,7 +111,7 @@ final class EndToEndApprovalProgressionTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .balanced,
+
             argumentSummary: "Write a file to disk"
         )
 
@@ -145,7 +145,7 @@ final class EndToEndApprovalProgressionTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .balanced,
+
             argumentSummary: "Read a file"
         )
         let highRiskIntent = ActionIntent(
@@ -157,7 +157,7 @@ final class EndToEndApprovalProgressionTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .balanced,
+
             argumentSummary: "Run bash command"
         )
 

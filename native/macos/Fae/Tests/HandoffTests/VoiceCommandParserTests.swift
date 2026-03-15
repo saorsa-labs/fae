@@ -4,8 +4,8 @@ import XCTest
 final class VoiceCommandParserTests: XCTestCase {
     func testParsesGovernanceCommands() {
         XCTAssertEqual(
-            VoiceCommandParser.parse("Fae, set tool mode to full no approval"),
-            .setToolMode("full_no_approval")
+            VoiceCommandParser.parse("Fae, switch to full access"),
+            .setToolMode("full")
         )
         XCTAssertEqual(VoiceCommandParser.parse("enable thinking mode"), .setThinking(true))
         XCTAssertEqual(VoiceCommandParser.parse("turn off barge in"), .setBargeIn(false))
@@ -56,18 +56,13 @@ final class VoiceCommandParserTests: XCTestCase {
         XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("yeah always"), .always)
     }
 
-    func testApprovalResponseApproveAllReadOnly() {
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all reads"), .approveAllReadOnly)
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("trust all read tools"), .approveAllReadOnly)
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all read only"), .approveAllReadOnly)
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve read only"), .approveAllReadOnly)
-    }
-
-    func testApprovalResponseApproveAll() {
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all"), .approveAll)
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("trust everything"), .approveAll)
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve everything"), .approveAll)
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("allow everything"), .approveAll)
+    func testFormerBulkApprovePhrasesFallThrough() {
+        // Former bulk-approve phrases now fall through to simpler matches since bulk approval was removed.
+        // "approve" is a yes-word; "trust" alone is not recognized.
+        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all reads"), .yes)
+        XCTAssertNil(VoiceCommandParser.parseApprovalResponse("trust all read tools"))
+        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all"), .yes)
+        XCTAssertNil(VoiceCommandParser.parseApprovalResponse("trust everything"))
     }
 
     func testApprovalResponseAmbiguous() {
@@ -96,14 +91,10 @@ final class VoiceCommandParserTests: XCTestCase {
 
     // MARK: - Ordering: most-specific phrases win over bare keywords
 
-    func testApproveAllWinsOverAlways() {
-        // "approve all" contains "approve" (a yes-word) but must return .approveAll
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all"), .approveAll)
-    }
-
-    func testApproveAllReadOnlyWinsOverApproveAll() {
-        // "approve all reads" contains "approve all" but must return .approveAllReadOnly
-        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all reads"), .approveAllReadOnly)
+    func testApproveAllNowReturnsYes() {
+        // "approve all" falls through to "yes" since bulk-approve was removed.
+        // "approve" is a yes-word.
+        XCTAssertEqual(VoiceCommandParser.parseApprovalResponse("approve all"), .yes)
     }
 
     func testAlwaysAllowWinsOverBareAlways() {

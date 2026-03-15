@@ -108,7 +108,7 @@ struct CoworkWorkspaceSnapshot: Sendable {
 
     static let empty = CoworkWorkspaceSnapshot(
         pipelineStateLabel: "Stopped",
-        toolMode: "off",
+        toolMode: "assistant",
         thinkingEnabled: false,
         thinkingLevel: FaeThinkingLevel.fast.rawValue,
         hasOwnerSetUp: false,

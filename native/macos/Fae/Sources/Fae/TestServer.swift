@@ -301,15 +301,13 @@ final class TestServer {
         let approvalToolName = approvalOverlay?.activeApproval?.toolName
         let approvalRequestID = approvalOverlay?.activeApproval?.id
 
-        // Derive policy profile from tool mode (matches PolicyProfile enum rawValues)
+        // Derive policy profile label from tool mode.
         let policyProfile: String
         switch toolMode {
-        case "off", "read_only":
-            policyProfile = "moreCautious"
-        case "full_no_approval":
-            policyProfile = "moreAutonomous"
+        case "assistant":
+            policyProfile = "assistant"
         default:
-            policyProfile = "balanced"
+            policyProfile = "full_access"
         }
 
         let defaults = UserDefaults.standard
@@ -522,7 +520,7 @@ final class TestServer {
 
     /// POST /approve — `{"approved":true}` or `{"decision":"always"}` → resolve pending tool approval.
     ///
-    /// Supported `decision` values: `"yes"`, `"no"`, `"always"`, `"approveAllReadOnly"`, `"approveAll"`.
+    /// Supported `decision` values: `"yes"`, `"no"`, `"always"`.
     /// When `decision` is omitted, falls back to `approved` bool.
     private func handleApprove(body: Data?, connection: NWConnection) {
         guard let body,

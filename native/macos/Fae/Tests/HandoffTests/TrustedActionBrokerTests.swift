@@ -13,7 +13,7 @@ final class TrustedActionBrokerTests: XCTestCase {
         isOwner: Bool = true,
         hasCapabilityTicket: Bool = true,
         explicitUserAuthorization: Bool = false,
-        profile: PolicyProfile = .balanced,
+
         source: ActionSource = .voice,
         schedulerTaskId: String? = nil,
         schedulerAllowedTools: Set<String> = [],
@@ -28,7 +28,7 @@ final class TrustedActionBrokerTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: explicitUserAuthorization,
             hasCapabilityTicket: hasCapabilityTicket,
-            policyProfile: profile,
+            
             argumentSummary: "test",
             schedulerTaskId: schedulerTaskId,
             schedulerAllowedTools: schedulerAllowedTools,
@@ -108,7 +108,7 @@ final class TrustedActionBrokerTests: XCTestCase {
         )
 
         let decision = await broker.evaluate(
-            makeIntent(toolName: "read", risk: .low, profile: .balanced)
+            makeIntent(toolName: "read", risk: .low)
         )
 
         if case .allow = decision {
@@ -125,7 +125,7 @@ final class TrustedActionBrokerTests: XCTestCase {
         )
 
         let decision = await broker.evaluate(
-            makeIntent(toolName: "session_search", risk: .low, profile: .balanced)
+            makeIntent(toolName: "session_search", risk: .low)
         )
 
         if case .allow = decision {
@@ -145,8 +145,7 @@ final class TrustedActionBrokerTests: XCTestCase {
             makeIntent(
                 toolName: "run_skill",
                 risk: .medium,
-                explicitUserAuthorization: false,
-                profile: .balanced
+                explicitUserAuthorization: false
             )
         )
 
@@ -157,7 +156,7 @@ final class TrustedActionBrokerTests: XCTestCase {
         }
     }
 
-    func testBalancedChannelSetupRequestsConfirm() async {
+    func testChannelSetupRequestsConfirm() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["channel_setup"],
             speakerConfig: FaeConfig.SpeakerConfig()
@@ -168,8 +167,7 @@ final class TrustedActionBrokerTests: XCTestCase {
                 toolName: "channel_setup",
                 risk: .high,
                 requiresApproval: true,
-                explicitUserAuthorization: true,
-                profile: .balanced
+                explicitUserAuthorization: true
             )
         )
 
@@ -181,7 +179,7 @@ final class TrustedActionBrokerTests: XCTestCase {
         }
     }
 
-    func testAutonomousMediumWithExplicitIntentAllows() async {
+    func testMediumRiskWithExplicitIntentAllows() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["run_skill"],
             speakerConfig: FaeConfig.SpeakerConfig()
@@ -191,22 +189,18 @@ final class TrustedActionBrokerTests: XCTestCase {
             makeIntent(
                 toolName: "run_skill",
                 risk: .medium,
-                explicitUserAuthorization: true,
-                profile: .moreAutonomous
+                explicitUserAuthorization: true
             )
         )
 
-        if case .allow(let reason) = decision {
-            XCTAssertEqual(
-                reason.code.rawValue,
-                DecisionReasonCode.allowAutonomousMediumRisk.rawValue
-            )
+        if case .allow = decision {
+            XCTAssertTrue(true)
         } else {
-            XCTFail("Expected allow in autonomous mode for explicit medium-risk action")
+            XCTFail("Expected allow for explicit medium-risk action")
         }
     }
 
-    func testAutonomousExplicitHighRiskAllowsWithoutConfirmation() async {
+    func testHighRiskRequiresConfirmation() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["bash"],
             speakerConfig: FaeConfig.SpeakerConfig()
@@ -217,32 +211,31 @@ final class TrustedActionBrokerTests: XCTestCase {
                 toolName: "bash",
                 risk: .high,
                 requiresApproval: true,
-                explicitUserAuthorization: true,
-                profile: .moreAutonomous
+                explicitUserAuthorization: true
             )
         )
 
-        if case .allow = decision {
+        if case .confirm = decision {
             XCTAssertTrue(true)
         } else {
-            XCTFail("Expected allow for explicit high-risk action in autonomous mode")
+            XCTFail("Expected confirm for high-risk action")
         }
     }
 
-    func testCautiousProfileAlwaysConfirms() async {
+    func testLowRiskAllows() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["read"],
             speakerConfig: FaeConfig.SpeakerConfig()
         )
 
         let decision = await broker.evaluate(
-            makeIntent(toolName: "read", risk: .low, profile: .moreCautious)
+            makeIntent(toolName: "read", risk: .low)
         )
 
-        if case .confirm = decision {
+        if case .allow = decision {
             XCTAssertTrue(true)
         } else {
-            XCTFail("Expected confirm in cautious profile")
+            XCTFail("Expected allow for low-risk action")
         }
     }
 

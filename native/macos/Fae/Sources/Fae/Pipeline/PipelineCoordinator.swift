@@ -132,7 +132,7 @@ actor PipelineCoordinator {
     /// Update the tool mode without restarting the pipeline.
     func setToolMode(_ mode: String) {
         if isRescueMode {
-            toolModeLive = "read_only"
+            toolModeLive = "assistant"
             return
         }
         toolModeLive = mode
@@ -1688,7 +1688,7 @@ actor PipelineCoordinator {
 
     private func effectiveToolMode() -> String {
         if isRescueMode {
-            return "read_only"
+            return "assistant"
         }
         return toolModeLive ?? config.toolMode
     }
@@ -3062,10 +3062,6 @@ actor PipelineCoordinator {
                     ack = PersonalityManager.nextApprovalDenied()
                 case .always:
                     ack = "Got it, I'll always allow that tool."
-                case .approveAllReadOnly:
-                    ack = "Okay, all read-only tools are now approved."
-                case .approveAll:
-                    ack = "Understood, all tools are now approved."
                 }
                 await speakDirect(ack)
             } else {
@@ -3885,19 +3881,7 @@ actor PipelineCoordinator {
                 return true
             }
 
-            if normalized == "full_no_approval" {
-                pendingGovernanceAction = PendingGovernanceAction(
-                    action: "set_tool_mode",
-                    value: .string(normalized),
-                    metadata: [:],
-                    source: "voice",
-                    confirmationPrompt: "Please say yes or no to confirm the tool mode change.",
-                    successSpeech: "Done. Tool mode is now \(displayToolMode(normalized)).",
-                    cancelledSpeech: "Okay, I won't change tool mode."
-                )
-                await speakDirect("This removes confirmation prompts for risky actions. Are you sure? Say yes or no.")
-                return true
-            }
+            // No governance confirmation needed — only two modes now (assistant/full).
 
             applyGovernanceAction(action: "set_tool_mode", value: .string(normalized), source: "voice")
             await speakDirect("Done. Tool mode is now \(displayToolMode(normalized)).")
@@ -4157,16 +4141,10 @@ actor PipelineCoordinator {
 
     private func displayToolMode(_ mode: String) -> String {
         switch mode {
-        case "off":
-            return "off"
-        case "read_only":
+        case "assistant":
             return "read only"
-        case "read_write":
-            return "read write"
         case "full":
-            return "full"
-        case "full_no_approval":
-            return "full no approval"
+            return "everything with approval"
         default:
             return mode
         }
@@ -5447,9 +5425,10 @@ actor PipelineCoordinator {
 
                 let fallback: String
                 let reasonCode: String
-                if effectiveToolMode() == "off" {
-                    reasonCode = "toolMode=off"
-                    fallback = "I can’t check that right now because tools are off. If you enable tools, I can fetch the real result."
+                let currentMode = effectiveToolMode()
+                if currentMode == "assistant" {
+                    reasonCode = "toolMode=assistant"
+                    fallback = "I’m in read-only mode right now — I can search and read but I can’t run that tool. Switch to ‘Everything’ to let me help with this."
                 } else if ownerEnrollmentRequired {
                     reasonCode = "owner_enrollment_required"
                     fallback = "I need to enroll your primary voice before I can run tools for that. Please complete voice enrollment, then ask me again."
@@ -5824,7 +5803,7 @@ actor PipelineCoordinator {
 
     static func shouldShowToolModeUpgradePopup(reasonCode: String) -> Bool {
         switch reasonCode {
-        case "owner_enrollment_required", "non-owner", "tool_not_called":
+        case "owner_enrollment_required", "non-owner", "tool_not_called", "toolMode=assistant":
             return true
         default:
             return false
@@ -7486,7 +7465,17 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(toolMode) privacy=\(privacyMode)")
         guard registry.isToolAllowed(call.name, mode: toolMode, privacyMode: privacyMode) else {
             debugLog(debugConsole, .toolResult, "Blocked by mode/privacy: \(call.name) mode=\(toolMode) privacy=\(privacyMode)")
-            let result = ToolResult.error("Tool '\(call.name)' is not available in current mode/privacy policy (\(toolMode), \(privacyMode))")
+            // Show tool mode upgrade popup so user can switch to full access.
+            if toolMode == "assistant" {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .faeToolModeUpgradeRequested,
+                        object: nil,
+                        userInfo: ["reason": "toolMode=assistant"]
+                    )
+                }
+            }
+            let result = ToolResult.error("Tool '\(call.name)' is not available in read-only mode. The user can switch to 'Everything (with approval)' to enable this tool.")
             await recordWorkflowToolResult(
                 turnID: workflowTurnID,
                 callId: traceToolCallID,
@@ -7568,7 +7557,6 @@ actor PipelineCoordinator {
             return result
         }
 
-        let policyProfile = currentPolicyProfile()
         let selfConfigRead = Self.isSelfConfigReadAction(arguments: call.arguments)
         let effectiveRequiresApproval = Self.toolRequiresApproval(
             toolName: call.name,
@@ -7580,8 +7568,7 @@ actor PipelineCoordinator {
         // Rate limiting.
         if let limitError = await rateLimiter.checkLimit(
             tool: call.name,
-            riskLevel: effectiveRiskLevel,
-            profile: policyProfile
+            riskLevel: effectiveRiskLevel
         ) {
             debugLog(debugConsole, .toolResult, "Rate limited: \(call.name) reason=\(limitError)")
             let result = ToolResult.error(limitError)
@@ -7598,7 +7585,11 @@ actor PipelineCoordinator {
 
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
         let effectiveTicket = capabilityTicketOverride ?? activeCapabilityTicket
-        let hasCapabilityTicket = effectiveTicket?.allows(toolName: call.name) ?? false
+        // Auto-grant capability tickets in full mode — the ticket system becomes invisible.
+        let currentToolMode = effectiveToolMode()
+        let hasCapabilityTicket = currentToolMode == "full"
+            ? true
+            : (effectiveTicket?.allows(toolName: call.name) ?? false)
         let explicitAuthorization = explicitUserAuthorizationOverride ?? explicitUserAuthorizationForTurn
         let effectiveGenerationContext = generationContextOverride ?? currentTurnGenerationContext
         let intent = ActionIntent(
@@ -7610,7 +7601,6 @@ actor PipelineCoordinator {
             livenessScore: livenessScore,
             explicitUserAuthorization: explicitAuthorization,
             hasCapabilityTicket: hasCapabilityTicket,
-            policyProfile: policyProfile,
             argumentSummary: Self.buildApprovalDescription(
                 toolName: call.name,
                 reason: "confirmation required",
@@ -8022,23 +8012,7 @@ actor PipelineCoordinator {
         return result
     }
 
-    /// Map current tool mode to an autonomy policy profile.
-    ///
-    /// - off => cautious profile
-    /// - read_only/read_write/full => balanced profile
-    /// - full_no_approval => autonomous profile
-    private func currentPolicyProfile() -> PolicyProfile {
-        switch effectiveToolMode() {
-        case "off":
-            return .moreCautious
-        case "full_no_approval":
-            return .moreAutonomous
-        case "read_only", "read_write", "full":
-            return .balanced
-        default:
-            return .balanced
-        }
-    }
+    // Policy profile removed — simplified to balanced-only behavior via TrustedActionBroker.
 
     /// Apply deterministic safety wrappers before executing a tool.
     private func applySafetyTransform(

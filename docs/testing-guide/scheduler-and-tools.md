@@ -117,13 +117,10 @@ The registry supports 5 permission modes:
 
 | Mode | Read Tools | Write Tools | Scheduler Mutation | Vision | Bash | Notes |
 |------|-----------|-----------|------------------|--------|------|-------|
-| `off` | ✗ | ✗ | ✗ | ✗ | ✗ | No tools at all |
-| `read_only` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations |
-| `read_write` | ✓ | ✓ | ✓ | ✓* | ✗ | Read + write + vision (no bash) |
-| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval |
-| `full_no_approval` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools, skip approval for owner |
+| `assistant` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations |
+| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups |
 
-*Vision tools require `read_write` or higher.
+Legacy modes (`off`, `read_only`, `read_write`, `full`) are silently migrated.
 
 ### Read-Only Tool Set
 
@@ -136,9 +133,9 @@ scheduler_list, roleplay, activate_skill, input_request, find_element, voice_ide
 
 ### Write Tool Set
 
-**16 additional tools** (requires `read_write` or `full`):
+**18 additional tools** (requires `full` mode):
 ```
-write, edit, self_config, channel_setup,
+write, edit, bash, self_config, channel_setup, delegate_agent,
 scheduler_create, scheduler_update, scheduler_delete, scheduler_trigger,
 manage_skill, run_skill,
 screenshot, camera, read_screen, click, type_text, scroll
@@ -147,22 +144,18 @@ screenshot, camera, read_screen, click, type_text, scroll
 ### Native Tool Specs for MLX
 
 - `ToolRegistry.nativeToolSpecs(for mode: String) -> [ToolSpec]?`
-- Returns `nil` when `mode == "off"` (so caller can distinguish "disabled" from "empty list")
-- Returns filtered list of `ToolSpec` objects for mode `read_only`, `read_write`, `full`, or `full_no_approval`
+- Returns filtered list of `ToolSpec` objects for mode `assistant` or `full`
 - Used by `MLXLLMEngine` to populate `UserInput.tools` for native Qwen3.5 tool calling
 
 ### Testing Checklist
 
 - [ ] **Tool Count**: Verify 34 tools are registered: `ToolRegistry.buildDefault().allTools.count == 34`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
-  - `off`: zero tools
-  - `read_only`: 16 tools (no write, no bash)
-  - `read_write`: 32 tools (no bash)
-  - `full` / `full_no_approval`: 34 tools
+  - `assistant`: 16 tools (no write, no bash)
+  - `full`: 34 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels
-- [ ] **Vision in read_write**: Verify vision tools (screenshot, camera, read_screen) appear only in `read_write` and `full`
 
 ---
 
@@ -427,7 +420,7 @@ Per-turn scoped grants with TTL:
 - [ ] **CapabilityTicket**: Verify tool can only execute during same turn (not replayed next turn)
 - [ ] **Scheduler Bypass**: Trigger awareness task via `scheduler_trigger`, verify allowed tools execute without approval
 - [ ] **Scheduler Denied**: Attempt denied tool in scheduler context (bash, write), verify broker denies
-- [ ] **Owner Identity**: When speaker is verified as owner + "full_no_approval" mode, verify tools execute without approval
+- [ ] **Owner Identity**: When speaker is verified as owner + "full" mode, verify tools execute without approval
 - [ ] **Audit Log**: Check security event logger for all broker decisions (allow/confirm/deny)
 
 ---
@@ -577,7 +570,7 @@ extension Notification.Name {
 Location: `SettingsToolsTab.swift`
 
 **Controls**:
-- **Tool Mode Picker**: off / read_only / read_write / full / full_no_approval
+- **Tool Mode Picker**: assistant / full
 - **PolicyProfile Picker**: balanced / moreAutonomous / moreCautious
 - **Apple Tool Permissions**: Per-tool Granted/Not Granted badges + Grant buttons
 
@@ -828,7 +821,7 @@ func testBrokerConfirmsHighRiskTool() async {
 
 The Fae scheduler and tool system is highly testable with:
 - ✅ 31 clearly defined tools with risk levels
-- ✅ 5 tool modes with deterministic filtering
+- ✅ 2 tool modes with deterministic filtering (assistant, full)
 - ✅ 17 scheduler tasks with clear execution paths
 - ✅ Central broker policy that's easy to mock
 - ✅ Approval UI that can be tested via notifications

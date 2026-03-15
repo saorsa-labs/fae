@@ -311,8 +311,8 @@ struct SelfConfigTool: Tool {
             description: "Seconds to keep listening after name-addressed (5-60)"
         ),
         "tool_mode": SettingSpec(
-            valueType: .string(allowed: ["off", "read_only", "read_write", "full", "full_no_approval"]),
-            description: "Maximum tool authority level"
+            valueType: .string(allowed: ["assistant", "full"]),
+            description: "Tool authority level (assistant = read-only, full = all tools with approval)"
         ),
         "privacy.mode": SettingSpec(
             valueType: .string(allowed: ["strict_local", "local_preferred", "connected"]),

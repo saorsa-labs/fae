@@ -1,12 +1,5 @@
 import Foundation
 
-/// User-facing autonomy profile for policy tuning.
-enum PolicyProfile: String, Sendable {
-    case balanced
-    case moreAutonomous
-    case moreCautious
-}
-
 /// Source that triggered an action intent.
 enum ActionSource: String, Sendable {
     case voice
@@ -27,7 +20,6 @@ struct ActionIntent: Sendable {
     let livenessScore: Float?
     let explicitUserAuthorization: Bool
     let hasCapabilityTicket: Bool
-    let policyProfile: PolicyProfile
     let argumentSummary: String
     let schedulerTaskId: String?  // nil for non-scheduler actions
     let schedulerAllowedTools: Set<String>
@@ -42,7 +34,6 @@ struct ActionIntent: Sendable {
         livenessScore: Float?,
         explicitUserAuthorization: Bool,
         hasCapabilityTicket: Bool,
-        policyProfile: PolicyProfile,
         argumentSummary: String,
         schedulerTaskId: String? = nil,
         schedulerAllowedTools: Set<String> = [],
@@ -56,7 +47,6 @@ struct ActionIntent: Sendable {
         self.livenessScore = livenessScore
         self.explicitUserAuthorization = explicitUserAuthorization
         self.hasCapabilityTicket = hasCapabilityTicket
-        self.policyProfile = policyProfile
         self.argumentSummary = argumentSummary
         self.schedulerTaskId = schedulerTaskId
         self.schedulerAllowedTools = schedulerAllowedTools
@@ -75,7 +65,6 @@ enum DecisionReasonCode: String, Sendable {
     case mediumRiskRequiresConfirmation
     case highRiskRequiresConfirmation
     case allowLowRisk
-    case allowAutonomousMediumRisk
     case outboundRecipientNovelty
     case outboundPayloadRisk
     case approvedByUserGrant
@@ -273,89 +262,33 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
             ))
         }
 
-        // Tool risk policy drives confirmation behavior.
-        let requiresConfirmation: Bool
-        switch intent.policyProfile {
-        case .balanced:
-            requiresConfirmation = shouldConfirmInBalancedProfile(intent)
-
-        case .moreCautious:
-            // Cautious mode: anything non-low requires confirmation.
-            requiresConfirmation = true
-
-        case .moreAutonomous:
-            // Autonomous mode still confirms high-risk/explicit-approval tools.
-            requiresConfirmation = shouldConfirmInAutonomousProfile(intent)
-        }
-
-        if requiresConfirmation {
-            // Autonomous profile can proceed for selected mutation tools only
-            // when reversible safety wrappers are applied.
-            if intent.policyProfile == .moreAutonomous {
-                let summary = intent.argumentSummary.lowercased()
-                if ["write", "edit"].contains(intent.toolName)
-                    || (intent.toolName == "manage_skill" && summary.contains("delete"))
-                {
-                    return .allowWithTransform(
-                        transform: .checkpointBeforeMutation,
-                        reason: DecisionReason(
-                            code: .explicitApprovalRequired,
-                            message: "Allowed in autonomous profile with reversible checkpoint"
-                        )
-                    )
-                }
-            }
-
-            let code: DecisionReasonCode = {
-                if intent.requiresApproval { return .explicitApprovalRequired }
-                return intent.riskLevel == .high
-                    ? .highRiskRequiresConfirmation
-                    : .mediumRiskRequiresConfirmation
-            }()
-
+        // Balanced policy: confirm high-risk, explicit-approval, and high-impact medium-risk tools.
+        if intent.requiresApproval || intent.riskLevel == .high {
+            let code: DecisionReasonCode = intent.requiresApproval
+                ? .explicitApprovalRequired
+                : .highRiskRequiresConfirmation
             return .confirm(
                 prompt: ConfirmationPrompt(message: intent.argumentSummary),
                 reason: DecisionReason(code: code, message: "Confirmation required by policy")
             )
         }
 
-        if intent.riskLevel == .medium, intent.policyProfile == .moreAutonomous {
-            return .allow(reason: DecisionReason(
-                code: .allowAutonomousMediumRisk,
-                message: "Allowed by autonomous profile for medium-risk action"
-            ))
+        if intent.riskLevel == .medium {
+            // Minimize prompt noise: medium-risk confirms only when both
+            // high-impact and intent is ambiguous.
+            if Self.highImpactMediumTools.contains(intent.toolName)
+                && !intent.explicitUserAuthorization
+            {
+                return .confirm(
+                    prompt: ConfirmationPrompt(message: intent.argumentSummary),
+                    reason: DecisionReason(code: .mediumRiskRequiresConfirmation, message: "Confirmation required by policy")
+                )
+            }
         }
 
         return .allow(reason: DecisionReason(
             code: .allowLowRisk,
             message: "Allowed by policy"
         ))
-    }
-
-    private func shouldConfirmInBalancedProfile(_ intent: ActionIntent) -> Bool {
-        if intent.requiresApproval || intent.riskLevel == .high {
-            return true
-        }
-
-        if intent.riskLevel == .medium {
-            // Minimize prompt noise: medium-risk confirms only when both
-            // high-impact and intent is ambiguous.
-            return Self.highImpactMediumTools.contains(intent.toolName)
-                && !intent.explicitUserAuthorization
-        }
-
-        return false
-    }
-
-    private func shouldConfirmInAutonomousProfile(_ intent: ActionIntent) -> Bool {
-        guard !intent.explicitUserAuthorization else {
-            return false
-        }
-
-        if intent.requiresApproval || intent.riskLevel == .high {
-            return true
-        }
-
-        return false
     }
 }

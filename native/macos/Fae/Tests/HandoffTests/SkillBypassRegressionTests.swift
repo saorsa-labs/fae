@@ -19,7 +19,6 @@ final class SkillBypassRegressionTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: false,
-            policyProfile: .balanced,
             argumentSummary: "run skill"
         )
 

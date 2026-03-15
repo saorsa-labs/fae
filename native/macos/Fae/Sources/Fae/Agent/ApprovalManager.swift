@@ -73,13 +73,13 @@ actor ApprovalManager {
         eventBus.send(.approvalResolved(id: requestId, approved: approved, source: source))
     }
 
-    /// Resolve with a progressive approval decision (always, approveAllReadOnly, approveAll).
+    /// Resolve with a progressive approval decision (yes, no, always).
     func resolve(requestId: UInt64, decision: VoiceCommandParser.ApprovalDecision, source: String = "user") {
         let toolName = pendingToolNames[requestId]
 
         let approved: Bool
         switch decision {
-        case .yes, .always, .approveAllReadOnly, .approveAll:
+        case .yes, .always:
             approved = true
         case .no:
             approved = false
@@ -104,24 +104,6 @@ actor ApprovalManager {
                         reasonCode: "user_granted_always"
                     )
                 }
-
-            case .approveAllReadOnly:
-                await store.setApproveAllReadonly(true)
-                await logger.log(
-                    event: "progressive_approval",
-                    toolName: toolName ?? "unknown",
-                    decision: "approve_all_readonly",
-                    reasonCode: "user_granted_approve_all_readonly"
-                )
-
-            case .approveAll:
-                await store.setApproveAll(true)
-                await logger.log(
-                    event: "progressive_approval",
-                    toolName: toolName ?? "unknown",
-                    decision: "approve_all",
-                    reasonCode: "user_granted_approve_all"
-                )
 
             case .yes, .no:
                 break // No persistence needed

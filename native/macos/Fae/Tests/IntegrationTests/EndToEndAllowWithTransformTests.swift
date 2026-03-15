@@ -7,7 +7,7 @@ final class EndToEndAllowWithTransformTests: XCTestCase {
         await ApprovedToolsStore.shared.revokeAll()
     }
 
-    func testAutonomousWriteUsesAllowWithTransform() async {
+    func testHighRiskWriteRequiresConfirmation() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["write"],
             speakerConfig: FaeConfig.SpeakerConfig()
@@ -22,20 +22,19 @@ final class EndToEndAllowWithTransformTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .moreAutonomous,
             argumentSummary: "I can write to /tmp/example.txt. Proceed?"
         )
 
         let decision = await broker.evaluate(intent)
         switch decision {
-        case .allowWithTransform(let transform, _):
-            XCTAssertEqual(transform, .checkpointBeforeMutation)
+        case .confirm:
+            XCTAssertTrue(true)
         default:
-            XCTFail("Expected allowWithTransform for autonomous write")
+            XCTFail("Expected confirm for high-risk write action")
         }
     }
 
-    func testAutonomousManageSkillDeleteUsesAllowWithTransform() async {
+    func testHighRiskManageSkillDeleteRequiresConfirmation() async {
         let broker = DefaultTrustedActionBroker(
             knownTools: ["manage_skill"],
             speakerConfig: FaeConfig.SpeakerConfig()
@@ -50,16 +49,15 @@ final class EndToEndAllowWithTransformTests: XCTestCase {
             livenessScore: 1.0,
             explicitUserAuthorization: false,
             hasCapabilityTicket: true,
-            policyProfile: .moreAutonomous,
             argumentSummary: "I can delete a skill in your local skills library. Continue?"
         )
 
         let decision = await broker.evaluate(intent)
         switch decision {
-        case .allowWithTransform(let transform, _):
-            XCTAssertEqual(transform, .checkpointBeforeMutation)
+        case .confirm:
+            XCTAssertTrue(true)
         default:
-            XCTFail("Expected allowWithTransform for autonomous manage_skill delete")
+            XCTFail("Expected confirm for high-risk manage_skill delete action")
         }
     }
 

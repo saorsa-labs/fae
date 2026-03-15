@@ -263,37 +263,8 @@ final class ApprovalOverlayController: ObservableObject {
         activeApproval = nil
     }
 
-    /// Approve all low-risk (read-only) tools permanently.
-    func approveAllReadOnly() {
-        guard let request = activeApproval else { return }
-        NSLog("ApprovalOverlayController: approveAllReadOnly() request_id=%llu tool=%@", request.id, request.toolName)
-        NotificationCenter.default.post(
-            name: .faeApprovalRespond,
-            object: nil,
-            userInfo: [
-                "request_id": String(request.id),
-                "approved": true,
-                "decision": "approveAllReadOnly",
-            ]
-        )
-        activeApproval = nil
-    }
-
-    /// Approve all tools currently allowed by the selected tool mode.
-    func approveAll() {
-        guard let request = activeApproval else { return }
-        NSLog("ApprovalOverlayController: approveAll() request_id=%llu", request.id)
-        NotificationCenter.default.post(
-            name: .faeApprovalRespond,
-            object: nil,
-            userInfo: [
-                "request_id": String(request.id),
-                "approved": true,
-                "decision": "approveAll",
-            ]
-        )
-        activeApproval = nil
-    }
+    // Bulk-approve methods (approveAllReadOnly, approveAll) removed.
+    // Users build trust tool-by-tool via the "Always" button instead.
 
     // MARK: - Input Actions
 

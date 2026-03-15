@@ -10,8 +10,6 @@ enum VoiceCommandParser {
         case yes                  // Approve this request only
         case no                   // Deny this request
         case always               // Auto-approve this tool name forever
-        case approveAllReadOnly   // Auto-approve all low-risk tools
-        case approveAll           // Auto-approve all tools already allowed in the current mode
     }
 
     /// Voice command types that Fae recognizes.
@@ -98,21 +96,17 @@ enum VoiceCommandParser {
         // Tool mode changes.
         if lower.contains("set tool mode") || lower.contains("tool mode") || lower.contains("tools mode")
             || lower.contains("set tools to") || lower.contains("use tool mode")
+            || lower.contains("switch to") || lower.contains("go read")
+            || lower.contains("enable full") || lower.contains("full access")
+            || lower.contains("assistant mode")
         {
-            if lower.contains("no approval") || lower.contains("without approval") || lower.contains("fully autonomous") {
-                return .setToolMode("full_no_approval")
-            }
-            if lower.contains("read write") || lower.contains("read and write") {
-                return .setToolMode("read_write")
-            }
-            if lower.contains("read only") || lower.contains("safe mode") {
-                return .setToolMode("read_only")
+            if lower.contains("assistant") || lower.contains("read only") || lower.contains("read-only")
+                || lower.contains("safe mode")
+            {
+                return .setToolMode("assistant")
             }
             if lower.contains("full") {
                 return .setToolMode("full")
-            }
-            if lower.contains("off") || lower.contains("disable tools") {
-                return .setToolMode("off")
             }
         }
 
@@ -168,26 +162,9 @@ enum VoiceCommandParser {
     /// Parse an approval response from a transcription.
     ///
     /// Returns an `ApprovalDecision` or `nil` for ambiguous input.
-    /// Checks escalation phrases first (most-specific wins).
+    /// Checks "always" phrases first (most-specific wins).
     static func parseApprovalResponse(_ text: String) -> ApprovalDecision? {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Check escalation phrases most-specific first so "approve all reads"
-        // isn't swallowed by the shorter "approve all" substring.
-        let approveAllReadOnlyPhrases = ["approve all reads", "trust all read tools",
-                                         "approve all read only", "trust read tools",
-                                         "approve read only", "allow all read only",
-                                         "allow all read-only"]
-        for phrase in approveAllReadOnlyPhrases {
-            if lower.contains(phrase) { return .approveAllReadOnly }
-        }
-
-        let approveAllPhrases = ["approve all", "trust everything", "approve everything",
-                                 "allow everything", "allow all in this mode",
-                                 "allow all in current mode"]
-        for phrase in approveAllPhrases {
-            if lower.contains(phrase) { return .approveAll }
-        }
 
         let alwaysPhrases = ["always allow", "always approve", "trust this tool",
                              "always trust"]

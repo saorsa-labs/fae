@@ -153,20 +153,20 @@ final class ApprovalManagerTests: XCTestCase {
 
         await fulfillment(of: [requested], timeout: 1.0)
 
-        let handledFull = await manager.resolveMostRecent(decision: .approveAll, source: "voice")
+        let handledFull = await manager.resolveMostRecent(decision: .always, source: "voice")
         XCTAssertTrue(handledFull)
         let fullApproved = await fullTask.value
         XCTAssertTrue(fullApproved)
-        let handledReadonly = await manager.resolveMostRecent(decision: .approveAllReadOnly, source: "voice")
+        let handledReadonly = await manager.resolveMostRecent(decision: .always, source: "voice")
         XCTAssertTrue(handledReadonly)
         let readOnlyApproved = await readOnlyTask.value
         XCTAssertTrue(readOnlyApproved)
         try await Task.sleep(nanoseconds: 150_000_000)
 
-        let approveAll = await ApprovedToolsStore.shared.isApproveAll()
-        let approveAllReadonly = await ApprovedToolsStore.shared.isApproveAllReadonly()
-        XCTAssertTrue(approveAll)
-        XCTAssertTrue(approveAllReadonly)
+        let bashApproved = await ApprovedToolsStore.shared.isToolApproved("bash")
+        let readApproved = await ApprovedToolsStore.shared.isToolApproved("read")
+        XCTAssertTrue(bashApproved)
+        XCTAssertTrue(readApproved)
     }
 
     func testRequestApprovalTimesOutPublishesResolutionAndClearsPendingState() async throws {

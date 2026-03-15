@@ -4,12 +4,12 @@ import Foundation
 enum CapabilitySnapshotService {
     static func policyProfile(for toolMode: String) -> String {
         switch toolMode {
-        case "off", "read_only":
-            return "more_cautious"
-        case "full_no_approval":
-            return "more_autonomous"
+        case "assistant":
+            return "assistant"
+        case "full":
+            return "full_access"
         default:
-            return "balanced"
+            return "full_access"
         }
     }
 

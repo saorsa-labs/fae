@@ -50,28 +50,7 @@ final class ApprovalOverlayControllerTests: XCTestCase {
         XCTAssertNil(controller.activeApproval)
     }
 
-    func testApproveAllReadOnlyPostsExpectedDecisionPayload() async throws {
-        let controller = ApprovalOverlayController()
-        controller.activeApproval = .init(
-            id: 8,
-            toolName: "read",
-            description: "Read: /tmp/demo.txt",
-            manualOnly: false,
-            isDisasterLevel: false
-        )
-
-        let expectation = expectation(forNotification: .faeApprovalRespond, object: nil) { notification in
-            let info = notification.userInfo
-            return info?["request_id"] as? String == "8"
-                && info?["approved"] as? Bool == true
-                && info?["decision"] as? String == "approveAllReadOnly"
-        }
-
-        controller.approveAllReadOnly()
-
-        await fulfillment(of: [expectation], timeout: 1.0)
-        XCTAssertNil(controller.activeApproval)
-    }
+    // testApproveAllReadOnly removed — bulk-approve methods were removed in UX simplification.
 
     func testInputRequestFormBuildsFieldsAndSubmitFormResponds() async throws {
         let controller = ApprovalOverlayController()

@@ -69,11 +69,8 @@ struct ToolPermissionSnapshot: Sendable {
           <p><strong>Tool mode quick actions</strong></p>
           <p class='hint'>Click to apply immediately:</p>
           <div class='chips'>
-            <a class='chip' href='fae-action://set_tool_mode?value=off&source=canvas'>Off</a>
-            <a class='chip' href='fae-action://set_tool_mode?value=read_only&source=canvas'>Read Only</a>
-            <a class='chip' href='fae-action://set_tool_mode?value=read_write&source=canvas'>Read/Write</a>
-            <a class='chip' href='fae-action://set_tool_mode?value=full&source=canvas'>Full</a>
-            <a class='chip danger' href='fae-action://set_tool_mode?value=full_no_approval&source=canvas'>Full (No Approval)</a>
+            <a class='chip' href='fae-action://set_tool_mode?value=assistant&source=canvas'>Read only</a>
+            <a class='chip' href='fae-action://set_tool_mode?value=full&source=canvas'>Everything (with approval)</a>
           </div>
         </div>
         """
@@ -105,9 +102,7 @@ struct ToolPermissionSnapshot: Sendable {
         <div class='panel'>
           <p><strong>Progressive approvals</strong></p>
           <p><strong>Always-approved tools:</strong> \(approvedTools.isEmpty ? "none" : approvedTools.map { "<code>\($0)</code>" }.joined(separator: ", "))</p>
-          <p><strong>Allow all read-only:</strong> \(approveAllReadonly ? "enabled" : "disabled")</p>
-          <p><strong>Allow all in current mode:</strong> \(approveAllInCurrentMode ? "enabled" : "disabled")</p>
-          <p class='hint'>These grants skip future approval popups only for tools already allowed by the current tool mode.</p>
+          <p class='hint'>Tap "Always" in the approval popup to build trust tool-by-tool. Reset approvals in Settings > Tools.</p>
         </div>
         """
 
@@ -169,7 +164,7 @@ struct ToolPermissionSnapshot: Sendable {
             <ul>\(listItems(deniedTools))</ul>
           </div>
 
-          <p class='hint'>Voice commands: “set tool mode to read only”, “enable thinking mode”, “request camera permission”, “lock your voice”.</p>
+          <p class='hint'>Voice commands: “switch to read only”, “enable everything”, “enable thinking mode”, “request camera permission”.</p>
         </body>
         </html>
         """

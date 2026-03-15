@@ -31,19 +31,16 @@ final class DocsContractTests: XCTestCase {
         let guide = try loadRepositoryText(relativePath: "docs/testing-guide/scheduler-and-tools.md")
         let registry = ToolRegistry.buildDefault()
 
-        let readOnlyCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "read_only") }.count
-        let readWriteCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "read_write") }.count
+        let assistantCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "assistant") }.count
         let fullCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "full") }.count
 
         XCTAssertEqual(registry.allTools.count, 34)
-        XCTAssertEqual(readOnlyCount, 16)
-        XCTAssertEqual(readWriteCount, 32)
+        XCTAssertEqual(assistantCount, 16)
         XCTAssertEqual(fullCount, 34)
 
         XCTAssertTrue(guide.contains("Total: 34 tools"))
-        XCTAssertTrue(guide.contains("read_only`: 16 tools") || guide.contains("`read_only`: 16 tools"))
-        XCTAssertTrue(guide.contains("read_write`: 32 tools") || guide.contains("`read_write`: 32 tools"))
-        XCTAssertTrue(guide.contains("full` / `full_no_approval`: 34 tools") || guide.contains("`full` / `full_no_approval`: 34 tools"))
+        XCTAssertTrue(guide.contains("assistant`: 16 tools") || guide.contains("`assistant`: 16 tools"))
+        XCTAssertTrue(guide.contains("full`: 34 tools") || guide.contains("`full`: 34 tools"))
         XCTAssertTrue(guide.contains("delegate_agent"))
         XCTAssertTrue(guide.contains("FaeScheduler.triggerTask(id:)"))
 

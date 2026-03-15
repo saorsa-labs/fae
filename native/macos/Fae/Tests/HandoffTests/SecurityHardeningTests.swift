@@ -297,55 +297,39 @@ final class ToolModeFilteringTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Off Mode
+    // MARK: - Assistant Mode (read-only)
 
-    func testOffModeDisablesAllTools() {
-        XCTAssertFalse(registry.isToolAllowed("read", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("web_search", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("fetch_url", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("calendar", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("contacts", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("reminders", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("mail", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("notes", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("scheduler_list", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("roleplay", mode: "off"))
+    func testAssistantModeAllowsReadOnlyTools() {
+        XCTAssertTrue(registry.isToolAllowed("read", mode: "assistant"))
+        XCTAssertTrue(registry.isToolAllowed("web_search", mode: "assistant"))
+        XCTAssertTrue(registry.isToolAllowed("calendar", mode: "assistant"))
+        XCTAssertFalse(registry.isToolAllowed("write", mode: "assistant"))
+        XCTAssertFalse(registry.isToolAllowed("bash", mode: "assistant"))
+        XCTAssertFalse(registry.isToolAllowed("edit", mode: "assistant"))
     }
 
     func testOffModeBlocksWriteTools() {
         XCTAssertFalse(registry.isToolAllowed("write", mode: "off"))
         XCTAssertFalse(registry.isToolAllowed("edit", mode: "off"))
         XCTAssertFalse(registry.isToolAllowed("bash", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("self_config", mode: "off"))
-        XCTAssertFalse(registry.isToolAllowed("scheduler_create", mode: "off"))
+        XCTAssertFalse(registry.isToolAllowed("self_config", mode: "assistant"))
+        XCTAssertFalse(registry.isToolAllowed("scheduler_create", mode: "assistant"))
     }
 
-    // MARK: - Read-Only Mode
+    // MARK: - Legacy Mode Migration
 
-    func testReadOnlyModeAllowsReadButBlocksMutationAndExecution() {
+    func testLegacyReadOnlyMigratesToAssistant() {
+        // read_only is a legacy mode that maps to assistant behavior
         XCTAssertTrue(registry.isToolAllowed("read", mode: "read_only"))
-        XCTAssertTrue(registry.isToolAllowed("session_search", mode: "read_only"))
-        XCTAssertTrue(registry.isToolAllowed("web_search", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
         XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))
-        XCTAssertFalse(registry.isToolAllowed("run_skill", mode: "read_only"))
-        XCTAssertFalse(registry.isToolAllowed("delegate_agent", mode: "read_only"))
-        XCTAssertFalse(registry.isToolAllowed("channel_setup", mode: "read_only"))
     }
 
-    // MARK: - Read-Write Mode
-
-    func testReadWriteModeAllowsWriteTools() {
+    func testLegacyReadWriteMigratesToFull() {
+        // read_write is a legacy mode that maps to full behavior
         XCTAssertTrue(registry.isToolAllowed("read", mode: "read_write"))
         XCTAssertTrue(registry.isToolAllowed("write", mode: "read_write"))
-        XCTAssertTrue(registry.isToolAllowed("edit", mode: "read_write"))
-        XCTAssertTrue(registry.isToolAllowed("self_config", mode: "read_write"))
-        XCTAssertTrue(registry.isToolAllowed("channel_setup", mode: "read_write"))
-        XCTAssertTrue(registry.isToolAllowed("scheduler_create", mode: "read_write"))
-    }
-
-    func testReadWriteModeBlocksBash() {
-        XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_write"))
+        XCTAssertTrue(registry.isToolAllowed("bash", mode: "read_write"))
     }
 
     // MARK: - Full Mode
@@ -376,9 +360,11 @@ final class ToolModeFilteringTests: XCTestCase {
 
     // MARK: - Schema Filtering
 
-    func testOffModeSchemasAreEmpty() {
-        let schemas = registry.toolSchemas(for: "off")
-        XCTAssertEqual(schemas, "")
+    func testAssistantModeSchemasExcludeWriteTools() {
+        let schemas = registry.toolSchemas(for: "assistant")
+        XCTAssertTrue(schemas.contains("## read\n"))
+        XCTAssertFalse(schemas.contains("## bash\n"))
+        XCTAssertFalse(schemas.contains("## write\n"))
     }
 
     func testFullModeSchemasIncludeAll() {

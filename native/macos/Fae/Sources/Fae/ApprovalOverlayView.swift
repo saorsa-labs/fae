@@ -86,11 +86,10 @@ private struct ApprovalCard: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
-            Text("Say no, once, always, always read-only, or always all.")
+            Text("Say no, yes, or always.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
-            // Row 1: Primary actions — No / Once / Always
             HStack(spacing: 8) {
                 Button(action: { controller.deny() }) {
                     Text("No")
@@ -103,7 +102,7 @@ private struct ApprovalCard: View {
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: { controller.approve() }) {
-                    Text("Once")
+                    Text("Yes")
                         .font(.system(size: 12, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
@@ -119,27 +118,6 @@ private struct ApprovalCard: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.blue)
-            }
-
-            // Row 2: Escalation — Always read-only / Always all
-            HStack(spacing: 8) {
-                Button(action: { controller.approveAllReadOnly() }) {
-                    Text("Always read-only")
-                        .font(.system(size: 10, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                }
-                .buttonStyle(.bordered)
-                .tint(.teal)
-
-                Button(action: { controller.approveAll() }) {
-                    Text("Always all")
-                        .font(.system(size: 10, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                }
-                .buttonStyle(.bordered)
-                .tint(.orange)
             }
         }
         .padding(14)
@@ -226,6 +204,9 @@ private struct ToolModeCard: View {
         if request.reason.contains("non-owner") {
             return "Speaker Not Authorized"
         }
+        if request.reason.contains("assistant") {
+            return "Read-Only Mode"
+        }
         return "Tool Access Required"
     }
 
@@ -235,6 +216,9 @@ private struct ToolModeCard: View {
         }
         if request.reason.contains("non-owner") {
             return "Owner-gated tools are blocked for this speaker."
+        }
+        if request.reason.contains("assistant") {
+            return "Fae is in read-only mode. Enable everything (with approval) to let her act?"
         }
         return "I need tool access to help with this request."
     }
@@ -275,8 +259,31 @@ private struct ToolModeCard: View {
                     .tint(.blue)
                     .keyboardShortcut(.return, modifiers: [])
                 }
+            } else if request.reason.contains("assistant") {
+                // Read-only mode: Stay / Enable Everything
+                HStack(spacing: 8) {
+                    Button(action: { controller.dismissToolModeRequest() }) {
+                        Text("Stay Read-Only")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
+                    .keyboardShortcut(.escape, modifiers: [])
+
+                    Button(action: { controller.upgradeToolMode("full") }) {
+                        Text("Enable Everything")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
             } else if request.reason.contains("non-owner") {
-                // Non-owner case: Dismiss / Read-Only
+                // Non-owner case: Dismiss / Assistant Mode
                 HStack(spacing: 8) {
                     Button(action: { controller.dismissToolModeRequest() }) {
                         Text("Dismiss")
@@ -288,8 +295,8 @@ private struct ToolModeCard: View {
                     .tint(.secondary)
                     .keyboardShortcut(.escape, modifiers: [])
 
-                    Button(action: { controller.upgradeToolMode("read_only") }) {
-                        Text("Read-Only")
+                    Button(action: { controller.upgradeToolMode("assistant") }) {
+                        Text("Read Only")
                             .font(.system(size: 12, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
@@ -311,8 +318,8 @@ private struct ToolModeCard: View {
                     .tint(.secondary)
                     .keyboardShortcut(.escape, modifiers: [])
 
-                    Button(action: { controller.upgradeToolMode("read_write") }) {
-                        Text("Read & Write")
+                    Button(action: { controller.upgradeToolMode("assistant") }) {
+                        Text("Read Only")
                             .font(.system(size: 12, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
@@ -321,7 +328,7 @@ private struct ToolModeCard: View {
                     .tint(.teal)
 
                     Button(action: { controller.upgradeToolMode("full") }) {
-                        Text("Full Access")
+                        Text("Enable Everything")
                             .font(.system(size: 12, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)

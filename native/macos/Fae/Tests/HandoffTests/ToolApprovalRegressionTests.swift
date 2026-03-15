@@ -15,27 +15,20 @@ final class ToolApprovalRegressionTests: XCTestCase {
     func testToolRegistryModeFilteringAndNativeSpecsStayConsistent() {
         let registry = ToolRegistry.buildDefault()
 
-        XCTAssertNil(registry.nativeToolSpecs(for: "off"))
-        XCTAssertEqual(registry.toolSchemas(for: "off"), "")
+        // Assistant mode: read-only tools only
+        XCTAssertTrue(registry.isToolAllowed("read", mode: "assistant"))
+        XCTAssertFalse(registry.isToolAllowed("write", mode: "assistant"))
+        XCTAssertFalse(registry.isToolAllowed("bash", mode: "assistant"))
 
-        XCTAssertTrue(registry.isToolAllowed("read", mode: "read_only"))
-        XCTAssertFalse(registry.isToolAllowed("write", mode: "read_only"))
-        XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_only"))
-
-        XCTAssertTrue(registry.isToolAllowed("write", mode: "read_write"))
-        XCTAssertTrue(registry.isToolAllowed("screenshot", mode: "read_write"))
-        XCTAssertFalse(registry.isToolAllowed("bash", mode: "read_write"))
-
+        // Full mode: all tools
         XCTAssertTrue(registry.isToolAllowed("bash", mode: "full"))
         XCTAssertTrue(registry.isToolAllowed("delegate_agent", mode: "full"))
 
-        let readOnlySpecs = registry.nativeToolSpecs(for: "read_only") ?? []
-        let readWriteSpecs = registry.nativeToolSpecs(for: "read_write") ?? []
+        let assistantSpecs = registry.nativeToolSpecs(for: "assistant") ?? []
         let fullSpecs = registry.nativeToolSpecs(for: "full") ?? []
 
-        XCTAssertFalse(readOnlySpecs.isEmpty)
-        XCTAssertGreaterThan(readWriteSpecs.count, readOnlySpecs.count)
-        XCTAssertGreaterThan(fullSpecs.count, readWriteSpecs.count)
+        XCTAssertFalse(assistantSpecs.isEmpty)
+        XCTAssertGreaterThan(fullSpecs.count, assistantSpecs.count)
     }
 
     func testToolRegistryLimitedSchemasRespectSubsetAndStrictLocalPrivacy() {

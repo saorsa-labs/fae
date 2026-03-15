@@ -311,11 +311,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 let isRescue = self.rescueMode?.isActive ?? false
 
-                // In rescue mode, override tool mode to read_only.
+                // In rescue mode, override tool mode to assistant (read-only).
                 var pipelineConfig = runtimeConfig
                 if isRescue {
-                    pipelineConfig.toolMode = "read_only"
-                    NSLog("FaeCore: rescue mode — tool mode forced to read_only")
+                    pipelineConfig.toolMode = "assistant"
+                    NSLog("FaeCore: rescue mode — tool mode forced to assistant")
                 }
 
                 let skillManager = SkillManager()
@@ -1286,8 +1286,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "yes": return .yes
         case "no": return .no
         case "always": return .always
-        case "approveAllReadOnly": return .approveAllReadOnly
-        case "approveAll": return .approveAll
         default: return approved ? .yes : .no
         }
     }
@@ -1331,22 +1329,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
         let value = payload["value"]
         switch key {
         case "tool_mode":
-            guard let value = value as? String,
-                  ["off", "read_only", "read_write", "full", "full_no_approval"].contains(value)
-            else { return }
-            toolMode = value
-            config.toolMode = value
+            guard let value = value as? String else { return }
+            // Accept both new and legacy mode values; FaeConfig.migrateToolMode handles mapping.
+            let migrated = FaeConfig.migrateToolMode(value)
+            guard ["assistant", "full"].contains(migrated) else { return }
+            toolMode = migrated
+            config.toolMode = migrated
             persistConfig(reason: "config.patch.tool_mode")
             if let coordinator = pipelineCoordinator {
                 Task {
-                    await coordinator.setToolMode(value)
+                    await coordinator.setToolMode(migrated)
                 }
-            }
-            // full_no_approval means all tools execute without approval popups.
-            // Sync the ApprovedToolsStore so the broker's shouldAutoApprove path
-            // short-circuits and bypasses confirmation for every tool in this mode.
-            Task {
-                await ApprovedToolsStore.shared.setApproveAll(value == "full_no_approval")
             }
 
         case "privacy.mode":

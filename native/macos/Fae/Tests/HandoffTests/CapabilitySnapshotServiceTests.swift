@@ -3,10 +3,8 @@ import XCTest
 
 final class CapabilitySnapshotServiceTests: XCTestCase {
     func testPolicyProfileMapping() {
-        XCTAssertEqual(CapabilitySnapshotService.policyProfile(for: "off"), "more_cautious")
-        XCTAssertEqual(CapabilitySnapshotService.policyProfile(for: "read_only"), "more_cautious")
-        XCTAssertEqual(CapabilitySnapshotService.policyProfile(for: "full"), "balanced")
-        XCTAssertEqual(CapabilitySnapshotService.policyProfile(for: "full_no_approval"), "more_autonomous")
+        XCTAssertEqual(CapabilitySnapshotService.policyProfile(for: "assistant"), "assistant")
+        XCTAssertEqual(CapabilitySnapshotService.policyProfile(for: "full"), "full_access")
     }
 
     func testSnapshotBuildIncludesToolAvailabilityAndPermissions() {
@@ -27,7 +25,7 @@ final class CapabilitySnapshotServiceTests: XCTestCase {
 
         let snapshot = CapabilitySnapshotService.buildSnapshot(
             triggerText: "test",
-            toolMode: "read_only",
+            toolMode: "assistant",
             privacyMode: "local_preferred",
             speakerState: "Speaker unknown",
             ownerGateEnabled: false,
@@ -42,7 +40,7 @@ final class CapabilitySnapshotServiceTests: XCTestCase {
             registry: registry
         )
 
-        XCTAssertEqual(snapshot.policyProfile, "more_cautious")
+        XCTAssertEqual(snapshot.policyProfile, "assistant")
         XCTAssertTrue(snapshot.allowedTools.contains("read"))
         XCTAssertTrue(snapshot.deniedTools.contains("write"))
         XCTAssertEqual(snapshot.approvedTools, ["read"])

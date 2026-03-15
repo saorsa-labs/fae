@@ -111,32 +111,23 @@ final class GovernanceActionRoutingTests: XCTestCase {
         XCTAssertEqual(sender.sent.last?.payload["key"] as? String, "vision.enabled")
     }
 
-    func testFullNoApprovalToolModeUsesPopupConfirmationBeforeDispatch() async throws {
+    func testToolModeSetViaCanvasDispatchesDirectly() async throws {
         let bridge = HostCommandBridge()
         let sender = MockSender()
         bridge.sender = sender
-
-        let popupExpectation = expectation(description: "full_no_approval popup requested")
-        let observer = NotificationCenter.default.addObserver(
-            forName: .faeGovernanceConfirmationRequested,
-            object: nil,
-            queue: .main
-        ) { _ in
-            popupExpectation.fulfill()
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
 
         NotificationCenter.default.post(
             name: .faeGovernanceActionRequested,
             object: nil,
             userInfo: [
                 "action": "set_tool_mode",
-                "value": "full_no_approval",
+                "value": "full",
                 "source": "canvas",
             ]
         )
 
-        await fulfillment(of: [popupExpectation], timeout: 2.0)
-        XCTAssertTrue(sender.sent.isEmpty)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(sender.sent.last?.name, "config.patch")
+        XCTAssertEqual(sender.sent.last?.payload["key"] as? String, "tool_mode")
     }
 }

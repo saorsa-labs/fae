@@ -139,11 +139,8 @@ final class ToolRegistry: Sendable {
 
     /// JSON schema descriptions filtered by tool mode.
     ///
-    /// - `off`: no tools
-    /// - `read_only`: read-only tools (no writes, no bash)
-    /// - `read_write`: read tools + write/edit/self_config + scheduler mutation
+    /// - `assistant`: read-only tools (no writes, no bash)
     /// - `full`: all tools (with approval for writes)
-    /// - `full_no_approval`: all tools
     func toolSchemas(
         for mode: String,
         privacyMode: String = "local_preferred",
@@ -186,16 +183,16 @@ final class ToolRegistry: Sendable {
         }
 
         switch mode {
-        case "off":
-            return false
-        case "read_only":
+        case "assistant", "read_only":
             return Self.readOnlyTools.contains(name)
-        case "read_write":
-            return Self.readOnlyTools.contains(name) || Self.writeTools.contains(name)
-        case "full", "full_no_approval":
+        case "full":
             return tools[name] != nil
         default:
-            // Unknown mode — treat as "full" for backward compatibility.
+            // Legacy or unknown modes — migrate and re-evaluate.
+            let migrated = FaeConfig.migrateToolMode(mode)
+            if migrated != mode {
+                return isToolAllowed(name, mode: migrated, privacyMode: privacyMode)
+            }
             return tools[name] != nil
         }
     }
@@ -240,6 +237,7 @@ final class ToolRegistry: Sendable {
         privacyMode: String = "local_preferred",
         limitedTo allowedNames: Set<String>? = nil
     ) -> [ToolSpec]? {
+        // No tools when mode is explicitly "off" (legacy).
         guard mode != "off" else { return nil }
         let allowed = filteredTools(for: mode, privacyMode: privacyMode, limitedTo: allowedNames)
         guard !allowed.isEmpty else { return nil }

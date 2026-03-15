@@ -26,7 +26,29 @@ struct FaeConfig: Codable {
     var licenseAccepted: Bool = false
     var startupIntroSeen: Bool = false
     var startupIntroSeenConfigured: Bool = false
-    var toolMode: String = "full"
+    var toolMode: String = "full" {
+        didSet {
+            // Silently migrate legacy tool mode values.
+            let migrated = Self.migrateToolMode(toolMode)
+            if migrated != toolMode {
+                toolMode = migrated
+            }
+        }
+    }
+
+    /// Migrate legacy tool mode strings to the simplified two-mode system.
+    static func migrateToolMode(_ mode: String) -> String {
+        switch mode {
+        case "off", "read_only":
+            return "assistant"
+        case "read_write", "full_no_approval":
+            return "full"
+        case "assistant", "full":
+            return mode
+        default:
+            return "full"
+        }
+    }
 
     // MARK: - Audio
 

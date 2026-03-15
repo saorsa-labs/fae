@@ -26,24 +26,19 @@ actor ToolRateLimiter {
 
     /// Check whether a tool invocation is within its rate limit.
     ///
-    /// Applies profile and risk-aware adjustments on top of per-tool defaults.
     /// - Returns `nil` if allowed, or an error message if rate-limited.
-    func checkLimit(tool: String, riskLevel: ToolRiskLevel, profile: PolicyProfile) -> String? {
+    func checkLimit(tool: String, riskLevel: ToolRiskLevel) -> String? {
         let now = Date()
         let windowStart = now.addingTimeInterval(-60)
         let baseLimit = Self.limits[tool] ?? Self.defaultLimit
-        let maxPerMinute = adjustedLimit(
-            base: baseLimit,
-            riskLevel: riskLevel,
-            profile: profile
-        )
+        let maxPerMinute = adjustedLimit(base: baseLimit, riskLevel: riskLevel)
 
         // Prune entries older than 60 seconds.
         var entries = windowByTool[tool, default: []]
         entries.removeAll { $0 < windowStart }
 
         if entries.count >= maxPerMinute {
-            return "Rate limit exceeded for '\(tool)': max \(maxPerMinute) calls/min (\(riskLevel.rawValue), \(profile.rawValue))"
+            return "Rate limit exceeded for '\(tool)': max \(maxPerMinute) calls/min (\(riskLevel.rawValue))"
         }
 
         entries.append(now)
@@ -51,7 +46,7 @@ actor ToolRateLimiter {
         return nil
     }
 
-    private func adjustedLimit(base: Int, riskLevel: ToolRiskLevel, profile: PolicyProfile) -> Int {
+    private func adjustedLimit(base: Int, riskLevel: ToolRiskLevel) -> Int {
         var limit = base
 
         // Risk-tier guardrails.
@@ -64,26 +59,12 @@ actor ToolRateLimiter {
             break
         }
 
-        // Profile tuning.
-        switch profile {
-        case .moreCautious:
-            limit = max(1, limit / 2)
-        case .balanced:
-            break
-        case .moreAutonomous:
-            if riskLevel == .low {
-                limit = min(60, limit + 5)
-            } else if riskLevel == .high {
-                limit = min(limit, 2)
-            }
-        }
-
         return max(limit, 1)
     }
 
     /// Backward-compatible call path used by older tests/callers.
     func checkLimit(tool: String) -> String? {
-        checkLimit(tool: tool, riskLevel: .medium, profile: .balanced)
+        checkLimit(tool: tool, riskLevel: .medium)
     }
 
     /// Reset all rate limit state (for testing).

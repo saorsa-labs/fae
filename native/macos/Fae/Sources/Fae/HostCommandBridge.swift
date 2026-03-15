@@ -279,19 +279,7 @@ final class HostCommandBridge: ObservableObject {
                 Self.incrementAuditCounter("fae.governance.invalid")
                 return
             }
-            if allowPopupConfirmation,
-               value == "full_no_approval",
-               source.contains("canvas")
-            {
-                requestGovernanceConfirmation(
-                    action: action,
-                    userInfo: userInfo,
-                    title: "Allow full autonomy without approvals?",
-                    message: "Fae will be able to run high-risk tool actions without confirmation prompts.",
-                    confirmLabel: "Allow Without Popups"
-                )
-                return
-            }
+            // No governance confirmation needed — only two safe modes (assistant/full).
 
             NSLog("HostCommandBridge: governance action set_tool_mode=%@ source=%@", value, source)
             dispatch(
@@ -436,11 +424,8 @@ final class HostCommandBridge: ObservableObject {
     /// Human-friendly label for a tool_mode value.
     private static func toolModeLabel(_ mode: String) -> String {
         switch mode {
-        case "full":             return "Tools are enabled with approval prompts"
-        case "full_no_approval": return "Tools are fully enabled without approval prompts"
-        case "read_only":        return "Tools are set to read-only"
-        case "read_write":       return "Tools are set to read-write"
-        case "off":              return "Tools are turned off"
+        case "assistant":        return "Read only — search and recall only"
+        case "full":             return "Everything enabled — Fae will ask before acting"
         default:                 return "Tool mode updated"
         }
     }
