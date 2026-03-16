@@ -240,6 +240,28 @@ final class DamageControlPolicyTests: XCTestCase {
         )
     }
 
+    func testNoDeleteDevDataDir() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let devDir = "\(home)/Library/Application Support/fae-dev/"
+        assertConfirmManual(
+            await bash("rm -rf \"\(devDir)\""),
+            "rm on fae-dev data dir must require manual confirmation"
+        )
+    }
+
+    func testNoDeleteDevVault() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let devVault = "\(home)/.fae-vault-dev"
+        assertConfirmManual(
+            await bash("rm -rf \(devVault)"),
+            "rm on .fae-vault-dev must require manual confirmation"
+        )
+        assertConfirmManual(
+            await bash("mv \(devVault) /tmp/fae-vault-dev-backup"),
+            "mv of .fae-vault-dev must require manual confirmation"
+        )
+    }
+
     // MARK: - Non-bash tools don't trigger bash rules
 
     func testCalendarToolNotIntercepted() async {

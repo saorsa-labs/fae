@@ -131,13 +131,75 @@ final class PathPolicyTests: XCTestCase {
     // MARK: - Fae Config
 
     func testBlocksFaeConfigToml() {
-        let home = NSHomeDirectory()
         let path = FaeDirectories.configFile.path
         let result = PathPolicy.validateWritePath(path)
         if case .blocked(let reason) = result {
             XCTAssertTrue(reason.contains("config.toml"), "Reason: \(reason)")
         } else {
             XCTFail("Expected Fae config.toml to be blocked for direct writes")
+        }
+    }
+
+    // MARK: - Cross-Mode Protection
+
+    func testBlocksProductionProtectedFilesFromDevMode() {
+        // Even when running in dev/test mode, production data files must be blocked.
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
+        let prodRoot = appSupport.appendingPathComponent("fae")
+
+        let protectedFiles = ["config.toml", "fae.db", "scheduler.db", "soul.md", "speakers.json", "approved_tools.json"]
+        for file in protectedFiles {
+            let path = prodRoot.appendingPathComponent(file).path
+            let result = PathPolicy.validateWritePath(path)
+            if case .blocked = result {
+                // expected
+            } else {
+                XCTFail("Expected production \(file) to be blocked, got: \(result)")
+            }
+        }
+    }
+
+    func testBlocksDevProtectedFilesFromProductionMode() {
+        // The dev data directory files must also be blocked unconditionally.
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
+        let devRoot = appSupport.appendingPathComponent("fae-dev")
+
+        let protectedFiles = ["config.toml", "fae.db", "scheduler.db", "soul.md", "speakers.json", "approved_tools.json"]
+        for file in protectedFiles {
+            let path = devRoot.appendingPathComponent(file).path
+            let result = PathPolicy.validateWritePath(path)
+            if case .blocked = result {
+                // expected
+            } else {
+                XCTFail("Expected dev \(file) to be blocked, got: \(result)")
+            }
+        }
+    }
+
+    func testBlocksDevVaultWrites() {
+        let home = NSHomeDirectory()
+        let result = PathPolicy.validateWritePath("\(home)/.fae-vault-dev/data/fae.db")
+        if case .blocked = result {
+            // expected
+        } else {
+            XCTFail("Expected .fae-vault-dev to be blocked for writes")
+        }
+    }
+
+    func testAllowsNonProtectedFilesInFaeDir() {
+        // Files that aren't in the protected list should still be writable.
+        let path = FaeDirectories.root.appendingPathComponent("my-notes.txt").path
+        let result = PathPolicy.validateWritePath(path)
+        if case .allowed = result {
+            // expected
+        } else {
+            XCTFail("Expected non-protected file in fae dir to be allowed, got: \(result)")
         }
     }
 
