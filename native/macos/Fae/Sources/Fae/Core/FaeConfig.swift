@@ -530,13 +530,13 @@ struct FaeConfig: Codable {
         case "qwen3_vl_4b_4bit", "qwen3_vl_4b":
             return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
         default: // "auto"
-            // 32+ GB: Text LLM is 35B-A3B (natively multimodal) — share its container.
-            //         Zero additional RAM for vision.
-            // 16-31 GB: Text LLM is 4B (text-only) — load Qwen3-VL-4B separately.
-            // <16 GB: Text LLM is 2B — not enough headroom for a separate VLM.
-            if totalGB >= 32 {
-                return ("mlx-community/Qwen3.5-35B-A3B-4bit", 16_384)
-            } else if totalGB >= 16 {
+            // Vision always uses the lightweight Qwen3-VL-4B for speed.
+            // 35B-A3B is natively multimodal but vision inference through the MoE
+            // is impractically slow (~3 min per screenshot). The text LLM is loaded
+            // as text-only and a separate Qwen3-VL-4B handles vision on-demand.
+            // 16+ GB: Qwen3-VL-4B (4-bit, ~2.5 GB) — fast vision alongside any text LLM.
+            // <16 GB: Not enough headroom for a separate VLM.
+            if totalGB >= 16 {
                 return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
             } else {
                 return nil

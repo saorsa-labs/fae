@@ -640,6 +640,54 @@ enum TextProcessing {
         }
     }
 
+    // MARK: - STT Repetition Guard
+
+    /// Detect pathologically repetitive STT output (degenerate ASR loop).
+    ///
+    /// Qwen3-ASR (and Whisper-family models) can enter a repetition loop on
+    /// short, ambiguous, or low-energy audio segments, producing thousands of
+    /// repeated tokens like "oh, oh, oh, oh...". This wastes LLM context and
+    /// confuses the user.
+    ///
+    /// Heuristic: split on whitespace, count unique words. If:
+    /// - total words > 20 AND unique/total ratio < 0.1 → hallucination
+    /// - OR a single 1-3 word pattern repeats 20+ consecutive times
+    static func isRepetitiveHallucination(_ text: String) -> Bool {
+        let words = text.lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+
+        guard words.count > 20 else { return false }
+
+        // Fast path: unique word ratio check.
+        let unique = Set(words)
+        let ratio = Double(unique.count) / Double(words.count)
+        if ratio < 0.1 {
+            return true
+        }
+
+        // Slower path: detect a short repeating pattern (1-3 words).
+        for patternLen in 1...min(3, words.count / 20) {
+            let pattern = Array(words.prefix(patternLen))
+            var consecutiveRepeats = 0
+            var i = 0
+            while i + patternLen <= words.count {
+                let slice = Array(words[i..<(i + patternLen)])
+                if slice == pattern {
+                    consecutiveRepeats += 1
+                    if consecutiveRepeats >= 20 {
+                        return true
+                    }
+                    i += patternLen
+                } else {
+                    break
+                }
+            }
+        }
+
+        return false
+    }
+
     // MARK: - STT Post-Processing
 
     /// Common ASR misrecognitions of "Fae" mapped to their corrections.

@@ -14,11 +14,25 @@ actor MLXVLMEngine: VLMEngine {
     private(set) var loadState: MLEngineLoadState = .notStarted
 
     func load(modelID: String) async throws {
+        try await load(modelID: modelID, progressHandler: { _ in })
+    }
+
+    /// Load a VLM with download progress reporting.
+    ///
+    /// When the model is not locally cached, MLXVLM downloads it from HuggingFace
+    /// Hub. The `progressHandler` receives `Progress` updates during that download.
+    func load(
+        modelID: String,
+        progressHandler: @Sendable @escaping (Progress) -> Void
+    ) async throws {
         loadState = .loading
         NSLog("MLXVLMEngine: loading model %@", modelID)
         do {
             let config = ModelConfiguration(id: modelID)
-            container = try await VLMModelFactory.shared.loadContainer(configuration: config)
+            container = try await VLMModelFactory.shared.loadContainer(
+                configuration: config,
+                progressHandler: progressHandler
+            )
             isLoaded = true
             loadState = .loaded
             NSLog("MLXVLMEngine: model loaded")

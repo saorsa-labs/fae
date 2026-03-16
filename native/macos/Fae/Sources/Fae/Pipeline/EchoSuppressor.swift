@@ -116,9 +116,9 @@ struct EchoSuppressor {
         durationSecs: Float,
         rms: Float,
         awaitingApproval: Bool,
-        segmentOnset: Date? = nil
+        segmentOnset: Date
     ) -> Bool {
-        let onset = segmentOnset ?? Date()
+        let onset = segmentOnset
         let now = Date()
 
         // 1. Active suppression — assistant is speaking.

@@ -159,7 +159,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     func start() throws {
         guard pipelineState == .stopped || pipelineState == .error else {
-            NSLog("FaeCore: start() ignored — already %@", String(describing: pipelineState))
+            if !pendingTextInjections.isEmpty {
+                NSLog("FaeCore: start() ignored — already %@ (⚠️ %d queued text injections will drain on next successful start)",
+                      String(describing: pipelineState), pendingTextInjections.count)
+            } else {
+                NSLog("FaeCore: start() ignored — already %@", String(describing: pipelineState))
+            }
             return
         }
         eventBus.send(.runtimeState(.starting))

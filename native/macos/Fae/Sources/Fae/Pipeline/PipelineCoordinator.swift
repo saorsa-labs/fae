@@ -398,6 +398,9 @@ actor PipelineCoordinator {
             "text input", "input field", "text box", "window to paste",
             "window to type", "give me a field", "need to type", "need to paste",
             "i'll paste", "ill paste", "i will paste", "i'll type", "ill type",
+            // User wants a popup window for input
+            "pop up a window", "pop up window", "popup a window", "popup window",
+            "pop up a field", "popup a field", "open a window to",
             // User offering information
             "give you a link", "give you some", "give you the",
             "here's a link", "here is a link", "heres a link",
@@ -3687,6 +3690,13 @@ actor PipelineCoordinator {
 
         debugLog(debugConsole, .qa, "Process transcription [turn=\(currentTurnID?.prefix(8) ?? "none")]: \(text)")
 
+        // STT repetition guard — drop degenerate ASR output (e.g. "oh oh oh oh..." ×1000).
+        if TextProcessing.isRepetitiveHallucination(text) {
+            NSLog("PipelineCoordinator: dropping repetitive STT hallucination (%d chars)", text.count)
+            debugLog(debugConsole, .pipeline, "⚠️ Dropped repetitive STT hallucination (\(text.count) chars)")
+            return
+        }
+
         // Extract query if name-addressed.
         var queryText = text
         if let match = wakeMatch ?? wakeAddressMatch(in: text) {
@@ -6004,6 +6014,11 @@ actor PipelineCoordinator {
 
         if assistantSpeaking {
             debugLog(debugConsole, .pipeline, "⚠️ Speech drain timeout (\(reason)) after \(timeoutMs)ms — force-stopping playback")
+            // Cancel any queued TTS work to prevent re-triggering assistantSpeaking
+            // after we clear it. Without this, a queued sentence could start playing
+            // immediately after stop(), re-setting the flag.
+            pendingTTSTask?.cancel()
+            pendingTTSTask = nil
             markGenerationInterrupted()
             await playback.stop()
             markAssistantSpeechEnded(reason: "speech_drain_timeout")
@@ -6875,6 +6890,9 @@ actor PipelineCoordinator {
         if lower.contains("input_request")
             || lower.contains("ask me for a password")
             || lower.contains("prompt me for a secret key")
+            || lower.contains("pop up a window")
+            || lower.contains("popup a window")
+            || lower.contains("pop up window")
         {
             let secure = lower.contains("password") || lower.contains("secret") || lower.contains("key")
             let title: String

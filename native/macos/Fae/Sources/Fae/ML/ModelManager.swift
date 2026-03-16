@@ -91,8 +91,22 @@ actor ModelManager {
             return nil
         }
         let engine = MLXVLMEngine()
+        let bus = self.eventBus
 
-        try await engine.load(modelID: modelId)
+        NSLog("ModelManager: loading VLM on-demand (%@) — download may be required", modelId)
+        bus.send(.runtimeProgress(stage: "vlm_loading", progress: 0))
+
+        try await engine.load(modelID: modelId) { progress in
+            let fraction = progress.fractionCompleted
+            let totalMB = progress.totalUnitCount / 1_000_000
+            let completedMB = progress.completedUnitCount / 1_000_000
+            bus.send(.runtimeProgress(stage: "vlm_downloading", progress: fraction))
+            if fraction < 1.0 {
+                NSLog("ModelManager: downloading VLM %lld/%lld MB (%.0f%%)", completedMB, totalMB, fraction * 100)
+            }
+        }
+
+        bus.send(.runtimeProgress(stage: "vlm_loading", progress: 1.0))
         eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
         self.vlmEngine = engine
         NSLog("ModelManager: VLM loaded on-demand (%@)", modelId)
