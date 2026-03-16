@@ -31,10 +31,16 @@ struct SkillMetadata: Sendable {
     let description: String
     let author: String?
     let version: String?
+    /// Freeform tags for grouping and filtering (e.g. `["channel", "discord"]`).
+    /// Parsed from `tags:` YAML array in SKILL.md frontmatter.
+    let tags: [String]
     let type: SkillType
     let tier: SkillTier
     var isEnabled: Bool
     let directoryURL: URL
+
+    /// Whether this skill is a channel integration (has "channel" tag).
+    var isChannel: Bool { tags.contains("channel") }
 }
 
 /// Full skill record including lazy-loaded body content.

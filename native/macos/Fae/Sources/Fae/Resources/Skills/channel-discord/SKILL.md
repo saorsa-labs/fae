@@ -1,6 +1,7 @@
 ---
 name: channel-discord
 description: Configure and maintain Discord channel integration for Fae.
+tags: [channel, discord]
 metadata:
   author: fae
   version: "1.0"

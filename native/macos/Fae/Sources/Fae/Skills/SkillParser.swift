@@ -75,19 +75,51 @@ enum SkillParser {
     /// ```yaml
     /// name: weather-check
     /// description: Check weather for a city.
+    /// tags: [channel, discord]
     /// metadata:
     ///   author: fae
     ///   version: "1.0"
     /// ```
+    ///
+    /// Also supports YAML list syntax for tags:
+    /// ```yaml
+    /// tags:
+    ///   - channel
+    ///   - discord
+    /// ```
     private static func parseSimpleYAML(_ lines: [String]) -> [String: String] {
         var result: [String: String] = [:]
         var currentParent: String?
+        var listItems: [String] = []
+        var listKey: String?
+
+        func flushList() {
+            if let key = listKey, !listItems.isEmpty {
+                result[key] = listItems.joined(separator: ",")
+            }
+            listKey = nil
+            listItems = []
+        }
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
 
             let indent = line.prefix(while: { $0 == " " }).count
+
+            // YAML list item (  - value)
+            if indent >= 2, trimmed.hasPrefix("- ") {
+                let item = String(trimmed.dropFirst(2))
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if listKey != nil {
+                    listItems.append(item)
+                }
+                continue
+            }
+
+            // Non-list line — flush any pending list.
+            flushList()
 
             if indent >= 2, let parent = currentParent {
                 // Nested key
@@ -108,8 +140,18 @@ enum SkillParser {
                     .trimmingCharacters(in: .whitespaces)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
                 if value.isEmpty {
-                    // This is a parent key (e.g. "metadata:")
+                    // This is a parent key (e.g. "metadata:") or a list parent (e.g. "tags:")
                     currentParent = key
+                    listKey = key
+                } else if value.hasPrefix("[") && value.hasSuffix("]") {
+                    // Inline YAML list: tags: [channel, discord]
+                    let inner = value.dropFirst().dropLast()
+                    let items = inner.components(separatedBy: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces)
+                            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) }
+                        .filter { !$0.isEmpty }
+                    result[key] = items.joined(separator: ",")
+                    currentParent = nil
                 } else {
                     result[key] = value
                     currentParent = nil
@@ -117,6 +159,7 @@ enum SkillParser {
             }
         }
 
+        flushList()
         return result
     }
 
@@ -138,11 +181,17 @@ enum SkillParser {
         let hasScripts = FileManager.default.fileExists(atPath: scriptsDir.path)
         let type: SkillType = hasScripts ? .executable : .instruction
 
+        let tags: [String] = (yaml["tags"] ?? "")
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+
         return SkillMetadata(
             name: name,
             description: description,
             author: yaml["metadata.author"],
             version: yaml["metadata.version"],
+            tags: tags,
             type: type,
             tier: tier,
             isEnabled: isEnabled,

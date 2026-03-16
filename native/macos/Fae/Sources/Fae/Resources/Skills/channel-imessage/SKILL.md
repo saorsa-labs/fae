@@ -1,6 +1,7 @@
 ---
 name: channel-imessage
 description: Configure and monitor iMessage channel integration for Fae.
+tags: [channel, imessage]
 metadata:
   author: fae
   version: "1.0"

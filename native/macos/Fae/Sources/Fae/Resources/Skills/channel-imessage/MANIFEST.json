@@ -19,7 +19,7 @@
   "integrity": {
     "algorithm": "sha256",
     "checksums": {
-      "SKILL.md": "1f4eb153ac4b493f03b2abf4d221f7399b3f2619b488c313e6ebe1c0063b4bb3",
+      "SKILL.md": "99d3ce421faf9ec3e1ce844ba91c78fce2285c91505229dd010fc9282e8425cc",
       "scripts/channel_imessage.py": "2ffa17be4baef64d4f4a4cad9cd86f8683937d6c90bb8b6aed4f81e96be2d92c"
     },
     "signature": null

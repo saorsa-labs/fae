@@ -166,6 +166,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     var testServer: TestServer?
     var debugFileLogger: DebugFileLogger?
 
+    /// Standalone skill import panel shown when Fae suggests a community skill.
+    var skillImportPanel: NSPanel?
     var deviceTransferObserver: NSObjectProtocol?
     var openSettingsObserver: NSObjectProtocol?
     var closeSettingsObserver: NSObjectProtocol?
@@ -465,6 +467,19 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Skill import suggestion — Fae found a community skill and wants the user to review it.
+        // Opens a standalone import window so it works even when Settings/Cowork aren't open.
+        NotificationCenter.default.addObserver(
+            forName: .faeSkillImportSuggested,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let url = note.userInfo?["url"] as? String, !url.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                self?.showSkillImportPanel(url: url)
+            }
+        }
+
         // Global hotkey — summon Fae from anywhere (Ctrl+Shift+A).
         hotkeyManager.start { [weak self] in
             guard let self else { return }
@@ -517,6 +532,39 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 self.faeCore.userName = name
             }
         }
+    }
+
+    // MARK: - Skill Import Panel
+
+    private func showSkillImportPanel(url: String) {
+        // Dismiss any existing import panel.
+        skillImportPanel?.close()
+
+        let importView = SkillImportView(
+            commandSender: hostBridge.sender,
+            initialURL: url,
+            dismissAction: { [weak self] in
+                self?.skillImportPanel?.close()
+                self?.skillImportPanel = nil
+            }
+        )
+        let hostingView = NSHostingView(rootView: importView)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 560, height: 440)
+
+        let panel = NSPanel(
+            contentRect: hostingView.frame,
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Import Community Skill"
+        panel.contentView = hostingView
+        panel.isReleasedWhenClosed = false
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        skillImportPanel = panel
     }
 
     // MARK: - Pipeline Startup

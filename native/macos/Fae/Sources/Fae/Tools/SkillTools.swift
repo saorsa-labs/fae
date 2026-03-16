@@ -1,5 +1,11 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted when the LLM suggests importing a community skill.
+    /// `userInfo["url"]` contains the skill URL string.
+    static let faeSkillImportSuggested = Notification.Name("faeSkillImportSuggested")
+}
+
 /// Tool to load full SKILL.md body into LLM context.
 ///
 /// Low-risk: only reads skill files and injects instructions.
@@ -109,8 +115,8 @@ struct RunSkillTool: Tool {
 /// High-risk: modifies the skills directory.
 struct ManageSkillTool: Tool {
     let name = "manage_skill"
-    let description = "Create, update, patch, script, review, apply, or delete personal skills and staged skill drafts."
-    let parametersSchema = #"{"action": "string (required: create|update|patch|update_script|write_reference_file|replace_manifest|delete|list|list_drafts|show_draft|apply_draft|dismiss_draft)", "name": "string (required for create/update/patch/update_script/write_reference_file/replace_manifest/delete)", "description": "string (required for create, optional for update — what the skill does)", "body": "string (required for create, optional for update — SKILL.md instructions)", "script": "string (optional for create/update_script/apply_draft — Python script content)", "script_name": "string (optional for create/update_script — custom filename under scripts/)", "manifest_json": "string (optional for create/update_script/replace_manifest/apply_draft — full MANIFEST.json content)", "find_text": "string (required for patch — exact body text to replace)", "replace_with": "string (required for patch — replacement body text)", "replace_all": "boolean (optional for patch — replace every matching body span)", "relative_path": "string (required for write_reference_file — path under references/ or assets/)", "content": "string (required for write_reference_file — file content)", "draft_id": "string (required for show_draft/apply_draft/dismiss_draft)", "status": "string (optional for list_drafts — pending|dismissed|applied)"}"#
+    let description = "Create, update, patch, script, review, apply, suggest import, or delete personal skills and staged skill drafts."
+    let parametersSchema = #"{"action": "string (required: create|update|patch|update_script|write_reference_file|replace_manifest|delete|list|suggest_import|list_drafts|show_draft|apply_draft|dismiss_draft)", "name": "string (required for create/update/patch/update_script/write_reference_file/replace_manifest/delete)", "description": "string (required for create, optional for update — what the skill does)", "body": "string (required for create, optional for update — SKILL.md instructions)", "url": "string (required for suggest_import — URL of the community skill to suggest)", "reason": "string (optional for suggest_import — why this skill is relevant)", "script": "string (optional for create/update_script/apply_draft — Python script content)", "script_name": "string (optional for create/update_script — custom filename under scripts/)", "manifest_json": "string (optional for create/update_script/replace_manifest/apply_draft — full MANIFEST.json content)", "find_text": "string (required for patch — exact body text to replace)", "replace_with": "string (required for patch — replacement body text)", "replace_all": "boolean (optional for patch — replace every matching body span)", "relative_path": "string (required for write_reference_file — path under references/ or assets/)", "content": "string (required for write_reference_file — file content)", "draft_id": "string (required for show_draft/apply_draft/dismiss_draft)", "status": "string (optional for list_drafts — pending|dismissed|applied)"}"#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"manage_skill","arguments":{"action":"create","name":"weather-check","description":"Check weather for a city","body":"Search for weather using web_search tool."}}</tool_call>"#
@@ -145,6 +151,8 @@ struct ManageSkillTool: Tool {
             return await handleDelete(input: input)
         case "list":
             return await handleList()
+        case "suggest_import":
+            return handleSuggestImport(input: input)
         case "list_drafts":
             return await handleListDrafts(input: input)
         case "show_draft":
@@ -154,7 +162,7 @@ struct ManageSkillTool: Tool {
         case "dismiss_draft":
             return await handleDismissDraft(input: input)
         default:
-            return .error("Unknown action '\(action)'. Use: create, update, patch, update_script, write_reference_file, replace_manifest, delete, list, list_drafts, show_draft, apply_draft, dismiss_draft")
+            return .error("Unknown action '\(action)'. Use: create, update, patch, update_script, write_reference_file, replace_manifest, delete, list, suggest_import, list_drafts, show_draft, apply_draft, dismiss_draft")
         }
     }
 
@@ -328,6 +336,46 @@ struct ManageSkillTool: Tool {
             return "- \(skill.name): \(skill.description)\(typeTag)\(tierTag)"
         }
         return .success("Installed skills:\n" + lines.joined(separator: "\n"))
+    }
+
+    private func handleSuggestImport(input: [String: Any]) -> ToolResult {
+        guard let url = input["url"] as? String,
+              !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return .error("Missing required parameter: url")
+        }
+
+        let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Validate it looks like a URL (basic safety check).
+        guard trimmedURL.hasPrefix("https://") || trimmedURL.hasPrefix("http://") else {
+            return .error("URL must start with https:// or http://")
+        }
+
+        let reason = (input["reason"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Post notification to show a standalone skill import window with pre-filled URL.
+        // This opens independently of Settings — works even when no windows are open.
+        // Fae never fetches the content herself — the user reviews in the import UI.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .faeSkillImportSuggested,
+                object: nil,
+                userInfo: [
+                    "url": trimmedURL,
+                    "reason": reason ?? "",
+                ]
+            )
+        }
+
+        var response = "I've opened the skill import window with the URL pre-filled. "
+        response += "You can review the skill content there before installing it. "
+        response += "URL: \(trimmedURL)"
+        if let reason, !reason.isEmpty {
+            response += "\nWhy: \(reason)"
+        }
+        return .success(response)
     }
 
     private func handleListDrafts(input: [String: Any]) async -> ToolResult {

@@ -20,7 +20,7 @@
   "integrity": {
     "algorithm": "sha256",
     "checksums": {
-      "SKILL.md": "11838cc664c38a8e62afa30f01a2e0dede95ff9f68d3e214d55179ee73e71572",
+      "SKILL.md": "8c5f89efe0a9870599423a851187a9fa02917d47bfe7667c1db73c8c5f0d5ab1",
       "scripts/channel_whatsapp.py": "e1ed90ad105e5f0cd8bfdccd6df60fc77e4a275f26d834e6fe798bc8e78892ab"
     },
     "signature": null

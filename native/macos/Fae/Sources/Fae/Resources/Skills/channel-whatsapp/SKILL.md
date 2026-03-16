@@ -1,6 +1,7 @@
 ---
 name: channel-whatsapp
 description: Configure and maintain WhatsApp channel integration for Fae.
+tags: [channel, whatsapp]
 metadata:
   author: fae
   version: "1.0"

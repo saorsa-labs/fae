@@ -20,7 +20,7 @@
   "integrity": {
     "algorithm": "sha256",
     "checksums": {
-      "SKILL.md": "c3df5b3d0f229be9b386f518f55619fffa6ddfb8365187bfe6649ccb9480244f",
+      "SKILL.md": "887d4dc31c728d7a54aa1d947aed6cd4e694cd2ee63684227b63a95f907eaea1",
       "scripts/channel_discord.py": "0369d41ed1e025f2cbf1d2369b8a8c900492c78b414a4851dad0b38cb7770e40"
     },
     "signature": null
