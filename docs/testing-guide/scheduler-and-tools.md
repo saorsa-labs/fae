@@ -94,7 +94,7 @@ Implementation in `SchedulerTriggerTool`:
 
 ### Tool Inventory
 
-**Total: 34 tools**
+**Total: 35 tools**
 
 Breakdown by category:
 
@@ -109,7 +109,8 @@ Breakdown by category:
 | Roleplay | 1 | roleplay |
 | Vision | 7 | screenshot, camera, read_screen, click, type_text, scroll, find_element |
 | Voice Identity | 1 | voice_identity |
-| **Total** | **34** | |
+| Task Tracking | 1 | till_done |
+| **Total** | **35** | |
 
 ### Tool Modes & Filtering
 
@@ -124,11 +125,11 @@ Legacy modes (`off`, `read_only`, `read_write`, `full`) are silently migrated.
 
 ### Read-Only Tool Set
 
-**15 tools** (always safe):
+**16 tools** (always safe):
 ```
 read, window_control, session_search, web_search, fetch_url,
 calendar, reminders, contacts, mail, notes,
-scheduler_list, roleplay, activate_skill, input_request, find_element, voice_identity
+scheduler_list, roleplay, activate_skill, input_request, find_element, voice_identity, till_done
 ```
 
 ### Write Tool Set
@@ -149,10 +150,10 @@ screenshot, camera, read_screen, click, type_text, scroll
 
 ### Testing Checklist
 
-- [ ] **Tool Count**: Verify 34 tools are registered: `ToolRegistry.buildDefault().allTools.count == 34`
+- [ ] **Tool Count**: Verify 35 tools are registered: `ToolRegistry.buildDefault().allTools.count == 35`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
-  - `assistant`: 16 tools (no write, no bash)
-  - `full`: 34 tools
+  - `assistant`: 17 tools (no write, no bash)
+  - `full`: 35 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels

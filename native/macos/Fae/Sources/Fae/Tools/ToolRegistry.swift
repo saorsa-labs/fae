@@ -95,6 +95,8 @@ final class ToolRegistry: Sendable {
             TypeTextTool(),
             ScrollTool(),
             FindElementTool(),
+            // Task tracking
+            TillDoneTool(),
             // Voice identity
             VoiceIdentityTool(
                 speakerEncoder: speakerEncoder,
@@ -209,6 +211,7 @@ final class ToolRegistry: Sendable {
         "input_request",
         "find_element",
         "voice_identity",
+        "till_done",
     ]
 
     /// Additional tools available in "read_write" mode.

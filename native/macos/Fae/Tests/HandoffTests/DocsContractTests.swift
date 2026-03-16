@@ -34,13 +34,13 @@ final class DocsContractTests: XCTestCase {
         let assistantCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "assistant") }.count
         let fullCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "full") }.count
 
-        XCTAssertEqual(registry.allTools.count, 34)
-        XCTAssertEqual(assistantCount, 16)
-        XCTAssertEqual(fullCount, 34)
+        XCTAssertEqual(registry.allTools.count, 35)
+        XCTAssertEqual(assistantCount, 17)
+        XCTAssertEqual(fullCount, 35)
 
-        XCTAssertTrue(guide.contains("Total: 34 tools"))
-        XCTAssertTrue(guide.contains("assistant`: 16 tools") || guide.contains("`assistant`: 16 tools"))
-        XCTAssertTrue(guide.contains("full`: 34 tools") || guide.contains("`full`: 34 tools"))
+        XCTAssertTrue(guide.contains("Total: 35 tools"))
+        XCTAssertTrue(guide.contains("assistant`: 17 tools") || guide.contains("`assistant`: 17 tools"))
+        XCTAssertTrue(guide.contains("full`: 35 tools") || guide.contains("`full`: 35 tools"))
         XCTAssertTrue(guide.contains("delegate_agent"))
         XCTAssertTrue(guide.contains("FaeScheduler.triggerTask(id:)"))
 

@@ -318,6 +318,26 @@ enum PersonalityManager {
           2) include `<show_capabilities/>` in your response so the app shows the trusted capabilities canvas.
         """
 
+    // MARK: - TillDone Prompt Fragment
+
+    static let tillDonePrompt = """
+        Task-driven work (TillDone):
+        - For complex multi-step work (research, coding, setup, reports, deep analysis), \
+          ALWAYS create a TillDone task list BEFORE starting.
+        - Use till_done new_list with a title, then till_done add to define all steps.
+        - Work sequentially: till_done start (one task) → do the work → till_done complete with a result summary.
+        - Only one task can be inprogress at a time. Focus and finish before moving on.
+        - Do NOT stop or give up when a step is hard. Try alternative approaches, search the web, \
+          break it into sub-steps, but keep going until the task is done.
+        - When ALL tasks are complete, the report appears in the canvas automatically. \
+          Tell the user to check the canvas for the full report, and offer to answer questions \
+          or change anything.
+        - For simple questions or quick tasks (greetings, facts, short lookups), do NOT use TillDone. \
+          Just answer directly.
+        - TillDone signals: "set up X", "research Y and write a report", "build Z", \
+          "create a plan for W", "do a deep dive on V" — anything requiring multiple steps.
+        """
+
     // MARK: - Roleplay Prompt Fragment
 
     static let roleplayPrompt = """
@@ -511,6 +531,7 @@ enum PersonalityManager {
                 parts.append(pythonCapabilityPrompt)
                 parts.append(selfModificationPrompt)
                 parts.append(proactiveBehaviorPrompt)
+                parts.append(tillDonePrompt)
                 parts.append(roleplayPrompt)
             }
             parts.append(toolCallingContractPrompt)

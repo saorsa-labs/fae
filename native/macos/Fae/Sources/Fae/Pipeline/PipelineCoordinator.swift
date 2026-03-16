@@ -1696,6 +1696,7 @@ actor PipelineCoordinator {
         await conversationState.clear()
         await llmEngine.resetSession()
         _ = await RoleplaySessionStore.shared.stop()
+        _ = await TillDoneManager.shared.clear()
         currentTurnGenerationContext = nil
         currentTurnID = nil
         sessionDeclaredUserName = nil
@@ -2554,6 +2555,7 @@ actor PipelineCoordinator {
         await closeConversationSessionIfNeeded(reason: "conversation_reset")
         await conversationState.clear()
         await llmEngine.resetSession()
+        _ = await TillDoneManager.shared.clear()
         currentTurnID = nil
         NSLog("PipelineCoordinator: conversation reset via %@ trigger: %@", source, trigger)
         debugLog(debugConsole, .pipeline, "Conversation reset (\(source)): \(trigger)")
@@ -4335,7 +4337,8 @@ actor PipelineCoordinator {
         playsThinkingTone: Bool = true,
         allowsAudibleOutput: Bool = true
     ) async {
-        let maxToolTurns = 5
+        let tillDoneListActive = await TillDoneManager.shared.isListActive
+        let maxToolTurns = tillDoneListActive ? 25 : 5
 
         let generationID: UUID
         if let providedGenerationID {
@@ -5654,6 +5657,44 @@ actor PipelineCoordinator {
 
             maybeShowCapabilitiesCanvas(triggerText: userText, modelResponse: fullResponse)
 
+            // TillDone nudge: if the LLM stopped generating but there are incomplete
+            // tasks on the TillDone list, nudge it to continue working.
+            // Nudges are tagged so they can be cleaned up after the turn, preventing
+            // history eviction of the original prompt on long runs.
+            if proactiveContext == nil,
+               turnCount < maxToolTurns,
+               await TillDoneManager.shared.hasIncompleteTasks
+            {
+                let summary = await TillDoneManager.shared.incompleteSummary
+                let progress = await TillDoneManager.shared.progressSummary
+                let nudgeTag = "tilldone_nudge"
+                debugLog(debugConsole, .qa, "TillDone nudge: incomplete tasks remain — \(progress)")
+
+                // Remove previous nudge messages to avoid accumulating history entries.
+                await conversationState.removeMessages(taggedWith: nudgeTag)
+
+                let nudge = """
+                    You still have incomplete tasks on your TillDone list:
+                    \(summary)
+
+                    Continue working. Use till_done start to begin the next task, \
+                    then do the work, then till_done complete when done. \
+                    Do not stop until all tasks are complete.
+                    """
+                await conversationState.addUserMessage(nudge, speakerDisplayName: nil, speakerId: nil, tag: nudgeTag)
+
+                await generateWithTools(
+                    userText: nudge,
+                    isToolFollowUp: true,
+                    turnCount: turnCount + 1,
+                    forceSuppressThinking: true,
+                    generationContext: generationContext,
+                    generationID: generationID,
+                    proactiveContext: proactiveContext
+                )
+                return
+            }
+
             endAssistantGeneration()
 
             // Refresh follow-up window.
@@ -5705,6 +5746,7 @@ actor PipelineCoordinator {
 
         guard turnCount < maxToolTurns else {
             debugLog(debugConsole, .qa, "Exceeded max tool turns (\(maxToolTurns))")
+            await conversationState.removeMessages(taggedWith: "tilldone_nudge")
             let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
             eventBus.send(.assistantText(text: msg, isFinal: true))
             if generationContext.allowsAudibleOutput {
@@ -5881,7 +5923,23 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .qa, "Tool execution summary: success=\(toolSuccessCount) failure=\(toolFailureCount)")
         await synchronizeLLMSession()
 
+        // TillDone: clean up nudge history and push canvas report when workflow ends.
+        let tillDoneListStillActive = await TillDoneManager.shared.isListActive
+        if tillDoneListStillActive, await TillDoneManager.shared.allDone {
+            let htmlReport = await TillDoneManager.shared.generateHTMLReport()
+            if !htmlReport.isEmpty {
+                debugLog(debugConsole, .qa, "TillDone: all tasks complete — pushing report to canvas")
+                eventBus.send(.canvasContent(html: htmlReport, append: false))
+                eventBus.send(.canvasVisibility(true))
+            }
+            await conversationState.removeMessages(taggedWith: "tilldone_nudge")
+        } else if !tillDoneListStillActive {
+            // List was cleared mid-conversation — remove any leftover nudge messages.
+            await conversationState.removeMessages(taggedWith: "tilldone_nudge")
+        }
+
         if toolFailureCount > 0 && toolSuccessCount == 0 {
+            await conversationState.removeMessages(taggedWith: "tilldone_nudge")
             let reason = firstToolError ?? "the tool call was denied or failed"
             let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
             eventBus.send(.assistantText(text: msg, isFinal: true))
@@ -7702,6 +7760,37 @@ actor PipelineCoordinator {
                 latencyMs: nil
             )
             return result
+        }
+
+        // TillDone hard gate: when a task list exists, non-TillDone tools are blocked
+        // unless a task is actively inprogress. This forces the LLM to plan first
+        // and work sequentially through tasks.
+        if call.name != "till_done",
+           proactiveContext == nil,
+           await TillDoneManager.shared.isListActive
+        {
+            let hasInprogress = await TillDoneManager.shared.currentTask != nil
+            let allComplete = await TillDoneManager.shared.allDone
+            if !hasInprogress && !allComplete {
+                let msg: String
+                let hasTasks = await TillDoneManager.shared.hasActiveTasks
+                if !hasTasks {
+                    msg = "All TillDone tasks are done or skipped. Use till_done report to generate the summary, or till_done add to add more tasks."
+                } else {
+                    msg = "No task is in progress. Use till_done start to mark a task as inprogress before doing any work."
+                }
+                debugLog(debugConsole, .toolResult, "TillDone gate blocked \(call.name): \(msg)")
+                let result = ToolResult.error(msg)
+                await recordWorkflowToolResult(
+                    turnID: workflowTurnID,
+                    callId: traceToolCallID,
+                    call: call,
+                    result: result,
+                    approved: nil,
+                    latencyMs: nil
+                )
+                return result
+            }
         }
 
         // Computer-use action step limiter (click/type_text/scroll).
