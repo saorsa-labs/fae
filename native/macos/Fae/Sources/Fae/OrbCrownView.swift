@@ -4,8 +4,8 @@ import SwiftUI
 ///
 /// The orb is the hero — always visible, never covered by conversation text.
 /// Includes an ambient glow halo that reflects the current palette color,
-/// a status capsule at the bottom (mode + feeling), progress bar at the top,
-/// and rescue badge.
+/// a mood arc above the orb, a status capsule at the bottom,
+/// progress bar at the top, and rescue badge.
 struct OrbCrownView: View {
     @EnvironmentObject private var orbAnimation: OrbAnimationState
     @EnvironmentObject private var orbState: OrbStateController
@@ -15,14 +15,20 @@ struct OrbCrownView: View {
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var rescueMode: RescueMode
 
-    /// Whether the mood detail row beneath the status is expanded.
+    /// Whether the mood arc is expanded (tap to collapse).
     @AppStorage("orbMoodExpanded") private var moodExpanded: Bool = true
 
-    /// Gentle pulse phase for the mood dot.
-    @State private var moodPulse: Bool = false
+    /// Breathing animation phase — drives scale and opacity pulsing.
+    @State private var breathe: Bool = false
+
+    /// Mood linger: keeps the arc visible after pipeline goes idle.
+    @State private var moodLingerActive: Bool = false
+    @State private var moodLingerTask: Task<Void, Never>?
+
+    /// Gentle pulse phase for the status dot.
+    @State private var dotPulse: Bool = false
 
     /// Optional callback fired when the Metal orb view finishes loading.
-    /// Used by ContentView to coordinate the `viewLoaded` fade-in.
     var onLoad: (() -> Void)? = nil
 
     var body: some View {
@@ -56,6 +62,10 @@ struct OrbCrownView: View {
             )
             .frame(width: 260, height: 260)
             .clipShape(Circle())
+
+            // Mood arc — above the orb, arched text with breathing animation.
+            moodArc
+                .offset(y: -100)
 
             // Status capsule — bottom of crown.
             VStack(spacing: 3) {
@@ -93,60 +103,94 @@ struct OrbCrownView: View {
         }
         .frame(height: 300)
         .onAppear {
+            withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
+                breathe = true
+            }
             withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-                moodPulse = true
+                dotPulse = true
+            }
+        }
+        .onChange(of: orbState.feeling) { _, newFeeling in
+            moodLingerTask?.cancel()
+            if newFeeling != .neutral {
+                withAnimation(.easeInOut(duration: 0.4)) { moodLingerActive = true }
+                moodLingerTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 1.2)) { moodLingerActive = false }
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.8)) { moodLingerActive = false }
             }
         }
     }
 
-    // MARK: - Status Capsule
+    // MARK: - Mood Arc (above the orb)
 
-    /// Combined status + mood indicator with collapse toggle.
+    /// Large, friendly mood display arced above the orb with breathing animation.
+    @ViewBuilder
+    private var moodArc: some View {
+        let feeling = orbState.feeling
+        let isActive = statusMode != nil
+        let showMood = moodExpanded && feeling != .neutral && (isActive || moodLingerActive)
+
+        if showMood {
+            let color = feelingColor(feeling)
+
+            VStack(spacing: 4) {
+                // Icon — large, breathing.
+                Text(feelingIcon(feeling))
+                    .font(.system(size: 22))
+                    .scaleEffect(breathe ? 1.12 : 0.92)
+                    .opacity(breathe ? 1.0 : 0.7)
+
+                // Label — warm, readable.
+                Text(feeling.label)
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(color)
+                    .opacity(breathe ? 1.0 : 0.75)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                Capsule()
+                    .fill(color.opacity(breathe ? 0.14 : 0.08))
+                    .blur(radius: 1)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(color.opacity(breathe ? 0.25 : 0.10), lineWidth: 1)
+            )
+            .scaleEffect(breathe ? 1.02 : 0.98)
+            .shadow(color: color.opacity(0.3), radius: breathe ? 12 : 6)
+            .transition(.opacity.combined(with: .scale(scale: 0.8)).combined(with: .move(edge: .bottom)))
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.3)) { moodExpanded.toggle() }
+            }
+        }
+    }
+
+    // MARK: - Status Capsule (below the orb)
+
+    /// Mode indicator — Listening/Thinking/Speaking with pulsing dot.
     @ViewBuilder
     private var statusCapsule: some View {
         let mode = statusMode
         let feeling = orbState.feeling
-        let isActive = mode != nil
 
-        VStack(spacing: 2) {
-            // Primary status line — always visible when active.
-            if let mode {
-                HStack(spacing: 5) {
-                    // Pulsing dot in the mood color.
-                    Circle()
-                        .fill(feelingColor(feeling))
-                        .frame(width: 6, height: 6)
-                        .scaleEffect(moodPulse ? 1.15 : 0.85)
-                        .opacity(moodPulse ? 1.0 : 0.7)
+        if let mode {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(feelingColor(feeling))
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(dotPulse ? 1.15 : 0.85)
+                    .opacity(dotPulse ? 1.0 : 0.7)
 
-                    Text(mode)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                Text(mode)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.85))
             }
-
-            // Expandable mood detail — shows feeling label with icon.
-            if isActive, moodExpanded, feeling != .neutral {
-                HStack(spacing: 4) {
-                    Text(feelingIcon(feeling))
-                        .font(.system(size: 9))
-                    Text(feeling.label)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(feelingColor(feeling).opacity(0.9))
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(feelingColor(feeling).opacity(0.12))
-                .clipShape(Capsule())
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .animation(.easeInOut(duration: 0.35), value: mode)
-        .animation(.easeInOut(duration: 0.4), value: feeling)
-        .animation(.easeInOut(duration: 0.3), value: moodExpanded)
-        .onTapGesture {
-            withAnimation { moodExpanded.toggle() }
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
         }
     }
 
@@ -171,7 +215,7 @@ struct OrbCrownView: View {
 
     // MARK: - Feeling Appearance
 
-    /// Color associated with each feeling — reflects the emotional tone.
+    /// Color associated with each feeling — warm, saturated for visibility.
     private func feelingColor(_ feeling: OrbFeeling) -> Color {
         switch feeling {
         case .neutral:   return .white
@@ -185,17 +229,17 @@ struct OrbCrownView: View {
         }
     }
 
-    /// Subtle icon for each feeling — keeps it lightweight.
+    /// Larger, friendlier icon for each feeling.
     private func feelingIcon(_ feeling: OrbFeeling) -> String {
         switch feeling {
-        case .neutral:   return "\u{25CB}" // ○
-        case .calm:      return "\u{223F}" // ∿
-        case .curiosity: return "\u{2727}" // ✧
-        case .warmth:    return "\u{2665}" // ♥
-        case .concern:   return "\u{25C7}" // ◇
-        case .delight:   return "\u{2736}" // ✶
-        case .focus:     return "\u{25CE}" // ◎
-        case .playful:   return "\u{2605}" // ★
+        case .neutral:   return "\u{25CB}"  // ○
+        case .calm:      return "\u{1F30A}" // 🌊
+        case .curiosity: return "\u{2728}"  // ✨
+        case .warmth:    return "\u{1F9E1}" // 🧡
+        case .concern:   return "\u{1F494}" // 💔
+        case .delight:   return "\u{2B50}"  // ⭐
+        case .focus:     return "\u{1F3AF}" // 🎯
+        case .playful:   return "\u{1F60A}" // 😊
         }
     }
 

@@ -131,6 +131,9 @@ struct ContentView: View {
             Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
 
             if pipelineAux.isPipelineReady {
+                // Voice hints — collapsible cheat sheet for wake/silence phrases.
+                VoiceHintsView()
+
                 // Zone 2: Conversation — scrolling, fills remaining space
                 ConversationScrollView()
 
