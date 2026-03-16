@@ -905,6 +905,7 @@ actor PipelineCoordinator {
     private var echoSuppressor = EchoSuppressor()
     private var thinkTagStripper = TextProcessing.ThinkTagStripper()
     private var voiceTagStripper = VoiceTagStripper()
+    private let keywordSpotter: KeywordSpotter
 
     // MARK: - Atomic-like Flags
 
@@ -1195,6 +1196,16 @@ actor PipelineCoordinator {
         self.modelManager = modelManager
         self.isRescueMode = rescueMode
 
+        // Build keyword spotter config from existing sleep phrases + interrupt triggers.
+        var interruptPhrases = KeywordBiasConfig.defaultInterruptPhrases
+        for phrase in config.conversation.sleepPhrases where !interruptPhrases.contains(phrase.lowercased()) {
+            interruptPhrases.append(phrase.lowercased())
+        }
+        self.keywordSpotter = KeywordSpotter(config: KeywordBiasConfig(
+            interruptPhrases: interruptPhrases,
+            wakePhrases: KeywordBiasConfig.defaultWakePhrases
+        ))
+
         // Configure VAD from config.
         vad.applyConfiguration(config.vad)
     }
@@ -1351,7 +1362,7 @@ actor PipelineCoordinator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        if isConversationStopTrigger(trimmed) {
+        if let match = await keywordSpotter.check(partialTranscript: trimmed), match.category == .interrupt {
             await resetConversationSession(trigger: trimmed, source: "text")
             return
         }
@@ -1413,7 +1424,7 @@ actor PipelineCoordinator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        if isConversationStopTrigger(trimmed) {
+        if let match = await keywordSpotter.check(partialTranscript: trimmed), match.category == .interrupt {
             await resetConversationSession(trigger: trimmed, source: "desktop_text")
             return
         }
@@ -2434,15 +2445,8 @@ actor PipelineCoordinator {
         "that will do fae",
     ]
 
-    private func isConversationStopTrigger(_ text: String) -> Bool {
-        Self.isConversationStopTrigger(
-            text: text,
-            configuredPhrases: config.conversation.sleepPhrases,
-            assistantSpeaking: assistantSpeaking,
-            assistantGenerating: assistantGenerating,
-            gateState: gateState
-        )
-    }
+    // Instance wrapper removed — replaced by keywordSpotter.check().
+    // Static isConversationStopTrigger retained for backward-compatible tests.
 
     private func wakeAddressMatch(in text: String, logDecision: Bool = false) -> TextProcessing.WakeAddressMatch? {
         let match = TextProcessing.findWakeAddressMatch(
@@ -2509,6 +2513,7 @@ actor PipelineCoordinator {
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
         clearPendingSemanticTurn()
+        await keywordSpotter.reset()
         await closeConversationSessionIfNeeded(reason: "conversation_reset")
         await conversationState.clear()
         await llmEngine.resetSession()
@@ -3394,9 +3399,13 @@ actor PipelineCoordinator {
 
         eventBus.send(.transcription(text: effectiveText, isFinal: true))
 
-        if isConversationStopTrigger(effectiveText) {
-            await resetConversationSession(trigger: effectiveText, source: "voice")
-            return
+        // Keyword spotter: check for interrupt phrases (replaces hardcoded stop triggers).
+        if let match = await keywordSpotter.check(partialTranscript: effectiveText) {
+            if match.category == .interrupt {
+                debugLog(debugConsole, .command, "Keyword spotter interrupt: \"\(match.configuredKeyword)\" (fuzzy=\(match.isFuzzy)) in \"\(effectiveText.prefix(60))\"")
+                await resetConversationSession(trigger: effectiveText, source: "voice")
+                return
+            }
         }
 
         let voiceCommand = VoiceCommandParser.parse(effectiveText)
