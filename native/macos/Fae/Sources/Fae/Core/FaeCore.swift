@@ -25,7 +25,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     let eventBus = FaeEventBus()
 
     @Published var pipelineState: FaePipelineState = .stopped
-    @Published var hasOwnerSetUp: Bool = UserDefaults.standard.bool(forKey: "fae.owner.enrolled")
+    @Published var hasOwnerSetUp: Bool = FaeEnvironment.defaults.bool(forKey: "fae.owner.enrolled")
     @Published var isLicenseAccepted: Bool
     @Published var shouldShowStartupIntro: Bool
     @Published var userName: String?
@@ -203,7 +203,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     config: runtimeConfig
                 )
 
-                UserDefaults.standard.set("worker_process", forKey: "fae.runtime.operator_runtime")
+                FaeEnvironment.defaults.set("worker_process", forKey: "fae.runtime.operator_runtime")
 
                 // Initialize memory system.
                 let memoryStore = try Self.createMemoryStore()
@@ -463,7 +463,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                 await MainActor.run {
                     self.hasOwnerSetUp = hasOwner
-                    UserDefaults.standard.set(hasOwner, forKey: "fae.owner.enrolled")
+                    FaeEnvironment.defaults.set(hasOwner, forKey: "fae.owner.enrolled")
                 }
                 if !hasOwner {
                     NSLog("FaeCore: no owner enrolled — waiting for native enrollment flow")
@@ -605,8 +605,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
         thinkingEnabled = level.enablesThinking
         config.llm.thinkingLevel = level.rawValue
         config.llm.thinkingEnabled = level.enablesThinking
-        UserDefaults.standard.set(level.rawValue, forKey: "thinkingLevel")
-        UserDefaults.standard.set(level.enablesThinking, forKey: "thinkingEnabled")
+        FaeEnvironment.defaults.set(level.rawValue, forKey: "thinkingLevel")
+        FaeEnvironment.defaults.set(level.enablesThinking, forKey: "thinkingEnabled")
         persistConfig(reason: "config.patch.thinking_level")
         if let coordinator = pipelineCoordinator {
             Task { await coordinator.setThinkingLevel(level) }
@@ -780,7 +780,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 await speakerProfileStore.clearAllProfiles()
                 await pipelineCoordinator?.setFirstOwnerEnrollmentActive(false)
                 hasOwnerSetUp = false
-                UserDefaults.standard.set(false, forKey: "fae.owner.enrolled")
+                FaeEnvironment.defaults.set(false, forKey: "fae.owner.enrolled")
 
                 // Reset enrollment-related config to defaults.
                 var configChanged = false
@@ -1975,7 +1975,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private static func migrateStartupIntroState(_ config: inout FaeConfig) -> Bool {
         guard !config.startupIntroSeenConfigured else { return false }
 
-        let defaults = UserDefaults.standard
+        let defaults = FaeEnvironment.defaults
         let hasLegacyKey = defaults.object(forKey: legacyStartupCanvasKey) != nil
 
         if config.licenseAccepted {
@@ -2129,7 +2129,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             // Clear ALL UserDefaults (@AppStorage values survive directory deletion
             // since they live in ~/Library/Preferences/, not in the fae data dir).
             if let bundleId = Bundle.main.bundleIdentifier {
-                UserDefaults.standard.removePersistentDomain(forName: bundleId)
+                FaeEnvironment.defaults.removePersistentDomain(forName: bundleId)
             }
             CredentialManager.deleteAll()
 
@@ -2346,8 +2346,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 ] as [String: Any],
             ]
         case "tts":
-            let runtimeSource = UserDefaults.standard.string(forKey: "fae.tts.runtime_voice_source")
-            let runtimeLockApplied = UserDefaults.standard.object(forKey: "fae.tts.runtime_voice_lock_applied") as? Bool
+            let runtimeSource = FaeEnvironment.defaults.string(forKey: "fae.tts.runtime_voice_source")
+            let runtimeLockApplied = FaeEnvironment.defaults.object(forKey: "fae.tts.runtime_voice_lock_applied") as? Bool
             return [
                 "payload": [
                     "tts": [

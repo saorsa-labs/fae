@@ -37,8 +37,8 @@ final class ThinkingLevelRuntimeParityTests: XCTestCase {
         let reloaded = FaeConfig.load()
         XCTAssertEqual(reloaded.llm.resolvedThinkingLevel, .balanced)
         XCTAssertTrue(reloaded.llm.thinkingEnabled)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "thinkingLevel"), FaeThinkingLevel.balanced.rawValue)
-        XCTAssertEqual(UserDefaults.standard.object(forKey: "thinkingEnabled") as? Bool, true)
+        XCTAssertEqual(FaeEnvironment.defaults.string(forKey: "thinkingLevel"), FaeThinkingLevel.balanced.rawValue)
+        XCTAssertEqual(FaeEnvironment.defaults.object(forKey: "thinkingEnabled") as? Bool, true)
     }
 
     func testThinkingLevelControlsRemainWiredAcrossMainAndCoworkSurfaces() throws {

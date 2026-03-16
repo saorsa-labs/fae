@@ -132,7 +132,7 @@ final class PathPolicyTests: XCTestCase {
 
     func testBlocksFaeConfigToml() {
         let home = NSHomeDirectory()
-        let path = "\(home)/Library/Application Support/fae/config.toml"
+        let path = FaeDirectories.configFile.path
         let result = PathPolicy.validateWritePath(path)
         if case .blocked(let reason) = result {
             XCTAssertTrue(reason.contains("config.toml"), "Reason: \(reason)")

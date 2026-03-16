@@ -301,8 +301,8 @@ final class RuntimeContractTests: XCTestCase {
         let reloaded = FaeConfig.load()
         XCTAssertEqual(reloaded.llm.resolvedThinkingLevel, .balanced)
         XCTAssertTrue(reloaded.llm.thinkingEnabled)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "thinkingLevel"), FaeThinkingLevel.balanced.rawValue)
-        XCTAssertEqual(UserDefaults.standard.object(forKey: "thinkingEnabled") as? Bool, true)
+        XCTAssertEqual(FaeEnvironment.defaults.string(forKey: "thinkingLevel"), FaeThinkingLevel.balanced.rawValue)
+        XCTAssertEqual(FaeEnvironment.defaults.object(forKey: "thinkingEnabled") as? Bool, true)
     }
 
     @MainActor
@@ -435,7 +435,7 @@ final class RuntimeContractTests: XCTestCase {
         let fm = FileManager.default
         let original = try? Data(contentsOf: url)
 
-        let defaults = UserDefaults.standard
+        let defaults = FaeEnvironment.defaults
         let originalRuntimeSource = defaults.object(forKey: "fae.tts.runtime_voice_source")
         let originalRuntimeLockApplied = defaults.object(forKey: "fae.tts.runtime_voice_lock_applied")
 
@@ -582,7 +582,7 @@ final class RuntimeContractTests: XCTestCase {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default
         let original = try? Data(contentsOf: url)
-        let defaults = UserDefaults.standard
+        let defaults = FaeEnvironment.defaults
         let legacyValue = defaults.object(forKey: "fae.hasShownStartupCanvas")
 
         defer {
@@ -624,7 +624,7 @@ final class RuntimeContractTests: XCTestCase {
         let url = FaeConfig.configFileURL
         let fm = FileManager.default
         let original = try? Data(contentsOf: url)
-        let defaults = UserDefaults.standard
+        let defaults = FaeEnvironment.defaults
         let legacyValue = defaults.object(forKey: "fae.hasShownStartupCanvas")
 
         defer {

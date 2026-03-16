@@ -44,20 +44,20 @@ enum PathPolicy {
                 }
             }
 
-            // Block Fae's own config (force use of self_config tool or Settings UI).
-            let faeConfigSuffix = "/library/application support/fae/config.toml"
-            if lowered.hasSuffix(faeConfigSuffix) {
-                return .blocked(
-                    reason: "Cannot write to Fae's config.toml directly. Use the self_config tool or Settings."
-                )
-            }
-
-            // Block the approved tools store (managed only via UI/voice approval flow).
-            let approvedToolsSuffix = "/library/application support/fae/approved_tools.json"
-            if lowered.hasSuffix(approvedToolsSuffix) {
-                return .blocked(
-                    reason: "Cannot write to approved_tools.json directly. Use the approval overlay or Settings."
-                )
+            // Block Fae's own data directory files (force use of self_config/Settings/approval).
+            // Uses FaeDirectories to cover both production (fae/) and dev (fae-dev/) paths.
+            let faeRoot = FaeDirectories.root.path.lowercased()
+            if lowered.hasPrefix(faeRoot) {
+                let protectedFiles: Set<String> = [
+                    "config.toml", "fae.db", "scheduler.db", "soul.md",
+                    "speakers.json", "approved_tools.json",
+                ]
+                let filename = URL(fileURLWithPath: resolved).lastPathComponent.lowercased()
+                if protectedFiles.contains(filename) {
+                    return .blocked(
+                        reason: "Cannot write to \(filename) directly. Use the appropriate tool or Settings."
+                    )
+                }
             }
         }
 

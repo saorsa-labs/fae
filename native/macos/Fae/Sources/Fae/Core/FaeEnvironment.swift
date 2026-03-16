@@ -52,9 +52,13 @@ enum FaeEnvironment {
 
     /// The UserDefaults store for this environment.
     ///
-    /// Dev mode uses a separate suite so @AppStorage values don't
-    /// interfere with the production instance.
+    /// - Tests: `com.saorsalabs.fae-test` (ephemeral, never touches production)
+    /// - Dev: `com.saorsalabs.fae-dev` (persistent across dev sessions)
+    /// - Normal: `UserDefaults.standard` (production)
     static let defaults: UserDefaults = {
+        if isTesting {
+            return UserDefaults(suiteName: "com.saorsalabs.fae-test") ?? .standard
+        }
         if isDev {
             return UserDefaults(suiteName: "com.saorsalabs.fae-dev") ?? .standard
         }
