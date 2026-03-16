@@ -199,7 +199,9 @@ actor DamageControlPolicy {
 
         self.noDeletePaths = [
             PathRule(path: "~/Library/Application Support/fae/"),
+            PathRule(path: "~/Library/Application Support/fae-dev/"),
             PathRule(path: "~/.fae-vault"),
+            PathRule(path: "~/.fae-vault-dev"),
         ]
 
         // MARK: Read-only paths (writes/edits denied — empty by default, user-configurable)

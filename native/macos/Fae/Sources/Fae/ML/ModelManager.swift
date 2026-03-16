@@ -215,10 +215,10 @@ actor ModelManager {
             }
 
             // Persist model ID for Settings UI
-            UserDefaults.standard.set(modelId, forKey: "fae.loaded_model_id")
-            UserDefaults.standard.set(true, forKey: "fae.runtime.operator_loaded")
+            FaeEnvironment.defaults.set(modelId, forKey: "fae.loaded_model_id")
+            FaeEnvironment.defaults.set(true, forKey: "fae.runtime.operator_loaded")
         } catch {
-            UserDefaults.standard.set(false, forKey: "fae.runtime.operator_loaded")
+            FaeEnvironment.defaults.set(false, forKey: "fae.runtime.operator_loaded")
             NSLog("ModelManager: LLM load failed (critical): %@", error.localizedDescription)
             throw MLEngineError.loadFailed("LLM", error)
         }
@@ -409,9 +409,9 @@ actor ModelManager {
     }
 
     private func persistVoiceRuntimeStatus(source: String, lockApplied: Bool) {
-        UserDefaults.standard.set(source, forKey: "fae.tts.runtime_voice_source")
-        UserDefaults.standard.set(lockApplied, forKey: "fae.tts.runtime_voice_lock_applied")
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
+        FaeEnvironment.defaults.set(source, forKey: "fae.tts.runtime_voice_source")
+        FaeEnvironment.defaults.set(lockApplied, forKey: "fae.tts.runtime_voice_lock_applied")
+        FaeEnvironment.defaults.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
     }
 
     // MARK: - Wired Memory Management (Phase 2)
@@ -440,7 +440,7 @@ actor ModelManager {
               estimatedKVBytes / 1_000_000, recommendedContextSize)
 
         // Persist for Settings UI
-        UserDefaults.standard.set(estimatedKVBytes, forKey: "fae.estimated_kv_bytes")
-        UserDefaults.standard.set(recommendedContextSize, forKey: "fae.recommended_context_size")
+        FaeEnvironment.defaults.set(estimatedKVBytes, forKey: "fae.estimated_kv_bytes")
+        FaeEnvironment.defaults.set(recommendedContextSize, forKey: "fae.recommended_context_size")
     }
 }

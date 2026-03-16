@@ -119,5 +119,6 @@ enum PathPolicy {
         "/.netrc",
         // Fae internal (managed by GitVaultManager, not tools)
         "/.fae-vault",
+        "/.fae-vault-dev",
     ]
 }

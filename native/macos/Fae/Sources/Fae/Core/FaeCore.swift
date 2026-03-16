@@ -2128,7 +2128,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
             // Clear ALL UserDefaults (@AppStorage values survive directory deletion
             // since they live in ~/Library/Preferences/, not in the fae data dir).
-            if let bundleId = Bundle.main.bundleIdentifier {
+            // Must clear the correct domain: named suite for dev/test, bundle ID for production.
+            if FaeEnvironment.isDev {
+                FaeEnvironment.defaults.removePersistentDomain(forName: "com.saorsalabs.fae-dev")
+            } else if FaeEnvironment.isTesting {
+                FaeEnvironment.defaults.removePersistentDomain(forName: "com.saorsalabs.fae-test")
+            } else if let bundleId = Bundle.main.bundleIdentifier {
                 FaeEnvironment.defaults.removePersistentDomain(forName: bundleId)
             }
             CredentialManager.deleteAll()

@@ -4181,7 +4181,7 @@ actor PipelineCoordinator {
     }
 
     private func recordVoiceCommandMetrics(command: String, handled: Bool, latencyMs: Int) {
-        let defaults = UserDefaults.standard
+        let defaults = FaeEnvironment.defaults
         defaults.set(defaults.integer(forKey: "fae.voice.commands.total") + 1, forKey: "fae.voice.commands.total")
         if handled {
             defaults.set(defaults.integer(forKey: "fae.voice.commands.handled") + 1, forKey: "fae.voice.commands.handled")
@@ -7860,7 +7860,7 @@ actor PipelineCoordinator {
         )
 
         var effectiveDecision = brokerDecision
-        if UserDefaults.standard.bool(forKey: "fae.security.shadowMode") {
+        if FaeEnvironment.defaults.bool(forKey: "fae.security.shadowMode") {
             switch brokerDecision {
             case .confirm(_, let reason, _, _), .deny(let reason):
                 await securityLogger.log(

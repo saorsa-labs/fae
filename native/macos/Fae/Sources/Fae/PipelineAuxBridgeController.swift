@@ -99,12 +99,13 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     init() {
         subscribe()
+        let defs = FaeEnvironment.defaults
         localStack = LocalStackDiagnostics(
-            operatorLoaded: UserDefaults.standard.bool(forKey: "fae.runtime.operator_loaded"),
-            currentRoute: UserDefaults.standard.string(forKey: "fae.runtime.current_route") ?? "operator",
-            operatorRuntime: UserDefaults.standard.string(forKey: "fae.runtime.operator_runtime") ?? "in_process",
-            operatorWorkerRestarts: UserDefaults.standard.integer(forKey: "fae.runtime.operator_worker_restarts"),
-            operatorWorkerLastError: UserDefaults.standard.string(forKey: "fae.runtime.operator_worker_last_error"),
+            operatorLoaded: defs.bool(forKey: "fae.runtime.operator_loaded"),
+            currentRoute: defs.string(forKey: "fae.runtime.current_route") ?? "operator",
+            operatorRuntime: defs.string(forKey: "fae.runtime.operator_runtime") ?? "in_process",
+            operatorWorkerRestarts: defs.integer(forKey: "fae.runtime.operator_worker_restarts"),
+            operatorWorkerLastError: defs.string(forKey: "fae.runtime.operator_worker_last_error"),
             lastUpdatedAt: nil
         )
     }
