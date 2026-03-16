@@ -43,7 +43,7 @@ struct SpeakerEnrollmentView: View {
             }
         }
         .padding(32)
-        .frame(width: 400, height: 340)
+        .frame(width: 420, height: 420)
         .onAppear {
             if !initialName.isEmpty {
                 displayName = initialName
@@ -79,15 +79,47 @@ struct SpeakerEnrollmentView: View {
 
     // MARK: - Step 2: Recording
 
+    /// Example phrases for each recording sample — gives users something
+    /// natural to say rather than awkward silence.
+    private static let samplePrompts: [[String]] = [
+        [
+            "\"The weather looks lovely today, I might go for a walk later.\"",
+            "\"I've been meaning to reorganise my desk, it's getting cluttered.\"",
+            "\"My favourite thing about mornings is that first cup of coffee.\"",
+        ],
+        [
+            "\"I was thinking about what to cook for dinner tonight.\"",
+            "\"There's a great wee bakery just round the corner from here.\"",
+            "\"I really enjoy listening to music while I work.\"",
+        ],
+        [
+            "\"Sometimes the best ideas come when you're not even trying.\"",
+            "\"I should probably call my mum this weekend, it's been a while.\"",
+            "\"The garden is looking better now that spring is on the way.\"",
+        ],
+    ]
+
     private var recordingStep: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Text("Voice Sample \(sampleIndex + 1) of \(Self.sampleCount)")
                 .font(.title2.weight(.semibold))
 
-            Text("Say something for a few seconds so I can learn your voice.")
+            Text("Read any of these aloud in your natural voice:")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            // Show example phrases for the current sample.
+            VStack(alignment: .leading, spacing: 6) {
+                let prompts = Self.samplePrompts[min(sampleIndex, Self.samplePrompts.count - 1)]
+                ForEach(prompts, id: \.self) { prompt in
+                    Text(prompt)
+                        .font(.system(size: 12, design: .serif))
+                        .foregroundStyle(.primary.opacity(0.75))
+                        .italic()
+                }
+            }
+            .padding(.horizontal, 8)
 
             ZStack {
                 Circle()

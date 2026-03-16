@@ -1839,6 +1839,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         userName = trimmedName
         config.userName = trimmedName
+
+        // Auto-enable voice identity in assist mode after enrollment.
+        // Fae will prefer the owner's voice but won't block unknown speakers.
+        config.voiceIdentity.enabled = true
+        config.voiceIdentity.mode = "assist"
+
         persistConfig(reason: "native_owner_enrollment")
 
         NotificationCenter.default.post(
