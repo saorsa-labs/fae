@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel in-progress CI runs when a new push arrives on the same branch/PR.
+# This prevents queue buildup on limited macOS runners and ensures only
+# the latest commit is validated.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
