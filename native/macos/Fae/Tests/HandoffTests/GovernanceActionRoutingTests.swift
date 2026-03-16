@@ -21,8 +21,8 @@ final class GovernanceActionRoutingTests: XCTestCase {
             object: nil,
             userInfo: [
                 "action": "set_setting",
-                "key": "barge_in.enabled",
-                "value": false,
+                "key": "conversation.require_direct_address",
+                "value": true,
                 "source": "canvas",
             ]
         )
@@ -31,8 +31,8 @@ final class GovernanceActionRoutingTests: XCTestCase {
 
         let command = sender.sent.last
         XCTAssertEqual(command?.name, "config.patch")
-        XCTAssertEqual(command?.payload["key"] as? String, "barge_in.enabled")
-        XCTAssertEqual(command?.payload["value"] as? Bool, false)
+        XCTAssertEqual(command?.payload["key"] as? String, "conversation.require_direct_address")
+        XCTAssertEqual(command?.payload["value"] as? Bool, true)
     }
 
     func testRequestPermissionGovernanceActionPostsCapabilityNotification() async throws {

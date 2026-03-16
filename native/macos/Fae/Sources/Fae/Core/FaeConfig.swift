@@ -217,7 +217,6 @@ struct FaeConfig: Codable {
     // MARK: - Barge-In
 
     struct BargeInConfig: Codable {
-        var enabled: Bool = false
         /// Minimum RMS energy for barge-in candidate. Raised from 0.05 to 0.08
         /// to filter background noise while still accepting conversational speech.
         var minRms: Float = 0.08
@@ -834,8 +833,8 @@ struct FaeConfig: Codable {
             case "bargeIn":
                 switch key {
                 case "enabled":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.bargeIn.enabled = v
+                    // Legacy field — barge-in is always on. Silently ignore.
+                    break
                 case "minRms":
                     guard let v = parseFloat(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.bargeIn.minRms = v
@@ -1073,7 +1072,6 @@ struct FaeConfig: Codable {
         lines.append("")
 
         lines.append("[bargeIn]")
-        lines.append("enabled = \(bargeIn.enabled ? "true" : "false")")
         lines.append("minRms = \(formatFloat(bargeIn.minRms))")
         lines.append("confirmMs = \(bargeIn.confirmMs)")
         lines.append("assistantStartHoldoffMs = \(bargeIn.assistantStartHoldoffMs)")

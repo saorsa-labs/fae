@@ -14,9 +14,9 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.8.92</string>
+  <string>0.8.109</string>
   <key>CFBundleVersion</key>
-  <string>0.8.92</string>
+  <string>0.8.109</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
@@ -81,6 +81,6 @@
   <key>SUPublicEDKey</key>
   <string>l2A5ko2QgGdXdquhdnTZius7+Ig92xJJhIkCoDsB7yg=</string>
   <key>SUFeedURL</key>
-  <string></string>
+  <string>https://github.com/saorsa-labs/fae/releases/latest/download/appcast.xml</string>
 </dict>
 </plist>

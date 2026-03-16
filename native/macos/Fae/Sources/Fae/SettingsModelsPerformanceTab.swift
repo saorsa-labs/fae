@@ -49,7 +49,6 @@ struct SettingsModelsPerformanceTab: View {
     // MARK: - Voice Settings
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
     @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
-    @AppStorage("bargeInEnabled") private var bargeInEnabled: Bool = true
     @AppStorage("acousticWakeEnabled") private var acousticWakeEnabled: Bool = true
     @AppStorage("acousticWakeThreshold") private var acousticWakeThreshold: Double = 0.82
 
@@ -505,21 +504,6 @@ struct SettingsModelsPerformanceTab: View {
                 }
             }
 
-            // Barge-In
-            SettingsCard(title: "Interaction", icon: "hand.raised", color: .teal) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Allow interrupting Fae", isOn: $bargeInEnabled)
-                        .onChange(of: bargeInEnabled) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("barge_in.enabled", value: bargeInEnabled)
-                        }
-
-                    Text("Speak while Fae is talking to stop her and take over. Turn off if Fae's voice through speakers causes problems.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             // Restart Notice
             if showRestartNotice {
                 restartNoticeView
@@ -681,17 +665,6 @@ struct SettingsModelsPerformanceTab: View {
                 }
                 if let templateCount = conversation["wake_template_count"] as? Int {
                     wakeTemplateCount = templateCount
-                }
-            }
-        }
-
-        // Fetch barge-in config
-        if let response = await sender.queryCommand(name: "config.get", payload: ["key": "barge_in"]) {
-            if let payload = response["payload"] as? [String: Any],
-               let bargeIn = payload["barge_in"] as? [String: Any]
-            {
-                if let enabled = bargeIn["enabled"] as? Bool {
-                    bargeInEnabled = enabled
                 }
             }
         }

@@ -32,7 +32,6 @@ final class CapabilitySnapshotServiceTests: XCTestCase {
             ownerProfileExists: false,
             permissions: permissions,
             thinkingEnabled: false,
-            bargeInEnabled: true,
             requireDirectAddress: false,
             visionEnabled: false,
             voiceIdentityLock: true,

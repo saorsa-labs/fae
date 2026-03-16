@@ -104,14 +104,7 @@ actor PipelineCoordinator {
         thinkingLevelLive = enabled ? .balanced : .fast
     }
 
-    /// Live override for barge-in — set by FaeCore when the user toggles the setting.
-    /// `nil` means fall back to `config.bargeIn.enabled`.
-    private var bargeInEnabledLive: Bool?
-
-    /// Update the barge-in flag without restarting the pipeline.
-    func setBargeInEnabled(_ enabled: Bool) {
-        bargeInEnabledLive = enabled
-    }
+    // Barge-in is always enabled — no toggle.
 
     /// Mute or unmute the microphone capture in response to the UI mic button.
     ///
@@ -991,6 +984,9 @@ actor PipelineCoordinator {
     private var lastAssistantStart: Date?
     private var engagedUntil: Date?
     private var idleRearmTask: Task<Void, Never>?
+    /// Set after an explicit user quiet/sleep request so idle owner speech
+    /// does not immediately wake Fae again until a fresh wake phrase arrives.
+    private var explicitWakeRequiredFromIdle: Bool = false
     /// Throttle for “currently sleeping” hints so we do not spam spoken nudges.
     private var lastSleepHintAt: Date?
     /// Last assistant response text — used to detect echo (mic picking up speaker output).
@@ -1670,13 +1666,15 @@ actor PipelineCoordinator {
 
     func wake() {
         gateState = .active
+        explicitWakeRequiredFromIdle = false
         engagedUntil = Date().addingTimeInterval(Double(effectiveIdleRearmSeconds()))
         scheduleIdleRearm()
         NSLog("PipelineCoordinator: gate → active")
     }
 
-    func sleep() {
+    func sleep(requireExplicitWake: Bool = false) {
         gateState = .idle
+        explicitWakeRequiredFromIdle = requireExplicitWake
         idleRearmTask?.cancel()
         idleRearmTask = nil
         engagedUntil = nil
@@ -1689,6 +1687,7 @@ actor PipelineCoordinator {
 
     func engage() {
         gateState = .active
+        explicitWakeRequiredFromIdle = false
         engagedUntil = Date().addingTimeInterval(Double(effectiveIdleRearmSeconds()))
         scheduleIdleRearm()
     }
@@ -1754,6 +1753,7 @@ actor PipelineCoordinator {
             "gate_state": gateState == .active ? "active" : "idle",
             "require_direct_address": effectiveRequireDirectAddress(),
             "followup_active": engagedUntil.map { Date() < $0 } ?? false,
+            "explicit_wake_required": explicitWakeRequiredFromIdle,
             "acoustic_wake_enabled": effectiveAcousticWakeEnabled(),
             "acoustic_wake_threshold": Double(effectiveAcousticWakeThreshold()),
         ]
@@ -1841,6 +1841,7 @@ actor PipelineCoordinator {
 
     static func fusedVoiceAttentionDecision(
         gateState: GateState,
+        explicitWakeRequired: Bool,
         requireDirectAddress: Bool,
         addressedToFae: Bool,
         inFollowup: Bool,
@@ -1867,6 +1868,9 @@ actor PipelineCoordinator {
         if gateState != .active {
             if addressedToFae {
                 return .wakeAndContinue
+            }
+            if explicitWakeRequired {
+                return .ignoreWhileSleeping
             }
             if speakerAllowsConversation && wordCount >= 4 {
                 return .wakeAndContinue
@@ -2349,6 +2353,7 @@ actor PipelineCoordinator {
         }
 
         gateState = .idle
+        explicitWakeRequiredFromIdle = false
         engagedUntil = nil
         idleRearmTask = nil
         NSLog("PipelineCoordinator: gate → idle (idle timeout %ds)", seconds)
@@ -2376,19 +2381,67 @@ actor PipelineCoordinator {
             .joined(separator: " ")
     }
 
-    private func isConversationStopTrigger(_ text: String) -> Bool {
-        let normalizedText = Self.normalizeForPhraseMatch(text)
-        var phrases = config.conversation.sleepPhrases
+    static func isConversationStopTrigger(
+        text: String,
+        configuredPhrases: [String],
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool,
+        gateState: GateState
+    ) -> Bool {
+        let normalizedText = normalizeForPhraseMatch(text)
+        guard !normalizedText.isEmpty else { return false }
+
+        let immediateQuietMode = assistantSpeaking || assistantGenerating || gateState == .active
+        if immediateQuietMode, immediateQuietTriggers.contains(normalizedText) {
+            return true
+        }
+
+        var phrases = configuredPhrases
         // Common apostrophe-less variant missed by strict literal matching.
         phrases.append("thatll do fae")
 
         for phrase in phrases {
-            let normalizedPhrase = Self.normalizeForPhraseMatch(phrase)
+            let normalizedPhrase = normalizeForPhraseMatch(phrase)
             if !normalizedPhrase.isEmpty, normalizedText.contains(normalizedPhrase) {
                 return true
             }
         }
         return false
+    }
+
+    private static let immediateQuietTriggers: Set<String> = [
+        "stop",
+        "stop fae",
+        "stop speaking",
+        "stop speaking fae",
+        "stop talking",
+        "stop talking fae",
+        "be quiet",
+        "be quiet fae",
+        "quiet",
+        "quiet fae",
+        "thats enough",
+        "thats enough fae",
+        "that s enough",
+        "that s enough fae",
+        "that is enough",
+        "that is enough fae",
+        "thatll do",
+        "thatll do fae",
+        "that ll do",
+        "that ll do fae",
+        "that will do",
+        "that will do fae",
+    ]
+
+    private func isConversationStopTrigger(_ text: String) -> Bool {
+        Self.isConversationStopTrigger(
+            text: text,
+            configuredPhrases: config.conversation.sleepPhrases,
+            assistantSpeaking: assistantSpeaking,
+            assistantGenerating: assistantGenerating,
+            gateState: gateState
+        )
     }
 
     private func wakeAddressMatch(in text: String, logDecision: Bool = false) -> TextProcessing.WakeAddressMatch? {
@@ -2436,7 +2489,12 @@ actor PipelineCoordinator {
     }
 
     private func resetConversationSession(trigger: String, source: String) async {
-        sleep()
+        // Stop any active speech/generation immediately.
+        if assistantSpeaking || assistantGenerating {
+            markGenerationInterrupted()
+            await playback.stop()
+        }
+        sleep(requireExplicitWake: true)
         currentTurnGenerationContext = nil
         engagedUntil = nil
         lastAssistantResponseText = ""
@@ -2884,11 +2942,9 @@ actor PipelineCoordinator {
                 )
                 if vadOutput.isSpeech {
                     // Check barge-in confirmation.
-                    let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
                     let confirmSamples = (config.bargeIn.confirmMs * config.audio.inputSampleRate) / 1000
                     if let barge = pendingBargeIn,
-                       barge.speechSamples >= confirmSamples,
-                       bargeInEnabled
+                       barge.speechSamples >= confirmSamples
                     {
                         pendingBargeIn = nil
                         await handleBargeInWithVerification(barge: barge)
@@ -3232,6 +3288,7 @@ actor PipelineCoordinator {
         let wordCount = effectiveText.split(whereSeparator: { $0.isWhitespace }).count
         let attentionDecision = Self.fusedVoiceAttentionDecision(
             gateState: gateState,
+            explicitWakeRequired: explicitWakeRequiredFromIdle,
             requireDirectAddress: effectiveRequireDirectAddress(),
             addressedToFae: addressedToFae,
             inFollowup: inFollowup,
@@ -3253,7 +3310,8 @@ actor PipelineCoordinator {
                 wakeScore: effectiveAcousticWakeDetection?.similarity,
                 rms: rms
             )
-            if wordCount >= 4,
+            if !explicitWakeRequiredFromIdle,
+               wordCount >= 4,
                VoiceConversationPolicy.shouldOfferSleepHint(
                    ownerProfileExists: ownerProfileExists,
                    firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
@@ -3605,23 +3663,12 @@ actor PipelineCoordinator {
             }
         }
 
-        // If assistant is still active, handle based on barge-in setting.
+        // Barge-in: if assistant is still active, interrupt and process the new input.
         if assistantSpeaking || assistantGenerating {
-            let bargeInEnabled = bargeInEnabledLive ?? config.bargeIn.enabled
-            if bargeInEnabled {
-                // Barge-in: interrupt speech and process the new transcription.
-                markGenerationInterrupted()
-                pendingTTSTask?.cancel()
-                pendingTTSTask = nil
-                await playback.stop()
-            } else {
-                // Barge-in disabled: drop the transcription entirely — do NOT
-                // interrupt active speech. Stray noise / echo that slipped through
-                // the echo suppressor should never cut off the assistant mid-sentence.
-                NSLog("PipelineCoordinator: dropping transcription while assistant active (barge-in disabled): \"%@\"", text)
-                debugLog(debugConsole, .pipeline, "Dropped transcription (barge-in off, assistant active): \"\(text.prefix(60))\"")
-                return
-            }
+            markGenerationInterrupted()
+            pendingTTSTask?.cancel()
+            pendingTTSTask = nil
+            await playback.stop()
         }
 
         let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)
@@ -3905,16 +3952,10 @@ actor PipelineCoordinator {
                 onApplied: "Done. Thinking mode is now \(enabled ? "on" : "off")."
             )
 
-        case .setBargeIn(let enabled):
-            return await handleBooleanGovernanceCommand(
-                originalText: originalText,
-                key: "barge_in.enabled",
-                enabled: enabled,
-                currentValue: bargeInEnabledLive ?? config.bargeIn.enabled,
-                voiceTag: "set_barge_in",
-                highRiskWhenEnabled: false,
-                onApplied: "Done. Barge-in is now \(enabled ? "enabled" : "disabled")."
-            )
+        case .setBargeIn:
+            // Barge-in is always on — acknowledge but do nothing.
+            await speakDirect("Barge-in is always enabled—you can interrupt me any time.")
+            return true
 
         case .setDirectAddress(let enabled):
             return await handleBooleanGovernanceCommand(
@@ -4067,7 +4108,6 @@ actor PipelineCoordinator {
             ownerProfileExists: ownerProfileExists,
             permissions: permissions,
             thinkingEnabled: (thinkingLevelLive ?? config.llm.resolvedThinkingLevel).enablesThinking,
-            bargeInEnabled: bargeInEnabledLive ?? config.bargeIn.enabled,
             requireDirectAddress: effectiveRequireDirectAddress(),
             visionEnabled: effectiveVisionEnabled(),
             voiceIdentityLock: effectiveVoiceIdentityLock(),
@@ -4119,7 +4159,7 @@ actor PipelineCoordinator {
         case "llm.thinking_enabled":
             return "Thinking mode"
         case "barge_in.enabled":
-            return "Barge-in"
+            return "Barge-in (always on)"
         case "conversation.require_direct_address":
             return "Direct-address requirement"
         case "vision.enabled":
@@ -6133,7 +6173,6 @@ actor PipelineCoordinator {
     /// Owner-verified barge-in: only the owner's voice can interrupt Fae mid-speech.
     /// Fail-closed after enrollment: if owner exists but verification fails, barge-in is DENIED.
     private func handleBargeInWithVerification(barge: PendingBargeIn) async {
-        guard bargeInEnabledLive ?? config.bargeIn.enabled else { return }
         guard !bargeInSuppressed else { return }
         guard Self.shouldAllowBargeInInterrupt(
             assistantSpeaking: assistantSpeaking,

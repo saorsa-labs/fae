@@ -8,7 +8,8 @@ final class VoiceCommandParserTests: XCTestCase {
             .setToolMode("full")
         )
         XCTAssertEqual(VoiceCommandParser.parse("enable thinking mode"), .setThinking(true))
-        XCTAssertEqual(VoiceCommandParser.parse("turn off barge in"), .setBargeIn(false))
+        // Barge-in is always on — voice commands to toggle it now return .none.
+        XCTAssertEqual(VoiceCommandParser.parse("turn off barge in"), .none)
         XCTAssertEqual(VoiceCommandParser.parse("require direct address"), .setDirectAddress(true))
         XCTAssertEqual(VoiceCommandParser.parse("unlock your voice"), .setVoiceIdentityLock(false))
         // Settings/window control is now skill-driven (window-control skill + tool).

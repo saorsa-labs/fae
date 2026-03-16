@@ -117,6 +117,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .idle,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: true,
                 inFollowup: false,
@@ -133,6 +134,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .idle,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: false,
                 inFollowup: false,
@@ -145,10 +147,45 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
+    func testFusedVoiceAttentionKeepsExplicitQuietModeAsleepUntilAddressed() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                explicitWakeRequired: true,
+                requireDirectAddress: true,
+                addressedToFae: false,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 7
+            ),
+            .ignoreWhileSleeping
+        )
+    }
+
+    func testFusedVoiceAttentionStillWakesExplicitQuietModeWhenAddressed() {
+        XCTAssertEqual(
+            PipelineCoordinator.fusedVoiceAttentionDecision(
+                gateState: .idle,
+                explicitWakeRequired: true,
+                requireDirectAddress: true,
+                addressedToFae: true,
+                inFollowup: false,
+                awaitingApproval: false,
+                firstOwnerEnrollmentActive: false,
+                speakerAllowsConversation: true,
+                wordCount: 3
+            ),
+            .wakeAndContinue
+        )
+    }
+
     func testFusedVoiceAttentionStillIgnoresShortSleepingBackgroundSpeech() {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .idle,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: false,
                 inFollowup: false,
@@ -161,10 +198,44 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
+    func testConversationStopTriggerAcceptsBareStopWhileAssistantIsActive() {
+        XCTAssertTrue(
+            PipelineCoordinator.isConversationStopTrigger(
+                text: "stop",
+                configuredPhrases: ["go to sleep"],
+                assistantSpeaking: true,
+                assistantGenerating: false,
+                gateState: .active
+            )
+        )
+        XCTAssertTrue(
+            PipelineCoordinator.isConversationStopTrigger(
+                text: "that's enough",
+                configuredPhrases: ["go to sleep"],
+                assistantSpeaking: false,
+                assistantGenerating: true,
+                gateState: .active
+            )
+        )
+    }
+
+    func testConversationStopTriggerRejectsBareStopWhileIdle() {
+        XCTAssertFalse(
+            PipelineCoordinator.isConversationStopTrigger(
+                text: "stop",
+                configuredPhrases: ["go to sleep"],
+                assistantSpeaking: false,
+                assistantGenerating: false,
+                gateState: .idle
+            )
+        )
+    }
+
     func testFusedVoiceAttentionWakesForEnrollmentWithoutDirectAddress() {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .idle,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: false,
                 inFollowup: false,
@@ -181,6 +252,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .idle,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: false,
                 inFollowup: false,
@@ -216,6 +288,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .active,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: false,
                 inFollowup: true,
@@ -232,6 +305,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .active,
+                explicitWakeRequired: false,
                 requireDirectAddress: true,
                 addressedToFae: false,
                 inFollowup: false,
@@ -248,6 +322,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .active,
+                explicitWakeRequired: false,
                 requireDirectAddress: false,
                 addressedToFae: false,
                 inFollowup: false,
@@ -264,6 +339,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(
             PipelineCoordinator.fusedVoiceAttentionDecision(
                 gateState: .active,
+                explicitWakeRequired: false,
                 requireDirectAddress: false,
                 addressedToFae: true,
                 inFollowup: false,

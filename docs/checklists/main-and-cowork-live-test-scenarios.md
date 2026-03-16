@@ -1,6 +1,6 @@
 # Main And Cowork Live Test Scenarios
 
-Last updated: March 14, 2026
+Last updated: March 16, 2026
 
 This document is the step-by-step live validation companion to
 [`docs/checklists/app-release-validation.md`](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md).
@@ -93,10 +93,12 @@ Acceptance:
 - Fae hears real audio through the mic pipeline.
 - Fae speaks an audible reply through the configured TTS path.
 - Listening starts quickly enough to catch the intended utterance.
+- Saying `stop`, `be quiet`, or `that's enough` while Fae is speaking stops her promptly without making her argue back.
 - Wake-word clipping does not break normal owner follow-up speech.
 - After Fae finishes speaking, the owner can start talking promptly without their utterance being dropped.
 - A brief mid-conversation pause does not dump the user back to idle.
 - Continuation cues like `wait` or `hold on` remain in the same conversation without requiring the wake phrase again.
+- After an explicit quiet request, ordinary nearby owner speech does not wake Fae again until `hey Fae` or another wake-name address is used.
 - Typing remains possible while listening is active.
 
 Steps:
@@ -107,8 +109,10 @@ Steps:
 4. Let Fae answer a short question, then begin speaking again within about a second of playback finishing; confirm the whole follow-up is heard instead of being dropped.
 5. Ask a short question, pause for about a second mid-thought, then continue speaking without repeating `hi Fae`; confirm the continuation is still accepted.
 6. During the same engaged session, say a continuation cue such as `wait, let me check` or `hold on` and confirm Fae does not snap back to idle or steal the turn.
-7. While listening is still enabled, type a short draft into the composer.
-8. Capture a screenshot showing the listening state and text composer together.
+7. While Fae is mid-reply, say `stop`, `be quiet`, or `that's enough`; confirm playback stops quickly and Fae does not answer the interruption with another spoken turn.
+8. After that quiet request, say a normal non-addressed sentence near the Mac and confirm Fae stays quiet; then say `hey Fae` plus a request and confirm she re-engages normally.
+9. While listening is still enabled, type a short draft into the composer.
+10. Capture a screenshot showing the listening state and text composer together.
 
 ### 4. Text quality and turn handling
 

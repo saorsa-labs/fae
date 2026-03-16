@@ -96,7 +96,6 @@ final class FaeConfigTests: XCTestCase {
         original.conversation.requireDirectAddress = true
         original.conversation.sleepPhrases = ["sleep now", "good night"]
 
-        original.bargeIn.enabled = false
         original.bargeIn.minRms = 0.12
 
         original.memory.maxRecallResults = 11
@@ -136,7 +135,6 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertTrue(loaded.conversation.requireDirectAddress)
         XCTAssertEqual(loaded.conversation.sleepPhrases, ["sleep now", "good night"])
 
-        XCTAssertFalse(loaded.bargeIn.enabled)
         XCTAssertEqual(loaded.bargeIn.minRms, 0.12, accuracy: 0.0001)
 
         XCTAssertEqual(loaded.memory.maxRecallResults, 11)

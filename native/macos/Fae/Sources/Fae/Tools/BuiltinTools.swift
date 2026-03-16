@@ -298,10 +298,6 @@ struct SelfConfigTool: Tool {
             valueType: .bool,
             description: "Extended reasoning mode"
         ),
-        "barge_in.enabled": SettingSpec(
-            valueType: .bool,
-            description: "Allow user to interrupt mid-speech"
-        ),
         "conversation.require_direct_address": SettingSpec(
             valueType: .bool,
             description: "Only respond when addressed by name"
@@ -506,7 +502,6 @@ struct SelfConfigTool: Tool {
         lines.append("  tts.voice_identity_lock = \(config.tts.voiceIdentityLock) — Force canonical bundled fae.wav")
         lines.append("  llm.temperature = \(config.llm.temperature) — Creativity (0.3=precise, 1.0=creative)")
         lines.append("  llm.thinking_enabled = \(config.llm.thinkingEnabled) — Extended reasoning")
-        lines.append("  barge_in.enabled = \(config.bargeIn.enabled) — Allow interruption")
         lines.append(
             "  conversation.require_direct_address = \(config.conversation.requireDirectAddress)"
                 + " — Name-gated responses"

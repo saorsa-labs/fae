@@ -19,7 +19,6 @@ struct ToolPermissionSnapshot: Sendable {
     let ownerProfileExists: Bool
     let permissions: PermissionStatusProvider.Snapshot
     let thinkingEnabled: Bool
-    let bargeInEnabled: Bool
     let requireDirectAddress: Bool
     let visionEnabled: Bool
     let voiceIdentityLock: Bool
@@ -80,7 +79,6 @@ struct ToolPermissionSnapshot: Sendable {
           <p><strong>Behavior quick actions</strong></p>
           <div class='chips'>
             <a class='chip' href='fae-action://set_setting?key=llm.thinking_enabled&value=\(thinkingEnabled ? "false" : "true")&source=canvas'>Thinking \(thinkingEnabled ? "ON" : "OFF")</a>
-            <a class='chip' href='fae-action://set_setting?key=barge_in.enabled&value=\(bargeInEnabled ? "false" : "true")&source=canvas'>Barge-in \(bargeInEnabled ? "ON" : "OFF")</a>
             <a class='chip' href='fae-action://set_setting?key=conversation.require_direct_address&value=\(requireDirectAddress ? "false" : "true")&source=canvas'>Direct address \(requireDirectAddress ? "ON" : "OFF")</a>
             <a class='chip' href='fae-action://set_setting?key=vision.enabled&value=\(visionEnabled ? "false" : "true")&source=canvas'>Vision \(visionEnabled ? "ON" : "OFF")</a>
             <a class='chip danger' href='fae-action://set_setting?key=tts.voice_identity_lock&value=\(voiceIdentityLock ? "false" : "true")&source=canvas'>Voice lock \(voiceIdentityLock ? "ON" : "OFF")</a>
@@ -134,7 +132,7 @@ struct ToolPermissionSnapshot: Sendable {
             <p><strong>Tool mode:</strong> <code>\(toolMode)</code> · <strong>Policy:</strong> <code>\(policyProfile)</code></p>
             <p><strong>Speaker trust:</strong> \(speakerState)</p>
             <p><strong>Owner gate:</strong> \(ownerGateEnabled ? "enabled" : "disabled") · owner profile \(ownerProfileExists ? "present" : "missing")</p>
-            <p><strong>Behavior:</strong> thinking \(thinkingEnabled ? "on" : "off") · barge-in \(bargeInEnabled ? "on" : "off") · direct-address \(requireDirectAddress ? "on" : "off") · vision \(visionEnabled ? "on" : "off") · voice lock \(voiceIdentityLock ? "on" : "off")</p>
+            <p><strong>Behavior:</strong> thinking \(thinkingEnabled ? "on" : "off") · barge-in always on · direct-address \(requireDirectAddress ? "on" : "off") · vision \(visionEnabled ? "on" : "off") · voice lock \(voiceIdentityLock ? "on" : "off")</p>
           </div>
 
           \(modeActions)

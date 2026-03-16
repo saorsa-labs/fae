@@ -194,12 +194,47 @@ The loop stays:
 
 1. freeze a base benchmark
 2. train a candidate
-3. fuse or adapt as needed for local evaluation
-4. rerun the same benchmark gate
-5. compare base vs candidate
-6. only promote if the candidate actually wins
+3. merge the HF adapter back into a plain HF model
+4. convert the merged HF model to MLX locally
+5. rerun the same benchmark gate
+6. compare base vs candidate
+7. only promote if the candidate actually wins
 
 For Fae, that still means tool calling remains a hard gate.
+
+### Merge and convert route
+
+For larger cloud runs, especially `Qwen3.5-35B-A3B`, the preferred route is:
+
+1. train an HF PEFT adapter
+2. merge it on HF Jobs
+3. convert the merged model to MLX on the Mac
+4. benchmark locally with the same gate the app uses
+
+Helper entrypoints:
+
+- [hf_jobs_merge_peft_adapter.py](../../scripts/hf_jobs_merge_peft_adapter.py)
+- [submit_hf_jobs_merge.sh](../../scripts/submit_hf_jobs_merge.sh)
+- [convert_and_benchmark_hf_candidate.sh](../../scripts/convert_and_benchmark_hf_candidate.sh)
+
+Example merge submission:
+
+```bash
+FAE_HFJ_MERGE_ADAPTER_REPO_ID=saorsa-labs/fae-qwen35-35b-a3b-sft-smoke-20260315-try3 \
+bash scripts/submit_hf_jobs_merge.sh
+```
+
+Example local conversion and benchmark:
+
+```bash
+bash scripts/convert_and_benchmark_hf_candidate.sh \
+  --hf-model saorsa-labs/fae-qwen35-35b-a3b-sft-smoke-20260315-try3-merged \
+  --candidate-name qwen35-35b-a3b-sft-smoke-merged
+```
+
+This route is preferred over trying to translate the HF PEFT adapter directly
+into an MLX adapter for MoE models. `Qwen3.5-35B-A3B` stores expert weights in
+forms that do not line up cleanly with MLX's split `switch_mlp` layout.
 
 ---
 

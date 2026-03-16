@@ -358,12 +358,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
 
-                // Sync barge-in setting from AppStorage on startup.
-                // bargeInEnabledLive defaults to nil, so we must explicitly
-                // set it from the persisted preference.
-                let bargeInPref = UserDefaults.standard.object(forKey: "bargeInEnabled") as? Bool
-                    ?? config.bargeIn.enabled
-                await coordinator.setBargeInEnabled(bargeInPref)
                 await coordinator.setPrivacyMode(config.privacy.mode)
 
                 // Wire SelfConfigTool's configPatcher to this FaeCore instance.
@@ -609,15 +603,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Return raw memory recall context without going through model generation (test harness use).
     func recallMemoryContextForTest(query: String) async -> String? {
         await memoryOrchestrator?.recall(query: query)
-    }
-
-    /// Toggle barge-in on/off, persist to config, and update the live pipeline.
-    func setBargeInEnabled(_ enabled: Bool) {
-        config.bargeIn.enabled = enabled
-        persistConfig(reason: "config.patch.barge_in.enabled")
-        if let coordinator = pipelineCoordinator {
-            Task { await coordinator.setBargeInEnabled(enabled) }
-        }
     }
 
     /// Update the reasoning depth used for future turns.
@@ -1391,8 +1376,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             setThinkingLevel(level)
 
         case "barge_in.enabled":
-            guard let value = value as? Bool else { return }
-            setBargeInEnabled(value)
+            break // Barge-in is always on — ignore config patches.
 
         case "tts.speed":
             let parsedSpeed: Float?
@@ -2389,7 +2373,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             return [
                 "payload": [
                     "barge_in": [
-                        "enabled": config.bargeIn.enabled,
+                        "enabled": true,
                     ] as [String: Any],
                 ] as [String: Any],
             ]

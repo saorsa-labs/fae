@@ -121,7 +121,6 @@ enum PersonalityManager {
           - "Lock your voice to Fae" / "allow custom voice" → adjust tts.voice_identity_lock (true|false)
           - "Be more creative/precise" → adjust llm.temperature (0.3=precise, 0.7=balanced, 1.0=creative)
           - "Think step by step" → adjust llm.thinking_enabled = true
-          - "Let me interrupt you" → adjust barge_in.enabled = true
           - "Only respond when I say your name" → adjust conversation.require_direct_address = true
           - "Enable vision" / "disable vision" → adjust vision.enabled (true|false)
           - "Enable/disable proactive awareness" → adjust awareness.enabled (true|false)

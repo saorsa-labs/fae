@@ -126,15 +126,7 @@ enum VoiceCommandParser {
             }
         }
 
-        if lower.contains("barge") || lower.contains("interrupt") {
-            // Check disable phrases first — "don't let me" must win over the "let me" substring.
-            if lower.contains("disable") || lower.contains("turn off") || lower.contains("don't let me") || lower.contains("stop letting") {
-                return .setBargeIn(false)
-            }
-            if lower.contains("enable") || lower.contains("turn on") || lower.contains("let me") {
-                return .setBargeIn(true)
-            }
-        }
+        // Barge-in is always on — no voice command to toggle.
 
         if lower.contains("direct address") || lower.contains("say your name") || lower.contains("say fae") {
             if lower.contains("require") || lower.contains("enable") || lower.contains("turn on") || lower.contains("only respond") {

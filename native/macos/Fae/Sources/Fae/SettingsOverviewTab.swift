@@ -9,7 +9,6 @@ struct SettingsOverviewTab: View {
     // Quick toggles
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
-    @AppStorage("bargeInEnabled") private var bargeInEnabled: Bool = true
     @AppStorage("kvQuantEnabled") private var kvQuantEnabled: Bool = true
 
     // System info
@@ -195,15 +194,6 @@ struct SettingsOverviewTab: View {
                     color: .purple
                 ) {
                     patchConfig("vision.enabled", value: visionEnabled)
-                }
-
-                quickToggle(
-                    title: "Interrupt",
-                    icon: "hand.raised",
-                    isOn: $bargeInEnabled,
-                    color: .teal
-                ) {
-                    patchConfig("barge_in.enabled", value: bargeInEnabled)
                 }
 
                 quickToggle(
