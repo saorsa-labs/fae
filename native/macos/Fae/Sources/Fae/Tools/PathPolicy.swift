@@ -45,24 +45,42 @@ enum PathPolicy {
             }
 
             // Block Fae's own data directory files (force use of self_config/Settings/approval).
-            // Uses FaeDirectories to cover both production (fae/) and dev (fae-dev/) paths.
-            let faeRoot = FaeDirectories.root.path.lowercased()
-            if lowered.hasPrefix(faeRoot) {
-                let protectedFiles: Set<String> = [
-                    "config.toml", "fae.db", "scheduler.db", "soul.md",
-                    "speakers.json", "approved_tools.json",
-                ]
-                let filename = URL(fileURLWithPath: resolved).lastPathComponent.lowercased()
-                if protectedFiles.contains(filename) {
-                    return .blocked(
-                        reason: "Cannot write to \(filename) directly. Use the appropriate tool or Settings."
-                    )
+            // Protects BOTH production (fae/) and dev (fae-dev/) unconditionally — a dev-mode
+            // tool must not be able to write to production data files and vice versa.
+            for faeRoot in Self.protectedFaeRoots {
+                if lowered.hasPrefix(faeRoot) {
+                    let filename = URL(fileURLWithPath: resolved).lastPathComponent.lowercased()
+                    if Self.protectedFaeFiles.contains(filename) {
+                        return .blocked(
+                            reason: "Cannot write to \(filename) directly. Use the appropriate tool or Settings."
+                        )
+                    }
                 }
             }
         }
 
         return .allowed(canonicalPath: resolved)
     }
+
+    // MARK: - Fae Data Protection
+
+    /// Both production and dev data roots — protects files in either regardless of current mode.
+    private static let protectedFaeRoots: [String] = {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support")
+        return [
+            appSupport.appendingPathComponent("fae").path.lowercased(),
+            appSupport.appendingPathComponent("fae-dev").path.lowercased(),
+        ]
+    }()
+
+    /// Filenames within the Fae data directory that are never directly writable by tools.
+    private static let protectedFaeFiles: Set<String> = [
+        "config.toml", "fae.db", "scheduler.db", "soul.md",
+        "speakers.json", "approved_tools.json",
+    ]
 
     // MARK: - Blocklists
 

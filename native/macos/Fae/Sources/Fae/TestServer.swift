@@ -310,7 +310,6 @@ final class TestServer {
             policyProfile = "full_access"
         }
 
-        let defaults = UserDefaults.standard
         sendResponse(connection: connection, status: 200, body: [
             "pipeline": state.rawValue,
             "toolMode": toolMode,
@@ -323,7 +322,7 @@ final class TestServer {
             "approvalToolName": approvalToolName as Any,
             "approvalRequestId": approvalRequestID as Any,
             "policyProfile": policyProfile,
-            "operatorLoaded":          defaults.bool(forKey: "fae.runtime.operator_loaded"),
+            "operatorLoaded": FaeEnvironment.defaults.bool(forKey: "fae.runtime.operator_loaded"),
         ])
     }
 
