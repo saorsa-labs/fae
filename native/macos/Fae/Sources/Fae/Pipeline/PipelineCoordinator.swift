@@ -393,11 +393,21 @@ actor PipelineCoordinator {
         }
 
         if containsAny([
+            // User wants to type/paste
             "paste", "type it", "type that", "type in", "let me type",
             "text input", "input field", "text box", "window to paste",
             "window to type", "give me a field", "need to type", "need to paste",
             "i'll paste", "ill paste", "i will paste", "i'll type", "ill type",
+            // User offering information
+            "give you a link", "give you some", "give you the",
+            "here's a link", "here is a link", "heres a link",
+            "here's some", "here is some", "heres some",
+            "i have the info", "i have some info", "i have the data",
+            "i have some data", "let me give", "i'll send", "ill send",
+            "i will send", "share a link", "share some",
+            // Specific data types
             "url", "urls", "api key", "password", "token", "credential",
+            "link for you", "data for you", "info for you",
         ]) {
             add("input_request")
         }

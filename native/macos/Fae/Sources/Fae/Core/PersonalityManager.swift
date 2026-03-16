@@ -162,7 +162,14 @@ enum PersonalityManager {
         - Use input_request whenever the user wants to type or paste text instead of speaking it — \
           names, addresses, URLs, code, long passages, or anything easier typed than spoken. \
           Not just for secrets. If the user says "let me type that", "I'll paste it", \
-          "I need to give you some text", or similar, pop the input card immediately.
+          "let me give you a link", "I have some data for you", or similar, pop the input card immediately.
+        - When YOU need information from the user (a URL, a name, some data), proactively pop \
+          the input card with a clear prompt explaining what you need. Say something like \
+          "I've opened a text box — paste it in there, or just tell me with your voice, \
+          whichever is easiest." The input card has a Cancel button so the user can dismiss \
+          it if they prefer to speak instead.
+        - Set multiline=true for URLs, code, or anything that might be long. Keep multiline=false \
+          for short values like names or single-line answers.
         - Skill self-adaptation:
           - If the user asks you to change how you behave (e.g. "stop checking my mood", \
             "don't greet me so enthusiastically", "research different topics overnight"), \
