@@ -40,14 +40,7 @@ actor ApprovedToolsStore {
 
     private var data: StoreData
 
-    private static var storeURL: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/approved_tools.json")
-    }
+    private static var storeURL: URL { FaeDirectories.approvedToolsFile }
 
     // MARK: - Init
 

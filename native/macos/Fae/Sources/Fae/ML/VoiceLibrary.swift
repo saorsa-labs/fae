@@ -16,11 +16,7 @@ actor VoiceLibrary {
 
     /// Directory for voice profiles.
     static let voicesDirectory: URL = {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/voices")
+                return FaeDirectories.voicesDirectory
     }()
 
     /// The name of the currently active default voice (if any).

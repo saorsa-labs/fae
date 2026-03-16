@@ -43,15 +43,9 @@ actor GitVaultManager {
     private let sourceDir: URL
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        self.vaultURL = home.appendingPathComponent(".fae-vault")
+        self.vaultURL = FaeDirectories.vault
         self.dataURL = vaultURL.appendingPathComponent("data")
-
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? home.appendingPathComponent("Library/Application Support")
-        self.sourceDir = appSupport.appendingPathComponent("fae")
+        self.sourceDir = FaeDirectories.root
     }
 
     // MARK: - Lifecycle

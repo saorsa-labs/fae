@@ -13,12 +13,7 @@ enum SoulManager {
         if let override = userSoulURLOverride {
             return override
         }
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/soul.md")
+                return FaeDirectories.soulFile
     }
 
     /// Read the bundled default SOUL.md from the resource bundle.

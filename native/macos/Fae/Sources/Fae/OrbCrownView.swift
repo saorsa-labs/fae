@@ -82,6 +82,25 @@ struct OrbCrownView: View {
                 }
             }
 
+            // Dev mode badge — top-right.
+            if FaeEnvironment.isDev {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Text("DEV")
+                            .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.85))
+                            .clipShape(Capsule())
+                            .padding(.trailing, 10)
+                            .padding(.top, 8)
+                    }
+                    Spacer()
+                }
+            }
+
             // Rescue badge — top-left.
             if rescueMode.isActive {
                 VStack {

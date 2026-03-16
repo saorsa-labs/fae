@@ -12,12 +12,7 @@ enum ReversibilityEngine {
     }
 
     private static var recoveryDir: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/recovery")
+                return FaeDirectories.recoveryDirectory
     }
 
     private static var indexURL: URL {

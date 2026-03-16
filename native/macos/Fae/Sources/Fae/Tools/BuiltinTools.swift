@@ -382,14 +382,7 @@ struct SelfConfigTool: Tool {
         "override instructions",
     ]
 
-    private static var filePath: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/directive.md")
-    }
+    private static var filePath: URL { FaeDirectories.directiveFile }
 
     /// Check if content contains jailbreak patterns.
     static func containsJailbreakPattern(_ text: String) -> Bool {

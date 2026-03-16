@@ -50,18 +50,32 @@ _kill-fae:
         sleep 1
     fi
 
-# Build, bundle, sign, and launch the native app.
+# Build, bundle, sign, and launch the native app (production mode).
 run-native: build _bundle-app _sign-bundle _kill-fae
     open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+
+# Build, bundle, sign, and launch in DEV mode (isolated data directory).
+# Uses ~/Library/Application Support/fae-dev/ — does NOT touch production Fae.
+# Reads config.toml from fae-dev/. Uses separate UserDefaults, memories, skills.
+run-dev: build _bundle-app _sign-bundle _kill-fae
+    FAE_DEV=1 open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1
+    @echo "✓ Fae (DEV) launched — logs: tail -f /tmp/fae-dev.log"
+    @echo "  Data: ~/Library/Application Support/fae-dev/"
+    @echo "  Vault: ~/.fae-vault-dev/"
 
 # Build the Swift app, create .app bundle, sign, and verify it (without launching).
 bundle-native: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
     @echo "✓ Signed bundle ready: {{_app_bundle}}"
 
-# Full clean rebuild and launch.
+# Full clean rebuild and launch (production).
 rebuild: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
     open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
     @echo "✓ Fae launched — logs: tail -f /tmp/fae-test.log"
+
+# Full clean rebuild and launch in DEV mode.
+rebuild-dev: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
+    FAE_DEV=1 open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1
+    @echo "✓ Fae (DEV) rebuilt and launched — logs: tail -f /tmp/fae-dev.log"
 
 # ── Test Harness ─────────────────────────────────────────────────────────
 

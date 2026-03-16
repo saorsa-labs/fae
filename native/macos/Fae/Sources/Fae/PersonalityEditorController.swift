@@ -32,14 +32,7 @@ final class PersonalityEditorController {
 
     // MARK: - Private
 
-    private var directiveURL: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/directive.md")
-    }
+    private var directiveURL: URL { FaeDirectories.directiveFile }
 
     private func ensureDirectiveFile(at url: URL) {
         guard !FileManager.default.fileExists(atPath: url.path) else { return }

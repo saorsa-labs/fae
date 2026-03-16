@@ -546,18 +546,22 @@ struct FaeConfig: Codable {
 
     // MARK: - Persistence
 
-    /// Config file path: ~/Library/Application Support/fae/config.toml
-    static var configFileURL: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/config.toml")
-    }
+    /// Config file path — uses FaeDirectories for dev-mode isolation.
+    static var configFileURL: URL { FaeDirectories.configFile }
 
-    /// Load config from disk. Returns default if file doesn't exist.
-    static func load() -> FaeConfig { load(from: configFileURL) }
+    /// Load config for the current environment.
+    ///
+    /// - **Normal mode**: Returns code defaults. config.toml is NOT read.
+    ///   User preferences come from UserDefaults (Settings UI / voice commands).
+    /// - **Dev mode**: Reads config.toml from the dev data directory.
+    ///   This allows developers to override any setting via the toml file.
+    static func load() -> FaeConfig {
+        if FaeEnvironment.isDev || FaeEnvironment.isTesting {
+            return load(from: configFileURL)
+        }
+        // Normal mode: pure code defaults. UserDefaults overlay applied by FaeCore.
+        return FaeConfig()
+    }
 
     /// Load config from a specific URL. Returns default for missing/invalid files.
     static func load(from url: URL) -> FaeConfig {
@@ -586,8 +590,11 @@ struct FaeConfig: Codable {
         }
     }
 
-    /// Save config to disk.
-    func save() throws { try save(to: Self.configFileURL) }
+    /// Save config to disk. Only writes in dev mode or tests — normal mode uses UserDefaults.
+    func save() throws {
+        guard FaeEnvironment.isDev || FaeEnvironment.isTesting else { return }
+        try save(to: Self.configFileURL)
+    }
 
     /// Save config to a specific URL atomically, creating parent directories as needed.
     func save(to url: URL) throws {

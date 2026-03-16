@@ -47,12 +47,7 @@ actor SkillManager {
 
     /// Skill directory: ~/Library/Application Support/fae/skills/
     static var skillsDirectory: URL {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        return appSupport.appendingPathComponent("fae/skills")
+                return FaeDirectories.skillsDirectory
     }
 
     /// User-scoped shared Agent Skills directory.

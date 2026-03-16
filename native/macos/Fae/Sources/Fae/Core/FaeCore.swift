@@ -90,30 +90,24 @@ final class FaeCore: ObservableObject, HostCommandSender {
         self.thinkingLevel = initialThinkingLevel
         self.thinkingEnabled = initialThinkingLevel.enablesThinking
 
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        let faeDir = appSupport.appendingPathComponent("fae")
         self.speakerProfileStore = SpeakerProfileStore(
-            storePath: faeDir.appendingPathComponent("speakers.json")
+            storePath: FaeDirectories.speakersFile
         )
         self.wakeWordProfileStore = WakeWordProfileStore(
-            storePath: faeDir.appendingPathComponent("wake_lexicon.json")
+            storePath: FaeDirectories.wakeLexiconFile
         )
 
         // Seed the UserDefaults enrollment cache synchronously from speakers.json if
         // the key has never been written (first launch with this code, or migration).
         // SpeakerProfileStore.init already loaded profiles from disk — check via the
         // same nonisolated file read so we don't need to await the actor.
-        if !UserDefaults.standard.bool(forKey: "fae.owner.enrolled") {
-            let speakersURL = faeDir.appendingPathComponent("speakers.json")
+        if !FaeEnvironment.defaults.bool(forKey: "fae.owner.enrolled") {
+            let speakersURL = FaeDirectories.speakersFile
             if let data = try? Data(contentsOf: speakersURL),
                let profiles = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
                profiles.contains(where: { ($0["role"] as? String) == "owner" })
             {
-                UserDefaults.standard.set(true, forKey: "fae.owner.enrolled")
+                FaeEnvironment.defaults.set(true, forKey: "fae.owner.enrolled")
                 hasOwnerSetUp = true
             }
         }
@@ -770,7 +764,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 await MainActor.run {
                     self.hasOwnerSetUp = isComplete
                     if isComplete {
-                        UserDefaults.standard.set(true, forKey: "fae.owner.enrolled")
+                        FaeEnvironment.defaults.set(true, forKey: "fae.owner.enrolled")
                     }
                 }
                 if isComplete {
@@ -1796,7 +1790,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.hasOwnerSetUp = true
-                UserDefaults.standard.set(true, forKey: "fae.owner.enrolled")
+                FaeEnvironment.defaults.set(true, forKey: "fae.owner.enrolled")
                 Task { await self.pipelineCoordinator?.setFirstOwnerEnrollmentActive(false) }
                 var configChanged = false
                 if !self.config.voiceIdentity.enabled {
@@ -2227,26 +2221,24 @@ final class FaeCore: ObservableObject, HostCommandSender {
         )
     }
 
-    /// `~/Library/Application Support/fae/` — the root data directory for Fae.
+    /// Root data directory — delegates to FaeDirectories for dev-mode isolation.
     private static func faeDirectory() throws -> URL {
-        try appSupportDirectory().appendingPathComponent("fae")
+        FaeDirectories.root
     }
 
-    /// Memory database path: ~/Library/Application Support/fae/fae.db
+    /// Memory database path.
     private static func createMemoryStore() throws -> SQLiteMemoryStore {
-        let dbPath = try faeDirectory().appendingPathComponent("fae.db").path
-        return try SQLiteMemoryStore(path: dbPath)
+        try SQLiteMemoryStore(path: FaeDirectories.database.path)
     }
 
     /// Scheduler persistence database path.
     private static func createSchedulerPersistenceStore() throws -> SchedulerPersistenceStore {
-        let dbPath = try faeDirectory().appendingPathComponent("scheduler.db").path
-        return try SchedulerPersistenceStore(path: dbPath)
+        try SchedulerPersistenceStore(path: FaeDirectories.schedulerDatabase.path)
     }
 
     /// Tool analytics database path.
     private static func createToolAnalyticsStore() throws -> ToolAnalytics {
-        let dbPath = try faeDirectory().appendingPathComponent("tool_analytics.db").path
+        let dbPath = FaeDirectories.toolAnalyticsDatabase.path
         return try ToolAnalytics(path: dbPath)
     }
 
