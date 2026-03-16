@@ -974,10 +974,14 @@ actor MemoryOrchestrator {
     }
 
     private func formattedRecallLine(for hit: MemorySearchHit) async -> String? {
-        let snippet = compactMemoryText(
-            hit.record.text,
-            maxLength: hit.record.kind == .digest ? 260 : 180
-        )
+        let isArtifactBacked = metadataValue(for: hit.record, key: "artifact_id") != nil
+        let maxLen: Int
+        switch (hit.record.kind, isArtifactBacked) {
+        case (.digest, _): maxLen = 260
+        case (_, true):    maxLen = 500  // Imported artifacts carry curated content
+        default:           maxLen = 180
+        }
+        let snippet = compactMemoryText(hit.record.text, maxLength: maxLen)
         let provenance = await provenanceSummary(for: hit.record)
         if let provenance, !provenance.isEmpty {
             return "- [\(hit.record.kind.rawValue) \(String(format: "%.2f", hit.record.confidence))] \(snippet) (sources: \(provenance))"

@@ -81,10 +81,32 @@ final class FaeCore: ObservableObject, HostCommandSender {
         loaded.llm.normalizeThinkingConfiguration(hasExplicitLevel: true)
         let initialThinkingLevel = loaded.llm.resolvedThinkingLevel
         self.config = loaded
-        self.isLicenseAccepted = loaded.licenseAccepted
-        self.shouldShowStartupIntro = loaded.licenseAccepted
+
+        // In normal mode config.toml is not read, so licence/intro state lives in
+        // UserDefaults.  Seed from config for dev/test mode; for normal mode the
+        // UserDefaults value is authoritative.
+        let licenseFromDefaults = FaeEnvironment.defaults.bool(forKey: "fae.licenseAccepted")
+        let introSeenFromDefaults = FaeEnvironment.defaults.bool(forKey: "fae.startupIntroSeen")
+
+        let resolvedLicenseAccepted: Bool
+        let resolvedIntroSeen: Bool
+        if FaeEnvironment.isDev || FaeEnvironment.isTesting {
+            // Dev mode: config.toml is the source of truth — sync to UserDefaults.
+            resolvedLicenseAccepted = loaded.licenseAccepted
+            resolvedIntroSeen = loaded.startupIntroSeen
+            FaeEnvironment.defaults.set(loaded.licenseAccepted, forKey: "fae.licenseAccepted")
+            FaeEnvironment.defaults.set(loaded.startupIntroSeen, forKey: "fae.startupIntroSeen")
+        } else {
+            // Normal mode: UserDefaults is the source of truth.
+            resolvedLicenseAccepted = licenseFromDefaults
+            resolvedIntroSeen = introSeenFromDefaults
+            loaded.licenseAccepted = resolvedLicenseAccepted
+        }
+
+        self.isLicenseAccepted = resolvedLicenseAccepted
+        self.shouldShowStartupIntro = resolvedLicenseAccepted
             && loaded.startupIntroSeenConfigured
-            && !loaded.startupIntroSeen
+            && !resolvedIntroSeen
         self.userName = loaded.userName
         self.toolMode = loaded.toolMode
         self.thinkingLevel = initialThinkingLevel
@@ -1761,6 +1783,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     func acceptLicense() {
         isLicenseAccepted = true
         config.licenseAccepted = true
+        FaeEnvironment.defaults.set(true, forKey: "fae.licenseAccepted")
         if !config.startupIntroSeenConfigured {
             config.startupIntroSeen = false
             config.startupIntroSeenConfigured = true
@@ -1775,6 +1798,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         shouldShowStartupIntro = false
         config.startupIntroSeen = true
         config.startupIntroSeenConfigured = true
+        FaeEnvironment.defaults.set(true, forKey: "fae.startupIntroSeen")
         persistConfig(reason: "startup_intro.seen")
         NSLog("FaeCore: startup intro marked seen")
     }

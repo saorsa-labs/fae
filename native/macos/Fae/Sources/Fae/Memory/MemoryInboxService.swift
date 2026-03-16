@@ -295,6 +295,11 @@ actor MemoryInboxService {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Max chars stored in the memory *record* text. The full content is
+    /// preserved in `memory_artifacts.raw_text`; the record only needs enough
+    /// for FTS5 search and recall snippets.
+    private static let maxRecordTextChars = 2000
+
     private static func importedRecordText(
         sourceType: MemoryArtifactSourceType,
         title: String?,
@@ -309,7 +314,15 @@ actor MemoryInboxService {
             lines.append("Origin: \(origin)")
         }
         lines.append("")
-        lines.append(rawText)
+
+        // Store a bounded preview in the record — full text lives in the artifact.
+        let headerLen = lines.joined(separator: "\n").count
+        let budget = max(maxRecordTextChars - headerLen, 200)
+        if rawText.count > budget {
+            lines.append(String(rawText.prefix(budget - 4)).trimmingCharacters(in: .whitespaces) + " ...")
+        } else {
+            lines.append(rawText)
+        }
         return lines.joined(separator: "\n")
     }
 
