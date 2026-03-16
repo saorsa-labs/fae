@@ -28,7 +28,7 @@ Artifacts in the Fae repo:
 
 ## Usage
 
-This model is intended to replace the standard `2B` auto-selected lane in Fae while leaving the `4B`, `9B`, and `27B` lanes unchanged.
+This model replaces the standard `2B` auto-selected lane in Fae. The three supported tiers are: `saorsa-1.1-tiny` (2B), `Qwen3.5-4B`, and `Qwen3.5-35B-A3B`.
 
 ## Notes
 

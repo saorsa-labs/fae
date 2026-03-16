@@ -463,4 +463,6 @@ extension Notification.Name {
     static let faeSchedulerTrigger = Notification.Name("faeSchedulerTrigger")
     /// Posted by `SchedulerUpdateTool` when a task's enabled state changes. `userInfo["id"]` and `userInfo["enabled"]`.
     static let faeSchedulerUpdate = Notification.Name("faeSchedulerUpdate")
+    /// Posted by `FaeScheduler.runCheckUpdate()` to trigger a Sparkle update check on the main thread.
+    static let faeCheckForUpdatesRequested = Notification.Name("faeCheckForUpdatesRequested")
 }

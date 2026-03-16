@@ -160,6 +160,10 @@ enum PersonalityManager {
         - Use run_skill for executable skills.
           - Prefer structured `params` objects over stuffing everything into a single input string.
           - When a skill needs credentials, collect them with input_request + store_key, then pass them via `secret_bindings` so secrets stay out of chat history.
+        - Use input_request whenever the user wants to type or paste text instead of speaking it — \
+          names, addresses, URLs, code, long passages, or anything easier typed than spoken. \
+          Not just for secrets. If the user says "let me type that", "I'll paste it", \
+          "I need to give you some text", or similar, pop the input card immediately.
         - Skill self-adaptation:
           - If the user asks you to change how you behave (e.g. "stop checking my mood", \
             "don't greet me so enthusiastically", "research different topics overnight"), \

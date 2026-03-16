@@ -1310,30 +1310,30 @@ Benchmarks: `docs/benchmarks/llm-benchmarks.md`.
 
 Auto mode selects based on system RAM (Qwen3.5 at every tier):
 
-**Auto mode** (current policy):
+**Auto mode** (current policy — three supported tiers only):
 
 | System RAM | Auto Model | Context |
 |------------|-----------|---------|
-| ≥64 GB | Qwen3.5-27B | 128K |
-| ≥32 GB | Qwen3.5-27B | 32K |
+| ≥64 GB | Qwen3.5-35B-A3B | 128K |
+| ≥32 GB | Qwen3.5-35B-A3B | 32K |
 | ≥16 GB | Qwen3.5-4B | 32K |
 | <16 GB | saorsa-1.1-tiny (fine-tuned 2B) | 32K |
+
+The 35B-A3B is a Mixture-of-Experts model: 35B total parameters, only 3B active per token.
 
 All Qwen3.5 models have native `max_position_embeddings` = **262,144**. Fae caps at practical
 limits to control KV-cache RAM.
 
-**Manual presets** (full Qwen3.5 lineup):
+**Supported presets** (only these three tiers ship):
 
 | Preset | Model | Fae Context | Native Max |
 |--------|-------|------------|-----------|
 | `qwen3_5_35b_a3b` | Qwen3.5-35B-A3B | 128K | 262K |
-| `qwen3_5_27b` | Qwen3.5-27B | 128K | 262K |
-| `qwen3_5_9b` | Qwen3.5-9B | 128K | 262K |
 | `qwen3_5_4b` | Qwen3.5-4B | 32K | 262K |
-| `qwen3_5_2b` | Qwen3.5-2B | 32K | 262K |
-| `qwen3_5_0_8b` | Qwen3.5-0.8B | 32K | 262K |
+| `saorsa_1_1_tiny` | saorsa-1.1-tiny (fine-tuned Qwen3.5-2B) | 32K | 262K |
 
-Legacy Qwen3 presets (`qwen3_8b`, `qwen3_4b`, `qwen3_1_7b`, `qwen3_0_6b`) are silently migrated to the nearest Qwen3.5 equivalent.
+Legacy and unsupported presets (`qwen3_5_27b`, `qwen3_5_9b`, `qwen3_5_2b`, `qwen3_5_0_8b`,
+`qwen3_8b`, `qwen3_4b`, `qwen3_1_7b`, `qwen3_0_6b`) are silently resolved to auto mode.
 
 Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, answer quality.
 

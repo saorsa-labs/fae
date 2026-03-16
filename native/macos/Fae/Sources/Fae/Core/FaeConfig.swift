@@ -460,7 +460,7 @@ struct FaeConfig: Codable {
     /// Based on research into Ollama, mistral.rs, and LM Studio optimizations.
     static func recommendedPrefillStepSize(modelId: String) -> Int {
         let modelLower = modelId.lowercased()
-        if modelLower.contains("35b") || modelLower.contains("27b") {
+        if modelLower.contains("35b") {
             return 256  // Large models: smaller chunks to avoid Metal spikes
         } else if modelLower.contains("4b") || modelLower.contains("3b") {
             return 768  // 4B: larger chunks

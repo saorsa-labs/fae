@@ -1012,8 +1012,9 @@ actor FaeScheduler {
 
     private func runCheckUpdate() async {
         NSLog("FaeScheduler: check_fae_update — running")
-        // Sparkle handles update checks automatically when configured.
-        // This task logs the check for observability.
+        await MainActor.run {
+            NotificationCenter.default.post(name: .faeCheckForUpdatesRequested, object: nil)
+        }
     }
 
     private func runSkillHealthCheck() async {

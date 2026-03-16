@@ -416,6 +416,17 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Sparkle update check — triggered by scheduler or LLM tool.
+        NotificationCenter.default.addObserver(
+            forName: .faeCheckForUpdatesRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.sparkleUpdater.checkForUpdates()
+            }
+        }
+
         if openSettingsObserver == nil {
             openSettingsObserver = NotificationCenter.default.addObserver(
                 forName: .faeOpenSettingsRequested,

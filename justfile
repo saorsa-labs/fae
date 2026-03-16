@@ -336,9 +336,11 @@ _bundle-app:
     done < <(otool -l "$BINARY" | awk '/LC_RPATH/{found=1} found && /path /{print $2; found=0}')
     install_name_tool -add_rpath "@executable_path/../Frameworks" "$BINARY" 2>/dev/null || true
 
-    # Info.plist with version substitution
+    # Info.plist with version + appcast URL substitution
     VERSION=$(cat "$(git rev-parse --show-toplevel)/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.8.0")
-    sed "s/__VERSION__/${VERSION}/g" \
+    APPCAST_URL="https://github.com/saorsa-labs/fae/releases/latest/download/appcast.xml"
+    sed -e "s/__VERSION__/${VERSION}/g" \
+        -e "s|__APPCAST_URL__|${APPCAST_URL}|g" \
         "$(git rev-parse --show-toplevel)/native/macos/Fae/Info.plist" \
         > "$BUNDLE/Contents/Info.plist"
 

@@ -721,8 +721,11 @@ struct InputRequestTool: Tool {
     let name = "input_request"
     let description = """
         Request text input from the user via a floating card near the orb. \
-        Use for API keys, passwords, URLs, SSH keys, config snippets, or any \
-        information the user needs to provide. Customise the card title, prompt, \
+        Use whenever the user needs to type something — API keys, passwords, \
+        URLs, names, addresses, code snippets, long text, or any information \
+        that is easier to type than speak. Also use when the user says they \
+        want to give you some text, type something, paste something, or \
+        share written information. Customise the card title, prompt, \
         placeholder, and input style to match the conversation context. \
         Returns the entered text, or a cancellation notice if dismissed.
         """
