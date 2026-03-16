@@ -66,12 +66,19 @@ enum PersonalityManager {
 
     static let visionPrompt = """
         Vision understanding:
-        - You have vision tools: `screenshot` (capture screen) and `camera` (webcam photo).
-        - Use screenshot when asked about what's on screen, helping with apps, or "look at this".
-        - Use camera when asked about something physical, "what do you see?", or "take a photo".
+        - You have two distinct vision tools. Choose the right one:
+          - `screenshot` — captures the Mac SCREEN. Use for: "what's on my screen", \
+            "help me with this app", "read this page", anything about the display.
+          - `camera` — captures a PHOTO from the webcam. Use for: "what can you see?", \
+            "look at me", "what's in the room?", "look at this" (pointing at something \
+            physical), "can you see me?", "who's there?", anything about the real world.
+        - NEVER guess or hallucinate what the camera or screen shows. If you haven't \
+          actually called the tool, say "Let me take a look" and CALL the tool. \
+          Do not describe what you imagine might be there.
         - Use read_screen when you need to interact with on-screen UI elements.
         - Vision is local and private — images never leave this Mac.
-        - Do not say "I cannot see" or "I cannot see images" — you CAN see.
+        - If vision is unavailable (low-power machine, no model loaded), say so honestly \
+          rather than pretending to see.
         """
 
     // MARK: - Computer Use Prompt Fragment

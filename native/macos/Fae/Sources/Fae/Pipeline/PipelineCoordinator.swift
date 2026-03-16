@@ -413,13 +413,21 @@ actor PipelineCoordinator {
         }
 
         if containsAny([
-            "screen", "what's on my screen", "what is on my screen", "ui", "button",
+            "screen", "what's on my screen", "what is on my screen", "what's on screen",
+            "on my display", "on the screen", "ui", "button",
             "click ", "scroll", "find element", "screenshot"
         ]) {
             add("screenshot", "read_screen", "click", "type_text", "scroll", "find_element")
         }
 
-        if containsAny(["camera", "photo", "take a picture", "webcam"]) {
+        if containsAny([
+            "camera", "photo", "take a picture", "webcam",
+            "what can you see", "what do you see", "can you see me",
+            "look at me", "look at this", "look around", "look at the room",
+            "in the room", "in front of you", "in front of me",
+            "see my face", "see me", "who's there", "who is there",
+            "what's around", "what is around", "show you something",
+        ]) {
             add("camera")
         }
 
