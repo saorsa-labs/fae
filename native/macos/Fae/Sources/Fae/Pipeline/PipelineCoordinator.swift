@@ -393,8 +393,18 @@ actor PipelineCoordinator {
         }
 
         if containsAny([
+            "paste", "type it", "type that", "type in", "let me type",
+            "text input", "input field", "text box", "window to paste",
+            "window to type", "give me a field", "need to type", "need to paste",
+            "i'll paste", "ill paste", "i will paste", "i'll type", "ill type",
+            "url", "urls", "api key", "password", "token", "credential",
+        ]) {
+            add("input_request")
+        }
+
+        if containsAny([
             "screen", "what's on my screen", "what is on my screen", "ui", "button",
-            "click ", "type ", "scroll", "find element", "screenshot"
+            "click ", "scroll", "find element", "screenshot"
         ]) {
             add("screenshot", "read_screen", "click", "type_text", "scroll", "find_element")
         }
