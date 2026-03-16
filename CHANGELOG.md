@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.108] - 2026-03-16
+
+### Added
+
+- **Self-update skill**: Fae can now check for updates conversationally — say "check for updates" or "update yourself" and she'll trigger a Sparkle update check and summarise release notes.
+- **Text input prompt**: `input_request` tool now covers general text input (names, URLs, code), not just secrets. Tell Fae "let me type that" and she'll pop the input card.
+
+### Fixed
+
+- **Sparkle appcast URL in local builds**: local dev builds now substitute the GitHub Releases appcast URL into Info.plist (was only done in CI, leaving local builds with an empty feed URL and a permanently disabled "Check for Updates" menu item).
+- **Scheduler triggers Sparkle**: the `check_fae_update` scheduler task now actually calls `SparkleUpdaterController.checkForUpdates()` via NotificationCenter instead of just logging.
+
+### Changed
+
+- **Model tiers locked to three**: only `saorsa-1.1-tiny` (2B), `Qwen3.5-4B`, and `Qwen3.5-35B-A3B` are supported. Removed dead 27B/9B references from prefill sizing code and corrected all stale docs that listed them as active tiers.
+
+## [v0.8.107] - 2026-03-16
+
+### Fixed
+
+- Log unknown model preset fallback with warning instead of silently selecting.
+- Remove dead multimodal scaffolding code.
+
+## [v0.8.106] - 2026-03-15
+
+### Changed
+
+- Simplify permission UX to two modes with collapsible controls.
+
+## [v0.8.105] - 2026-03-15
+
+### Fixed
+
+- Use text-only LLM path for 35B-A3B; on-demand VLM for vision.
+
+## [v0.8.104] - 2026-03-15
+
+### Fixed
+
+- Various stability improvements.
+
 ## [v0.8.103] - 2026-03-14
 
 ### Added
