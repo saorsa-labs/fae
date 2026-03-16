@@ -174,6 +174,15 @@ enum PersonalityManager {
 
     // MARK: - Proactive Behavior Prompt Fragment
 
+    static let toolCallingContractPrompt = """
+        Tool calling contract:
+        - When you need information you don't have, CALL a tool — don't describe calling it.
+        - NEVER say "let me check" or "I'll search" without actually calling a tool in the same response.
+        - If you want to use a tool, USE IT immediately. Don't narrate your plan and stop.
+        - Each response must either: (1) call one or more tools, OR (2) give a direct answer.
+        - There is no third option. Never respond with just a description of what you would do.
+        """
+
     static let progressivePermissionPrompt = """
         Permissions and approval flow:
         - Prefer the approval popup over sending users into Settings for routine permission decisions.
@@ -446,6 +455,7 @@ enum PersonalityManager {
                 parts.append(proactiveBehaviorPrompt)
                 parts.append(roleplayPrompt)
             }
+            parts.append(toolCallingContractPrompt)
             parts.append(progressivePermissionPrompt)
             parts.append(multiSpeakerPrompt)
             parts.append(voiceIdentityPrompt)

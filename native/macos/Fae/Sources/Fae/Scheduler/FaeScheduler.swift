@@ -1087,6 +1087,12 @@ actor FaeScheduler {
         }
     }
 
+    /// Tier 1 task IDs that run under proactive-lite consent (no camera/screen).
+    private static let tier1TaskIDs: Set<String> = [
+        "enhanced_morning_briefing", "overnight_work",
+        "training_data_export", "training_cycle",
+    ]
+
     @discardableResult
     private func dispatchProactiveTask(
         taskId: String,
@@ -1122,18 +1128,30 @@ actor FaeScheduler {
             proactiveInterjectionCount += 1
         }
 
+        // Tier 1 tasks (briefing, overnight research) are allowed under proactive-lite
+        // consent alone — they don't use camera/screen. Tier 2 tasks (camera, screen)
+        // require full awareness consent.
+        let consentGranted: Bool
+        if Self.tier1TaskIDs.contains(taskId) {
+            consentGranted = awarenessConfig.proactiveLiteEnabled
+                || (awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil)
+        } else {
+            consentGranted = awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+        }
+
         NSLog(
-            "FaeScheduler: %@ dispatching (mode=%@, silent=%@)",
+            "FaeScheduler: %@ dispatching (mode=%@, silent=%@, consent=%@)",
             taskId,
             mode.rawValue,
-            silent ? "yes" : "no"
+            silent ? "yes" : "no",
+            consentGranted ? "yes" : "no"
         )
         await handler(
             prompt,
             silent,
             taskId,
             allowedTools,
-            awarenessConfig.enabled && awarenessConfig.consentGrantedAt != nil
+            consentGranted
         )
         return true
     }

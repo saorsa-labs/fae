@@ -4,14 +4,22 @@ import SwiftUI
 ///
 /// The orb is the hero — always visible, never covered by conversation text.
 /// Includes an ambient glow halo that reflects the current palette color,
-/// a status line at the bottom, progress bar at the top, and rescue badge.
+/// a status capsule at the bottom (mode + feeling), progress bar at the top,
+/// and rescue badge.
 struct OrbCrownView: View {
     @EnvironmentObject private var orbAnimation: OrbAnimationState
+    @EnvironmentObject private var orbState: OrbStateController
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @EnvironmentObject private var subtitles: SubtitleStateController
     @EnvironmentObject private var conversation: ConversationController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var rescueMode: RescueMode
+
+    /// Whether the mood detail row beneath the status is expanded.
+    @AppStorage("orbMoodExpanded") private var moodExpanded: Bool = true
+
+    /// Gentle pulse phase for the mood dot.
+    @State private var moodPulse: Bool = false
 
     /// Optional callback fired when the Metal orb view finishes loading.
     /// Used by ContentView to coordinate the `viewLoaded` fade-in.
@@ -20,7 +28,6 @@ struct OrbCrownView: View {
     var body: some View {
         ZStack {
             // Ambient glow — soft radial gradient using current palette color.
-            // Extends beyond the orb circle to bleed emotional color into surroundings.
             RadialGradient(
                 colors: [primaryPaletteColor.opacity(0.12), Color.clear],
                 center: .center,
@@ -50,20 +57,12 @@ struct OrbCrownView: View {
             .frame(width: 260, height: 260)
             .clipShape(Circle())
 
-            // Status line — bottom of crown.
-            VStack {
+            // Status capsule — bottom of crown.
+            VStack(spacing: 3) {
                 Spacer()
-                if !statusText.isEmpty {
-                    Text(statusText)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.45))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .transition(.opacity)
-                        .animation(.easeInOut(duration: 0.3), value: statusText)
-                }
+                statusCapsule
             }
-            .padding(.bottom, 6)
+            .padding(.bottom, 4)
 
             // Progress bar — top edge.
             if subtitles.progressPercent != nil {
@@ -91,16 +90,70 @@ struct OrbCrownView: View {
                     Spacer()
                 }
             }
-
-
         }
         .frame(height: 300)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                moodPulse = true
+            }
+        }
     }
 
-    // MARK: - Status Text
+    // MARK: - Status Capsule
 
-    /// Derives status from pipeline and conversation state.
-    private var statusText: String {
+    /// Combined status + mood indicator with collapse toggle.
+    @ViewBuilder
+    private var statusCapsule: some View {
+        let mode = statusMode
+        let feeling = orbState.feeling
+        let isActive = mode != nil
+
+        VStack(spacing: 2) {
+            // Primary status line — always visible when active.
+            if let mode {
+                HStack(spacing: 5) {
+                    // Pulsing dot in the mood color.
+                    Circle()
+                        .fill(feelingColor(feeling))
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(moodPulse ? 1.15 : 0.85)
+                        .opacity(moodPulse ? 1.0 : 0.7)
+
+                    Text(mode)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+
+            // Expandable mood detail — shows feeling label with icon.
+            if isActive, moodExpanded, feeling != .neutral {
+                HStack(spacing: 4) {
+                    Text(feelingIcon(feeling))
+                        .font(.system(size: 9))
+                    Text(feeling.label)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(feelingColor(feeling).opacity(0.9))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(feelingColor(feeling).opacity(0.12))
+                .clipShape(Capsule())
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.35), value: mode)
+        .animation(.easeInOut(duration: 0.4), value: feeling)
+        .animation(.easeInOut(duration: 0.3), value: moodExpanded)
+        .onTapGesture {
+            withAnimation { moodExpanded.toggle() }
+        }
+    }
+
+    // MARK: - Status Mode
+
+    /// Current mode as display text, or nil when idle.
+    private var statusMode: String? {
         if !subtitles.toolText.isEmpty {
             return subtitles.toolText
         }
@@ -113,7 +166,37 @@ struct OrbCrownView: View {
         if conversation.isListening {
             return "Listening\u{2026}"
         }
-        return ""
+        return nil
+    }
+
+    // MARK: - Feeling Appearance
+
+    /// Color associated with each feeling — reflects the emotional tone.
+    private func feelingColor(_ feeling: OrbFeeling) -> Color {
+        switch feeling {
+        case .neutral:   return .white
+        case .calm:      return Color(red: 0.55, green: 0.75, blue: 0.95) // soft blue
+        case .curiosity: return Color(red: 0.65, green: 0.82, blue: 0.55) // sage green
+        case .warmth:    return Color(red: 0.95, green: 0.75, blue: 0.45) // warm amber
+        case .concern:   return Color(red: 0.85, green: 0.55, blue: 0.55) // muted rose
+        case .delight:   return Color(red: 0.95, green: 0.85, blue: 0.40) // golden
+        case .focus:     return Color(red: 0.55, green: 0.60, blue: 0.90) // indigo
+        case .playful:   return Color(red: 0.85, green: 0.60, blue: 0.90) // lavender
+        }
+    }
+
+    /// Subtle icon for each feeling — keeps it lightweight.
+    private func feelingIcon(_ feeling: OrbFeeling) -> String {
+        switch feeling {
+        case .neutral:   return "\u{25CB}" // ○
+        case .calm:      return "\u{223F}" // ∿
+        case .curiosity: return "\u{2727}" // ✧
+        case .warmth:    return "\u{2665}" // ♥
+        case .concern:   return "\u{25C7}" // ◇
+        case .delight:   return "\u{2736}" // ✶
+        case .focus:     return "\u{25CE}" // ◎
+        case .playful:   return "\u{2605}" // ★
+        }
     }
 
     // MARK: - Palette Color

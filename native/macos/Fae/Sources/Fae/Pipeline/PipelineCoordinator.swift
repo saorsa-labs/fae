@@ -318,6 +318,13 @@ actor PipelineCoordinator {
         availableToolNames: [String]
     ) -> Set<String> {
         let lower = userText.lowercased()
+
+        // Long text is rarely a simple tool request — it's more likely a multi-step
+        // prompt, pasted content, or system-injected instruction. Narrowing tools based
+        // on incidental keyword matches (e.g. "camera" in "ask for consent before camera
+        // use") hides tools the LLM actually needs. Return empty → all tools visible.
+        if lower.count > 200 { return [] }
+
         let available = Set(availableToolNames)
         var matches: Set<String> = []
 
@@ -5170,6 +5177,44 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .qa, "Tool repair fallback failed: \(repairResult.output)")
         }
 
+        // Agentic continuation: if the LLM described an intention to use a tool
+        // ("let me check", "I'll look into", etc.) but didn't emit any tool calls,
+        // re-prompt once so the model actually performs the action instead of just
+        // describing it. This is a common failure mode with smaller local models.
+        if toolCalls.isEmpty,
+           turnCount == 0,
+           !isToolFollowUp,
+           proactiveContext == nil,
+           effectiveToolMode() != "off",
+           effectiveToolMode() != "assistant",
+           Self.responseImpliesToolIntent(fullResponse)
+        {
+            debugLog(debugConsole, .qa, "Agentic nudge: LLM described tool intent but emitted 0 calls — re-prompting")
+
+            // Add the LLM's partial response to conversation history so the re-prompt
+            // has context, then inject a continuation nudge as a follow-up user message.
+            let visibleResponse = Self.stripThinkContent(fullResponse)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !visibleResponse.isEmpty {
+                await conversationState.addAssistantMessage(visibleResponse, tag: nil)
+            }
+
+            let nudge = "You said you would check, but you didn't use any tool. Please go ahead and use the appropriate tool now to complete the action."
+            await conversationState.addUserMessage(nudge, speakerDisplayName: nil, speakerId: nil, tag: nil)
+
+            await generateWithTools(
+                userText: nudge,
+                isToolFollowUp: true,
+                turnCount: turnCount + 1,
+                forceSuppressThinking: true,
+                generationContext: generationContext,
+                generationID: generationID,
+                proactiveContext: proactiveContext,
+                turnSource: .text
+            )
+            return
+        }
+
         if toolCalls.isEmpty {
             // No tool calls — flush remaining speech and finish.
             if roleplayActive {
@@ -6468,6 +6513,33 @@ actor PipelineCoordinator {
     }
 
     /// Heuristic: explicit visual requests where the assistant should run webcam capture.
+    /// Detects when the LLM's response implies it intended to use a tool but didn't.
+    /// Common failure mode with smaller local models: they describe the action
+    /// ("Let me check your settings") instead of emitting a tool call.
+    static func responseImpliesToolIntent(_ response: String) -> Bool {
+        let lower = Self.stripThinkContent(response)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Short responses are more likely to be tool-intent preamble that got cut off.
+        // Long responses are usually substantive answers.
+        guard lower.count < 400 else { return false }
+
+        let toolIntentPhrases = [
+            "let me check", "let me look", "let me search", "let me find",
+            "let me see", "let me pull up", "let me get", "let me fetch",
+            "let me verify", "let me review", "let me examine",
+            "i'll check", "i'll look", "i'll search", "i'll find",
+            "i'll pull up", "i'll get", "i'll fetch", "i'll verify",
+            "i'll review", "i'll examine", "i'll run",
+            "let me run", "let me use", "i'll use",
+            "checking that now", "looking that up", "searching for",
+            "let me look through", "let me look into",
+        ]
+
+        return toolIntentPhrases.contains { lower.contains($0) }
+    }
+
     private static func isCameraIntentRequest(_ text: String) -> Bool {
         let lower = text.lowercased()
         let cameraPhrases = [

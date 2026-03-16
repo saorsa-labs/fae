@@ -239,7 +239,9 @@ final class TrustedActionBrokerTests: XCTestCase {
         }
     }
 
-    func testSchedulerRequiresConsent() async {
+    func testSchedulerAllowsConsentedTask() async {
+        // Consent gating is handled upstream by AwarenessThrottle/FaeScheduler.
+        // The broker only enforces per-task tool allowlists.
         let broker = DefaultTrustedActionBroker(
             knownTools: ["camera"],
             speakerConfig: FaeConfig.SpeakerConfig()
@@ -254,10 +256,10 @@ final class TrustedActionBrokerTests: XCTestCase {
             )
         )
 
-        if case .deny(let reason) = decision {
-            XCTAssertEqual(reason.code, .noCapabilityTicket)
+        if case .allow = decision {
+            XCTAssertTrue(true)
         } else {
-            XCTFail("Expected deny when scheduler consent is absent")
+            XCTFail("Expected allow for scheduler task with tool in allowlist")
         }
     }
 

@@ -178,15 +178,10 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
             ))
         }
 
-        // Scheduler auto-allow for consented awareness observations.
+        // Scheduler auto-allow for scheduled task observations.
+        // Consent gating is handled upstream by AwarenessThrottle and FaeScheduler —
+        // the broker only enforces per-task tool allowlists and denied-tool blocklists.
         if intent.source == .scheduler {
-            guard intent.schedulerConsentGranted else {
-                return .deny(reason: DecisionReason(
-                    code: .noCapabilityTicket,
-                    message: "Awareness consent not granted"
-                ))
-            }
-
             guard let taskId = intent.schedulerTaskId else {
                 return .deny(reason: DecisionReason(
                     code: .noExplicitRule,

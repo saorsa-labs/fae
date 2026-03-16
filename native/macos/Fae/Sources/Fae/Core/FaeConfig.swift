@@ -340,9 +340,9 @@ struct FaeConfig: Codable {
     // MARK: - Training
 
     struct TrainingConfig: Codable {
-        var enabled: Bool = false
+        var enabled: Bool = true
         var consentGrantedAt: String? = nil
-        var autoTrainEnabled: Bool = false
+        var autoTrainEnabled: Bool = true
         var targetModelPreset: String = "auto"
         var trainingPreset: String = "light"
         var maxIterationsPerRun: Int = 50

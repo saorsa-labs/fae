@@ -34,8 +34,15 @@ enum VoiceCommandParser {
     }
 
     /// Parse a transcription into a voice command.
+    ///
+    /// Voice commands are short, imperative utterances (≤120 characters).
+    /// Longer input (e.g. pasted paragraphs) is never a voice command —
+    /// skip parsing entirely to avoid false positives from broad `contains()`.
     static func parse(_ text: String) -> VoiceCommand {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Long input is never a voice command — bail early.
+        if lower.count > 120 { return .none }
 
         // Canvas commands — word-level matching handles "the" variants.
         if (lower.contains("show") || lower.contains("open")) && lower.contains("canvas") {
