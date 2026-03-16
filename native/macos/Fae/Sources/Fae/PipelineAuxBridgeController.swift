@@ -259,6 +259,12 @@ final class PipelineAuxBridgeController: ObservableObject {
                 status = "All core models loaded — verifying startup…"
             }
 
+        case "downloading":
+            // MLX LLMModelFactory download in progress (HuggingFace Hub).
+            let progress = userInfo["progress"] as? Double ?? 0
+            let pct = Int(progress * 100)
+            status = "Downloading language model… \(pct)%"
+
         case "download_started", "download_progress", "download_complete", "cached":
             // Download progress is handled by ConversationBridgeController
             // for the subtitle/progress bar UI. We only track status string.

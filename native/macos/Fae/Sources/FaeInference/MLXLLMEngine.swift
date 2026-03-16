@@ -48,6 +48,18 @@ public actor MLXLLMEngine: LLMEngine {
     public init() {}
 
     public func load(modelID: String) async throws {
+        try await load(modelID: modelID, progressHandler: { _ in })
+    }
+
+    /// Load a model with download progress reporting.
+    ///
+    /// When the model is not locally cached, MLX's `LLMModelFactory` downloads it
+    /// from HuggingFace Hub. The `progressHandler` receives `Progress` updates during
+    /// that download, allowing the UI to show a progress bar instead of freezing.
+    public func load(
+        modelID: String,
+        progressHandler: @Sendable @escaping (Progress) -> Void
+    ) async throws {
         loadState = .loading
         NSLog("MLXLLMEngine: loading model %@", modelID)
         do {
@@ -57,12 +69,16 @@ public actor MLXLLMEngine: LLMEngine {
                 NSLog("MLXLLMEngine: resolved local model directory %@", localDirectory.path)
             } else {
                 config = ModelConfiguration(id: modelID)
+                NSLog("MLXLLMEngine: model not cached locally — download will begin")
             }
             if usesQwenCompatibleToolCallFormat(modelID: modelID) {
                 config.toolCallFormat = .xmlFunction
                 NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen-compatible model")
             }
-            container = try await LLMModelFactory.shared.loadContainer(configuration: config)
+            container = try await LLMModelFactory.shared.loadContainer(
+                configuration: config,
+                progressHandler: progressHandler
+            )
             isLoaded = true
             loadState = .loaded
             sessionState = nil

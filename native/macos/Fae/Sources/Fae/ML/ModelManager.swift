@@ -154,7 +154,24 @@ actor ModelManager {
             if isMultimodal {
                 NSLog("ModelManager: multimodal LLM detected — loading as text-only (vision via on-demand VLM for speed)")
             }
-            try await llm.load(modelID: modelId)
+            // Use progress-aware load when available (MLXLLMEngine) to report
+            // HuggingFace download progress to the UI instead of freezing.
+            if let mlxLLM = llm as? MLXLLMEngine {
+                let bus = self.eventBus
+                try await mlxLLM.load(modelID: modelId) { progress in
+                    let fraction = progress.fractionCompleted
+                    let totalMB = progress.totalUnitCount / 1_000_000
+                    let completedMB = progress.completedUnitCount / 1_000_000
+                    // Map download progress to the LLM portion (0.35–0.55) of overall startup.
+                    let overall = 0.35 + fraction * 0.20
+                    bus.send(.runtimeProgress(stage: "downloading", progress: overall))
+                    if fraction < 1.0 {
+                        NSLog("ModelManager: downloading LLM %lld/%lld MB (%.0f%%)", completedMB, totalMB, fraction * 100)
+                    }
+                }
+            } else {
+                try await llm.load(modelID: modelId)
+            }
             loadedModelId = modelId
             eventBus.send(.modelLoaded(engine: "llm", modelId: modelId))
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.6))

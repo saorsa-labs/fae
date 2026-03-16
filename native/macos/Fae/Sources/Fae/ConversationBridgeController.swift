@@ -381,6 +381,15 @@ final class ConversationBridgeController: ObservableObject {
         case "download_complete", "cached":
             break
 
+        case "downloading":
+            // MLX LLMModelFactory download in progress (HuggingFace Hub).
+            let progress = userInfo["progress"] as? Double ?? 0
+            let pct = Int(progress * 100)
+            subtitleState?.showProgress(
+                label: "Downloading language model… \(pct)%",
+                percent: pct
+            )
+
         case "load_started":
             let model = userInfo["model_name"] as? String ?? "model"
             let (label, pct) = Self.friendlyLoadingLabel(model: model)
