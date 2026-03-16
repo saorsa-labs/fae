@@ -128,22 +128,23 @@ final class FaeEnvironmentTests: XCTestCase {
         XCTAssertEqual(config.bargeIn.minRms, defaults.bargeIn.minRms)
     }
 
-    func testConfigSaveIsNoOpInNonDevMode() throws {
-        guard !FaeEnvironment.isDev else { return }
-        // Saving in non-dev mode should not create/modify config.toml
-        let configPath = FaeDirectories.configFile.path
-        let existedBefore = FileManager.default.fileExists(atPath: configPath)
+    func testConfigSaveWritesInDevOrTestMode() throws {
+        // In dev or test mode, save() should write to config.toml.
+        // In production mode (neither isDev nor isTesting), save() is a no-op.
+        // Since tests always have isTesting=true, we verify save writes successfully.
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-save-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
 
+        let configURL = tmpDir.appendingPathComponent("config.toml")
         var config = FaeConfig()
-        config.llm.temperature = 0.999
-        try config.save()
+        config.llm.temperature = 0.42
+        try config.save(to: configURL)
 
-        if !existedBefore {
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: configPath),
-                "config.toml should not be created in non-dev mode"
-            )
-        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: configURL.path))
+        let reloaded = FaeConfig.load(from: configURL)
+        XCTAssertEqual(reloaded.llm.temperature, 0.42, accuracy: 0.001)
     }
 
     // MARK: - Cache Directory
