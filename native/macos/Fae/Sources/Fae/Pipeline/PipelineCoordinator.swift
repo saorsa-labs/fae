@@ -5975,7 +5975,10 @@ actor PipelineCoordinator {
         }
 
         if assistantSpeaking {
-            debugLog(debugConsole, .pipeline, "⚠️ Speech drain timeout (\(reason)) after \(timeoutMs)ms")
+            debugLog(debugConsole, .pipeline, "⚠️ Speech drain timeout (\(reason)) after \(timeoutMs)ms — force-stopping playback")
+            markGenerationInterrupted()
+            await playback.stop()
+            markAssistantSpeechEnded(reason: "speech_drain_timeout")
         }
     }
 
