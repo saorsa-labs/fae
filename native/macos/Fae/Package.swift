@@ -82,6 +82,7 @@ let package = Package(
                 .copy("Resources/Models"),
                 .copy("Resources/default.metallib"),
                 .copy("Resources/SOUL.md"),
+                .copy("Resources/CHANGELOG.md"),
                 .copy("Resources/HEARTBEAT.md"),
                 .copy("Resources/damage-control-default.yaml"),
                 .copy("Resources/Voices/fae.wav"),

@@ -434,8 +434,14 @@ actor PipelineCoordinator {
             add("camera")
         }
 
-        if containsAny(["skill", "activate skill", "run skill", "manage skill"]) {
-            add("activate_skill", "run_skill", "manage_skill")
+        if containsAny([
+            "skill", "activate skill", "run skill", "manage skill",
+            // Integration / channel / service setup — needs skill + tool access
+            "discord", "whatsapp", "imessage", "slack", "channel",
+            "set up", "setup", "connect to", "integration", "configure",
+        ]) {
+            add("activate_skill", "run_skill", "manage_skill",
+                "bash", "read", "write", "edit", "self_config", "input_request")
         }
 
         if containsAny([
@@ -5910,13 +5916,39 @@ actor PipelineCoordinator {
             return
         }
 
+        // If activate_skill ran, the LLM now has skill instructions in context and
+        // needs full tool access (run_skill, bash, etc.) to act on them — not just
+        // the limited hint set from the initial user utterance.
+        let executedToolNames = Set(toolCalls.prefix(5).map(\.name))
+        var followUpContext = generationContext
+        if executedToolNames.contains("activate_skill") {
+            let activeModelId = currentModelId()
+            let preferLegacy = Self.prefersLegacyInlineToolPrompt(modelId: activeModelId)
+            if !preferLegacy {
+                let fullTools = registry.nativeToolSpecs(
+                    for: effectiveToolMode(),
+                    privacyMode: effectivePrivacyMode(),
+                    limitedTo: nil
+                )
+                followUpContext = GenerationContext(
+                    systemPrompt: generationContext.systemPrompt,
+                    turnContextPrefix: generationContext.turnContextPrefix,
+                    nativeTools: fullTools,
+                    actionSource: generationContext.actionSource,
+                    playsThinkingTone: generationContext.playsThinkingTone,
+                    allowsAudibleOutput: generationContext.allowsAudibleOutput
+                )
+                debugLog(debugConsole, .pipeline, "Expanded tool set after activate_skill (was hint-limited)")
+            }
+        }
+
         // Recurse: generate again with tool results in context.
         await generateWithTools(
             userText: userText,
             isToolFollowUp: true,
             turnCount: turnCount + 1,
             forceSuppressThinking: forceSuppressThinking,
-            generationContext: generationContext,
+            generationContext: followUpContext,
             generationID: generationID,
             proactiveContext: proactiveContext
         )

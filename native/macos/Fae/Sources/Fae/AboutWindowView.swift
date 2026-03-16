@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// Rich About panel showing version, model stack, system info, changelog, and updates.
+/// Rich About panel showing version, model stack, system info, and changelog.
+///
+/// Updates are handled by the Fae menu "Check for Updates..." item (Sparkle).
+/// The About window focuses on system info and release history.
 struct AboutWindowView: View {
     @ObservedObject var conversation: ConversationController
     @ObservedObject var sparkleUpdater: SparkleUpdaterController
@@ -21,9 +24,7 @@ struct AboutWindowView: View {
                 Divider()
                 systemSection
                 Divider()
-                whatsNewSection
-                Divider()
-                updatesSection
+                changelogSection
 
                 Text("100% local \u{00B7} No cloud \u{00B7} No tracking")
                     .font(.footnote)
@@ -91,13 +92,39 @@ struct AboutWindowView: View {
         }
     }
 
-    // MARK: - What's New
+    // MARK: - Changelog
 
-    private var whatsNewSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("What's New")
+    private var changelogSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("Changelog")
 
-            ForEach(Self.changelog, id: \.self) { item in
+            let releases = Self.parsedChangelog
+            if releases.isEmpty {
+                Text("No changelog available.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(releases.enumerated()), id: \.offset) { _, release in
+                    releaseView(release)
+                }
+            }
+        }
+    }
+
+    private func releaseView(_ release: ChangelogRelease) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(release.version)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.primary)
+                if let date = release.date {
+                    Text(date)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            ForEach(Array(release.items.enumerated()), id: \.offset) { _, item in
                 HStack(alignment: .top, spacing: 8) {
                     Text("\u{2022}")
                         .foregroundStyle(.secondary)
@@ -105,38 +132,6 @@ struct AboutWindowView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
-            }
-        }
-    }
-
-    // MARK: - Updates
-
-    private var updatesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Updates")
-
-            HStack {
-                Button("Check for Updates") {
-                    sparkleUpdater.checkForUpdates()
-                }
-                .buttonStyle(.bordered)
-                .disabled(!sparkleUpdater.canCheckForUpdates)
-
-                Spacer()
-
-                if let lastCheck = sparkleUpdater.lastUpdateCheck {
-                    Text("Last checked \(lastCheck, style: .relative) ago")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if sparkleUpdater.isConfigured {
-                Toggle("Automatic updates", isOn: Binding(
-                    get: { sparkleUpdater.automaticallyChecksForUpdates },
-                    set: { sparkleUpdater.automaticallyChecksForUpdates = $0 }
-                ))
-                .font(.system(size: 12))
             }
         }
     }
@@ -205,18 +200,124 @@ struct AboutWindowView: View {
         return String(cString: buffer)
     }
 
-    // MARK: - Static Changelog
+    // MARK: - Changelog Parsing
 
-    /// Updated per release — keeps the About window informative without parsing files.
-    private static let changelog: [String] = [
-        "Rescue mode for safe recovery",
-        "Personality editor (Edit menu)",
-        "Enhanced orb animations with Metal shaders",
-        "Streaming conversation bubbles",
-        "Global hotkey (Ctrl+Shift+A)",
-        "Neural embeddings for semantic memory",
-        "Knowledge graph with entity relationships",
-    ]
+    struct ChangelogRelease {
+        let version: String
+        let date: String?
+        let items: [String]
+    }
+
+    /// Parse CHANGELOG.md from the app bundle (or project root in dev).
+    /// Shows the 10 most recent releases to keep the About window manageable.
+    private static let parsedChangelog: [ChangelogRelease] = {
+        guard let text = loadChangelogText() else { return [] }
+        return parseChangelog(text, maxReleases: 10)
+    }()
+
+    private static func loadChangelogText() -> String? {
+        // 1. Try the resource bundle (release builds).
+        if let url = Bundle.faeResources.url(forResource: "CHANGELOG", withExtension: "md"),
+           let text = try? String(contentsOf: url, encoding: .utf8)
+        {
+            return text
+        }
+
+        // 2. Try project root (dev builds via `just run-native`).
+        let devPaths = [
+            // Running from native/macos/Fae/.build/...
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent() // Fae/
+                .deletingLastPathComponent() // Sources/
+                .deletingLastPathComponent() // Fae/
+                .deletingLastPathComponent() // macos/
+                .deletingLastPathComponent() // native/
+                .appendingPathComponent("CHANGELOG.md"),
+        ]
+        for path in devPaths {
+            if let text = try? String(contentsOf: path, encoding: .utf8) {
+                return text
+            }
+        }
+
+        return nil
+    }
+
+    /// Parse a CHANGELOG.md into structured releases.
+    ///
+    /// Expected format:
+    /// ```
+    /// ## [v0.8.112] - 2026-03-16
+    /// ### Added
+    /// - Item one
+    /// - Item two
+    /// ### Fixed
+    /// - Fix one
+    /// ```
+    private static func parseChangelog(_ text: String, maxReleases: Int) -> [ChangelogRelease] {
+        var releases: [ChangelogRelease] = []
+        var currentVersion: String?
+        var currentDate: String?
+        var currentItems: [String] = []
+
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Version header: ## [v0.8.112] - 2026-03-16
+            if trimmed.hasPrefix("## [") {
+                // Save previous release.
+                if let version = currentVersion, !currentItems.isEmpty {
+                    releases.append(ChangelogRelease(
+                        version: version,
+                        date: currentDate,
+                        items: currentItems
+                    ))
+                    if releases.count >= maxReleases { break }
+                }
+
+                // Parse new version.
+                let afterBracket = trimmed.dropFirst(4) // drop "## ["
+                if let closeBracket = afterBracket.firstIndex(of: "]") {
+                    currentVersion = String(afterBracket[afterBracket.startIndex..<closeBracket])
+                    let rest = afterBracket[closeBracket...].dropFirst() // drop "]"
+                    let dateStr = rest.trimmingCharacters(in: .whitespaces)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "- "))
+                    currentDate = dateStr.isEmpty ? nil : dateStr
+                } else {
+                    currentVersion = String(afterBracket)
+                    currentDate = nil
+                }
+                currentItems = []
+                continue
+            }
+
+            // Skip section headers (### Added, ### Fixed, etc.) — we flatten them.
+            if trimmed.hasPrefix("### ") { continue }
+
+            // Bullet item: - **Bold**: description or - plain text
+            if trimmed.hasPrefix("- ") {
+                var item = String(trimmed.dropFirst(2))
+                // Strip markdown bold markers for clean display.
+                item = item.replacingOccurrences(
+                    of: "\\*\\*(.+?)\\*\\*",
+                    with: "$1",
+                    options: .regularExpression
+                )
+                currentItems.append(item)
+            }
+        }
+
+        // Don't forget the last release.
+        if let version = currentVersion, !currentItems.isEmpty, releases.count < maxReleases {
+            releases.append(ChangelogRelease(
+                version: version,
+                date: currentDate,
+                items: currentItems
+            ))
+        }
+
+        return releases
+    }
 }
 
 // MARK: - Pipeline State Label
