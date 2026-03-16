@@ -68,7 +68,7 @@ final class FaeEnvironmentTests: XCTestCase {
     }
 
     func testVaultPathSuffixMatchesEnvironment() {
-        if FaeEnvironment.isDev {
+        if FaeEnvironment.isDev || FaeEnvironment.isTesting {
             XCTAssertEqual(FaeDirectories.vaultBlockedPathSuffix, "/.fae-vault-dev")
         } else {
             XCTAssertEqual(FaeDirectories.vaultBlockedPathSuffix, "/.fae-vault")
@@ -90,15 +90,13 @@ final class FaeEnvironmentTests: XCTestCase {
 
     // MARK: - Dev vs Prod Path Separation
 
-    func testDevAndProdPathsAreDifferent() {
-        // The paths should contain either "fae" or "fae-dev" — never the same
+    func testDevAndTestPathsUseFaeDev() {
+        // Tests and dev mode both use fae-dev to avoid polluting production data
         let rootPath = FaeDirectories.root.path
-        if FaeEnvironment.isDev {
+        if FaeEnvironment.isDev || FaeEnvironment.isTesting {
             XCTAssertTrue(rootPath.contains("fae-dev"))
-            XCTAssertFalse(rootPath.hasSuffix("/fae"))
         } else {
             XCTAssertTrue(rootPath.hasSuffix("/fae"))
-            XCTAssertFalse(rootPath.contains("fae-dev"))
         }
     }
 

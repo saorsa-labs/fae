@@ -86,9 +86,9 @@ enum FaeDirectories {
 
     /// Root data directory.
     /// - Normal: `~/Library/Application Support/fae/`
-    /// - Dev: `~/Library/Application Support/fae-dev/`
+    /// - Dev or tests: `~/Library/Application Support/fae-dev/`
     static let root: URL = {
-        let name = FaeEnvironment.isDev ? "fae-dev" : "fae"
+        let name = (FaeEnvironment.isDev || FaeEnvironment.isTesting) ? "fae-dev" : "fae"
         let url = appSupport.appendingPathComponent(name)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
@@ -98,7 +98,7 @@ enum FaeDirectories {
     /// - Normal: `~/.fae-vault/`
     /// - Dev: `~/.fae-vault-dev/`
     static let vault: URL = {
-        let name = FaeEnvironment.isDev ? ".fae-vault-dev" : ".fae-vault"
+        let name = (FaeEnvironment.isDev || FaeEnvironment.isTesting) ? ".fae-vault-dev" : ".fae-vault"
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(name)
     }()
@@ -112,7 +112,7 @@ enum FaeDirectories {
             in: .userDomainMask
         ).first ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches")
-        let name = FaeEnvironment.isDev ? "fae-dev" : "fae"
+        let name = (FaeEnvironment.isDev || FaeEnvironment.isTesting) ? "fae-dev" : "fae"
         let url = base.appendingPathComponent(name)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
@@ -187,5 +187,5 @@ enum FaeDirectories {
 
     /// The vault path prefix for PathPolicy blocklist.
     /// Normal: `/.fae-vault`, Dev: `/.fae-vault-dev`
-    static let vaultBlockedPathSuffix: String = FaeEnvironment.isDev ? "/.fae-vault-dev" : "/.fae-vault"
+    static let vaultBlockedPathSuffix: String = (FaeEnvironment.isDev || FaeEnvironment.isTesting) ? "/.fae-vault-dev" : "/.fae-vault"
 }
