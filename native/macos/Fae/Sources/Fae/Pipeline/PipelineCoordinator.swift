@@ -3594,16 +3594,27 @@ actor PipelineCoordinator {
 
         // Echo suppression check — pass segment onset time so the echo tail is
         // checked against when the speech STARTED, not when it finished processing.
+        //
+        // Exception: if the acoustic wake detector already fired during streaming
+        // capture for this segment, the user is deliberately saying "Hi Fae" shortly
+        // after Fae stopped talking. In that case, bypass the echo tail and short
+        // utterance guard — the acoustic template match is strong evidence this is
+        // real speech, not speaker bleedthrough. We still reject if Fae is actively
+        // speaking (layer 1) since that's definitely echo overlap.
+        let hasStreamingWake = streamingWakeDetection != nil
         guard echoSuppressor.shouldAccept(
             durationSecs: durationSecs,
             rms: rms,
             awaitingApproval: awaitingApproval,
             segmentOnset: segment.capturedAt
-        ) else {
+        ) || (hasStreamingWake && !echoSuppressor.assistantSpeaking) else {
             NSLog("PipelineCoordinator: dropping %.1fs speech segment (echo suppression, onset=%.1fs ago)",
                   durationSecs, Date().timeIntervalSince(segment.capturedAt))
             debugLog(debugConsole, .pipeline, "Echo suppressed: \(String(format: "%.1f", durationSecs))s segment (rms=\(String(format: "%.3f", rms)), onset=\(String(format: "%.1f", Date().timeIntervalSince(segment.capturedAt)))s ago)")
             return
+        }
+        if hasStreamingWake {
+            debugLog(debugConsole, .command, "Acoustic wake override: bypassed echo suppression for wake-detected segment")
         }
 
         // LLM quality gate — drop ambient noise.

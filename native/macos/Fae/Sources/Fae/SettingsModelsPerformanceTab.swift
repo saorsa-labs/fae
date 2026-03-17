@@ -50,7 +50,7 @@ struct SettingsModelsPerformanceTab: View {
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
     @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
     @AppStorage("acousticWakeEnabled") private var acousticWakeEnabled: Bool = true
-    @AppStorage("acousticWakeThreshold") private var acousticWakeThreshold: Double = 0.82
+    @AppStorage("acousticWakeThreshold") private var acousticWakeThreshold: Double = 0.70
 
     // MARK: - System Info
     @State private var systemRAM: String = "—"

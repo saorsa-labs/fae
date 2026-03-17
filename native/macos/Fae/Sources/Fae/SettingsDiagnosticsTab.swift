@@ -28,7 +28,7 @@ struct SettingsDiagnosticsTab: View {
     @State private var section: Section = .voice
     @State private var wakeTemplateCount: Int = 0
     @State private var acousticWakeEnabled: Bool = true
-    @State private var acousticWakeThreshold: Double = 0.82
+    @State private var acousticWakeThreshold: Double = 0.70
     @State private var loadedVoiceConfig: Bool = false
     @State private var isRefreshingVoiceConfig: Bool = false
 

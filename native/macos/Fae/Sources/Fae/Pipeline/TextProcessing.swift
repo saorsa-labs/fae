@@ -699,12 +699,24 @@ enum TextProcessing {
         ("hey fae", "Hey Fae"),
         ("high fay", "Hi Fae"),
         ("high fae", "Hi Fae"),
+        ("high faith", "Hi Fae"),
+        ("hi faith", "Hi Fae"),
+        ("hey faith", "Hey Fae"),
+        ("hi phase", "Hi Fae"),
+        ("hey phase", "Hey Fae"),
+        ("hi faye", "Hi Fae"),
+        ("hey faye", "Hey Fae"),
+        ("hi fay", "Hi Fae"),
+        ("hey fay", "Hey Fae"),
         ("i fae", "Hi Fae"),
         ("i fay", "Hi Fae"),
+        ("i faye", "Hi Fae"),
         // Single-word garbles at word boundaries.
         ("ife", "Fae"),
         ("ifae", "Fae"),
         ("ifay", "Fae"),
+        ("faith", "Fae"),
+        ("phase", "Fae"),
         ("faye", "Fae"),
         ("fay", "Fae"),
         ("fey", "Fae"),
@@ -712,10 +724,12 @@ enum TextProcessing {
         ("fah", "Fae"),
         ("feh", "Fae"),
         ("fei", "Fae"),
+        ("fae's", "Fae's"),
         ("ivy", "Fae"),
         ("ivie", "Fae"),
         ("fay.", "Fae."),
         ("fey.", "Fae."),
+        ("faith.", "Fae."),
     ]
 
     /// Returns true when a transcript strongly suggests the user has not finished
@@ -868,7 +882,7 @@ enum TextProcessing {
 
     /// Name variants for wake-word / direct-address detection.
     /// Ordered longest-first for greedy matching.
-    static let nameVariants = ["faye", "fae", "fea", "fee", "fay", "fey", "fah", "feh"]
+    static let nameVariants = ["faye", "fae", "faith", "phase", "fea", "fee", "fay", "fey", "fah", "feh", "fei"]
 
     struct WakeAddressMatch {
         enum MatchKind: String {
