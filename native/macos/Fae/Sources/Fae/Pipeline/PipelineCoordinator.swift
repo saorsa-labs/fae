@@ -5298,10 +5298,29 @@ actor PipelineCoordinator {
         // contains the tool call XML. Without this, the follow-up turn sees an
         // empty assistant message and the Jinja template renders a malformed
         // prompt that causes the model to produce 0 tokens.
+        //
+        // IMPORTANT: Use Qwen3.5's XML function format (not JSON), because
+        // that is what the chat template renders and what the model was trained on:
+        //   <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
         if !streamedToolCalls.isEmpty && !fullResponse.contains("<tool_call>") {
             for call in streamedToolCalls {
-                let argsJSON = Self.serializeArguments(call.arguments)
-                fullResponse += "\n<tool_call>\n{\"name\":\"\(call.name)\",\"arguments\":\(argsJSON)}\n</tool_call>"
+                var xml = "\n<tool_call>\n<function=\(call.name)>\n"
+                for (key, value) in call.arguments {
+                    let valueStr: String
+                    if let s = value as? String {
+                        valueStr = s
+                    } else if let data = try? JSONSerialization.data(
+                        withJSONObject: value,
+                        options: [.fragmentsAllowed]
+                    ), let s = String(data: data, encoding: .utf8) {
+                        valueStr = s
+                    } else {
+                        valueStr = "\(value)"
+                    }
+                    xml += "<parameter=\(key)>\n\(valueStr)\n</parameter>\n"
+                }
+                xml += "</function>\n</tool_call>"
+                fullResponse += xml
             }
         }
         if !toolCalls.isEmpty {

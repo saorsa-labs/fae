@@ -274,6 +274,13 @@ public actor MLXLLMEngine: LLMEngine {
                             let cachedTokenCount = cacheBox.value.first?.offset ?? 0
                             let totalPromptTokens = cachedTokenCount + input.text.tokens.size
 
+                            // Debug: decode last 500 tokens to see what the model receives.
+                            if hasToolMessages {
+                                let tokens = input.text.tokens
+                                let tokenCount = tokens.size
+                                NSLog("MLXLLMEngine: TOOL FOLLOW-UP prompt: %d tokens total", tokenCount)
+                            }
+
                             var effectiveParameters = baseParameters
                             if let contextLimit = options.contextLimitTokens {
                                 let availableForGeneration = max(contextLimit - totalPromptTokens - 32, 1)
@@ -592,6 +599,33 @@ public actor MLXLLMEngine: LLMEngine {
         }
 
         let message = chatMessages[index]
+
+        // Never inject turn context into tool result messages — the model
+        // was trained to see clean tool responses. Mixing system context into
+        // tool_response tags causes Qwen3.5 to produce 0 tokens on follow-ups.
+        // Instead, walk backward/forward to find the nearest user message.
+        if message.role == .tool {
+            let nearestUserIndex: Int?
+            switch mode {
+            case .lastMessage:
+                nearestUserIndex = chatMessages[..<index].lastIndex { $0.role == .user }
+            case .firstMessage:
+                nearestUserIndex = chatMessages[chatMessages.index(after: index)...].firstIndex { $0.role == .user }
+                    ?? chatMessages[..<index].lastIndex { $0.role == .user }
+            }
+            if let userIdx = nearestUserIndex {
+                let userMsg = chatMessages[userIdx]
+                chatMessages[userIdx] = Chat.Message(
+                    role: userMsg.role,
+                    content: payload + "\n\n" + userMsg.content,
+                    images: userMsg.images,
+                    videos: userMsg.videos
+                )
+            }
+            // If no user message found, skip — don't inject into tool message.
+            return
+        }
+
         let decoratedContent = payload + "\n\n" + message.content
         chatMessages[index] = Chat.Message(
             role: message.role,
@@ -602,17 +636,38 @@ public actor MLXLLMEngine: LLMEngine {
     }
 
     private func makeChatMessages(from messages: [LLMMessage]) -> [Chat.Message] {
-        messages.map { msg in
+        // Group consecutive tool messages and merge them into a single user message
+        // with <tool_response> wrapping. This matches the exact token sequence that
+        // the Qwen3.5 Jinja template produces for role=tool, bypassing template
+        // processing that can cause 0-token generation on tool follow-up turns.
+        var result: [Chat.Message] = []
+        var pendingToolResponses: [String] = []
+
+        func flushToolResponses() {
+            guard !pendingToolResponses.isEmpty else { return }
+            let combined = pendingToolResponses
+                .map { "\n<tool_response>\n\($0)\n</tool_response>" }
+                .joined()
+            result.append(.user(combined))
+            pendingToolResponses.removeAll()
+        }
+
+        for msg in messages {
             switch msg.role {
             case .user:
-                return .user(msg.content)
+                flushToolResponses()
+                result.append(.user(msg.content))
             case .assistant:
-                return .assistant(msg.content)
+                flushToolResponses()
+                result.append(.assistant(msg.content))
             case .system:
-                return .system(msg.content)
+                flushToolResponses()
+                result.append(.system(msg.content))
             case .tool:
-                return .tool(msg.content)
+                pendingToolResponses.append(msg.content)
             }
         }
+        flushToolResponses()
+        return result
     }
 }
