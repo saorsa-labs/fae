@@ -285,6 +285,9 @@ final class JitPermissionController: ObservableObject {
             object: nil,
             userInfo: ["capability": capability]
         )
+        // After granting one Apple permission, proactively request the others so the
+        // user handles all permission dialogs at once and never sees them again.
+        requestRemainingApplePermissions(excluding: capability)
     }
 
     private func postDenied(capability: String) {
@@ -293,6 +296,54 @@ final class JitPermissionController: ObservableObject {
             object: nil,
             userInfo: ["capability": capability]
         )
+    }
+
+    // MARK: - Proactive Apple Permission Bundling
+
+    /// Apple capabilities that can be requested programmatically (excludes mail/notes
+    /// which require Automation settings and cannot be prompted).
+    private static let appleCapabilities = ["calendar", "reminders", "contacts"]
+
+    /// After one Apple permission is granted, request any remaining ungated ones.
+    private func requestRemainingApplePermissions(excluding granted: String) {
+        guard Self.appleCapabilities.contains(granted) else { return }
+
+        for capability in Self.appleCapabilities where capability != granted {
+            switch capability {
+            case "calendar":
+                if !Self.isCalendarAuthorized() {
+                    requestCalendar(capability: capability)
+                }
+            case "reminders":
+                if !Self.isRemindersAuthorized() {
+                    requestReminders(capability: capability)
+                }
+            case "contacts":
+                if CNContactStore.authorizationStatus(for: .contacts) != .authorized {
+                    requestContacts(capability: capability)
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private static func isCalendarAuthorized() -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if #available(macOS 14.0, *) {
+            return status == .fullAccess || status == .writeOnly
+        } else {
+            return status == .authorized
+        }
+    }
+
+    private static func isRemindersAuthorized() -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .reminder)
+        if #available(macOS 14.0, *) {
+            return status == .fullAccess || status == .writeOnly
+        } else {
+            return status == .authorized
+        }
     }
 }
 

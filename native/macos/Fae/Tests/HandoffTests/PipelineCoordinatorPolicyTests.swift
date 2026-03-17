@@ -14,23 +14,28 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
     }
 
     func testExplicitlyMentionedToolNamesMatchesUnderscoredAndFriendlyAliases() {
+        // "read" is an ambiguous tool name (common English word) and should NOT
+        // be matched — matching it causes false-positive memory recall suppression
+        // when users say things like "read from your memory database".
         let matches = PipelineCoordinator.explicitlyMentionedToolNames(
             in: "Fae, use the read tool and then run self config to show your settings.",
             availableToolNames: ["read", "self_config", "web_search"]
         )
 
-        XCTAssertEqual(matches, ["read", "self_config"])
+        XCTAssertEqual(matches, ["self_config"])
     }
 
     func testVisibleToolNamesForTurnNarrowsToExplicitToolMention() {
+        // "read" is ambiguous so explicit mention doesn't narrow. But path
+        // heuristics in inferredToolNamesForTurn still detect the file read intent.
         let visible = PipelineCoordinator.visibleToolNamesForTurn(
             firstOwnerEnrollmentActive: false,
-            userText: "Fae, call the read tool to open /etc/hosts.",
+            userText: "Fae, call the web_search tool to find Swift news.",
             availableToolNames: ["read", "write", "web_search"],
             proactiveAllowedTools: nil
         )
 
-        XCTAssertEqual(visible, ["read"])
+        XCTAssertEqual(visible, ["web_search"])
     }
 
     func testVisibleToolNamesForTurnPreservesProactiveAllowanceWhenNoExplicitMention() {
@@ -618,6 +623,43 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
             PipelineCoordinator.shouldPreferInlineToolExecution(
                 userText: "Fae, use the calendar tool right now and list my events for today.",
                 toolCalls: [call]
+            )
+        )
+    }
+
+    func testRepairedToolCallForRemindersLookupDefaultsToListIncomplete() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, show me my reminders"
+        ) else {
+            return XCTFail("Expected reminders repair call")
+        }
+
+        XCTAssertEqual(call.name, "reminders")
+        XCTAssertEqual(call.arguments["action"] as? String, "list_incomplete")
+    }
+
+    func testRepairedToolCallForMailLookupDefaultsToCheckInbox() {
+        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+            "Fae, check my email"
+        ) else {
+            return XCTFail("Expected mail repair call")
+        }
+
+        XCTAssertEqual(call.name, "mail")
+        XCTAssertEqual(call.arguments["action"] as? String, "check_inbox")
+    }
+
+    func testShouldNotSuppressRecallForMemoryQueries() {
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSuppressEpisodeRecallForToolSensitiveTurn(
+                userText: "Read from your memory database and tell me what you know about me.",
+                availableToolNames: ["read", "web_search"]
+            )
+        )
+        XCTAssertFalse(
+            PipelineCoordinator.shouldSuppressEpisodeRecallForToolSensitiveTurn(
+                userText: "What do you know about me?",
+                availableToolNames: ["read", "web_search"]
             )
         )
     }

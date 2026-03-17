@@ -286,6 +286,14 @@ actor PipelineCoordinator {
         }
     }
 
+    /// Common English words that happen to be tool names but should NOT
+    /// suppress memory recall when used in natural speech. "read" in
+    /// "read from your memory database" is the user asking Fae to *recall*,
+    /// not requesting the `read` file-reading tool.
+    private static let ambiguousToolNames: Set<String> = [
+        "read", "edit", "write", "notes", "mail", "scroll", "camera",
+    ]
+
     static func explicitlyMentionedToolNames(
         in userText: String,
         availableToolNames: [String]
@@ -294,6 +302,10 @@ actor PipelineCoordinator {
         var matches: Set<String> = []
 
         for toolName in availableToolNames {
+            // Skip tool names that are common English words — these cause
+            // false-positive suppression of memory recall for natural queries.
+            if ambiguousToolNames.contains(toolName) { continue }
+
             for alias in toolNameAliases(toolName) {
                 guard !alias.isEmpty else { continue }
                 if normalized.contains(" \(alias) ") {
@@ -486,6 +498,16 @@ actor PipelineCoordinator {
         userText: String,
         availableToolNames: [String]
     ) -> Bool {
+        // Never suppress recall for queries that explicitly ask about memory/knowledge.
+        let lower = userText.lowercased()
+        let memoryIntentPhrases = [
+            "memory", "what do you know", "what you know", "tell me about me",
+            "remember about me", "know about me", "what have you learned",
+        ]
+        if memoryIntentPhrases.contains(where: { lower.contains($0) }) {
+            return false
+        }
+
         if isEphemeralArithmeticQuery(userText) {
             return true
         }
@@ -498,7 +520,6 @@ actor PipelineCoordinator {
             return true
         }
 
-        let lower = userText.lowercased()
         if lower.contains("http://") || lower.contains("https://") {
             return true
         }
@@ -6998,6 +7019,22 @@ actor PipelineCoordinator {
             return calendarCall
         }
 
+        if let remindersCall = repairedRemindersLookupCall(from: text, lowercased: lower) {
+            return remindersCall
+        }
+
+        if let contactsCall = repairedContactsLookupCall(from: text, lowercased: lower) {
+            return contactsCall
+        }
+
+        if let mailCall = repairedMailLookupCall(lowercased: lower) {
+            return mailCall
+        }
+
+        if let notesCall = repairedNotesLookupCall(from: text, lowercased: lower) {
+            return notesCall
+        }
+
         if lower.contains("bash")
             || lower.contains("terminal")
             || lower.contains("run the command")
@@ -7356,6 +7393,64 @@ actor PipelineCoordinator {
         }
 
         return ToolCall(name: "calendar", arguments: ["action": "list_today"])
+    }
+
+    private static func repairedRemindersLookupCall(from text: String, lowercased lower: String) -> ToolCall? {
+        let remindersIntent = [
+            "reminder", "reminders", "to-do", "todo", "task list",
+        ].contains { containsWholeWord($0, in: lower) }
+        guard remindersIntent else { return nil }
+
+        if lower.contains("search") || lower.contains("find ") || lower.contains("look for ") {
+            let query = extractCalendarSearchQuery(from: text, lowercased: lower) ?? ""
+            if !query.isEmpty {
+                return ToolCall(name: "reminders", arguments: ["action": "search", "query": query])
+            }
+        }
+
+        return ToolCall(name: "reminders", arguments: ["action": "list_incomplete"])
+    }
+
+    private static func repairedContactsLookupCall(from text: String, lowercased lower: String) -> ToolCall? {
+        let contactsIntent = [
+            "contact", "contacts", "phone number", "email address",
+        ].contains { containsWholeWord($0, in: lower) }
+        guard contactsIntent else { return nil }
+
+        let query = extractCalendarSearchQuery(from: text, lowercased: lower) ?? ""
+        guard !query.isEmpty else { return nil }
+
+        if lower.contains("phone") || lower.contains("number") {
+            return ToolCall(name: "contacts", arguments: ["action": "get_phone", "query": query])
+        }
+        if lower.contains("email") {
+            return ToolCall(name: "contacts", arguments: ["action": "get_email", "query": query])
+        }
+        return ToolCall(name: "contacts", arguments: ["action": "search", "query": query])
+    }
+
+    private static func repairedMailLookupCall(lowercased lower: String) -> ToolCall? {
+        let mailIntent = [
+            "mail", "email", "inbox",
+        ].contains { containsWholeWord($0, in: lower) }
+        guard mailIntent else { return nil }
+        return ToolCall(name: "mail", arguments: ["action": "check_inbox"])
+    }
+
+    private static func repairedNotesLookupCall(from text: String, lowercased lower: String) -> ToolCall? {
+        // "notes" is ambiguous — only match when paired with a lookup verb.
+        let notesIntent = containsWholeWord("notes", in: lower)
+        let lookupVerb = ["check", "show", "list", "find", "search", "read"].contains { lower.contains($0) }
+        guard notesIntent && lookupVerb else { return nil }
+
+        if lower.contains("search") || lower.contains("find ") {
+            let query = extractCalendarSearchQuery(from: text, lowercased: lower) ?? ""
+            if !query.isEmpty {
+                return ToolCall(name: "notes", arguments: ["action": "search", "query": query])
+            }
+        }
+
+        return ToolCall(name: "notes", arguments: ["action": "list_recent"])
     }
 
     private static func extractISODateCandidate(from text: String) -> String? {

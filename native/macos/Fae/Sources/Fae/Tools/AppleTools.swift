@@ -1,6 +1,30 @@
+import AppKit
 @preconcurrency import Contacts
 import EventKit
 import Foundation
+
+// MARK: - App Opener
+
+/// Opens a macOS app by bundle identifier, bringing it to the foreground.
+/// Used by Apple tools to show the actual app alongside Fae's spoken summary.
+private func openAppleApp(bundleId: String) {
+    Task { @MainActor in
+        guard let appURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleId
+        ) else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        try? await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
+    }
+}
+
+/// Opens a URL in the user's default browser.
+private func openInBrowser(url: String) {
+    guard let parsed = URL(string: url) else { return }
+    Task { @MainActor in
+        NSWorkspace.shared.open(parsed)
+    }
+}
 
 // MARK: - EventKit Authorization Helper
 
@@ -103,17 +127,22 @@ struct CalendarTool: Tool {
     let example = #"<tool_call>{"name":"calendar","arguments":{"action":"list_today"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
-        let store = EKEventStore()
-
         if !isEventKitAuthorized(for: .event) {
             guard await requestPermission(capability: "calendar") else {
                 return .error("I need calendar access to do that. You can grant it in System Settings > Privacy & Security.")
             }
         }
 
+        // Create store AFTER permission is confirmed — a store created before the
+        // TCC grant may not reflect the new authorization state.
+        let store = EKEventStore()
+
         guard let action = input["action"] as? String else {
             return .error("Missing required parameter: action")
         }
+
+        // Open the Calendar app so the user sees the actual data alongside Fae's summary.
+        openAppleApp(bundleId: "com.apple.iCal")
 
         switch action {
         case "list_today":
@@ -234,17 +263,22 @@ struct RemindersTool: Tool {
     let example = #"<tool_call>{"name":"reminders","arguments":{"action":"list_incomplete"}}</tool_call>"#
 
     func execute(input: [String: Any]) async throws -> ToolResult {
-        let store = EKEventStore()
-
         if !isEventKitAuthorized(for: .reminder) {
             guard await requestPermission(capability: "reminders") else {
                 return .error("I need reminders access to do that. You can grant it in System Settings > Privacy & Security.")
             }
         }
 
+        // Create store AFTER permission is confirmed — a store created before the
+        // TCC grant may not reflect the new authorization state.
+        let store = EKEventStore()
+
         guard let action = input["action"] as? String else {
             return .error("Missing required parameter: action")
         }
+
+        // Open the Reminders app so the user sees the actual list.
+        openAppleApp(bundleId: "com.apple.reminders")
 
         switch action {
         case "list_incomplete":
@@ -354,6 +388,11 @@ struct ContactsTool: Tool {
             return .error("Missing required parameter: query")
         }
 
+        // Open Contacts app so the user sees the actual contact card.
+        openAppleApp(bundleId: "com.apple.AddressBook")
+
+        // Create store AFTER permission is confirmed — a store created before the
+        // TCC grant may not reflect the new authorization state.
         let store = CNContactStore()
         let keysToFetch: [CNKeyDescriptor] = [
             CNContactGivenNameKey as CNKeyDescriptor,

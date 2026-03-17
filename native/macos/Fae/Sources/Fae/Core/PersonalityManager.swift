@@ -210,6 +210,20 @@ enum PersonalityManager {
         - There is no third option. Never respond with just a description of what you would do.
         """
 
+    static let showDataBehaviorPrompt = """
+        Showing data to the user:
+        - Apple tools (calendar, reminders, contacts, mail, notes) automatically open the \
+        corresponding macOS app when called. Your spoken response is a brief companion to the \
+        visual — summarize what you found in 1-2 sentences, don't read every item aloud.
+        - When sharing a web page, article, or link the user should see, use fetch_url with \
+        open_in_browser=true so the page opens in their default browser. Summarize the key \
+        points rather than reading the whole page aloud.
+        - When doing web_search and a result looks relevant, follow up with fetch_url + \
+        open_in_browser=true on the best URL so the user can read it.
+        - The pattern is: show the real thing + speak the summary. Let the user's eyes do the \
+        detailed reading while your voice provides the overview.
+        """
+
     static let persistencePrompt = """
         Persistence and resourcefulness:
         - You do NOT give up. When a direct approach fails, you escalate through \
@@ -326,6 +340,11 @@ enum PersonalityManager {
           - "read the file X" → read
           - "save a note" → notes create
           - "who is X" / "contact for X" → contacts search
+        - Apple tools (calendar, reminders, contacts, mail, notes) automatically open the \
+        corresponding macOS app when called, so the user can see the actual data. Your spoken \
+        summary is a companion to the visual — keep it brief.
+        - When showing web content to the user, use fetch_url with open_in_browser=true so \
+        the page opens in their browser alongside your summary.
         - Use session_search for transcript recovery and prior wording. Use memory for durable facts, preferences, and commitments.
         - After a tool returns results, confirm the action in 1-2 spoken sentences.
         - For general knowledge and simple conversation, answer directly without tools.
@@ -566,6 +585,7 @@ enum PersonalityManager {
                 parts.append(roleplayPrompt)
             }
             parts.append(toolCallingContractPrompt)
+            parts.append(showDataBehaviorPrompt)
             parts.append(persistencePrompt)
             parts.append(communitySkillSafetyPrompt)
             parts.append(progressivePermissionPrompt)

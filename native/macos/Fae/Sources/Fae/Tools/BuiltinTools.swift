@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - Read Tool
@@ -640,8 +641,8 @@ struct WebSearchTool: Tool {
 /// header, aside), extract main content, and return clean text with word count.
 struct FetchURLTool: Tool {
     let name = "fetch_url"
-    let description = "Fetch a web page and extract its readable text content."
-    let parametersSchema = #"{"url": "string (required, must start with http:// or https://)"}"#
+    let description = "Fetch a web page and extract its readable text content. Set open_in_browser=true to also show the page in the user's default browser."
+    let parametersSchema = #"{"url": "string (required, must start with http:// or https://)", "open_in_browser": "boolean (optional, default false — open the page in the user's browser)"}"#
     let requiresApproval = false
     let example = #"<tool_call>{"name":"fetch_url","arguments":{"url":"https://example.com/article"}}</tool_call>"#
 
@@ -673,6 +674,14 @@ struct FetchURLTool: Tool {
 
         if let blockedReason = Self.blockedReason(for: urlString) {
             return .error(blockedReason)
+        }
+
+        // Open in browser if requested.
+        let shouldOpen = input["open_in_browser"] as? Bool ?? false
+        if shouldOpen, let url = URL(string: urlString) {
+            Task { @MainActor in
+                NSWorkspace.shared.open(url)
+            }
         }
 
         do {

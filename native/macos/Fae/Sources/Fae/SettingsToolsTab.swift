@@ -60,6 +60,22 @@ struct SettingsToolsTab: View {
             }
 
             Section("Apple Tool Permissions") {
+                if !allApplePermissionsGranted {
+                    Button("Grant All Apple Permissions") {
+                        onboarding.requestCalendar()
+                        onboarding.requestReminders()
+                        onboarding.requestContacts()
+                        onboarding.requestMail()
+                        refreshAfterDelay()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Text("Grant access to Calendar, Reminders, Contacts, Mail & Notes all at once.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 permissionRow(
                     icon: "calendar",
                     label: "Calendar",
@@ -120,6 +136,12 @@ struct SettingsToolsTab: View {
                 toolMode = migrated
             }
         }
+    }
+
+    /// True when Calendar, Reminders, and Contacts are all granted.
+    /// Mail & Notes use Automation (no preflight API), so excluded from this check.
+    private var allApplePermissionsGranted: Bool {
+        permissionSnapshot.calendar && permissionSnapshot.reminders && permissionSnapshot.contacts
     }
 
     // MARK: - Helpers
