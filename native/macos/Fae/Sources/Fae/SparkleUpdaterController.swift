@@ -31,6 +31,7 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
 
     /// The underlying Sparkle controller. `nil` when SUFeedURL is not configured.
     private var controller: SPUStandardUpdaterController?
+    private var cancellables = Set<AnyCancellable>()
 
     override init() {
         super.init()
@@ -57,7 +58,11 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
         // Bind published properties to Sparkle's KVO-observable state.
         ctrl.updater.publisher(for: \.canCheckForUpdates)
             .receive(on: RunLoop.main)
-            .assign(to: &$canCheckForUpdates)
+            .sink { [weak self] value in
+                self?.canCheckForUpdates = value
+                NSLog("SparkleUpdaterController: canCheckForUpdates → %@", value ? "true" : "false")
+            }
+            .store(in: &cancellables)
 
         ctrl.updater.publisher(for: \.lastUpdateCheckDate)
             .receive(on: RunLoop.main)
