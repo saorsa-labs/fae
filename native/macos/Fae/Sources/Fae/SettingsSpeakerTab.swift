@@ -4,9 +4,9 @@ import SwiftUI
 struct SettingsSpeakerTab: View {
     var commandSender: HostCommandSender?
 
-    @State private var voiceIdentityEnabled: Bool = false
-    @State private var voiceIdentityMode: String = "assist"
-    @State private var approvalRequiresMatch: Bool = false
+    @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
+    @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
+    @AppStorage("voiceIdentityApprovalRequiresMatch") private var approvalRequiresMatch: Bool = false
     @State private var ownerName: String = ""
     @State private var ownerEnrollmentCount: Int = 0
     @State private var ownerLastSeen: Date?
@@ -156,13 +156,8 @@ struct SettingsSpeakerTab: View {
     // MARK: - Actions
 
     private func loadState() {
-        // Read voice identity config directly from FaeConfig.
-        let config = FaeConfig.load()
-        voiceIdentityEnabled = config.voiceIdentity.enabled
-        voiceIdentityMode = config.voiceIdentity.mode
-        approvalRequiresMatch = config.voiceIdentity.approvalRequiresMatch
-
-        // Read speaker profiles from SpeakerProfileStore (local instance to same file).
+        // Voice identity settings are read via @AppStorage (UserDefaults).
+        // Only speaker profile data needs to be loaded from disk.
         Task {
             let appSupport = FileManager.default.urls(
                 for: .applicationSupportDirectory, in: .userDomainMask

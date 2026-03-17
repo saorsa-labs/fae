@@ -81,6 +81,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         loaded.llm.normalizeThinkingConfiguration(hasExplicitLevel: true)
         let initialThinkingLevel = loaded.llm.resolvedThinkingLevel
+
+        // Voice identity settings: UserDefaults is authoritative in normal mode.
+        if !FaeEnvironment.isDev && !FaeEnvironment.isTesting {
+            loaded.voiceIdentity.enabled = FaeEnvironment.defaults.bool(forKey: "voiceIdentityEnabled")
+            loaded.voiceIdentity.mode = FaeEnvironment.defaults.string(forKey: "voiceIdentityMode") ?? "assist"
+            loaded.voiceIdentity.approvalRequiresMatch = FaeEnvironment.defaults.bool(forKey: "voiceIdentityApprovalRequiresMatch")
+        }
+
         self.config = loaded
 
         // In normal mode config.toml is not read, so licence/intro state lives in
@@ -1472,6 +1480,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "voice_identity.enabled":
             guard let value = value as? Bool else { return }
             config.voiceIdentity.enabled = value
+            FaeEnvironment.defaults.set(value, forKey: "voiceIdentityEnabled")
             persistConfig(reason: "config.patch.voice_identity.enabled")
 
         case "voice_identity.mode":
@@ -1479,12 +1488,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                   ["assist", "enforce"].contains(value)
             else { return }
             config.voiceIdentity.mode = value
+            FaeEnvironment.defaults.set(value, forKey: "voiceIdentityMode")
             persistConfig(reason: "config.patch.voice_identity.mode")
 
         case "voice_identity.approval_requires_match":
             guard let value = value as? Bool else { return }
             config.voiceIdentity.approvalRequiresMatch = value
             config.speaker.requireOwnerForTools = value
+            FaeEnvironment.defaults.set(value, forKey: "voiceIdentityApprovalRequiresMatch")
             persistConfig(reason: "config.patch.voice_identity.approval_requires_match")
 
         case "memory.enabled":
@@ -1891,12 +1902,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 var configChanged = false
                 if !self.config.voiceIdentity.enabled {
                     self.config.voiceIdentity.enabled = true
+                    FaeEnvironment.defaults.set(true, forKey: "voiceIdentityEnabled")
                     configChanged = true
                     NSLog("FaeCore: auto-enabled voiceIdentity after enrollment")
                 }
                 // Owner enrolled — auto-enable owner-only tool gating.
                 if !self.config.speaker.requireOwnerForTools {
                     self.config.speaker.requireOwnerForTools = true
+                    FaeEnvironment.defaults.set(true, forKey: "voiceIdentityApprovalRequiresMatch")
                     configChanged = true
                     NSLog("FaeCore: auto-enabled requireOwnerForTools after enrollment")
                 }
@@ -1940,6 +1953,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Fae will prefer the owner's voice but won't block unknown speakers.
         config.voiceIdentity.enabled = true
         config.voiceIdentity.mode = "assist"
+        FaeEnvironment.defaults.set(true, forKey: "voiceIdentityEnabled")
+        FaeEnvironment.defaults.set("assist", forKey: "voiceIdentityMode")
 
         persistConfig(reason: "native_owner_enrollment")
 
