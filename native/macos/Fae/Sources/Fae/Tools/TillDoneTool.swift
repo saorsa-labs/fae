@@ -22,9 +22,15 @@ actor TillDoneManager {
         var text: String
         var status: TaskStatus
         var result: String?
+        /// Number of times this task has been started (attempt counter).
+        var attempts: Int = 0
+        /// Brief descriptions of what was tried and why it failed.
+        var failureLog: [String] = []
     }
 
     private var tasks: [TaskItem] = []
+    /// Number of consecutive nudges fired without a task completing.
+    private(set) var consecutiveNudges: Int = 0
     private var nextId = 1
     private(set) var listTitle: String?
     private(set) var listDescription: String?
@@ -104,7 +110,19 @@ actor TillDoneManager {
 
         let prev = tasks[idx].status
         tasks[idx].status = .inprogress
+        tasks[idx].attempts += 1
+        consecutiveNudges = 0
         var msg = "Task #\(id): \(prev.rawValue) → inprogress — \(tasks[idx].text)"
+        if tasks[idx].attempts > 1 {
+            msg += " (attempt #\(tasks[idx].attempts))"
+        }
+        if !tasks[idx].failureLog.isEmpty {
+            msg += "\nPrevious attempts that failed:"
+            for entry in tasks[idx].failureLog {
+                msg += "\n  - \(entry)"
+            }
+            msg += "\nYou MUST try a DIFFERENT approach this time."
+        }
         if !demoted.isEmpty {
             msg += "\n(Auto-paused \(demoted.map { "#\($0)" }.joined(separator: ", ")) → idle)"
         }
@@ -117,6 +135,7 @@ actor TillDoneManager {
         }
         tasks[idx].status = .done
         tasks[idx].result = result
+        consecutiveNudges = 0
         let remaining = tasks.filter { $0.status == .idle || $0.status == .inprogress }.count
         var msg = "Task #\(id) done: \(tasks[idx].text)"
         if let result { msg += "\nResult: \(result)" }
@@ -275,12 +294,46 @@ actor TillDoneManager {
         nextId = 1
         listTitle = nil
         listDescription = nil
+        consecutiveNudges = 0
         return "Cleared \(count) task(s)"
     }
 
     /// The next idle task to suggest (auto-advance).
     var nextIdleTask: TaskItem? {
         tasks.first { $0.status == .idle }
+    }
+
+    /// Record a nudge firing (for escalation tracking).
+    func recordNudge() {
+        consecutiveNudges += 1
+    }
+
+    /// Log a failure on the current inprogress task so the nudge can report what was tried.
+    func logFailureOnCurrentTask(_ description: String) {
+        guard let idx = tasks.firstIndex(where: { $0.status == .inprogress }) else { return }
+        let trimmed = String(description.prefix(200))
+        tasks[idx].failureLog.append(trimmed)
+    }
+
+    /// Context for the nudge: what the current task is, how many attempts, and what failed.
+    var currentTaskContext: String {
+        guard let task = tasks.first(where: { $0.status == .inprogress }) else {
+            return "No task is currently inprogress."
+        }
+        var ctx = "Current task: #\(task.id) \"\(task.text)\" (attempt #\(task.attempts))"
+        if !task.failureLog.isEmpty {
+            ctx += "\nWhat was already tried and failed:"
+            for entry in task.failureLog {
+                ctx += "\n  - \(entry)"
+            }
+        }
+        return ctx
+    }
+
+    /// Whether the current inprogress task is stalled (3+ attempts).
+    var currentTaskStalled: Bool {
+        guard let task = tasks.first(where: { $0.status == .inprogress }) else { return false }
+        return task.attempts >= 3
     }
 
     // MARK: - Private
@@ -302,12 +355,14 @@ struct TillDoneTool: Tool {
         before starting complex work (research, coding, setup, reports). \
         Actions: new_list (title + description), add (text or texts for batch), \
         start (id — mark inprogress), complete (id + result summary), skip (id + reason), \
+        log_failure (text — record what you tried and why it failed on the current task), \
         update (id + text), remove (id), list, report (final summary), clear. \
         Always start a task before working on it, and complete it with a result when done. \
-        Only one task can be inprogress at a time.
+        Only one task can be inprogress at a time. When something fails, use log_failure \
+        before trying a different approach.
         """
     let parametersSchema = """
-        {"action":{"type":"string","description":"new_list, add, start, complete, skip, update, remove, list, report, clear","required":true},\
+        {"action":{"type":"string","description":"new_list, add, start, complete, skip, log_failure, update, remove, list, report, clear","required":true},\
         "text":{"type":"string","description":"Task text (for add/update), or list title (for new_list)"},\
         "texts":{"type":"array","description":"Multiple task texts for batch add"},\
         "description":{"type":"string","description":"List description (for new_list)"},\
@@ -373,6 +428,14 @@ struct TillDoneTool: Tool {
             let msg = await manager.skipTask(id: taskId, reason: result)
             return .success(msg)
 
+        case "log_failure":
+            guard let failureText = text else {
+                return .error("Missing required parameter: text (what you tried and why it failed)")
+            }
+            await manager.logFailureOnCurrentTask(failureText)
+            let ctx = await manager.currentTaskContext
+            return .success("Failure logged. \(ctx)\nNow try a DIFFERENT approach.")
+
         case "update":
             guard let taskId = id, let newText = text else {
                 return .error("Missing required parameters: id and text")
@@ -400,7 +463,7 @@ struct TillDoneTool: Tool {
             return .success(msg)
 
         default:
-            return .error("Unknown action: \(action). Use: new_list, add, start, complete, skip, update, remove, list, report, clear")
+            return .error("Unknown action: \(action). Use: new_list, add, start, complete, skip, log_failure, update, remove, list, report, clear")
         }
     }
 }

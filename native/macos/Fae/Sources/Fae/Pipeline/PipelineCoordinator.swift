@@ -381,27 +381,36 @@ actor PipelineCoordinator {
             add("bash", "read", "write", "edit")
         }
 
+        let isCloseOrQuitRequest = containsAny([
+            "close ", "quit ", "hide ", "dismiss ", "shut ", "kill ",
+            "stop the ", "close the ", "quit the ", "hide the ",
+        ])
+
         if containsAny([
-            "calendar", "schedule", "meeting", "appointment", "today", "tomorrow",
+            "calendar", "schedule", "meeting", "appointment", "tomorrow",
             "free time", "availability", "busy"
-        ]) {
-            add("calendar")
+        ]) || (containsAny(["today"]) && containsAny(["what", "show", "list", "check", "any"])) {
+            if isCloseOrQuitRequest {
+                add("bash", "window_control")
+            } else {
+                add("calendar")
+            }
         }
 
         if containsAny(["remind me", "reminder", "todo", "to-do", "task list", "tasks"]) {
-            add("reminders")
+            if isCloseOrQuitRequest { add("bash", "window_control") } else { add("reminders") }
         }
 
         if containsAny(["contact", "phone number", "email address"]) {
-            add("contacts")
+            if isCloseOrQuitRequest { add("bash", "window_control") } else { add("contacts") }
         }
 
         if containsAny(["send email", "draft email", "compose email", "mail "]) {
-            add("mail", "contacts")
+            if isCloseOrQuitRequest { add("bash", "window_control") } else { add("mail", "contacts") }
         }
 
         if containsAny(["note", "notes", "jot down"]) {
-            add("notes")
+            if isCloseOrQuitRequest { add("bash", "window_control") } else { add("notes") }
         }
 
         if containsAny([
@@ -5758,26 +5767,61 @@ actor PipelineCoordinator {
             // tasks on the TillDone list, nudge it to continue working.
             // Nudges are tagged so they can be cleaned up after the turn, preventing
             // history eviction of the original prompt on long runs.
+            // The nudge escalates based on consecutive nudges and task attempt count,
+            // explicitly telling the LLM to try different approaches.
             if proactiveContext == nil,
                turnCount < maxToolTurns,
                await TillDoneManager.shared.hasIncompleteTasks
             {
+                await TillDoneManager.shared.recordNudge()
                 let summary = await TillDoneManager.shared.incompleteSummary
                 let progress = await TillDoneManager.shared.progressSummary
+                let taskCtx = await TillDoneManager.shared.currentTaskContext
+                let stalled = await TillDoneManager.shared.currentTaskStalled
+                let nudgeCount = await TillDoneManager.shared.consecutiveNudges
                 let nudgeTag = "tilldone_nudge"
-                debugLog(debugConsole, .qa, "TillDone nudge: incomplete tasks remain — \(progress)")
+                debugLog(debugConsole, .qa, "TillDone nudge #\(nudgeCount): \(progress)")
 
                 // Remove previous nudge messages to avoid accumulating history entries.
                 await conversationState.removeMessages(taggedWith: nudgeTag)
 
-                let nudge = """
+                var nudge = """
                     You still have incomplete tasks on your TillDone list:
                     \(summary)
 
-                    Continue working. Use till_done start to begin the next task, \
-                    then do the work, then till_done complete when done. \
-                    Do not stop until all tasks are complete.
+                    \(taskCtx)
                     """
+
+                if stalled {
+                    nudge += """
+
+                        This task has been attempted 3+ times. You MUST change strategy:
+                        - Break it into smaller sub-tasks (till_done add)
+                        - Try a completely different tool or approach
+                        - Search the web for a solution (web_search)
+                        - Write code to solve it (bash + Python/uv)
+                        - Delegate to an agent (delegate_agent)
+                        - If truly impossible, skip it (till_done skip) with a reason
+                        Do NOT repeat anything from the failure log above.
+                        """
+                } else if nudgeCount > 1 {
+                    nudge += """
+
+                        You have been nudged \(nudgeCount) times without completing a task.
+                        If a tool call failed, use till_done log_failure to record what \
+                        you tried, then try a DIFFERENT approach. Do not repeat the same \
+                        command. Read error messages carefully and fix the root cause.
+                        """
+                } else {
+                    nudge += """
+
+                        Continue working. Use till_done start to begin the next task, \
+                        then do the work, then till_done complete when done. \
+                        If something fails, log it with till_done log_failure and try \
+                        a different approach. Do not stop until all tasks are complete.
+                        """
+                }
+
                 await conversationState.addUserMessage(nudge, speakerDisplayName: nil, speakerId: nil, tag: nudgeTag)
 
                 await generateWithTools(
@@ -7015,6 +7059,11 @@ actor PipelineCoordinator {
             }
         }
 
+        // Close/quit/hide app requests → window_control close_app.
+        if let closeAppCall = repairedCloseAppCall(lowercased: lower) {
+            return closeAppCall
+        }
+
         if let calendarCall = repairedCalendarLookupCall(from: text, lowercased: lower) {
             return calendarCall
         }
@@ -7378,6 +7427,12 @@ actor PipelineCoordinator {
         ].contains { containsWholeWord($0, in: lower) }
         guard calendarIntent else { return nil }
 
+        // Don't force a calendar lookup when the user wants to close/quit/hide it.
+        let closeWords = ["close", "quit", "hide", "dismiss", "shut", "kill", "stop"]
+        if closeWords.contains(where: { lower.contains($0) }) {
+            return nil
+        }
+
         if let date = extractISODateCandidate(from: text) {
             return ToolCall(name: "calendar", arguments: ["action": "list_date", "date": date])
         }
@@ -7401,6 +7456,12 @@ actor PipelineCoordinator {
         ].contains { containsWholeWord($0, in: lower) }
         guard remindersIntent else { return nil }
 
+        // Don't force a reminders lookup when the user wants to close/quit/hide it.
+        let closeWords = ["close", "quit", "hide", "dismiss", "shut", "kill", "stop"]
+        if closeWords.contains(where: { lower.contains($0) }) {
+            return nil
+        }
+
         if lower.contains("search") || lower.contains("find ") || lower.contains("look for ") {
             let query = extractCalendarSearchQuery(from: text, lowercased: lower) ?? ""
             if !query.isEmpty {
@@ -7409,6 +7470,29 @@ actor PipelineCoordinator {
         }
 
         return ToolCall(name: "reminders", arguments: ["action": "list_incomplete"])
+    }
+
+    /// Detect "close the calendar" / "quit reminders" etc. and return a window_control close_app call.
+    private static func repairedCloseAppCall(lowercased lower: String) -> ToolCall? {
+        let closeVerbs = ["close", "quit", "hide", "dismiss"]
+        guard closeVerbs.contains(where: { lower.contains($0) }) else { return nil }
+
+        let appMap: [(keywords: [String], appName: String)] = [
+            (["calendar", "ical"], "Calendar"),
+            (["reminder"], "Reminders"),
+            (["contact", "address book"], "Contacts"),
+            (["mail", "email app"], "Mail"),
+            (["note"], "Notes"),
+            (["safari", "browser"], "Safari"),
+            (["finder"], "Finder"),
+            (["music", "itunes"], "Music"),
+        ]
+        for entry in appMap {
+            if entry.keywords.contains(where: { lower.contains($0) }) {
+                return ToolCall(name: "window_control", arguments: ["action": "close_app", "app_name": entry.appName])
+            }
+        }
+        return nil
     }
 
     private static func repairedContactsLookupCall(from text: String, lowercased lower: String) -> ToolCall? {

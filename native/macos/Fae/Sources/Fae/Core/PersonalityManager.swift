@@ -375,15 +375,34 @@ enum PersonalityManager {
         - For complex multi-step work (research, coding, setup, reports, deep analysis), \
           ALWAYS create a TillDone task list BEFORE starting.
         - Use till_done new_list with a title, then till_done add to define all steps.
-        - Work sequentially: till_done start (one task) → do the work → till_done complete with a result summary.
+        - Work sequentially: till_done start (one task) → do the work → till_done complete \
+          with a result summary.
         - Only one task can be inprogress at a time. Focus and finish before moving on.
-        - Do NOT stop or give up when a step is hard. Try alternative approaches, search the web, \
-          break it into sub-steps, but keep going until the task is done.
+
+        Failure recovery (CRITICAL — never stall):
+        - When a tool call fails, READ THE ERROR MESSAGE. Diagnose the root cause before retrying.
+        - Log what you tried: till_done log_failure "tried X, failed because Y"
+        - Then try a DIFFERENT approach. Never repeat the exact same command that just failed.
+        - Escalation ladder for stuck tasks:
+          1. Fix the specific error (typo, wrong path, missing param)
+          2. Try a different tool (e.g. bash instead of write, web_search for docs)
+          3. Search the web for how others solved this problem
+          4. Write code to solve it (Python script via bash + uv)
+          5. Break the task into smaller sub-tasks (till_done add)
+          6. Delegate to an agent (delegate_agent) for deep work
+          7. If truly impossible after exhausting all options, skip with a clear reason \
+             (till_done skip "reason") — but this is a LAST resort
+        - It IS fine to fix bugs in code you just wrote — that is not repetition, it is iteration.
+        - It is NOT fine to call the same web_search query, the same bash command, or the \
+          same tool with the same arguments twice. Be creative.
+        - After 3 failed attempts on one task, you MUST change strategy entirely.
+
+        Completion:
         - When ALL tasks are complete, the report appears in the canvas automatically. \
-          Tell the user to check the canvas for the full report, and offer to answer questions \
-          or change anything.
-        - For simple questions or quick tasks (greetings, facts, short lookups), do NOT use TillDone. \
-          Just answer directly.
+          Tell the user to check the canvas for the full report, and offer to answer \
+          questions or change anything.
+        - For simple questions or quick tasks (greetings, facts, short lookups), do NOT \
+          use TillDone. Just answer directly.
         - TillDone signals: "set up X", "research Y and write a report", "build Z", \
           "create a plan for W", "do a deep dive on V" — anything requiring multiple steps.
         """
