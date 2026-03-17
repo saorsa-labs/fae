@@ -1440,10 +1440,10 @@ actor PipelineCoordinator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        if let match = await keywordSpotter.check(partialTranscript: trimmed), match.category == .interrupt {
-            await resetConversationSession(trigger: trimmed, source: "text")
-            return
-        }
+        // Do NOT run the keyword spotter on typed/pasted text. The spotter uses
+        // fuzzy matching designed for misheard voice — it false-positives on normal
+        // text (e.g. "discord channel" → "cancel"). Text injection is a deliberate
+        // user action that should always reach the LLM.
 
         // Text input is trusted (physically typed by the user at the device).
         currentSpeakerLabel = "owner"
