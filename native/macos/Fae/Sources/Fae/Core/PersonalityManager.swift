@@ -136,6 +136,11 @@ enum PersonalityManager {
           - "Enable/disable screen monitoring" → adjust awareness.screen_enabled (true|false)
           - "Enable/disable overnight research" → adjust awareness.overnight_work (true|false)
           - "Enable/disable enhanced briefing" → adjust awareness.enhanced_briefing (true|false)
+          - "Only listen to me" / "only respond to my voice" / "lock to my voice" → adjust \
+            voice_identity.enabled = true AND voice_identity.mode = "enforce"
+          - "Let anyone talk to you" / "don't restrict by voice" → adjust \
+            voice_identity.mode = "assist" (keeps recognition on but doesn't block others)
+          - "Disable voice identity" → adjust voice_identity.enabled = false
           - "Use safer tools" / "switch to assistant mode" → adjust tool_mode
             (assistant, full)
           - "Stay fully local" / "allow connected features" → adjust privacy.mode

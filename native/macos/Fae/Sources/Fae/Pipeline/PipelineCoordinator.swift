@@ -51,7 +51,7 @@ actor PipelineCoordinator {
     private let sttEngine: MLXSTTEngine
     private let llmEngine: any LLMEngine
     private let ttsEngine: any TTSEngine
-    private let config: FaeConfig
+    private var config: FaeConfig
     private let conversationState: ConversationStateTracker
     private let memoryOrchestrator: MemoryOrchestrator?
     private let sessionStore: SessionStore?
@@ -933,6 +933,15 @@ actor PipelineCoordinator {
 
     func setVoiceIdentityLock(_ enabled: Bool) {
         voiceIdentityLockLive = enabled
+    }
+
+    func setVoiceIdentityConfig(enabled: Bool, mode: String, approvalRequiresMatch: Bool) {
+        config.voiceIdentity.enabled = enabled
+        config.voiceIdentity.mode = mode
+        config.voiceIdentity.approvalRequiresMatch = approvalRequiresMatch
+        config.speaker.requireOwnerForTools = approvalRequiresMatch
+        NSLog("PipelineCoordinator: voice identity updated — enabled=%@ mode=%@ approvalMatch=%@",
+              enabled ? "true" : "false", mode, approvalRequiresMatch ? "true" : "false")
     }
 
     /// Switch the TTS voice live without restarting. No-op if TTS engine is not Kokoro.

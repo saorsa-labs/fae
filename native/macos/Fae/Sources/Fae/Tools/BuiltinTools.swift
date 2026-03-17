@@ -363,6 +363,18 @@ struct SelfConfigTool: Tool {
             valueType: .bool,
             description: "Pause proactive observations under high thermal pressure"
         ),
+        "voice_identity.enabled": SettingSpec(
+            valueType: .bool,
+            description: "Enable voice identity (speaker recognition)"
+        ),
+        "voice_identity.mode": SettingSpec(
+            valueType: .string(allowed: ["assist", "enforce"]),
+            description: "Voice identity mode: assist (informational) or enforce (block unknown speakers from tools)"
+        ),
+        "voice_identity.approval_requires_match": SettingSpec(
+            valueType: .bool,
+            description: "Require voice match for tool approval"
+        ),
     ]
 
     /// Patterns that indicate an attempt to bypass safety.
@@ -511,6 +523,9 @@ struct SelfConfigTool: Tool {
         lines.append("  awareness.consent_granted = \(config.awareness.consentGrantedAt != nil) — Explicit consent for camera/screen awareness")
         lines.append("  awareness.camera_enabled = \(config.awareness.cameraEnabled) — Camera awareness")
         lines.append("  awareness.screen_enabled = \(config.awareness.screenEnabled) — Screen awareness")
+        lines.append("  voice_identity.enabled = \(config.voiceIdentity.enabled) — Speaker recognition active")
+        lines.append("  voice_identity.mode = \(config.voiceIdentity.mode) — assist (informational) or enforce (block unknown speakers)")
+        lines.append("  voice_identity.approval_requires_match = \(config.voiceIdentity.approvalRequiresMatch) — Require voice match for tool approval")
         return lines.joined(separator: "\n")
     }
 }

@@ -1482,6 +1482,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.voiceIdentity.enabled = value
             FaeEnvironment.defaults.set(value, forKey: "voiceIdentityEnabled")
             persistConfig(reason: "config.patch.voice_identity.enabled")
+            syncVoiceIdentityToPipeline()
 
         case "voice_identity.mode":
             guard let value = value as? String,
@@ -1490,6 +1491,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.voiceIdentity.mode = value
             FaeEnvironment.defaults.set(value, forKey: "voiceIdentityMode")
             persistConfig(reason: "config.patch.voice_identity.mode")
+            syncVoiceIdentityToPipeline()
 
         case "voice_identity.approval_requires_match":
             guard let value = value as? Bool else { return }
@@ -1497,6 +1499,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.speaker.requireOwnerForTools = value
             FaeEnvironment.defaults.set(value, forKey: "voiceIdentityApprovalRequiresMatch")
             persistConfig(reason: "config.patch.voice_identity.approval_requires_match")
+            syncVoiceIdentityToPipeline()
 
         case "memory.enabled":
             guard let value = value as? Bool else { return }
@@ -2319,6 +2322,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 allowedSenders: config.channels.imessage.allowedSenders
             )
         )
+    }
+
+    /// Propagate current voice identity config to the live pipeline.
+    private func syncVoiceIdentityToPipeline() {
+        if let coordinator = pipelineCoordinator {
+            let vi = config.voiceIdentity
+            Task {
+                await coordinator.setVoiceIdentityConfig(
+                    enabled: vi.enabled,
+                    mode: vi.mode,
+                    approvalRequiresMatch: vi.approvalRequiresMatch
+                )
+            }
+        }
     }
 
     private func persistConfig(reason: String) {
