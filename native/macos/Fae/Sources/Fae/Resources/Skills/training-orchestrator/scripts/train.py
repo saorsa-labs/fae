@@ -57,9 +57,9 @@ def main():
     os.makedirs(adapter_dir, exist_ok=True)
     os.makedirs(run_dir, exist_ok=True)
 
-    sft_train = os.path.join(data_dir, "sft_train.jsonl")
-    if not os.path.exists(sft_train):
-        print(json.dumps({"error": "No training data found. Run export_data first.", "path": sft_train}))
+    train_file = os.path.join(data_dir, "train.jsonl")
+    if not os.path.exists(train_file):
+        print(json.dumps({"error": "No training data found. Run export_data first.", "path": train_file}))
         return
 
     cmd = [

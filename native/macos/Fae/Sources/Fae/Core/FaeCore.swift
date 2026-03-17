@@ -50,6 +50,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     private var config: FaeConfig
     private var schedulerObservers: [NSObjectProtocol] = []
+    private var channelSettingsObserver: NSObjectProtocol?
 
     init() {
         var loaded = FaeConfig.load()
@@ -133,6 +134,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 hasOwnerSetUp = true
             }
         }
+
+        observeChannelSettingsUpdates()
     }
 
     private static func isLowResidentMemoryProfileEnabled() -> Bool {
@@ -167,6 +170,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let wakeWordProfileStore: WakeWordProfileStore
     private var skillManagerRef: SkillManager?
     private var scheduler: FaeScheduler?
+    private var channelManager: ChannelManager?
     private var debugConsoleRef: DebugConsoleController?
     private var vaultManager: GitVaultManager?
 
@@ -449,6 +453,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: rescue mode — scheduler skipped")
                 }
 
+                await synchronizeChannelRuntime(reason: "startup")
+
                 // Warm up LLM — first MLX inference compiles Metal shaders.
                 // This can take 30–60s on cold start. Running warmup here, before
                 // the ready announcement, ensures Fae is actually responsive
@@ -526,6 +532,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
             if let vault = vaultManager {
                 _ = await vault.backup(reason: "pre-shutdown")
             }
+            await channelManager?.stop()
+            channelManager = nil
             await scheduler?.stop()
             scheduler = nil
             await pipelineCoordinator?.stop()
@@ -1515,6 +1523,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             guard let value = value as? Bool else { return }
             config.channels.enabled = value
             persistConfig(reason: "config.patch.channels.enabled")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.enabled")
 
         case "channels.discord.bot_token":
             let token = sanitizedString(value)
@@ -1522,15 +1531,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
             // Keep inline field cleared after migration to avoid plaintext secrets on disk.
             config.channels.discord.botToken = nil
             persistConfig(reason: "config.patch.channels.discord.bot_token")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.discord.bot_token")
 
         case "channels.discord.guild_id":
             config.channels.discord.guildId = sanitizedString(value)
             persistConfig(reason: "config.patch.channels.discord.guild_id")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.discord.guild_id")
 
         case "channels.discord.allowed_channel_ids":
             if let values = parseStringList(value) {
                 config.channels.discord.allowedChannelIds = values
                 persistConfig(reason: "config.patch.channels.discord.allowed_channel_ids")
+                enqueueChannelRuntimeRefresh(reason: "config.patch.channels.discord.allowed_channel_ids")
             }
 
         case "channels.whatsapp.access_token":
@@ -1538,21 +1550,76 @@ final class FaeCore: ObservableObject, HostCommandSender {
             updateChannelSecret(key: "channels.whatsapp.access_token", value: token)
             config.channels.whatsapp.accessToken = nil
             persistConfig(reason: "config.patch.channels.whatsapp.access_token")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.whatsapp.access_token")
 
         case "channels.whatsapp.phone_number_id":
             config.channels.whatsapp.phoneNumberId = sanitizedString(value)
             persistConfig(reason: "config.patch.channels.whatsapp.phone_number_id")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.whatsapp.phone_number_id")
 
         case "channels.whatsapp.verify_token":
             let token = sanitizedString(value)
             updateChannelSecret(key: "channels.whatsapp.verify_token", value: token)
             config.channels.whatsapp.verifyToken = nil
             persistConfig(reason: "config.patch.channels.whatsapp.verify_token")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.whatsapp.verify_token")
+
+        case "channels.whatsapp.app_secret":
+            let secret = sanitizedString(value)
+            updateChannelSecret(key: "channels.whatsapp.app_secret", value: secret)
+            config.channels.whatsapp.appSecret = nil
+            persistConfig(reason: "config.patch.channels.whatsapp.app_secret")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.whatsapp.app_secret")
 
         case "channels.whatsapp.allowed_numbers":
             if let values = parseStringList(value) {
                 config.channels.whatsapp.allowedNumbers = values
                 persistConfig(reason: "config.patch.channels.whatsapp.allowed_numbers")
+                enqueueChannelRuntimeRefresh(reason: "config.patch.channels.whatsapp.allowed_numbers")
+            }
+
+        case "channels.whatsapp.webhook_port":
+            let parsedPort: Int?
+            if let value = value as? Int {
+                parsedPort = value
+            } else if let value = value as? Double {
+                parsedPort = Int(value)
+            } else if let value = value as? String {
+                parsedPort = Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            } else {
+                parsedPort = nil
+            }
+            guard let parsedPort, (1...65_535).contains(parsedPort) else { return }
+            config.channels.whatsapp.webhookPort = UInt16(parsedPort)
+            persistConfig(reason: "config.patch.channels.whatsapp.webhook_port")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.whatsapp.webhook_port")
+
+        case "channels.imessage.enabled":
+            let parsedEnabled: Bool?
+            if let value = value as? Bool {
+                parsedEnabled = value
+            } else if let value = value as? String {
+                switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                case "1", "true", "yes", "on":
+                    parsedEnabled = true
+                case "0", "false", "no", "off":
+                    parsedEnabled = false
+                default:
+                    parsedEnabled = nil
+                }
+            } else {
+                parsedEnabled = nil
+            }
+            guard let parsedEnabled else { return }
+            config.channels.imessage.enabled = parsedEnabled
+            persistConfig(reason: "config.patch.channels.imessage.enabled")
+            enqueueChannelRuntimeRefresh(reason: "config.patch.channels.imessage.enabled")
+
+        case "channels.imessage.allowed_senders":
+            if let values = parseStringList(value) {
+                config.channels.imessage.allowedSenders = values
+                persistConfig(reason: "config.patch.channels.imessage.allowed_senders")
+                enqueueChannelRuntimeRefresh(reason: "config.patch.channels.imessage.allowed_senders")
             }
 
         case "llm.temperature":
@@ -2050,6 +2117,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         migrate(&config.channels.discord.botToken, key: "channels.discord.bot_token")
         migrate(&config.channels.whatsapp.accessToken, key: "channels.whatsapp.access_token")
         migrate(&config.channels.whatsapp.verifyToken, key: "channels.whatsapp.verify_token")
+        migrate(&config.channels.whatsapp.appSecret, key: "channels.whatsapp.app_secret")
 
         if migrated {
             NSLog("FaeCore: migrated legacy channel secrets to Keychain")
@@ -2205,6 +2273,43 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    private func buildChannelManagerConfig() -> ChannelManager.ChannelConfig {
+        let dc = config.channels.discord
+        let wa = config.channels.whatsapp
+
+        // Secrets may have been migrated to Keychain — fall back to Keychain
+        // when the inline config field is nil (normal post-migration state).
+        let discordToken = dc.botToken
+            ?? CredentialManager.retrieve(key: "channels.discord.bot_token")
+        let waAccessToken = wa.accessToken
+            ?? CredentialManager.retrieve(key: "channels.whatsapp.access_token")
+        let waVerifyToken = wa.verifyToken
+            ?? CredentialManager.retrieve(key: "channels.whatsapp.verify_token")
+        let waAppSecret = wa.appSecret
+            ?? CredentialManager.retrieve(key: "channels.whatsapp.app_secret")
+
+        return ChannelManager.ChannelConfig(
+            enabled: config.channels.enabled,
+            discord: .init(
+                botToken: discordToken,
+                guildId: dc.guildId,
+                allowedChannelIds: dc.allowedChannelIds
+            ),
+            whatsapp: .init(
+                accessToken: waAccessToken,
+                phoneNumberId: wa.phoneNumberId,
+                verifyToken: waVerifyToken,
+                appSecret: waAppSecret,
+                allowedNumbers: wa.allowedNumbers,
+                webhookPort: wa.webhookPort
+            ),
+            imessage: .init(
+                enabled: config.channels.imessage.enabled,
+                allowedSenders: config.channels.imessage.allowedSenders
+            )
+        )
+    }
+
     private func persistConfig(reason: String) {
         do {
             try config.save()
@@ -2340,11 +2445,93 @@ final class FaeCore: ObservableObject, HostCommandSender {
         schedulerObservers = [updateObserver, triggerObserver, toolModeObserver]
     }
 
+    private func observeChannelSettingsUpdates() {
+        guard channelSettingsObserver == nil else { return }
+        channelSettingsObserver = NotificationCenter.default.addObserver(
+            forName: .faeChannelSettingsChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let channelKey = notification.userInfo?["channel_key"] as? String ?? "unknown"
+            Task { @MainActor [weak self] in
+                await self?.synchronizeChannelRuntime(
+                    reason: "channel_settings_changed.\(channelKey)",
+                    reloadPersistedChannels: true
+                )
+            }
+        }
+    }
+
     deinit {
         schedulerObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        if let channelSettingsObserver {
+            NotificationCenter.default.removeObserver(channelSettingsObserver)
+        }
         if let enrollmentCompleteObserver {
             NotificationCenter.default.removeObserver(enrollmentCompleteObserver)
         }
+    }
+
+    private func enqueueChannelRuntimeRefresh(
+        reason: String,
+        reloadPersistedChannels: Bool = false
+    ) {
+        Task { @MainActor [weak self] in
+            await self?.synchronizeChannelRuntime(
+                reason: reason,
+                reloadPersistedChannels: reloadPersistedChannels
+            )
+        }
+    }
+
+    private func synchronizeChannelRuntime(
+        reason: String,
+        reloadPersistedChannels: Bool = false
+    ) async {
+        if reloadPersistedChannels {
+            config.channels = FaeConfig.load().channels
+        }
+
+        guard pipelineState == .running || pipelineState == .starting else { return }
+
+        var channelConfig = buildChannelManagerConfig()
+        let isRescue = rescueMode?.isActive ?? false
+        if isRescue {
+            channelConfig.enabled = false
+        }
+        let shouldRunChannels = channelConfig.enabled && Self.hasConfiguredChannelEndpoints(channelConfig)
+
+        if let channelManager {
+            await channelManager.updateConfig(channelConfig)
+            if !shouldRunChannels {
+                NSLog("FaeCore: channel runtime updated (%@) — adapters now inactive", reason)
+            }
+            return
+        }
+
+        guard shouldRunChannels else { return }
+        guard let coordinator = pipelineCoordinator else {
+            NSLog("FaeCore: channel runtime refresh skipped (%@) — coordinator unavailable", reason)
+            return
+        }
+
+        let channelManager = ChannelManager(eventBus: eventBus, config: channelConfig)
+        await channelManager.setResponseHandler { channel, sender, text in
+            return await coordinator.injectChannelText(channel: channel, sender: sender, text: text)
+        }
+        await channelManager.start()
+        self.channelManager = channelManager
+        NSLog("FaeCore: channel runtime started (%@)", reason)
+    }
+
+    private static func hasConfiguredChannelEndpoints(_ config: ChannelManager.ChannelConfig) -> Bool {
+        let discordReady = config.discord.botToken?.isEmpty == false
+        let whatsappReady = config.whatsapp.accessToken?.isEmpty == false
+            && config.whatsapp.phoneNumberId?.isEmpty == false
+            && config.whatsapp.verifyToken?.isEmpty == false
+        let imessageReady = config.imessage.enabled
+        return discordReady || whatsappReady || imessageReady
     }
 
     private func configGetResponse(key: String) -> [String: Any] {

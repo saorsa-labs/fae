@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": ["run_skill"],
+  "allowedDomains": [],
+  "dataClasses": [
+    "local_files",
+    "user_conversations"
+  ],
+  "riskTier": "medium",
+  "timeoutSeconds": 120,
+  "allowNetwork": false,
+  "allowSubprocess": false,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "5c63fda38858a1bef671be2e14d9c98cea9cb8840458a4c9dab57fc2ddc376ce",
+      "scripts/build_dataset.py": "50ef2dbeee9a8ec48d4fd0b9b393b6f813766b3de6c9628cad7702afc6c2180d",
+      "scripts/extract_corrections.py": "f69a2f4ec506bc64d628c505509ea2e8fb38f447df87d1305f944930f15bd802"
+    },
+    "signature": null
+  }
+}

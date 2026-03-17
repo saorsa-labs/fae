@@ -3,84 +3,60 @@
 # dependencies = []
 # ///
 
-"""Poll training progress."""
+"""Check whether personal model training appears to be in progress."""
 
 import json
 import os
 import sys
 
+RUN_STATE_PATH = os.path.expanduser("~/Library/Application Support/fae/training/run.json")
 
-def main():
-    params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
 
-    run_path = os.path.expanduser("~/Library/Application Support/fae/training/run.json")
-    if not os.path.exists(run_path):
-        print(json.dumps({"status": "no_run", "message": "No training run found."}))
+def _is_pid_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+
+
+def main() -> None:
+    params = {}
+    if len(sys.argv) > 1:
+        try:
+            payload = json.loads(sys.argv[1])
+            if isinstance(payload, dict):
+                params = payload.get("params", payload) if payload.get("params") else payload
+        except json.JSONDecodeError:
+            params = {}
+
+    run_state_path = os.path.expanduser(params.get("run_state_path", RUN_STATE_PATH))
+    if not os.path.exists(run_state_path):
+        print(json.dumps({"status": "idle", "running": False, "reason": "run_state_missing"}))
         return
 
-    with open(run_path) as f:
-        run_info = json.load(f)
+    try:
+        with open(run_state_path, "r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        print(json.dumps({"status": "unknown", "running": False, "reason": "invalid_run_state"}))
+        return
 
-    pid = run_info.get("pid")
-    adapter_path = run_info.get("adapter_path", "")
-    log_path = run_info.get("log_path", "")
-
-    running = False
-    if pid:
-        try:
-            os.kill(pid, 0)
-            running = True
-        except (ProcessLookupError, PermissionError):
-            running = False
-
-    latest_iter = None
-    latest_loss = None
-    if log_path and os.path.exists(log_path):
-        try:
-            with open(log_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("Iter "):
-                        parts = line.split(":")
-                        if parts:
-                            iter_part = parts[0].replace("Iter ", "").strip()
-                            try:
-                                latest_iter = int(iter_part)
-                            except ValueError:
-                                pass
-                        if "loss" in line.lower():
-                            for part in line.split(","):
-                                if "loss" in part.lower():
-                                    try:
-                                        latest_loss = float(part.split()[-1])
-                                    except (ValueError, IndexError):
-                                        pass
-        except OSError:
-            pass
-
-    adapter_exists = os.path.exists(os.path.join(adapter_path, "adapters.safetensors"))
-
-    if running:
-        status = "running"
-    elif adapter_exists:
-        status = "completed"
-    else:
-        status = "failed"
+    pid = state.get("pid")
+    running = isinstance(pid, int) and _is_pid_running(pid)
 
     result = {
-        "status": status,
+        "status": "running" if running else "not_running",
+        "running": running,
         "pid": pid,
-        "adapter_path": adapter_path,
-        "adapter_exists": adapter_exists,
+        "started_at": state.get("started_at"),
+        "adapter_path": state.get("adapter_path"),
+        "log_path": state.get("log_path"),
     }
-    if latest_iter is not None:
-        result["latest_iteration"] = latest_iter
-    if latest_loss is not None:
-        result["latest_loss"] = latest_loss
-    if run_info.get("model_id"):
-        result["model_id"] = run_info["model_id"]
-    if run_info.get("started_at"):
-        result["started_at"] = run_info["started_at"]
 
     print(json.dumps(result))
 

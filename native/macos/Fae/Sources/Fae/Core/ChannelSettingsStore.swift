@@ -66,7 +66,8 @@ enum ChannelSettingsStore {
             channelKey: channelKey,
             fieldID: field.id,
             store: field.store,
-            rawValue: rawValue
+            rawValue: rawValue,
+            notify: true
         )
     }
 
@@ -75,6 +76,22 @@ enum ChannelSettingsStore {
         fieldID: String,
         store: SkillSettingsStore,
         rawValue: Any
+    ) throws {
+        try setValue(
+            channelKey: channelKey,
+            fieldID: fieldID,
+            store: store,
+            rawValue: rawValue,
+            notify: true
+        )
+    }
+
+    private static func setValue(
+        channelKey: String,
+        fieldID: String,
+        store: SkillSettingsStore,
+        rawValue: Any,
+        notify: Bool
     ) throws {
         let normalizedChannel = normalizeChannelKey(channelKey)
         let normalizedField = normalizeFieldID(fieldID)
@@ -116,6 +133,10 @@ enum ChannelSettingsStore {
             store: store,
             value: serialized
         )
+
+        if notify {
+            postSettingsChanged(channelKey: normalizedChannel, fieldID: normalizedField)
+        }
     }
 
     static func clearValue(
@@ -135,13 +156,17 @@ enum ChannelSettingsStore {
         channelKey: String,
         fields: [SkillManager.ConfigurableFieldDescriptor]
     ) throws {
+        let normalizedChannel = normalizeChannelKey(channelKey)
         for field in fields {
-            try clearValue(
-                channelKey: channelKey,
+            try setValue(
+                channelKey: normalizedChannel,
                 fieldID: field.id,
-                store: field.store
+                store: field.store,
+                rawValue: "",
+                notify: false
             )
         }
+        postSettingsChanged(channelKey: normalizedChannel, fieldID: nil)
     }
 
     static func storageKey(channelKey: String, fieldID: String) -> String {
@@ -220,10 +245,22 @@ enum ChannelSettingsStore {
         case ("whatsapp", "verify_token"):
             return CredentialManager.retrieve(key: "channels.whatsapp.verify_token")
                 ?? config.channels.whatsapp.verifyToken
+        case ("whatsapp", "app_secret"):
+            return CredentialManager.retrieve(key: "channels.whatsapp.app_secret")
+                ?? config.channels.whatsapp.appSecret
         case ("whatsapp", "allowed_numbers"):
             return config.channels.whatsapp.allowedNumbers.isEmpty
                 ? nil
                 : config.channels.whatsapp.allowedNumbers.joined(separator: ",")
+        case ("whatsapp", "webhook_port"):
+            return String(config.channels.whatsapp.webhookPort)
+
+        case ("imessage", "enabled"):
+            return config.channels.imessage.enabled ? "true" : nil
+        case ("imessage", "allowed_senders"):
+            return config.channels.imessage.allowedSenders.isEmpty
+                ? nil
+                : config.channels.imessage.allowedSenders.joined(separator: ",")
 
         default:
             return nil
@@ -253,8 +290,19 @@ enum ChannelSettingsStore {
             config.channels.whatsapp.phoneNumberId = value
         case ("whatsapp", "verify_token", .secretStore):
             config.channels.whatsapp.verifyToken = nil
+        case ("whatsapp", "app_secret", .secretStore):
+            config.channels.whatsapp.appSecret = nil
         case ("whatsapp", "allowed_numbers", .configStore):
             config.channels.whatsapp.allowedNumbers = parseList(value)
+        case ("whatsapp", "webhook_port", .configStore):
+            if let port = parsePort(value) {
+                config.channels.whatsapp.webhookPort = port
+            }
+
+        case ("imessage", "enabled", .configStore):
+            config.channels.imessage.enabled = parseTruthy(value)
+        case ("imessage", "allowed_senders", .configStore):
+            config.channels.imessage.allowedSenders = parseList(value)
 
         default:
             didUpdate = false
@@ -271,4 +319,41 @@ enum ChannelSettingsStore {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
+
+    private static func parsePort(_ value: String?) -> UInt16? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let parsed = Int(trimmed),
+              (1...65_535).contains(parsed)
+        else {
+            return nil
+        }
+        return UInt16(parsed)
+    }
+
+    private static func parseTruthy(_ value: String?) -> Bool {
+        guard let normalized = value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !normalized.isEmpty
+        else {
+            return false
+        }
+        return ["1", "true", "yes", "on"].contains(normalized)
+    }
+
+    private static func postSettingsChanged(channelKey: String, fieldID: String?) {
+        var userInfo: [String: Any] = ["channel_key": channelKey]
+        if let fieldID {
+            userInfo["field_id"] = fieldID
+        }
+        NotificationCenter.default.post(
+            name: .faeChannelSettingsChanged,
+            object: nil,
+            userInfo: userInfo
+        )
+    }
+}
+
+extension Notification.Name {
+    static let faeChannelSettingsChanged = Notification.Name("faeChannelSettingsChanged")
 }

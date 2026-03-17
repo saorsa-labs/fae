@@ -30,7 +30,30 @@
     "key": "imessage",
     "display_name": "iMessage",
     "description": "Configure local iMessage integration for Fae",
-    "fields": [],
+    "fields": [
+      {
+        "id": "enabled",
+        "type": "bool",
+        "label": "Enable iMessage",
+        "required": true,
+        "prompt": "Should Fae enable local iMessage routing on this Mac?",
+        "placeholder": "true",
+        "help": "Set this to true to start polling Messages.app for inbound iMessages.",
+        "sensitive": false,
+        "store": "config_store"
+      },
+      {
+        "id": "allowed_senders",
+        "type": "text",
+        "label": "Allowed Senders",
+        "required": false,
+        "prompt": "Optionally list allowed iMessage senders or handles (comma-separated).",
+        "placeholder": "+441234567890, alice@icloud.com",
+        "help": "Leave blank to accept messages from any iMessage sender visible to this Mac.",
+        "sensitive": false,
+        "store": "config_store"
+      }
+    ],
     "actions": {
       "status": "status",
       "configure": "configure",

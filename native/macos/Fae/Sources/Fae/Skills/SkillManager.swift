@@ -505,9 +505,25 @@ actor SkillManager {
             try Self.validateScriptFileName(scriptName)
         }
 
+        // Security review on creation
+        let findings = SkillSecurityReviewer.review(
+            name: name,
+            description: description,
+            body: body,
+            sourceURL: nil
+        )
+        let criticalFindings = findings.filter { $0.severity == .critical }
+        if !criticalFindings.isEmpty {
+            let reasons = criticalFindings.map { $0.title }.joined(separator: ", ")
+            throw NSError(
+                domain: "SkillManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Skill blocked by security review: \(reasons)"]
+            )
+        }
+
         let skillDir = try Self.canonicalSkillDirectory(for: name)
         let fm = FileManager.default
-
         guard !fm.fileExists(atPath: skillDir.path) else {
             throw SkillError.alreadyExists(name)
         }
@@ -837,10 +853,26 @@ actor SkillManager {
                 continue
             }
 
+            let skillMdContent = (try? String(contentsOf: skillMd, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if skillMdContent?.isEmpty != false {
+                results[skill.name] = .broken("SKILL.md is empty")
+                continue
+            }
+
             if skill.type == .executable {
                 let scriptsDir = skill.directoryURL.appendingPathComponent("scripts")
-                if !fm.fileExists(atPath: scriptsDir.path) {
+                var isScriptsDir: ObjCBool = false
+                let scriptsDirExists = fm.fileExists(atPath: scriptsDir.path, isDirectory: &isScriptsDir)
+                if !scriptsDirExists || !isScriptsDir.boolValue {
                     results[skill.name] = .degraded("Missing scripts/ directory")
+                    continue
+                }
+
+                let pythonScripts = (try? fm.contentsOfDirectory(at: scriptsDir, includingPropertiesForKeys: nil))?
+                    .filter { $0.pathExtension == "py" } ?? []
+                if pythonScripts.isEmpty {
+                    results[skill.name] = .degraded("scripts/ has no .py files")
                     continue
                 }
 
@@ -855,7 +887,6 @@ actor SkillManager {
         }
         return results
     }
-
     // MARK: - Private Helpers
 
     private func scanDirectory(_ dir: URL, tier: SkillTier) -> [SkillMetadata] {

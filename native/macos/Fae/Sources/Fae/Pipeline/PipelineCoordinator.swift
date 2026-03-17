@@ -1029,6 +1029,8 @@ actor PipelineCoordinator {
     private var lastSleepHintAt: Date?
     /// Last assistant response text — used to detect echo (mic picking up speaker output).
     private var lastAssistantResponseText: String = ""
+    /// Final reply text captured for the active remote relay turn, when present.
+    private var relayReplyCaptureText: String?
 
     // MARK: - Barge-In
 
@@ -1451,6 +1453,80 @@ actor PipelineCoordinator {
             durationSecs: nil,
             turnSource: .text
         )
+    }
+
+    /// Inject text from a remote channel (Discord, WhatsApp, iMessage).
+    ///
+    /// Unlike `injectText`, this path does NOT grant owner trust: the speaker is
+    /// treated as a remote non-owner.  The generated assistant response text is
+    /// captured from conversation state and returned so the channel adapter can
+    /// send it back as a reply.
+    /// TTS playback is suppressed — the response is text-only for the remote user.
+    func injectChannelText(channel: String, sender: String, text: String) async -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let historyBefore = await conversationState.history
+        let assistantCountBefore = historyBefore.lazy.filter { $0.role == .assistant }.count
+
+        // Remote senders are explicitly non-owner.
+        currentSpeakerLabel = "channel:\(channel):\(sender)"
+        currentSpeakerDisplayName = sender
+        currentSpeakerRole = .guest
+        currentSpeakerIsOwner = false
+        currentSpeakerIsKnownNonOwner = true
+        relayReplyCaptureText = nil
+        defer { relayReplyCaptureText = nil }
+
+        await processTranscription(
+            text: trimmed,
+            rms: nil,
+            durationSecs: nil,
+            turnSource: .relay,
+            playsThinkingTone: false,
+            allowsAudibleOutput: false
+        )
+
+        let historyAfter = await conversationState.history
+        let assistantCountAfter = historyAfter.lazy.filter { $0.role == .assistant }.count
+        let lastAssistant = historyAfter.last(where: { $0.role == .assistant })?.content
+        return Self.resolveRelayReply(
+            capturedReply: relayReplyCaptureText,
+            assistantCountBefore: assistantCountBefore,
+            assistantCountAfter: assistantCountAfter,
+            assistantHistoryAfter: lastAssistant
+        )
+    }
+
+    static func resolveRelayReply(
+        capturedReply: String?,
+        assistantCountBefore: Int,
+        assistantCountAfter: Int,
+        assistantHistoryAfter: String?
+    ) -> String? {
+        if let capturedReply = capturedReply?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !capturedReply.isEmpty
+        {
+            return capturedReply
+        }
+
+        guard assistantCountAfter > assistantCountBefore,
+              let assistantHistoryAfter = assistantHistoryAfter?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !assistantHistoryAfter.isEmpty
+        else {
+            return nil
+        }
+
+        return assistantHistoryAfter
+    }
+
+    private func sendAssistantText(_ text: String, isFinal: Bool) {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isFinal, !cleaned.isEmpty {
+            relayReplyCaptureText = cleaned
+        }
+        eventBus.send(.assistantText(text: text, isFinal: isFinal))
     }
 
     /// Inject text from the desktop cowork surface.
@@ -3802,7 +3878,7 @@ actor PipelineCoordinator {
         if allowsAudibleOutput {
             await speakText(responseText, isFinal: true)
         } else {
-            eventBus.send(.assistantText(text: responseText, isFinal: true))
+            sendAssistantText(responseText, isFinal: true)
         }
         await conversationState.addAssistantMessage(responseText, tag: tag)
         await synchronizeLLMSession()
@@ -4400,7 +4476,7 @@ actor PipelineCoordinator {
             if proactiveContext == nil,
                let forgetReply = await memoryOrchestrator?.handleForgetCommandIfNeeded(userText: userText)
             {
-                eventBus.send(.assistantText(text: forgetReply, isFinal: true))
+                sendAssistantText(forgetReply, isFinal: true)
                 if allowsAudibleOutput {
                     await speakText(forgetReply, isFinal: true)
                 }
@@ -4419,7 +4495,7 @@ actor PipelineCoordinator {
             if proactiveContext == nil,
                let directRecallReply = await memoryOrchestrator?.handleDirectPersonalRecallIfNeeded(userText: userText)
             {
-                eventBus.send(.assistantText(text: directRecallReply, isFinal: true))
+                sendAssistantText(directRecallReply, isFinal: true)
                 if allowsAudibleOutput {
                     await speakText(directRecallReply, isFinal: true)
                 }
@@ -4459,7 +4535,7 @@ actor PipelineCoordinator {
                     "Blocked requested tool before generation: \(inferredToolCall.name) — \(preflightDenial)"
                 )
                 let msg = "I can't do that in the current mode: \(preflightDenial)"
-                eventBus.send(.assistantText(text: msg, isFinal: true))
+                sendAssistantText(msg, isFinal: true)
                 if allowsAudibleOutput {
                     await speakText(msg, isFinal: true)
                 }
@@ -4821,14 +4897,14 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .pipeline, "[suppressed non-prose TTS] \(String(cleaned.prefix(80)))")
                 // Still show in conversation UI, just don't speak it.
                 recordVisibleText(cleaned)
-                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                sendAssistantText(cleaned, isFinal: false)
                 return
             }
             // Suppress UI self-narration at any position (model describing its own interface).
             if TextProcessing.isUISelfNarration(cleaned) {
                 debugLog(debugConsole, .pipeline, "[suppressed UI self-narration] \(String(cleaned.prefix(80)))")
                 recordVisibleText(cleaned)
-                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                sendAssistantText(cleaned, isFinal: false)
                 return
             }
 
@@ -4844,7 +4920,7 @@ actor PipelineCoordinator {
             // turn completion so TTS receives larger coherent text context.
             if preferFinalOnlySpeech {
                 recordVisibleText(cleaned)
-                eventBus.send(.assistantText(text: cleaned, isFinal: false))
+                sendAssistantText(cleaned, isFinal: false)
                 deferredSentenceQueue.append(cleaned)
                 return
             }
@@ -4861,7 +4937,7 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "Stream chunk #\(streamingChunkCount) chars=\(cleaned.count) interval_ms=\(intervalMs)")
             NSLog("PipelineCoordinator: TTS chunk → \"%@\"", String(cleaned.prefix(120)))
             recordVisibleText(cleaned)
-            eventBus.send(.assistantText(text: cleaned, isFinal: false))
+            sendAssistantText(cleaned, isFinal: false)
             if generationContext.allowsAudibleOutput {
                 recordSpokenText(cleaned)
                 enqueueTTS(cleaned, isFinal: false, generationID: generationID)
@@ -4889,7 +4965,7 @@ actor PipelineCoordinator {
             if TextProcessing.looksLikeNonProse(cleaned) {
                 debugLog(debugConsole, .pipeline, "[suppressed non-prose roleplay TTS] \(String(cleaned.prefix(80)))")
                 recordVisibleText(cleaned)
-                eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
+                sendAssistantText(cleaned, isFinal: isFinal)
                 return
             }
 
@@ -4900,7 +4976,7 @@ actor PipelineCoordinator {
 
             let voice = await voiceInstruct(for: chunk.character)
             recordVisibleText(cleaned)
-            eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
+            sendAssistantText(cleaned, isFinal: isFinal)
             if generationContext.allowsAudibleOutput {
                 recordSpokenText(cleaned)
                 enqueueTTS(cleaned, isFinal: isFinal, voiceInstruct: voice, generationID: generationID)
@@ -5181,7 +5257,7 @@ actor PipelineCoordinator {
                !Self.shouldPreferInlineToolExecution(userText: userText, toolCalls: [repairCall])
             {
                 let ack = "I’ll check that in the background and report back as soon as it’s ready."
-                eventBus.send(.assistantText(text: ack, isFinal: true))
+                sendAssistantText(ack, isFinal: true)
                 if generationContext.allowsAudibleOutput {
                     enqueueTTS(ack, isFinal: true, generationID: generationID)
                 }
@@ -5231,7 +5307,7 @@ actor PipelineCoordinator {
             if !repairResult.isError {
                 if let directReply = Self.directToolReplyText(for: repairCall, result: repairResult)
                 {
-                    eventBus.send(.assistantText(text: directReply, isFinal: true))
+                    sendAssistantText(directReply, isFinal: true)
                     if generationContext.allowsAudibleOutput {
                         await speakText(directReply, isFinal: true, emitAssistantText: false)
                     }
@@ -5357,7 +5433,7 @@ actor PipelineCoordinator {
                         )
                     } else {
                         recordVisibleText(finalText)
-                        eventBus.send(.assistantText(text: finalText, isFinal: true))
+                        sendAssistantText(finalText, isFinal: true)
                     }
                 }
                 if shouldSpeak {
@@ -5408,7 +5484,7 @@ actor PipelineCoordinator {
                )
             {
                 debugLog(debugConsole, .pipeline, "Deterministic LLM failure fallback: \(llmFailureDescription)")
-                eventBus.send(.assistantText(text: fallback, isFinal: true))
+                sendAssistantText(fallback, isFinal: true)
                 if generationContext.allowsAudibleOutput {
                     recordSpokenText(fallback)
                     enqueueTTS(fallback, isFinal: true, generationID: generationID)
@@ -5589,7 +5665,7 @@ actor PipelineCoordinator {
                     }
                 }
 
-                eventBus.send(.assistantText(text: fallback, isFinal: true))
+                sendAssistantText(fallback, isFinal: true)
                 if generationContext.allowsAudibleOutput {
                     enqueueTTS(fallback, isFinal: true, generationID: generationID)
                 }
@@ -5714,7 +5790,7 @@ actor PipelineCoordinator {
             let assistantToolMessage = Self.stripThinkContent(fullResponse)
 
             let ack = "I’ll check that in the background and report back as soon as it’s ready."
-            eventBus.send(.assistantText(text: ack, isFinal: true))
+            sendAssistantText(ack, isFinal: true)
             if generationContext.allowsAudibleOutput {
                 enqueueTTS(ack, isFinal: true, generationID: generationID)
             }
@@ -5748,7 +5824,7 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .qa, "Exceeded max tool turns (\(maxToolTurns))")
             await conversationState.removeMessages(taggedWith: "tilldone_nudge")
             let msg = "I've used several tools but couldn't complete that. Could you try rephrasing?"
-            eventBus.send(.assistantText(text: msg, isFinal: true))
+            sendAssistantText(msg, isFinal: true)
             if generationContext.allowsAudibleOutput {
                 await speakText(msg, isFinal: true)
             }
@@ -5775,7 +5851,7 @@ actor PipelineCoordinator {
         {
             let filler = Self.toolCallAcknowledgement(for: toolCalls)
             if !filler.isEmpty {
-                eventBus.send(.assistantText(text: filler, isFinal: false))
+                sendAssistantText(filler, isFinal: false)
                 if generationContext.allowsAudibleOutput {
                     recordSpokenText(filler)
                     enqueueTTS(filler, isFinal: false, generationID: generationID)
@@ -5942,7 +6018,7 @@ actor PipelineCoordinator {
             await conversationState.removeMessages(taggedWith: "tilldone_nudge")
             let reason = firstToolError ?? "the tool call was denied or failed"
             let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
-            eventBus.send(.assistantText(text: msg, isFinal: true))
+            sendAssistantText(msg, isFinal: true)
             if generationContext.allowsAudibleOutput {
                 await speakText(msg, isFinal: true)
             }
@@ -5957,7 +6033,7 @@ actor PipelineCoordinator {
            toolCalls.count == 1,
            let directToolReply
         {
-            eventBus.send(.assistantText(text: directToolReply, isFinal: true))
+            sendAssistantText(directToolReply, isFinal: true)
             if generationContext.allowsAudibleOutput {
                 await speakText(directToolReply, isFinal: true, emitAssistantText: false)
             }
@@ -6127,7 +6203,7 @@ actor PipelineCoordinator {
 
         let cleaned = TextProcessing.stripNonSpeechChars(text)
         if emitAssistantText, !cleaned.isEmpty {
-            eventBus.send(.assistantText(text: cleaned, isFinal: isFinal))
+            sendAssistantText(cleaned, isFinal: isFinal)
         }
 
         // Use cleaned text for TTS — stripping self-introductions, markup, etc.
@@ -7623,7 +7699,7 @@ actor PipelineCoordinator {
         if toolFailureCount > 0 && toolSuccessCount == 0 {
             let reason = firstToolError ?? "the tool call was denied or failed"
             let msg = "I couldn't complete that background check because the required tool didn't run: \(reason)"
-            eventBus.send(.assistantText(text: msg, isFinal: true))
+            sendAssistantText(msg, isFinal: true)
             if job.generationContext.allowsAudibleOutput {
                 await speakText(msg, isFinal: true)
             }
@@ -7655,7 +7731,7 @@ actor PipelineCoordinator {
         }
 
         if let directToolReply {
-            eventBus.send(.assistantText(text: directToolReply, isFinal: true))
+            sendAssistantText(directToolReply, isFinal: true)
             if job.generationContext.allowsAudibleOutput {
                 await speakText(directToolReply, isFinal: true, emitAssistantText: false)
             }

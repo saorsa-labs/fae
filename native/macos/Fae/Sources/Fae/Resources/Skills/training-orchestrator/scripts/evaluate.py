@@ -30,7 +30,7 @@ def main():
         print(json.dumps({"error": "Adapter file not found.", "path": adapter_file}))
         return
 
-    val_path = os.path.expanduser("~/Library/Application Support/fae/training/data/sft_val.jsonl")
+    val_path = os.path.expanduser("~/Library/Application Support/fae/training/data/valid.jsonl")
     val_count = 0
     if os.path.exists(val_path):
         with open(val_path) as f:

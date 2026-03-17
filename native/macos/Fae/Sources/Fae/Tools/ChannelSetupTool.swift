@@ -271,7 +271,7 @@ struct ChannelSetupTool: Tool {
     }
 
     private func normalizedPersistedValue(fieldID: String, value: Any) -> Any {
-        if fieldID == "allowedchannelids" || fieldID == "allowednumbers" {
+        if fieldID == "allowedchannelids" || fieldID == "allowednumbers" || fieldID == "allowedsenders" {
             if let list = value as? [String] {
                 return list
             }
@@ -280,6 +280,23 @@ struct ChannelSetupTool: Tool {
                     .split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
+            }
+        }
+
+        if fieldID == "enabled" {
+            if let boolValue = value as? Bool {
+                return boolValue ? "true" : ""
+            }
+            if let stringValue = value as? String {
+                let normalized = stringValue
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                if ["1", "true", "yes", "on"].contains(normalized) {
+                    return "true"
+                }
+                if ["0", "false", "no", "off"].contains(normalized) {
+                    return ""
+                }
             }
         }
 

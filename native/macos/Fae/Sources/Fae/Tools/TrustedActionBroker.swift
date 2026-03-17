@@ -120,6 +120,7 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         // Training orchestration tasks.
         "training_data_export": ["activate_skill", "run_skill"],
         "training_cycle": ["activate_skill", "run_skill"],
+        "acp_session_monitor": ["agent_session", "activate_skill"],
     ]
 
     /// Tools that scheduler tasks can NEVER use regardless of allowlist.
@@ -134,6 +135,7 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "session_search", "web_search", "fetch_url", "input_request",
         "activate_skill", "run_skill", "manage_skill",
         "delegate_agent",
+        "agent_session",
         "channel_setup",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
@@ -143,6 +145,8 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "click", "type_text", "scroll", "find_element",
         // Voice identity.
         "voice_identity",
+        // TillDone and window control.
+        "till_done", "window_control",
     ]
 
     /// Medium-risk tools that should still confirm when user intent is ambiguous.

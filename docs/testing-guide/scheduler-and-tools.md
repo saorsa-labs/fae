@@ -94,7 +94,7 @@ Implementation in `SchedulerTriggerTool`:
 
 ### Tool Inventory
 
-**Total: 35 tools**
+**Total: 36 tools**
 
 Breakdown by category:
 
@@ -102,7 +102,7 @@ Breakdown by category:
 |----------|-------|-------|
 | Core | 10 | read, write, edit, bash, self_config, channel_setup, window_control, session_search, web_search, fetch_url |
 | Skills | 3 | activate_skill, run_skill, manage_skill |
-| Delegation | 1 | delegate_agent |
+| Delegation | 2 | delegate_agent, agent_session |
 | User Input | 1 | input_request |
 | Apple | 5 | calendar, reminders, contacts, mail, notes |
 | Scheduler | 5 | scheduler_list, scheduler_create, scheduler_update, scheduler_delete, scheduler_trigger |
@@ -110,7 +110,7 @@ Breakdown by category:
 | Vision | 7 | screenshot, camera, read_screen, click, type_text, scroll, find_element |
 | Voice Identity | 1 | voice_identity |
 | Task Tracking | 1 | till_done |
-| **Total** | **35** | |
+| **Total** | **36** | |
 
 ### Tool Modes & Filtering
 
@@ -118,8 +118,8 @@ The registry supports 5 permission modes:
 
 | Mode | Read Tools | Write Tools | Scheduler Mutation | Vision | Bash | Notes |
 |------|-----------|-----------|------------------|--------|------|-------|
-| `assistant` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations |
-| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups |
+| `assistant` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations (17 tools) |
+| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups (36 tools) |
 
 Legacy modes (`off`, `read_only`, `read_write`, `full`) are silently migrated.
 
@@ -134,9 +134,9 @@ scheduler_list, roleplay, activate_skill, input_request, find_element, voice_ide
 
 ### Write Tool Set
 
-**18 additional tools** (requires `full` mode):
+**19 additional tools** (requires `full` mode):
 ```
-write, edit, bash, self_config, channel_setup, delegate_agent,
+write, edit, bash, self_config, channel_setup, delegate_agent, agent_session,
 scheduler_create, scheduler_update, scheduler_delete, scheduler_trigger,
 manage_skill, run_skill,
 screenshot, camera, read_screen, click, type_text, scroll
@@ -150,10 +150,10 @@ screenshot, camera, read_screen, click, type_text, scroll
 
 ### Testing Checklist
 
-- [ ] **Tool Count**: Verify 35 tools are registered: `ToolRegistry.buildDefault().allTools.count == 35`
+- [ ] **Tool Count**: Verify 36 tools are registered: `ToolRegistry.buildDefault().allTools.count == 36`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
   - `assistant`: 17 tools (no write, no bash)
-  - `full`: 35 tools
+  - `full`: 36 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels
@@ -821,9 +821,9 @@ func testBrokerConfirmsHighRiskTool() async {
 ## Summary
 
 The Fae scheduler and tool system is highly testable with:
-- ✅ 31 clearly defined tools with risk levels
+- ✅ 36 clearly defined tools with risk levels
 - ✅ 2 tool modes with deterministic filtering (assistant, full)
-- ✅ 17 scheduler tasks with clear execution paths
+- ✅ 19 scheduler tasks with clear execution paths
 - ✅ Central broker policy that's easy to mock
 - ✅ Approval UI that can be tested via notifications
 - ✅ Permission system that's agnostic to real system dialogs

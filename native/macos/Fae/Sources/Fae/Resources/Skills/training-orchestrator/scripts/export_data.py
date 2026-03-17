@@ -3,150 +3,166 @@
 # dependencies = []
 # ///
 
-"""Export Fae conversation episodes to SFT/DPO training format."""
+"""Export active episode records from fae.db into SFT JSONL format."""
 
 import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 
 
-def main():
-    params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+DEFAULT_DB_PATH = os.path.expanduser("~/Library/Application Support/fae/fae.db")
+DEFAULT_OUTPUT_DIR = os.path.expanduser("~/Library/Application Support/fae/training/data")
 
-    db_path = os.path.expanduser("~/Library/Application Support/fae/fae.db")
-    soul_path = os.path.expanduser("~/Library/Application Support/fae/soul.md")
-    output_dir = os.path.expanduser("~/Library/Application Support/fae/training/data")
-    last_export = params.get("last_export_timestamp", None)
+
+def _load_request() -> dict:
+    """Load JSON-RPC request payload from argv[1] when provided."""
+    if len(sys.argv) < 2:
+        return {"jsonrpc": "2.0", "id": None, "params": {}}
+
+    try:
+        request = json.loads(sys.argv[1])
+    except json.JSONDecodeError:
+        return {"jsonrpc": "2.0", "id": None, "params": {}}
+
+    if isinstance(request, dict):
+        request.setdefault("jsonrpc", "2.0")
+        request.setdefault("params", {})
+        return request
+
+    return {"jsonrpc": "2.0", "id": None, "params": {}}
+
+
+def _extract_sft_message(content: str) -> tuple[str, str] | None:
+    """Best-effort conversion from episode text to user+assistant pair."""
+    marker = "\nAssistant: "
+    if marker not in content:
+        return None
+
+    user_part, assistant_part = content.split(marker, 1)
+    user_text = user_part.strip()
+    if user_text.startswith("User: "):
+        user_text = user_text[6:].strip()
+
+    assistant_text = assistant_part.strip()
+    if not user_text or not assistant_text:
+        return None
+
+    return (user_text, assistant_text)
+
+
+def _json_rpc_success(request_id, result: dict) -> None:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": result,
+    }
+    print(json.dumps(payload))
+
+
+def _json_rpc_error(request_id, code: int, message: str, data: dict | None = None) -> None:
+    error = {
+        "code": code,
+        "message": message,
+    }
+    if data:
+        error["data"] = data
+    payload = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": error,
+    }
+    print(json.dumps(payload))
+
+
+def main() -> None:
+    request = _load_request()
+    request_id = request.get("id")
+    params = request.get("params") or {}
+
+    db_path = os.path.expanduser(params.get("db_path", DEFAULT_DB_PATH))
+    output_dir = os.path.expanduser(params.get("output_dir", DEFAULT_OUTPUT_DIR))
+    after_timestamp = params.get("after_timestamp")
 
     if not os.path.exists(db_path):
-        print(json.dumps({"error": "Database not found", "path": db_path}))
+        _json_rpc_error(request_id, -32001, "Database not found", {"db_path": db_path})
         return
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Read system prompt from soul.md
-    system_prompt = "You are Fae, a thoughtful voice-first AI assistant."
-    if os.path.exists(soul_path):
-        with open(soul_path, "r") as f:
-            system_prompt = f.read().strip()[:2000]
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
     query = """
-        SELECT id, content, created_at, metadata
+        SELECT id, content, created_at
         FROM memory_records
         WHERE kind = 'episode' AND status = 'active'
     """
-    query_params = []
-    if last_export:
+    query_params: list[str] = []
+    if isinstance(after_timestamp, str) and after_timestamp.strip():
         query += " AND created_at > ?"
-        query_params.append(last_export)
+        query_params.append(after_timestamp.strip())
     query += " ORDER BY created_at ASC"
 
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     rows = conn.execute(query, query_params).fetchall()
     conn.close()
 
-    if not rows:
-        print(json.dumps({"status": "no_new_data", "record_count": 0}))
-        return
-
-    sft_records = []
-    dpo_records = []
-    all_episodes = []
+    system_prompt = "You are Fae, a thoughtful voice-first AI assistant."
+    records = []
+    last_created_at = None
 
     for row in rows:
-        content = row["content"]
-        created_at = row["created_at"]
-
-        if "\nAssistant: " not in content:
+        parsed = _extract_sft_message(row["content"])
+        if parsed is None:
             continue
 
-        parts = content.split("\nAssistant: ", 1)
-        if len(parts) != 2:
-            continue
+        user_text, assistant_text = parsed
+        records.append(
+            {
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": assistant_text},
+                ],
+                "metadata": {
+                    "episode_id": row["id"],
+                    "created_at": row["created_at"],
+                },
+            }
+        )
+        last_created_at = row["created_at"]
 
-        user_text = parts[0]
-        if user_text.startswith("User: "):
-            user_text = user_text[6:]
+    # Split 80/20 into train/valid for mlx_lm.lora compatibility.
+    split_idx = max(1, int(len(records) * 0.8)) if len(records) > 1 else len(records)
+    train_records = records[:split_idx]
+    valid_records = records[split_idx:]
 
-        assistant_text = parts[1].strip()
+    train_path = os.path.join(output_dir, "train.jsonl")
+    valid_path = os.path.join(output_dir, "valid.jsonl")
 
-        if not user_text.strip() or not assistant_text.strip():
-            continue
+    with open(train_path, "w", encoding="utf-8") as handle:
+        for record in train_records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-        episode = {
-            "id": row["id"],
-            "user": user_text.strip(),
-            "assistant": assistant_text,
-            "created_at": created_at,
-        }
-        all_episodes.append(episode)
+    with open(valid_path, "w", encoding="utf-8") as handle:
+        for record in valid_records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-        sft_records.append({
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": episode["user"]},
-                {"role": "assistant", "content": episode["assistant"]},
-            ]
-        })
-
-    # Extract DPO pairs from correction patterns
-    correction_markers = [
-        "no,", "no ", "actually", "i meant", "too long", "that's wrong",
-        "not what i", "try again", "instead,", "correction:",
-    ]
-
-    for i in range(1, len(all_episodes)):
-        prev = all_episodes[i - 1]
-        curr = all_episodes[i]
-        user_lower = curr["user"].lower().strip()
-
-        is_correction = any(user_lower.startswith(m) for m in correction_markers)
-        if is_correction and prev["user"].strip():
-            dpo_records.append({
-                "prompt": prev["user"],
-                "chosen": curr["assistant"],
-                "rejected": prev["assistant"],
-            })
-
-    # Split 90/10
-    split_idx = max(1, int(len(sft_records) * 0.9))
-    sft_train = sft_records[:split_idx]
-    sft_val = sft_records[split_idx:]
-
-    def write_jsonl(path, records):
-        with open(path, "w") as f:
-            for r in records:
-                f.write(json.dumps(r) + "\n")
-
-    write_jsonl(os.path.join(output_dir, "sft_train.jsonl"), sft_train)
-    write_jsonl(os.path.join(output_dir, "sft_val.jsonl"), sft_val)
-    if dpo_records:
-        dpo_split = max(1, int(len(dpo_records) * 0.9))
-        write_jsonl(os.path.join(output_dir, "dpo_train.jsonl"), dpo_records[:dpo_split])
-        write_jsonl(os.path.join(output_dir, "dpo_val.jsonl"), dpo_records[dpo_split:])
-
-    meta = {
-        "exported_at": rows[-1]["created_at"] if rows else None,
-        "total_episodes": len(all_episodes),
-        "sft_train_count": len(sft_train),
-        "sft_val_count": len(sft_val),
-        "dpo_count": len(dpo_records),
-        "output_dir": output_dir,
-    }
-    with open(os.path.join(output_dir, "meta.json"), "w") as f:
-        json.dump(meta, f, indent=2)
-
-    print(json.dumps({
-        "status": "success",
-        "record_count": len(all_episodes),
-        "sft_train": len(sft_train),
-        "sft_val": len(sft_val),
-        "dpo_pairs": len(dpo_records),
-        "output_dir": output_dir,
-    }))
+    _json_rpc_success(
+        request_id,
+        {
+            "status": "ok",
+            "exported_episodes": len(records),
+            "train_count": len(train_records),
+            "valid_count": len(valid_records),
+            "train_path": train_path,
+            "valid_path": valid_path,
+            "source_db": db_path,
+            "after_timestamp": after_timestamp,
+            "last_exported_created_at": last_created_at,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 if __name__ == "__main__":

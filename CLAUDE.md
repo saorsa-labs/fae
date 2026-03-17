@@ -233,13 +233,13 @@ Implementation: `Scheduler/FaeScheduler.swift`
 
 ## Tool system
 
-Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. Full inventory (31 tools):
+Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. Full inventory (36 tools):
 
 | Category | Tools |
 |----------|-------|
-| Core | `read`, `write`, `edit`, `bash`, `self_config` |
-| Web | `web_search` (DuckDuckGo HTML), `fetch_url` (with content extraction) |
+| Core | `read`, `write`, `edit`, `bash`, `self_config`, `channel_setup`, `window_control`, `session_search`, `web_search`, `fetch_url` |
 | Skills | `activate_skill` (load skill instructions), `run_skill` (execute Python), `manage_skill` (create/update/delete/list) |
+| Delegation | `delegate_agent` (one-shot agent task), `agent_session` (multi-turn ACP sessions with external coding agents) |
 | Apple | `calendar`, `reminders`, `contacts`, `mail`, `notes` |
 | Scheduler | `scheduler_list`, `scheduler_create`, `scheduler_update`, `scheduler_delete`, `scheduler_trigger` |
 | Vision | `screenshot` (screen capture → VLM), `camera` (webcam capture → VLM), `read_screen` (screenshot + accessibility tree) |
@@ -247,6 +247,7 @@ Tools are registered dynamically in `ToolRegistry.buildDefault(skillManager:)`. 
 | Voice Identity | `voice_identity` (enroll speakers, verify identity, manage profiles — beep-guided capture) |
 | Roleplay | `roleplay` (multi-voice reading sessions) |
 | Input | `input_request` (prompt user for text/password; 120s timeout) |
+| Task Tracking | `till_done` (task-driven work with hard gating) |
 
 Skills use **progressive disclosure**: the LLM sees skill names + short descriptions (~50-100 tokens each)
 in the system prompt. Full SKILL.md body is loaded only when the LLM activates a skill via `activate_skill`.
@@ -377,6 +378,68 @@ Implementation files:
 `WebSearchTool` POSTs to `https://html.duckduckgo.com/html/` and parses result blocks from the HTML response. Extracts titles from `result__a` links, snippets from `result__snippet` divs, and unwraps DDG redirect URLs (`uddg` parameter). Returns up to 5 results by default.
 
 `FetchURLTool` fetches any URL and extracts main content by stripping boilerplate HTML tags (script, style, nav, footer, header, aside), extracting from `<article>`, `<main>`, or `<body>` in priority order, and normalizing whitespace. Maximum 100K chars output.
+
+## ACP integration (Agent Client Protocol)
+
+Fae delegates coding tasks to external agents (Claude Code, Codex, Gemini, etc.) via the Agent Client Protocol. The `agent_session` tool manages multi-turn sessions with external agents via `acpx`.
+
+**Architecture**: `ACPSessionManager` (actor) spawns `acpx` as a subprocess, communicates via JSON-RPC 2.0 over stdin/stdout (NDJSON events), and tracks session lifecycle.
+
+**acpx discovery** (in order): Bundle resources, `/usr/local/bin/`, `~/.npm/bin/`, `~/.bun/bin/`, `~/.local/bin/`, PATH lookup. The `acp-setup` built-in skill handles installation.
+
+**Session limits**: max 5 concurrent sessions (enforced by `ACPSessionManager.maxConcurrentSessions`).
+
+**Security**: `agent_session` is `.high` risk, requires approval. `SensitiveContentPolicy` blocks delegation of prompts containing sensitive content. `TrustedActionBroker` has explicit rules for both `agent_session` and `delegate_agent`.
+
+Implementation files: `Tools/ACPProtocol.swift`, `Tools/ACPSessionManager.swift`, `Tools/AgentSessionTool.swift`.
+
+## Channel adapters (Discord, WhatsApp, iMessage)
+
+Fae can receive and reply to messages from remote channels. All three adapters are wired through `ChannelManager` which is started by `FaeCore` when `config.channels.enabled = true`.
+
+**Security model**: Remote channel senders are treated as **non-owner guests** — `injectChannelText()` sets `currentSpeakerRole = .guest`, `currentSpeakerIsOwner = false`, `currentSpeakerIsKnownNonOwner = true`. This prevents remote users from inheriting local-owner trust or bypassing approval policies. TTS playback is suppressed; responses are text-only.
+
+**Credential storage**: Channel secrets (Discord bot token, WhatsApp access token, verify token, app secret) are stored in macOS Keychain via `CredentialManager`. `buildChannelManagerConfig()` falls back to Keychain when inline config fields are nil (normal post-migration state).
+
+| Adapter | Transport | Auth | Message limit |
+|---------|-----------|------|---------------|
+| `DiscordAdapter` | WebSocket Gateway + REST | Bot token | 2000 chars (auto-split) |
+| `WhatsAppAdapter` | NWListener HTTP webhook + Graph API | Verify token + HMAC-SHA256 (`appSecret`) | 4096 chars (auto-split) |
+| `IMessageAdapter` | SQLite polling (`chat.db`) + AppleScript send | Full Disk Access | No limit |
+
+**iMessage echo prevention**: `fetchMessages` SQL includes `AND m.is_from_me = 0` to filter out Fae's own replies.
+
+**Discord rate limiting**: REST 429 responses trigger retry with `Retry-After` header (up to 3 retries).
+
+Config: `[channels]`, `[channels.discord]`, `[channels.whatsapp]`, `[channels.imessage]` sections in config.toml.
+
+Implementation files: `Channels/ChannelManager.swift`, `Channels/DiscordAdapter.swift`, `Channels/WhatsAppAdapter.swift`, `Channels/iMessageAdapter.swift`.
+
+## Training pipeline (self-improvement)
+
+Fae can fine-tune personal LoRA adapters from her own conversation history. Two built-in skills form the pipeline:
+
+**training-data-bridge**: Extracts training data from `fae.db` — weighted SFT examples (interest-boosted), DPO correction pairs (explicit rephrase, "no I meant", silent abandonment).
+
+**training-orchestrator**: End-to-end pipeline: `export_data` (80/20 train/valid split as `train.jsonl`/`valid.jsonl` for `mlx_lm.lora`) → `train` (LoRA with smoke/light/standard/deep presets) → `evaluate` (loss-to-score) → `propose` (natural language upgrade proposal with train/valid counts) → `deploy` (user approval required) → `rollback` (if needed).
+
+**Safety**: Training data never leaves the Mac. New models must score >= current. User must explicitly approve switches. Previous checkpoints preserved.
+
+### Skill manifest hardening contract
+
+All executable built-in skills MUST follow the hardened manifest schema:
+- `schemaVersion: 1`
+- `capabilities: ["execute"]`
+- `allowedTools` MUST include `"run_skill"`
+- `integrity.checksums` MUST contain SHA-256 hex digests for every file (SKILL.md + all scripts)
+- `allowNetwork` / `allowSubprocess` must accurately reflect script behavior
+- Old-format manifests (`capabilities: ["process","network"]`, `files:` key) are invalid and will be disabled by `SkillManager.validateManifest()`
+
+When modifying any built-in skill script, recompute checksums:
+```bash
+cd native/macos/Fae/Sources/Fae/Resources/Skills/<skill-name>
+for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d' ' -f1)\""; done
+```
 
 ## Roleplay reading (multi-voice TTS)
 
@@ -631,6 +694,10 @@ Implementation files:
 | `forge` | Executable | 4 (init, build, test, release) | Tool creation workshop — scaffold, compile, test, and release Zig/Python tools |
 | `toolbox` | Executable | 5 (list, install, search, verify, uninstall) | Local tool registry — manage installed forge-built tools |
 | `mesh` | Executable | 5 (discover, serve, publish, fetch, trust) | Peer discovery and tool sharing — Fae-to-Fae tool exchange |
+| `acp-setup` | Executable | 2 (install, status) | Install and manage acpx for ACP agent delegation |
+| `training-orchestrator` | Executable | 7 (export_data, train, evaluate, propose, check_status, deploy, rollback) | Personal model training pipeline — LoRA fine-tuning from conversations |
+| `training-data-bridge` | Executable | 2 (build_dataset, extract_corrections) | Extract weighted SFT examples and DPO correction pairs from memory |
+| `huggingface-scout` | Executable | 4 (search_models, search_datasets, check_new_releases, evaluate_candidate) | Search HuggingFace Hub for models, datasets, and training resources |
 
 ### Forge skill (tool creation)
 
@@ -1523,3 +1590,15 @@ Key metrics: T/s at voice context, thinking suppression compliance, idle RAM, an
   - **CoWork approval dialog positioning**: `AuxiliaryWindowManager.showApproval(anchor:)` now centers the panel over large windows (height > 400pt) instead of floating off the top edge. Added `clampToScreenFrame(_:screen:)` overload that accepts an explicit `NSScreen` — uses the anchor window's screen rather than the orb window's screen, fixing multi-monitor misplacement.
   - **`FaeLocalRuntimeServer.awaitOutcome()` fix**: no longer bails out immediately when an approval dialog appears. Keeps polling (120s deadline) until the turn completes after the user approves or denies. Only reports `.pendingApproval` if the deadline expires with approval still pending.
   - **Camera tool fix**: replaced `AVCapturePhotoOutput` with `AVCaptureVideoDataOutput` in `CameraFrameCapture`. The original implementation triggered an ObjC runtime crash (`NSKVONotifying_AVCapturePhotoOutput not linked into application`) because `AVCapturePhotoOutput`'s KVO proxy class is not resolved in the macOS app context. The new implementation captures the first video frame via `AVCaptureVideoDataOutputSampleBufferDelegate`, converting `CMSampleBuffer → CVPixelBuffer → CGImage` via `CIContext`.
+- **v1.4.2** — ACP integration, channel adapters, training pipeline, skill hardening
+  - **ACP agent sessions**: `ACPSessionManager` (actor) + `ACPProtocol` (JSON-RPC 2.0/NDJSON parser) + `AgentSessionTool` (36th tool). Max 5 concurrent sessions enforced. acpx discovery: bundle, `/usr/local/bin`, `~/.npm/bin`, `~/.bun/bin`, `~/.local/bin`, PATH. `acp-setup` built-in skill handles installation.
+  - **Channel adapters wired into runtime**: `ChannelManager` started by `FaeCore` with Discord, WhatsApp, iMessage adapters. Remote senders treated as `.guest` (non-owner) via `injectChannelText()` — no owner trust escalation. Responses returned as text to adapters (no local TTS). Credentials loaded from Keychain post-migration.
+  - **Discord hardening**: 2000-char message splitting on newline boundaries, 429 rate limit retry (up to 3 attempts with `Retry-After`), heartbeat jitter.
+  - **WhatsApp hardening**: 4096-char message splitting, HMAC-SHA256 webhook signature verification (`X-Hub-Signature-256` + `appSecret`), connection timeout on webhook listener.
+  - **iMessage hardening**: `is_from_me = 0` filter prevents echo loops, Full Disk Access error guidance, AppleScript 10s timeout.
+  - **Training pipeline**: `export_data.py` produces `train.jsonl`/`valid.jsonl` (80/20 split) matching `mlx_lm.lora` expectations. `train.py`, `evaluate.py`, `propose.py` updated for consistent field names (`train_count`/`valid_count`). Pipeline is end-to-end coherent.
+  - **Skill manifest hardening**: All executable built-in skills migrated to `schemaVersion: 1` with `capabilities: ["execute"]`, `allowedTools: ["run_skill"]`, SHA-256 `integrity.checksums`. Old-format manifests (`files:` key, `process`/`network` capabilities) are rejected by `SkillManager.validateManifest()`. Fixed: `acp-setup`, `training-orchestrator`, `training-data-bridge`, `huggingface-scout`.
+  - **TrustedActionBroker**: `till_done` and `window_control` added to `explicitRuleTools`. `agent_session` added to `explicitRuleTools` and `strictLocalDeniedTools`.
+  - **FaeConfig**: `channels.imessage` section (enabled, allowedSenders) with full TOML parse/serialize. `channels.whatsapp.appSecret` and `webhookPort` persisted.
+  - **Docs contract**: `docs/testing-guide/scheduler-and-tools.md` updated for 36 tools, 19 scheduler tasks, delegation category includes `agent_session`.
+  - Total: 36 tools (was 35), 19 built-in skills (was 14)

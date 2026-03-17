@@ -267,6 +267,40 @@ final class SettingsCapabilityManifestTests: XCTestCase {
         XCTAssertFalse(progressive?.missingFields.contains("nickname") ?? true)
     }
 
+    func testBuiltInIMessageManifestRequiresEnablementBeforeConfigured() async throws {
+        let manager = SkillManager()
+        var config = FaeConfig()
+        config.channels.enabled = true
+        config.channels.imessage.enabled = false
+
+        let manifest = await SettingsCapabilityManifestBuilder.build(config: config, skillManager: manager)
+        let imessage = manifest.channels.first(where: {
+            $0.key == "imessage" && $0.skillName == "channel-imessage"
+        })
+
+        XCTAssertNotNil(imessage)
+        XCTAssertEqual(imessage?.state, .missingInput)
+        XCTAssertEqual(imessage?.requiredFields, ["enabled"])
+        XCTAssertEqual(imessage?.missingFields, ["enabled"])
+    }
+
+    func testBuiltInIMessageManifestConfiguredWhenEnabled() async throws {
+        let manager = SkillManager()
+        var config = FaeConfig()
+        config.channels.enabled = true
+        config.channels.imessage.enabled = true
+        config.channels.imessage.allowedSenders = ["alice@icloud.com"]
+
+        let manifest = await SettingsCapabilityManifestBuilder.build(config: config, skillManager: manager)
+        let imessage = manifest.channels.first(where: {
+            $0.key == "imessage" && $0.skillName == "channel-imessage"
+        })
+
+        XCTAssertNotNil(imessage)
+        XCTAssertEqual(imessage?.state, .configured)
+        XCTAssertEqual(imessage?.missingFields, [])
+    }
+
     private func createChannelSkill(
         manager: SkillManager,
         skillName: String,

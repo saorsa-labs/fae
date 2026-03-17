@@ -549,11 +549,32 @@ actor FaeScheduler {
             if let speak = speakHandler {
                 await speak(suggestion)
             }
+
+            // Proactive Forge: check for high-confidence skill drafts ready for application.
+            if let workflowTraceStore {
+                let pendingDrafts = try await workflowTraceStore.listDraftCandidates(
+                    statuses: [.pending],
+                    limit: 3
+                )
+                let highConfidence = pendingDrafts.filter { $0.confidence >= 0.75 }
+                if let topDraft = highConfidence.first {
+                    let forgePrompt = """
+                    [PROACTIVE FORGE] I have a high-confidence skill draft ready: "\(topDraft.title)"
+                    Skill name: \(topDraft.targetSkillName)
+                    Confidence: \(String(format: "%.0f", topDraft.confidence * 100))%
+                    Rationale: \(topDraft.rationale)
+
+                    Would you like me to create this skill? I can show you the draft first if you'd like to review it.
+                    """
+                    if let speak = speakHandler {
+                        await speak(forgePrompt)
+                    }
+                }
+            }
         } catch {
             NSLog("FaeScheduler: skill_proposals — error: %@", error.localizedDescription)
         }
     }
-
     private func runSkillDistill() async {
         NSLog("FaeScheduler: skill_distill — running")
         guard let workflowTraceStore else { return }

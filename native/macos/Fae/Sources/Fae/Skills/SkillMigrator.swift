@@ -7,8 +7,9 @@ import Foundation
 /// - flat `.py` / `.md` files in `~/.fae/skills/`
 enum SkillMigrator {
 
-    /// Marker file written after migration to prevent re-runs.
-    static let migrationMarker = ".skills_migrated_v3"
+    /// Marker file written after migration to prevent unnecessary re-runs.
+    static let migrationMarker = ".skills_migrated"
+    static let currentMigrationVersion = 4
 
     /// Run migration if not already done. Returns count of migrated skills.
     @discardableResult
@@ -19,10 +20,13 @@ enum SkillMigrator {
         try? fm.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
 
         let markerURL = destinationRoot.appendingPathComponent(migrationMarker)
-        if fm.fileExists(atPath: markerURL.path) {
+        if let markerContent = try? String(contentsOf: markerURL, encoding: .utf8),
+           let versionLine = markerContent.components(separatedBy: .newlines).first(where: { $0.hasPrefix("version:") }),
+           let version = Int(versionLine.dropFirst("version:".count).trimmingCharacters(in: .whitespacesAndNewlines)),
+           version >= currentMigrationVersion
+        {
             return 0
         }
-
         let sources = [
             destinationRoot,
             SkillManager.legacySkillsDirectory,
@@ -200,7 +204,7 @@ enum SkillMigrator {
     }
 
     private static func writeMarker(at url: URL) {
-        let content = "Migrated on \(ISO8601DateFormatter().string(from: Date()))\n"
+        let content = "version:\(currentMigrationVersion)\nMigrated on \(ISO8601DateFormatter().string(from: Date()))\n"
         try? content.write(to: url, atomically: true, encoding: .utf8)
     }
 }

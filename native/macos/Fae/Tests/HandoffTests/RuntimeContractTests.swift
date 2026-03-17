@@ -176,6 +176,42 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(CredentialManager.retrieve(key: secretKey), newSecret)
     }
 
+    @MainActor
+    func testFaeCorePersistsIMessageChannelPatchKeys() async throws {
+        let url = FaeConfig.configFileURL
+        let fm = FileManager.default
+        let original = try? Data(contentsOf: url)
+
+        defer {
+            if let original {
+                try? original.write(to: url, options: .atomic)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+
+        let core = FaeCore()
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "channels.imessage.enabled", "value": true]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        core.sendCommand(
+            name: "config.patch",
+            payload: ["key": "channels.imessage.allowed_senders", "value": "alice@icloud.com, +441234567890"]
+        )
+        try await Task.sleep(nanoseconds: 120_000_000)
+
+        let reloaded = FaeConfig.load()
+        XCTAssertTrue(reloaded.channels.imessage.enabled)
+        XCTAssertEqual(
+            reloaded.channels.imessage.allowedSenders,
+            ["alice@icloud.com", "+441234567890"]
+        )
+    }
+
     func testCredentialManagerListsKeysByPrefix() throws {
         let key = "tests.runtime.\(UUID().uuidString)"
         let original = CredentialManager.retrieve(key: key)

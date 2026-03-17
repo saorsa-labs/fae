@@ -3,20 +3,28 @@
   "capabilities": [
     "execute"
   ],
-  "allowedTools": [
-    "run_skill"
-  ],
+  "allowedTools": ["run_skill"],
   "allowedDomains": [],
   "dataClasses": [
     "local_files",
     "user_conversations"
   ],
-  "riskTier": "high",
-  "timeoutSeconds": 300,
+  "riskTier": "medium",
+  "timeoutSeconds": 120,
+  "allowNetwork": false,
   "allowSubprocess": true,
   "integrity": {
     "algorithm": "sha256",
-    "checksums": {},
+    "checksums": {
+      "SKILL.md": "4bc45e4c2824a999cd50fcfcd143fb6e0d2ef341ea263904e93fc735a6cba5bc",
+      "scripts/check_status.py": "a605880121ace3056d941e2d3fda1890c63038b4b4d732e5d8c534a02dcffc54",
+      "scripts/export_data.py": "775d201c39e6c5c541dcc55fa58edac1d4da0c6f80bffe9867a8ed88b1761c25",
+      "scripts/evaluate.py": "e1e3bb51306d99d7fb7b16f902017551fd9bf2f570ede71c4c147afe861f1f5d",
+      "scripts/propose.py": "7dea982072902893e76d6edf5dbd5b352920f58e2ac2fdfd055bbb10d7819305",
+      "scripts/deploy.py": "992dd8abe922966c89018bb4014e97efbbb9dfaced66073e418a364290eedbb8",
+      "scripts/rollback.py": "6ad108be4e6d7a63d3d7c9ffc81437546e5fd1d906e2a6e0ebeb9c1402a0d5d8",
+      "scripts/train.py": "8faef78289450d43579271402cb7e104c69c3fa79991debb5b75ebed7fe49a13"
+    },
     "signature": null
   }
 }

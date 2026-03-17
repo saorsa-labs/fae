@@ -71,6 +71,7 @@ final class ToolRegistry: Sendable {
             RunSkillTool(skillManager: sm),
             ManageSkillTool(skillManager: sm, workflowTraceStore: workflowTraceStore),
             AgentDelegateTool(),
+            AgentSessionTool(),
             // User input tool
             InputRequestTool(),
             // Apple integration tools
@@ -227,6 +228,7 @@ final class ToolRegistry: Sendable {
     /// Tools disabled when privacy mode is strict_local.
     private static let strictLocalDeniedTools: Set<String> = [
         "delegate_agent",
+        "agent_session",
         "web_search",
         "fetch_url",
     ]

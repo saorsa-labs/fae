@@ -21,6 +21,7 @@ struct FaeConfig: Codable {
     var vision: VisionConfig = VisionConfig()
     var awareness: AwarenessConfig = AwarenessConfig()
     var training = TrainingConfig()
+    var agents = AgentConfig()
     var privacy: PrivacyConfig = PrivacyConfig()
     var userName: String?
     var licenseAccepted: Bool = false
@@ -265,6 +266,7 @@ struct FaeConfig: Codable {
         var enabled: Bool = true
         var discord: DiscordConfig = DiscordConfig()
         var whatsapp: WhatsAppConfig = WhatsAppConfig()
+        var imessage: IMessageConfig = IMessageConfig()
 
         struct DiscordConfig: Codable {
             var botToken: String?
@@ -276,7 +278,14 @@ struct FaeConfig: Codable {
             var accessToken: String?
             var phoneNumberId: String?
             var verifyToken: String?
+            var appSecret: String?
             var allowedNumbers: [String] = []
+            var webhookPort: UInt16 = 8443
+        }
+
+        struct IMessageConfig: Codable {
+            var enabled: Bool = false
+            var allowedSenders: [String] = []
         }
     }
 
@@ -351,6 +360,20 @@ struct FaeConfig: Codable {
         var minEpisodesSinceLastExport: Int = 100
         var personalAdapterPath: String? = nil
         var previousAdapterPath: String? = nil
+    }
+
+    // MARK: - Agents
+
+    struct AgentConfig: Codable {
+        /// Custom agent registry: name -> command mapping.
+        /// Example: ["my-agent": "./bin/my-acp-server"]
+        var customAgents: [String: String] = [:]
+        /// Default approval policy for agent sessions.
+        var defaultApprovalPolicy: String = "approve_reads"
+        /// Maximum concurrent ACP sessions.
+        var maxConcurrentSessions: Int = 5
+        /// Session idle timeout in seconds (default 30 minutes).
+        var sessionIdleTimeoutSeconds: Int = 1800
     }
 
     // MARK: - Privacy
@@ -909,9 +932,24 @@ struct FaeConfig: Codable {
                     config.channels.whatsapp.phoneNumberId = rawValue == "nil" ? nil : parseString(rawValue)
                 case "verifyToken":
                     config.channels.whatsapp.verifyToken = rawValue == "nil" ? nil : parseString(rawValue)
+                case "appSecret":
+                    config.channels.whatsapp.appSecret = rawValue == "nil" ? nil : parseString(rawValue)
                 case "allowedNumbers":
                     guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.channels.whatsapp.allowedNumbers = v
+                case "webhookPort":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.channels.whatsapp.webhookPort = UInt16(clamping: v)
+                default: break
+                }
+            case "channels.imessage":
+                switch key {
+                case "enabled":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.channels.imessage.enabled = v
+                case "allowedSenders":
+                    guard let v = parseStringArray(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.channels.imessage.allowedSenders = v
                 default: break
                 }
             case "vision":
@@ -1146,7 +1184,14 @@ struct FaeConfig: Codable {
         lines.append("accessToken = \(encodeStringOrNil(channels.whatsapp.accessToken))")
         lines.append("phoneNumberId = \(encodeStringOrNil(channels.whatsapp.phoneNumberId))")
         lines.append("verifyToken = \(encodeStringOrNil(channels.whatsapp.verifyToken))")
+        lines.append("appSecret = \(encodeStringOrNil(channels.whatsapp.appSecret))")
         lines.append("allowedNumbers = \(encodeStringArray(channels.whatsapp.allowedNumbers))")
+        lines.append("webhookPort = \(channels.whatsapp.webhookPort)")
+        lines.append("")
+
+        lines.append("[channels.imessage]")
+        lines.append("enabled = \(channels.imessage.enabled ? "true" : "false")")
+        lines.append("allowedSenders = \(encodeStringArray(channels.imessage.allowedSenders))")
 
         return lines.joined(separator: "\n") + "\n"
     }

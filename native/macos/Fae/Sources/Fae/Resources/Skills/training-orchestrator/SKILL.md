@@ -1,52 +1,38 @@
 ---
 name: training-orchestrator
-description: Personal LoRA training — export conversation data, train adapters, benchmark, and deploy.
+description: Orchestrate personal model training — export data, train LoRA adapters, evaluate, and propose upgrades.
+tags:
+  - training
+  - self-improvement
 metadata:
   author: fae
   version: "1.0"
-  type: executable
 ---
 
-# Personal Training Orchestrator
+# Training Orchestrator
 
-You manage Fae's personal LoRA fine-tuning cycle. Everything runs locally on this Mac — no data leaves the device.
+This skill manages the personal model training pipeline.
 
-## Manual Triggers
+## Available Scripts
 
-- **"Fae, export training data"** → run `export_data` script
-- **"Fae, train yourself"** or **"Fae, start training"** → run `train` script, then poll `check_status`
-- **"Fae, check training status"** → run `check_status` script
-- **"Fae, evaluate the trained model"** → run `evaluate` script
-- **"Fae, deploy the trained model"** → run `deploy` script (requires user confirmation)
-- **"Fae, rollback model"** → run `rollback` script
+- **export_data**: Export conversation episodes to train.jsonl/valid.jsonl (80/20 split for mlx_lm.lora)
+- **train**: Run LoRA fine-tuning on exported data
+- **evaluate**: Benchmark a trained checkpoint against the current model
+- **propose**: Generate a human-readable comparison report for the user
+- **check_status**: Check if a training run is in progress
+- **deploy**: Switch to a new model checkpoint (requires user approval)
 
-## Autonomous Cycle (when auto-train is enabled)
+## Workflow
 
-The scheduler runs this weekly:
-1. **Sunday 01:00** — `export_data` extracts recent conversations into training format
-2. **Monday 02:00** — `train` launches LoRA fine-tuning as a background process
-3. **Monday 02:00+** — `check_status` polls until training completes (max 3 polls per scheduler tick)
-4. **After training** — `evaluate` benchmarks the candidate against current performance
-5. **Morning briefing** — `propose` formats results for the user's review
-6. **User says "deploy"** — `deploy` activates the new adapter
-
-## Data Flow
-
-- Episodes from `~/Library/Application Support/fae/fae.db` → SFT JSONL + DPO pairs
-- Training output → `~/Library/Application Support/fae/models/personal/{timestamp}/`
-- Active adapter path stored in config as `training.personalAdapterPath`
-
-## Review Protocol
-
-After training completes, present results conversationally:
-- "I trained a personal adapter on {N} conversations. Benchmark improved from {old} to {new}. Want me to activate it?"
-- If user says yes → run `deploy`
-- If user says no → adapter stays in models/personal/ for later
-- If user says rollback → run `rollback` to restore previous adapter
+1. Run export_data to prepare training dataset from recent conversations
+2. Run train with appropriate preset (smoke/light/standard/deep)
+3. Run evaluate to benchmark the new checkpoint
+4. Run propose to generate upgrade proposal
+5. If user approves, run deploy to switch models
 
 ## Safety
 
 - Training data never leaves the Mac
-- User must explicitly consent before any training occurs
-- Deployment requires explicit user approval
-- Previous adapter is always preserved for rollback
+- New models must score >= current on ALL benchmark categories
+- User must explicitly approve model switches
+- Previous checkpoints are always preserved for rollback
