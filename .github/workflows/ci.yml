@@ -17,10 +17,25 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 jobs:
-  build-and-test:
-    name: Build & Test (macOS arm64)
+  # ── Quick lint and guard checks (runs on cheap Linux runner) ──────
+  preflight:
+    name: Pre-flight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: "Guard: no Rust reintroduction in active CI/default recipes"
+        run: ./scripts/ci/guard-no-rust-reintro.sh
+
+  # ── Build (debug) ────────────────────────────────────────────────
+  build:
+    name: Build (macOS arm64)
+    needs: preflight
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,18 +44,35 @@ jobs:
       - name: Select Xcode 26.2
         run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
 
-      - name: "Guard: no Rust reintroduction in active CI/default recipes"
-        run: ./scripts/ci/guard-no-rust-reintro.sh
+      - name: Resolve SPM dependencies
+        run: swift package resolve
+        working-directory: native/macos/Fae
+        timeout-minutes: 10
+
+      - name: Build (debug)
+        run: swift build
+        working-directory: native/macos/Fae
+
+  # ── Tests (parallel with build on separate runner) ───────────────
+  test:
+    name: Tests (macOS arm64)
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode 26.2
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
 
       - name: Resolve SPM dependencies
         run: swift package resolve
         working-directory: native/macos/Fae
-
-      - name: Build (release)
-        run: swift build -c release
-        working-directory: native/macos/Fae
+        timeout-minutes: 10
 
       - name: Run tests
         run: swift test
         working-directory: native/macos/Fae
-        timeout-minutes: 15
+        timeout-minutes: 20
