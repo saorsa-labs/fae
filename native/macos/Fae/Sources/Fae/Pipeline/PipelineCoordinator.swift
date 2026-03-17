@@ -5292,6 +5292,18 @@ actor PipelineCoordinator {
                 ? Self.parseToolCalls(from: fullResponse)
                 : streamedToolCalls
         }()
+
+        // When native MLX tool calls were captured (not accumulated as text),
+        // serialize them back into fullResponse so the assistant history message
+        // contains the tool call XML. Without this, the follow-up turn sees an
+        // empty assistant message and the Jinja template renders a malformed
+        // prompt that causes the model to produce 0 tokens.
+        if !streamedToolCalls.isEmpty && !fullResponse.contains("<tool_call>") {
+            for call in streamedToolCalls {
+                let argsJSON = Self.serializeArguments(call.arguments)
+                fullResponse += "\n<tool_call>\n{\"name\":\"\(call.name)\",\"arguments\":\(argsJSON)}\n</tool_call>"
+            }
+        }
         if !toolCalls.isEmpty {
             debugLog(debugConsole, .pipeline, "Found \(toolCalls.count) tool call(s): \(toolCalls.map(\.name).joined(separator: ", "))")
         } else if fullResponse.contains("<tool_call>") {

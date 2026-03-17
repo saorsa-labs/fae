@@ -249,6 +249,20 @@ public actor MLXLLMEngine: LLMEngine {
                 // so only enable parsed generation on turns that actually expose tools.
                 let shouldParseToolCalls = !(options.tools?.isEmpty ?? true)
 
+                // Debug: dump chat messages for tool follow-up diagnosis.
+                let hasToolMessages = chatMessages.contains { $0.role == .tool }
+                if hasToolMessages {
+                    NSLog("MLXLLMEngine: ⚠️ TOOL FOLLOW-UP — dumping %d chat messages:", chatMessages.count)
+                    for (i, msg) in chatMessages.enumerated() {
+                        let preview = String(msg.content.prefix(300)).replacingOccurrences(of: "\n", with: "\\n")
+                        NSLog("  [%d] role=%@ content(%d chars)=%@", i, msg.role.rawValue, msg.content.count, preview)
+                    }
+                    NSLog("  tools=%d, suppressThinking=%@, shouldParseToolCalls=%@",
+                          options.tools?.count ?? 0,
+                          options.suppressThinking ? "true" : "false",
+                          shouldParseToolCalls ? "true" : "false")
+                }
+
                 do {
                     if shouldParseToolCalls {
                         let setup = try await container.perform { context in
