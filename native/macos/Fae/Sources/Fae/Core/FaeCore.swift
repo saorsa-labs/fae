@@ -87,6 +87,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
             loaded.voiceIdentity.enabled = FaeEnvironment.defaults.bool(forKey: "voiceIdentityEnabled")
             loaded.voiceIdentity.mode = FaeEnvironment.defaults.string(forKey: "voiceIdentityMode") ?? "assist"
             loaded.voiceIdentity.approvalRequiresMatch = FaeEnvironment.defaults.bool(forKey: "voiceIdentityApprovalRequiresMatch")
+
+            // LLM model preset: UserDefaults is authoritative in normal mode.
+            // Without this, selecting a model in Settings reverts to "auto" on restart.
+            if let preset = FaeEnvironment.defaults.string(forKey: "voiceModelPreset"), !preset.isEmpty {
+                loaded.llm.voiceModelPreset = preset
+            }
         }
 
         self.config = loaded
