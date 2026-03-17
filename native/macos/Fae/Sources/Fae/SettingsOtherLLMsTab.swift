@@ -11,6 +11,7 @@ struct SettingsOtherLLMsTab: View {
     @State private var hasStoredAPIKey: Bool = false
     @State private var isTestingConnection: Bool = false
     @State private var connectionStatus: String?
+    @State private var showClearKeyConfirmation: Bool = false
     @State private var discoveredModels: [String] = []
     @State private var showingModelPicker = false
     @State private var modelSearchText = ""
@@ -146,15 +147,23 @@ struct SettingsOtherLLMsTab: View {
 
                     if hasStoredAPIKey {
                         Button("Clear stored key") {
-                            CredentialManager.delete(key: providerCredentialKey)
-                            if selectedPreset.id == "openrouter" {
-                                CredentialManager.delete(key: openRouterKeychainKey)
-                            }
-                            hasStoredAPIKey = false
-                            providerAPIKey = ""
-                            connectionStatus = "\(selectedPreset.displayName) key removed from Keychain."
+                            showClearKeyConfirmation = true
                         }
                         .buttonStyle(.bordered)
+                        .alert("Remove API key?", isPresented: $showClearKeyConfirmation) {
+                            Button("Remove", role: .destructive) {
+                                CredentialManager.delete(key: providerCredentialKey)
+                                if selectedPreset.id == "openrouter" {
+                                    CredentialManager.delete(key: openRouterKeychainKey)
+                                }
+                                hasStoredAPIKey = false
+                                providerAPIKey = ""
+                                connectionStatus = "\(selectedPreset.displayName) key removed from Keychain."
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This will remove the \(selectedPreset.displayName) API key from your Keychain. Remote sessions using this provider will stop working until you add a new key.")
+                        }
                     }
                 }
 

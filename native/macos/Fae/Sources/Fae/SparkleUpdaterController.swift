@@ -35,14 +35,15 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
     override init() {
         super.init()
 
-        // Guard: only initialise Sparkle if SUFeedURL is present and not a placeholder.
-        guard let feedURL = Bundle.main.infoDictionary?["SUFeedURL"] as? String,
-              !feedURL.isEmpty,
-              !feedURL.contains("__"),
-              URL(string: feedURL) != nil
-        else {
-            NSLog("SparkleUpdaterController: SUFeedURL not configured — updates disabled")
-            return
+        // Resolve feed URL: prefer Info.plist value, fall back to known appcast URL.
+        let plistFeedURL = Bundle.main.infoDictionary?["SUFeedURL"] as? String
+        let feedURL: String
+        if let plist = plistFeedURL, !plist.isEmpty, !plist.contains("__"), URL(string: plist) != nil {
+            feedURL = plist
+        } else {
+            // Info.plist has placeholder or empty string (common in dev builds) — use known URL.
+            feedURL = "https://github.com/saorsa-labs/fae/releases/latest/download/appcast.xml"
+            NSLog("SparkleUpdaterController: SUFeedURL not configured in Info.plist — using fallback: %@", feedURL)
         }
 
         let ctrl = SPUStandardUpdaterController(
@@ -105,9 +106,14 @@ extension SparkleUpdaterController: SPUUpdaterDelegate {
     /// the stale appcast for subsequent manual checks. A timestamp query
     /// parameter ensures every check uses a unique URL, forcing a fresh fetch.
     nonisolated func feedURLString(for updater: SPUUpdater) -> String? {
-        guard let base = Bundle.main.infoDictionary?["SUFeedURL"] as? String,
-              !base.isEmpty, !base.contains("__")
-        else { return nil }
+        let fallback = "https://github.com/saorsa-labs/fae/releases/latest/download/appcast.xml"
+        let base: String
+        if let plist = Bundle.main.infoDictionary?["SUFeedURL"] as? String,
+           !plist.isEmpty, !plist.contains("__") {
+            base = plist
+        } else {
+            base = fallback
+        }
         let ts = Int(Date().timeIntervalSince1970)
         return "\(base)?t=\(ts)"
     }

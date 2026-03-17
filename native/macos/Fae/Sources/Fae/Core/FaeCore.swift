@@ -2045,12 +2045,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 NSLog("FaeCore: setup audit warning — requireOwnerForTools=true but no owner voice profile is enrolled")
             }
 
-            if hasOwner && !config.voiceIdentity.enabled {
-                debugLog(debugConsoleRef, .qa, "Setup audit repair: enabling voice identity because an owner profile exists")
-                NSLog("FaeCore: setup audit repair — enabling voice identity because an owner profile exists")
-                config.voiceIdentity.enabled = true
-                persistConfig(reason: "setup.audit.enable_voice_identity")
-            }
+            // Note: voice identity enabled/disabled is a user choice — do NOT force-enable
+            // even when an owner profile exists. The user may have deliberately disabled it.
 
             if config.voiceIdentity.approvalRequiresMatch && !config.voiceIdentity.enabled {
                 debugLog(debugConsoleRef, .qa, "Setup audit repair: approvalRequiresMatch=true while voiceIdentity.enabled=false — disabling approvalRequiresMatch")

@@ -2549,10 +2549,19 @@ struct CoworkWorkspaceView: View {
                             Text(ok ? "Connected" : "Failed")
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                                 .foregroundStyle(ok ? CoworkPalette.mint : Color.red.opacity(0.8))
+                        } else if hasGlobalKeyForPreset(preset) {
+                            Image(systemName: "key.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(CoworkPalette.mint)
+                            Text("Key stored in Settings")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(CoworkPalette.mint)
                         }
                     }
                     SecureField(
-                        editingAgent == nil ? preset.apiKeyPlaceholder : "New key (blank = keep current)",
+                        hasGlobalKeyForPreset(preset)
+                            ? "Override stored key (leave blank to use Settings key)"
+                            : (editingAgent == nil ? preset.apiKeyPlaceholder : "New key (blank = keep current)"),
                         text: $newAgentAPIKey
                     )
                     .textFieldStyle(.roundedBorder)
@@ -2783,6 +2792,22 @@ struct CoworkWorkspaceView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isSelected ? CoworkPalette.mint.opacity(0.10) : Color.primary.opacity(0.03))
         )
+    }
+
+    private func hasGlobalKeyForPreset(_ preset: CoworkBackendPreset) -> Bool {
+        guard preset.requiresAPIKey else { return false }
+        // Check the provider-specific key from Settings > Other LLMs
+        if let stored = CredentialManager.retrieve(key: "llm.remote_provider.\(preset.id).api_key"),
+           !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        // Check the legacy OpenRouter key
+        if preset.id == "openrouter",
+           let stored = CredentialManager.retrieve(key: "llm.openrouter.api_key"),
+           !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
     }
 
     private func providerSystemImage(for presetID: String) -> String {

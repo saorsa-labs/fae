@@ -131,11 +131,11 @@ struct SettingsSpeakerTab: View {
                     }
 
                 if voiceIdentityMode == "assist" {
-                    Text("Fae keeps normal conversation to the owner and trusted speakers. Assist mode mainly affects voice step-up checks for tools.")
+                    Text("Fae identifies who is speaking and shows speaker names in conversation. Unknown voices can still use Fae normally — voice identity is informational only.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Fae keeps normal conversation to the owner and trusted speakers, and enforce mode adds stricter live-voice checks.")
+                    Text("Fae requires a recognised voice before allowing sensitive actions like running tools, editing files, or executing commands. Unknown voices are limited to read-only conversation.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
