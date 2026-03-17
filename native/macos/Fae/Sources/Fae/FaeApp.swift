@@ -866,7 +866,6 @@ struct FaeApp: App {
                 Button("Check for Updates\u{2026}") {
                     appDelegate.sparkleUpdater.checkForUpdates()
                 }
-                .disabled(!appDelegate.sparkleUpdater.canCheckForUpdates)
             }
             CommandGroup(after: .appInfo) {
                 Menu("Permissions") {
