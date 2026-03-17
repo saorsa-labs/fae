@@ -10,17 +10,21 @@ import Foundation
 /// - `confirm_identity` — matches current speaker against all profiles
 /// - `rename_speaker` — updates display name
 /// - `list_speakers` — lists all enrolled speakers with roles and counts
+/// - `grant_tools` — promote a guest speaker to trusted (grants tool access)
+/// - `revoke_tools` — demote a trusted speaker back to guest (removes tool access)
 struct VoiceIdentityTool: Tool {
     let name = "voice_identity"
     let description = """
         Manage voice identity: enroll speakers, verify identity, and personalize wake name detection. \
         Actions: check_status, show_enrollment_panel (opens native recording UI), collect_sample \
-        (plays beep then captures voice), collect_wake_samples, confirm_identity, rename_speaker, list_speakers.
+        (plays beep then captures voice), collect_wake_samples, confirm_identity, rename_speaker, \
+        list_speakers, grant_tools (promote guest to trusted — grants tool access), \
+        revoke_tools (demote trusted back to guest — removes tool access).
         """
     let parametersSchema = #"""
         {
-            "action": "string (required) — one of: check_status, show_enrollment_panel, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers",
-            "label": "string (optional) — speaker label for collect_sample or rename_speaker (e.g. 'alice')",
+            "action": "string (required) — one of: check_status, show_enrollment_panel, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers, grant_tools, revoke_tools",
+            "label": "string (optional) — speaker label for collect_sample, rename_speaker, grant_tools, or revoke_tools (e.g. 'alice')",
             "role": "string (optional) — speaker role for collect_sample: 'owner', 'trusted', 'guest' (default: 'guest')",
             "display_name": "string (optional) — human-readable name for collect_sample or rename_speaker",
             "count": "number (optional) — number of wake samples for collect_wake_samples (default: 3, max: 6)",
@@ -65,8 +69,12 @@ struct VoiceIdentityTool: Tool {
             return await renameSpeaker(input: input)
         case "list_speakers":
             return await listSpeakers()
+        case "grant_tools":
+            return await grantTools(input: input)
+        case "revoke_tools":
+            return await revokeTools(input: input)
         default:
-            return .error("Unknown action: \(action). Valid actions: check_status, show_enrollment_panel, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers")
+            return .error("Unknown action: \(action). Valid actions: check_status, show_enrollment_panel, collect_sample, collect_wake_samples, confirm_identity, rename_speaker, list_speakers, grant_tools, revoke_tools")
         }
     }
 
@@ -415,6 +423,88 @@ struct VoiceIdentityTool: Tool {
 
         return .success("""
             {"speakers": [\(list)], "count": \(summaries.count)}
+            """)
+    }
+
+    // MARK: - Trust Management
+
+    /// Promote a guest speaker to trusted, granting them tool access.
+    /// Only the owner should invoke this (enforced by tool visibility — guests don't see tools).
+    private func grantTools(input: [String: Any]) async -> ToolResult {
+        guard let store = speakerProfileStore else {
+            return .error("Speaker profile store not available.")
+        }
+        guard let label = input["label"] as? String else {
+            return .error("Missing required parameter: label — specify which speaker to grant tool access to.")
+        }
+
+        let summaries = await store.profileSummaries()
+        guard let profile = summaries.first(where: {
+            $0.id == label || $0.displayName.lowercased() == label.lowercased()
+        }) else {
+            let names = summaries.filter { $0.role == .guest }.map(\.displayName)
+            return .error("No speaker found matching '\(label)'. Guest speakers: \(names.joined(separator: ", "))")
+        }
+
+        guard profile.role == .guest else {
+            if profile.role == .owner {
+                return .success(#"{"changed": false, "reason": "That speaker is the owner — they already have full access."}"#)
+            }
+            if profile.role == .trusted {
+                return .success(#"{"changed": false, "reason": "That speaker already has tool access."}"#)
+            }
+            return .error("Cannot change role for this speaker.")
+        }
+
+        let updated = await store.setRole(label: profile.id, role: .trusted)
+        guard updated else {
+            return .error("Failed to update speaker role.")
+        }
+
+        NSLog("VoiceIdentityTool: promoted '%@' (%@) from guest → trusted", profile.displayName, profile.id)
+        return .success("""
+            {"changed": true, "label": "\(profile.id)", "display_name": "\(profile.displayName)", \
+            "old_role": "guest", "new_role": "trusted", \
+            "message": "\(profile.displayName) can now use tools when speaking with Fae."}
+            """)
+    }
+
+    /// Demote a trusted speaker back to guest, removing tool access.
+    private func revokeTools(input: [String: Any]) async -> ToolResult {
+        guard let store = speakerProfileStore else {
+            return .error("Speaker profile store not available.")
+        }
+        guard let label = input["label"] as? String else {
+            return .error("Missing required parameter: label — specify which speaker to revoke tool access from.")
+        }
+
+        let summaries = await store.profileSummaries()
+        guard let profile = summaries.first(where: {
+            $0.id == label || $0.displayName.lowercased() == label.lowercased()
+        }) else {
+            return .error("No speaker found matching '\(label)'.")
+        }
+
+        guard profile.role == .trusted else {
+            if profile.role == .owner {
+                return .success(#"{"changed": false, "reason": "Cannot revoke tool access from the owner."}"#)
+            }
+            if profile.role == .guest {
+                return .success(#"{"changed": false, "reason": "That speaker already doesn't have tool access."}"#)
+            }
+            return .error("Cannot change role for this speaker.")
+        }
+
+        let updated = await store.setRole(label: profile.id, role: .guest)
+        guard updated else {
+            return .error("Failed to update speaker role.")
+        }
+
+        NSLog("VoiceIdentityTool: demoted '%@' (%@) from trusted → guest", profile.displayName, profile.id)
+        return .success("""
+            {"changed": true, "label": "\(profile.id)", "display_name": "\(profile.displayName)", \
+            "old_role": "trusted", "new_role": "guest", \
+            "message": "\(profile.displayName) can still talk to Fae but can no longer use tools."}
             """)
     }
 

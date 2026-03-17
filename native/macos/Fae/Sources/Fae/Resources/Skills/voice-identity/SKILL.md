@@ -53,6 +53,17 @@ When voice confidence seems low:
 - Use `voice_identity rename_speaker` to update display names.
 - Use `voice_identity check_status` for an overview of the voice identity system.
 
+## Trust & Tool Access
+
+Voiceprinted people (guests) can talk to Fae but cannot use tools. The owner can grant or revoke tool access:
+
+- **"Fae, let Alice use tools"** → call `voice_identity grant_tools` with `label: "alice"` — promotes guest → trusted
+- **"Fae, remove Alice's tool access"** → call `voice_identity revoke_tools` with `label: "alice"` — demotes trusted → guest
+
+The `label` parameter accepts either the speaker's internal label or their display name (case-insensitive).
+
+Only the owner can grant or revoke tool access (guests don't see the voice_identity tool).
+
 ## Tone
 
 - Be warm and conversational, not robotic or procedural.

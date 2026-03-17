@@ -19,7 +19,7 @@ final class VoiceConversationPolicyTests: XCTestCase {
         )
     }
 
-    func testUnknownAndGuestSpeakersCannotConverseAfterOwnerEnrollment() {
+    func testUnknownSpeakersCannotConverseAfterOwnerEnrollment() {
         XCTAssertFalse(
             VoiceConversationPolicy.allowsConversation(
                 ownerProfileExists: true,
@@ -27,13 +27,22 @@ final class VoiceConversationPolicyTests: XCTestCase {
                 speakerRole: nil
             )
         )
-        XCTAssertFalse(
+    }
+
+    func testGuestSpeakersCanConverseButNotUseTools() {
+        // Guests (voiceprinted) can converse...
+        XCTAssertTrue(
             VoiceConversationPolicy.allowsConversation(
                 ownerProfileExists: true,
                 firstOwnerEnrollmentActive: false,
                 speakerRole: .guest
             )
         )
+        // ...but cannot use tools.
+        XCTAssertFalse(VoiceConversationPolicy.allowsToolUse(speakerRole: .guest))
+        XCTAssertTrue(VoiceConversationPolicy.allowsToolUse(speakerRole: .owner))
+        XCTAssertTrue(VoiceConversationPolicy.allowsToolUse(speakerRole: .trusted))
+        XCTAssertFalse(VoiceConversationPolicy.allowsToolUse(speakerRole: nil))
     }
 
     func testEnrollmentModeAllowsConversationBeforeOwnerExists() {
@@ -55,7 +64,11 @@ final class VoiceConversationPolicyTests: XCTestCase {
                 wakeStrength: .exact
             )
         )
-        XCTAssertFalse(
+    }
+
+    func testGuestWakeMatchIsHonoredAfterOwnerEnrollment() {
+        // Guests can converse, so their wake matches should be honored.
+        XCTAssertTrue(
             VoiceConversationPolicy.shouldHonorWakeMatch(
                 ownerProfileExists: true,
                 firstOwnerEnrollmentActive: false,

@@ -16,6 +16,20 @@ enum VoiceConversationPolicy {
         guard let speakerRole else { return false }
 
         switch speakerRole {
+        case .owner, .trusted, .guest:
+            return true
+        case .faeSelf:
+            return false
+        }
+    }
+
+    /// Whether the speaker should have access to tools.
+    ///
+    /// Guests (voiceprinted but not promoted) can converse but cannot use tools.
+    /// The owner can grant tool access by promoting a guest to `.trusted`.
+    static func allowsToolUse(speakerRole: SpeakerRole?) -> Bool {
+        guard let speakerRole else { return false }
+        switch speakerRole {
         case .owner, .trusted:
             return true
         case .guest, .faeSelf:

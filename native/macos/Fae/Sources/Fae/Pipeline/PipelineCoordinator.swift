@@ -4636,8 +4636,13 @@ actor PipelineCoordinator {
                     "Visible tools for turn: \(visibleToolNames.sorted().joined(separator: ", "))"
                 )
             }
+            // Guests (voiceprinted but not promoted to trusted) can converse
+            // but do not see tools. The owner can grant tool access by saying
+            // "Fae, let Alice use tools" which promotes guest → trusted.
+            let guestToolBlock = currentSpeakerRole == .guest
             let toolsAvailableForTurn = toolMode != "off"
                 && !ownerEnrollmentRequired
+                && !guestToolBlock
             let includeTools = toolsAvailableForTurn
             let activeModelId = currentModelId()
             let preferLegacyInlineToolPrompt = Self.prefersLegacyInlineToolPrompt(
@@ -4651,6 +4656,9 @@ actor PipelineCoordinator {
                 }
                 if ownerEnrollmentRequired {
                     return "owner_enrollment_required"
+                }
+                if guestToolBlock {
+                    return "guest_speaker_no_tools"
                 }
                 return "unknown"
             }()
