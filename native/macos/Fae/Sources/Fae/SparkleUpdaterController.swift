@@ -46,8 +46,9 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
             NSLog("SparkleUpdaterController: SUFeedURL not configured in Info.plist — using fallback: %@", feedURL)
         }
 
+        // Start with startingUpdater: false so we can capture the error from startUpdater:.
         let ctrl = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: false,
             updaterDelegate: self,
             userDriverDelegate: self
         )
@@ -62,7 +63,17 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
             .receive(on: RunLoop.main)
             .assign(to: &$lastUpdateCheck)
 
-        NSLog("SparkleUpdaterController: started — feed: %@", feedURL)
+        // Manually start the updater so we can log any startup errors.
+        do {
+            try ctrl.updater.start()
+            NSLog("SparkleUpdaterController: started successfully — feed: %@", feedURL)
+        } catch {
+            NSLog("SparkleUpdaterController: ⚠️ updater failed to start: %@", error.localizedDescription)
+            NSLog("SparkleUpdaterController: bundle=%@ bundleID=%@ version=%@",
+                  Bundle.main.bundlePath,
+                  Bundle.main.bundleIdentifier ?? "nil",
+                  Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "nil")
+        }
     }
 
     // MARK: - Public API
