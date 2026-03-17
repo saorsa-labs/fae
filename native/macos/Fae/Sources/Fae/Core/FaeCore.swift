@@ -1490,6 +1490,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
             else { return }
             config.voiceIdentity.mode = value
             FaeEnvironment.defaults.set(value, forKey: "voiceIdentityMode")
+            // Setting enforce mode implies voice identity must be on.
+            if value == "enforce" && !config.voiceIdentity.enabled {
+                config.voiceIdentity.enabled = true
+                FaeEnvironment.defaults.set(true, forKey: "voiceIdentityEnabled")
+                NSLog("FaeCore: auto-enabled voiceIdentity for enforce mode")
+            }
             persistConfig(reason: "config.patch.voice_identity.mode")
             syncVoiceIdentityToPipeline()
 
