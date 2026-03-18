@@ -260,7 +260,8 @@ actor PipelineCoordinator {
         firstOwnerEnrollmentActive: Bool,
         userText: String,
         availableToolNames: [String],
-        proactiveAllowedTools: Set<String>?
+        proactiveAllowedTools: Set<String>?,
+        isConversationContinuation: Bool = false
     ) -> Set<String>? {
         if firstOwnerEnrollmentActive {
             return ["voice_identity"]
@@ -273,6 +274,15 @@ actor PipelineCoordinator {
             ? inferredToolNamesForTurn(in: userText, availableToolNames: availableToolNames)
             : []
         let requestedTools = explicitMentions.isEmpty ? inferredMentions : explicitMentions
+
+        // Short conversational follow-ups ("yes", "no problem", "just pop a window")
+        // often lack the keywords that triggered tool visibility on the previous turn.
+        // When continuing a conversation and no tools are inferred, show all tools
+        // so the model can use whatever it needs based on conversation context.
+        if isConversationContinuation && requestedTools.isEmpty && proactiveAllowedTools == nil {
+            return nil
+        }
+
         switch (proactiveAllowedTools, requestedTools.isEmpty) {
         case let (allowed?, false):
             let narrowed = allowed.intersection(requestedTools)
@@ -420,7 +430,7 @@ actor PipelineCoordinator {
             "window to type", "give me a field", "need to type", "need to paste",
             "i'll paste", "ill paste", "i will paste", "i'll type", "ill type",
             // User wants a popup window for input
-            "pop up a window", "pop up window", "popup a window", "popup window",
+            "pop a window", "pop up a window", "pop up window", "popup a window", "popup window",
             "pop up a field", "popup a field", "open a window to",
             // User offering information
             "give you a link", "give you some", "give you the",
@@ -461,7 +471,7 @@ actor PipelineCoordinator {
             "discord", "whatsapp", "imessage", "slack", "channel",
             "set up", "setup", "connect to", "integration", "configure",
         ]) {
-            add("activate_skill", "run_skill", "manage_skill",
+            add("activate_skill", "run_skill", "manage_skill", "channel_setup",
                 "bash", "read", "write", "edit", "self_config", "input_request")
         }
 
@@ -4623,11 +4633,15 @@ actor PipelineCoordinator {
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
+            // Detect conversation continuation: if there's already assistant history,
+            // the user is following up on a prior turn, not starting a new topic.
+            let conversationHasHistory = await conversationState.history.contains { $0.role == .assistant }
             let visibleToolNames = Self.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
                 userText: userText,
                 availableToolNames: registry.toolNames,
-                proactiveAllowedTools: proactiveContext?.allowedTools
+                proactiveAllowedTools: proactiveContext?.allowedTools,
+                isConversationContinuation: conversationHasHistory
             )
             if let visibleToolNames {
                 debugLog(
