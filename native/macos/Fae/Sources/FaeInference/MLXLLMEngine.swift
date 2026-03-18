@@ -276,11 +276,16 @@ public actor MLXLLMEngine: LLMEngine {
                             let cachedTokenCount = cacheBox.value.first?.offset ?? 0
                             let totalPromptTokens = cachedTokenCount + input.text.tokens.size
 
-                            // Debug: decode last 500 tokens to see what the model receives.
+                            // Debug: decode prompt tail to see what the model receives.
                             if hasToolMessages {
                                 let tokens = input.text.tokens
                                 let tokenCount = tokens.size
                                 NSLog("MLXLLMEngine: TOOL FOLLOW-UP prompt: %d tokens total", tokenCount)
+                                // Dump the rendered prompt to a temp file for offline analysis.
+                                let dumpPath = "/tmp/fae-tool-followup-prompt.txt"
+                                let decoded = context.tokenizer.decode(tokens: (0..<tokenCount).map { input.text.tokens[$0].item() })
+                                try? decoded.write(toFile: dumpPath, atomically: true, encoding: .utf8)
+                                NSLog("MLXLLMEngine: prompt dumped to %@", dumpPath)
                             }
 
                             var effectiveParameters = baseParameters

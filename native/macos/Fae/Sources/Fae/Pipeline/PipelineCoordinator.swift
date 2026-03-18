@@ -4859,13 +4859,19 @@ actor PipelineCoordinator {
                 + localMaxTokens
         )
         await conversationState.setReservedTokens(dynamicReservedTokens)
+        // On tool follow-up turns, pass tools=nil to disable the streaming tool
+        // call parser. The parser intercepts <-prefixed tokens looking for <tool_call>,
+        // which can interfere with think blocks and cause 0-token generation on some
+        // models. Tool calls in follow-up responses are still detected by the text-based
+        // parseToolCalls() fallback on fullResponse after generation completes.
+        let effectiveTools = isToolFollowUp ? nil : generationContext.nativeTools
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
             maxTokens: localMaxTokens,
             repetitionPenalty: config.llm.repeatPenalty,
             suppressThinking: suppressThinking,
-            tools: generationContext.nativeTools,
+            tools: effectiveTools,
             turnContextPrefix: effectiveTurnContextPrefix,
             contextLimitTokens: contextLimitTokens,
             // KV Cache Optimization (Phase 1) - based on Ollama/mistral.rs/LM Studio research
@@ -6149,6 +6155,7 @@ actor PipelineCoordinator {
         }
 
         debugLog(debugConsole, .qa, "Tool execution summary: success=\(toolSuccessCount) failure=\(toolFailureCount)")
+
         await synchronizeLLMSession()
 
         // TillDone: clean up nudge history and push canvas report when workflow ends.
@@ -6203,29 +6210,61 @@ actor PipelineCoordinator {
         }
 
         // If activate_skill ran, the LLM now has skill instructions in context and
-        // needs full tool access (run_skill, bash, etc.) to act on them — not just
-        // the limited hint set from the initial user utterance.
+        // needs tool access to act on them. Rather than expanding to ALL tools
+        // (which adds ~30 tool schemas / thousands of tokens and invalidates the
+        // session KV cache), expand to a focused set: the skill execution tools
+        // plus the tools from the original turn. This keeps the prompt compact
+        // and avoids the Qwen3.5 0-token stall caused by massive tool schemas
+        // in follow-up turns.
         let executedToolNames = Set(toolCalls.prefix(5).map(\.name))
         var followUpContext = generationContext
         if executedToolNames.contains("activate_skill") {
             let activeModelId = currentModelId()
             let preferLegacy = Self.prefersLegacyInlineToolPrompt(modelId: activeModelId)
             if !preferLegacy {
-                let fullTools = registry.nativeToolSpecs(
+                // Skill execution core tools + common action tools.
+                let skillTools: Set<String> = [
+                    "run_skill", "bash", "read", "write", "edit",
+                    "channel_setup", "input_request", "self_config",
+                    "activate_skill", "manage_skill", "web_search", "fetch_url",
+                ]
+                // Merge with the original turn's tools so nothing is lost.
+                let originalToolNames = Set(
+                    (generationContext.nativeTools ?? []).compactMap { spec -> String? in
+                        (spec["function"] as? [String: Any])?["name"] as? String
+                    }
+                )
+                let expandedSet = skillTools.union(originalToolNames)
+                let expandedTools = registry.nativeToolSpecs(
                     for: effectiveToolMode(),
                     privacyMode: effectivePrivacyMode(),
-                    limitedTo: nil
+                    limitedTo: expandedSet
                 )
                 followUpContext = GenerationContext(
                     systemPrompt: generationContext.systemPrompt,
                     turnContextPrefix: generationContext.turnContextPrefix,
-                    nativeTools: fullTools,
+                    nativeTools: expandedTools,
                     actionSource: generationContext.actionSource,
                     playsThinkingTone: generationContext.playsThinkingTone,
                     allowsAudibleOutput: generationContext.allowsAudibleOutput
                 )
-                debugLog(debugConsole, .pipeline, "Expanded tool set after activate_skill (was hint-limited)")
+                debugLog(debugConsole, .pipeline, "Expanded tool set after activate_skill to \(expandedSet.count) tools (was \(originalToolNames.count))")
             }
+        }
+
+        // After activate_skill, the tool response contains skill instructions but
+        // no direct answer. Qwen3.5 stalls (0 tokens) because it doesn't know what
+        // to do next. Inject a follow-up user nudge so the model has a clear signal
+        // to act on the skill instructions and respond to the user's original request.
+        if executedToolNames.contains("activate_skill") && toolSuccessCount > 0 {
+            let nudge = "The skill is now active. Use the skill instructions to help with my request."
+            await conversationState.addUserMessage(
+                nudge,
+                speakerDisplayName: currentSpeakerDisplayName,
+                speakerId: currentSpeakerLabel,
+                tag: proactiveContext?.conversationTag
+            )
+            debugLog(debugConsole, .pipeline, "Injected follow-up nudge after activate_skill")
         }
 
         // Recurse: generate again with tool results in context.
