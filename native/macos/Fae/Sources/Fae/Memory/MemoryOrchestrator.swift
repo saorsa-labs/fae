@@ -48,6 +48,18 @@ actor MemoryOrchestrator {
         self.entityStore = entityStore
     }
 
+    /// All entity names for dynamic vocabulary correction (post-ASR).
+    func entityNamesForVocabulary() async -> [(canonical: String, aliases: [String], type: String)] {
+        guard let entityStore else { return [] }
+        do {
+            let entities = try await entityStore.allEntitiesForBackfill()
+            return entities.map { ($0.canonicalName, $0.aliases, $0.entityType.rawValue) }
+        } catch {
+            NSLog("MemoryOrchestrator: failed to load entities for vocabulary: %@", error.localizedDescription)
+            return []
+        }
+    }
+
     func setConfig(_ config: FaeConfig.MemoryConfig) {
         self.config = config
     }

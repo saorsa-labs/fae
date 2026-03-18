@@ -989,6 +989,7 @@ actor PipelineCoordinator {
     private var gateState: GateState = .idle
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()
+    private let vocabularyCorrector = DynamicVocabularyCorrector()
     private var thinkTagStripper = TextProcessing.ThinkTagStripper()
     private var voiceTagStripper = VoiceTagStripper()
     private let keywordSpotter: KeywordSpotter
@@ -1316,6 +1317,9 @@ actor PipelineCoordinator {
             wakeAliases = await wakeStore.allAliases()
             debugLog(debugConsole, .command, "Wake aliases loaded: \(wakeAliases.joined(separator: ", "))")
         }
+
+        // Build dynamic vocabulary corrections from known names.
+        await rebuildVocabularyCorrections()
 
         startSpeechSegmentProcessingLoop()
 
@@ -2638,6 +2642,34 @@ actor PipelineCoordinator {
         wakeAddressMatch(in: text, logDecision: logDecision) != nil
     }
 
+    /// Rebuild the dynamic vocabulary corrector from all known name sources.
+    ///
+    /// Called at pipeline start and can be called periodically to pick up
+    /// new entities from memory captures.
+    func rebuildVocabularyCorrections() async {
+        var ownerName = config.userName
+        if ownerName == nil { ownerName = await memoryOrchestrator?.rememberedUserName() }
+        if ownerName == nil { ownerName = await speakerProfileStore?.ownerDisplayName() }
+
+        // Entity names from the knowledge graph.
+        let entityNames = await memoryOrchestrator?.entityNamesForVocabulary() ?? []
+
+        // Speaker profile names.
+        var speakerNames: [(label: String, displayName: String)] = []
+        if let store = speakerProfileStore {
+            let summaries = await store.profileSummaries()
+            speakerNames = summaries
+                .filter { $0.role != .faeSelf }
+                .map { (label: $0.id, displayName: $0.displayName) }
+        }
+
+        await vocabularyCorrector.rebuild(
+            ownerName: ownerName,
+            entityNames: entityNames,
+            speakerNames: speakerNames
+        )
+    }
+
     private func learnWakeAliasIfNeeded(rawText: String) async {
         guard currentSpeakerIsOwner,
               let wakeStore = wakeWordProfileStore,
@@ -3237,6 +3269,7 @@ actor PipelineCoordinator {
         if let pending = pendingSemanticTurn {
             effectiveRawText = pending.rawText + " " + rawText
             effectiveText = TextProcessing.correctNameRecognition(effectiveRawText)
+            effectiveText = await vocabularyCorrector.correct(effectiveText)
             if effectiveAcousticWakeDetection == nil {
                 effectiveAcousticWakeDetection = pending.acousticWakeDetection
             }
@@ -3787,8 +3820,11 @@ actor PipelineCoordinator {
             let rawText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !rawText.isEmpty else { return }
 
-            // Correct common ASR misrecognitions of "Fae".
-            let text = TextProcessing.correctNameRecognition(rawText)
+            // Correct common ASR misrecognitions — first static "Fae" corrections,
+            // then dynamic corrections from the user's known vocabulary (names,
+            // entities, speaker profiles).
+            var text = TextProcessing.correctNameRecognition(rawText)
+            text = await vocabularyCorrector.correct(text)
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
