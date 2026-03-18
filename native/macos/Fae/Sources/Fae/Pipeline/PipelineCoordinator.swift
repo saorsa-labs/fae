@@ -6424,19 +6424,25 @@ actor PipelineCoordinator {
             }
         }
 
-        // After activate_skill, the tool response contains skill instructions but
-        // no direct answer. Qwen3.5 stalls (0 tokens) because it doesn't know what
-        // to do next. Inject a follow-up user nudge so the model has a clear signal
-        // to act on the skill instructions and respond to the user's original request.
-        if executedToolNames.contains("activate_skill") && toolSuccessCount > 0 {
-            let nudge = "The skill is now active. Use the skill instructions to help with my request."
+        // Qwen3.5 stalls (0 tokens) on tool follow-up turns when the tool
+        // result is in context but there's no clear user signal to continue.
+        // Inject a follow-up nudge so the model knows to interpret the tool
+        // results and respond. The nudge is tailored: activate_skill gets a
+        // skill-specific nudge; other tools get a generic continuation signal.
+        if toolSuccessCount > 0 {
+            let nudge: String
+            if executedToolNames.contains("activate_skill") {
+                nudge = "The skill is now active. Use the skill instructions to help with my request."
+            } else {
+                nudge = "Use the tool results above to continue helping with my request."
+            }
             await conversationState.addUserMessage(
                 nudge,
                 speakerDisplayName: currentSpeakerDisplayName,
                 speakerId: currentSpeakerLabel,
                 tag: proactiveContext?.conversationTag
             )
-            debugLog(debugConsole, .pipeline, "Injected follow-up nudge after activate_skill")
+            debugLog(debugConsole, .pipeline, "Injected follow-up nudge after tool execution (\(executedToolNames.sorted().joined(separator: ", ")))")
         }
 
         // Recurse: generate again with tool results in context.
@@ -7986,9 +7992,9 @@ actor PipelineCoordinator {
         guard !trimmed.isEmpty else { return nil }
 
         switch call.name {
-        case "bash":
-            guard trimmed.count <= 500 else { return nil }
-            return "Command output:\n\(trimmed)"
+        // bash output is never spoken directly — always routed back to the LLM
+        // for interpretation so the user gets a natural-language response
+        // instead of raw command output like "HTTP/2 301".
 
         case "calendar", "reminders", "contacts", "mail", "notes":
             return trimmed

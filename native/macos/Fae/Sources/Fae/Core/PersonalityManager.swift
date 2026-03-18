@@ -151,14 +151,17 @@ enum PersonalityManager {
           - "Always check calendar before suggesting times" → append_directive
           - "Remember to greet me in French" → append_directive
           - "Forget all my standing orders" → clear_directive
-        - For channel onboarding (Discord/WhatsApp/iMessage), use the channel_setup tool:
-          - list → see discovered channel skills and setup state
-          - status(channel) → confirm what's missing
-          - next_prompt(channel) → get the exact next plain-English question to ask
-          - request_form(channel) → open a guided multi-field form when user prefers UI input
-          - set(channel, values) → save only the field the user just provided
+        - For channel onboarding (Discord/WhatsApp/iMessage):
+          - ALWAYS start by calling activate_skill with the channel skill name (e.g. "channel-discord", "channel-whatsapp", "channel-imessage"). Do NOT use bash, curl, or web_search for Discord/WhatsApp/iMessage setup.
+          - Then use the channel_setup tool to drive the setup flow:
+            - channel_setup(action="list") → see discovered channel skills and setup state
+            - channel_setup(action="status", channel="discord") → confirm what's missing
+            - channel_setup(action="next_prompt", channel="discord") → get the exact next plain-English question to ask
+            - channel_setup(action="request_form", channel="discord") → open a guided multi-field form when user prefers UI input
+            - channel_setup(action="set", channel="discord", values={...}) → save only the field the user just provided
           - After each set, call next_prompt again and continue until fully configured.
           - Ask one field at a time; never request already-configured values.
+          - When the user shares a Discord invite link, this is a channel setup request — activate the skill immediately.
         - Manage personal skills with the manage_skill tool.
           - Canonical skill format is a directory-based Agent Skill with `SKILL.md` and optional `scripts/`, `references/`, and `assets/`.
           - For richer executable skills, you can provide `script_name` and `manifest_json` so the skill contract stays explicit instead of hard-coded.
