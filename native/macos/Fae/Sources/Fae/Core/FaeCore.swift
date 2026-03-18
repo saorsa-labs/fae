@@ -1928,11 +1928,18 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     configChanged = true
                     NSLog("FaeCore: auto-enabled requireOwnerForTools after enrollment")
                 }
+                // Owner enrolled — activate all proactive awareness features.
+                // Voice identity is the security model; awareness is core to what Fae is.
+                if self.config.awareness.consentGrantedAt == nil {
+                    self.config.awareness.consentGrantedAt = ISO8601DateFormatter().string(from: Date())
+                    configChanged = true
+                    NSLog("FaeCore: auto-activated awareness after primary user enrollment")
+                }
                 if configChanged {
                     self.persistConfig(reason: "owner_enrolled_auto_voice_identity")
                 }
-                self.refreshAwarenessRuntime(restartSchedulerTasks: false)
-                NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true")
+                self.refreshAwarenessRuntime(restartSchedulerTasks: true)
+                NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true, awareness active")
             }
         }
     }

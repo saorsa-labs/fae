@@ -188,15 +188,6 @@ struct SettingsOverviewTab: View {
                 }
 
                 quickToggle(
-                    title: "Vision",
-                    icon: "eye",
-                    isOn: $visionEnabled,
-                    color: .purple
-                ) {
-                    patchConfig("vision.enabled", value: visionEnabled)
-                }
-
-                quickToggle(
                     title: "Memory Saver",
                     icon: "bolt.fill",
                     isOn: $kvQuantEnabled,

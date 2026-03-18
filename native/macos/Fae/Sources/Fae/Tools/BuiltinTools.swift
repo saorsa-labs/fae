@@ -299,10 +299,6 @@ struct SelfConfigTool: Tool {
             valueType: .bool,
             description: "Extended reasoning mode"
         ),
-        "conversation.require_direct_address": SettingSpec(
-            valueType: .bool,
-            description: "Only respond when addressed by name"
-        ),
         "conversation.direct_address_followup_s": SettingSpec(
             valueType: .int(min: 5, max: 60),
             description: "Seconds to keep listening after name-addressed (5-60)"
@@ -315,30 +311,11 @@ struct SelfConfigTool: Tool {
             valueType: .string(allowed: ["strict_local", "local_preferred", "connected"]),
             description: "Privacy boundary for networking and delegation"
         ),
-        "vision.enabled": SettingSpec(
-            valueType: .bool,
-            description: "Enable vision tools (screenshot, camera, read_screen). Requires restart."
-        ),
         "vision.model_preset": SettingSpec(
             valueType: .string(allowed: ["auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit"]),
             description: "Vision model preset (auto, qwen3_vl_4b_4bit, qwen3_vl_4b_8bit)."
         ),
-        "awareness.enabled": SettingSpec(
-            valueType: .bool,
-            description: "Master toggle for proactive awareness (requires consent)"
-        ),
-        "awareness.consent_granted": SettingSpec(
-            valueType: .bool,
-            description: "Explicit consent gate for proactive camera/screen observations"
-        ),
-        "awareness.camera_enabled": SettingSpec(
-            valueType: .bool,
-            description: "Camera-based presence detection and greetings"
-        ),
-        "awareness.screen_enabled": SettingSpec(
-            valueType: .bool,
-            description: "Screen activity monitoring for contextual help"
-        ),
+        // Awareness intensity controls (always-on features — no on/off toggles).
         "awareness.camera_interval_seconds": SettingSpec(
             valueType: .int(min: 10, max: 120),
             description: "Camera check interval in seconds (10-120)"
@@ -347,14 +324,7 @@ struct SelfConfigTool: Tool {
             valueType: .int(min: 10, max: 120),
             description: "Screen check interval in seconds (10-120)"
         ),
-        "awareness.overnight_work": SettingSpec(
-            valueType: .bool,
-            description: "Research topics during quiet hours (22:00-06:00)"
-        ),
-        "awareness.enhanced_briefing": SettingSpec(
-            valueType: .bool,
-            description: "Enhanced morning briefing with calendar, mail, and research"
-        ),
+        // Power management (adjustable).
         "awareness.pause_on_battery": SettingSpec(
             valueType: .bool,
             description: "Pause proactive observations when on battery power"
@@ -362,18 +332,6 @@ struct SelfConfigTool: Tool {
         "awareness.pause_on_thermal_pressure": SettingSpec(
             valueType: .bool,
             description: "Pause proactive observations under high thermal pressure"
-        ),
-        "voice_identity.enabled": SettingSpec(
-            valueType: .bool,
-            description: "Enable voice identity (speaker recognition)"
-        ),
-        "voice_identity.mode": SettingSpec(
-            valueType: .string(allowed: ["assist", "enforce"]),
-            description: "Voice identity mode: assist (informational) or enforce (block unknown speakers from tools)"
-        ),
-        "voice_identity.approval_requires_match": SettingSpec(
-            valueType: .bool,
-            description: "Require voice match for tool approval"
         ),
     ]
 
@@ -509,23 +467,19 @@ struct SelfConfigTool: Tool {
         lines.append("  llm.temperature = \(config.llm.temperature) — Creativity (0.3=precise, 1.0=creative)")
         lines.append("  llm.thinking_enabled = \(config.llm.thinkingEnabled) — Extended reasoning")
         lines.append(
-            "  conversation.require_direct_address = \(config.conversation.requireDirectAddress)"
-                + " — Name-gated responses"
-        )
-        lines.append(
             "  conversation.direct_address_followup_s = \(config.conversation.directAddressFollowupS)"
                 + " — Follow-up window (seconds)"
         )
         lines.append("  tool_mode = \(config.toolMode) — Maximum tool authority level")
-        lines.append("  vision.enabled = \(config.vision.enabled) — Enable on-device vision tools")
         lines.append("  vision.model_preset = \(config.vision.modelPreset) — Vision model preset")
-        lines.append("  awareness.enabled = \(config.awareness.enabled) — Proactive orchestration master toggle")
-        lines.append("  awareness.consent_granted = \(config.awareness.consentGrantedAt != nil) — Explicit consent for camera/screen awareness")
-        lines.append("  awareness.camera_enabled = \(config.awareness.cameraEnabled) — Camera awareness")
-        lines.append("  awareness.screen_enabled = \(config.awareness.screenEnabled) — Screen awareness")
-        lines.append("  voice_identity.enabled = \(config.voiceIdentity.enabled) — Speaker recognition active")
-        lines.append("  voice_identity.mode = \(config.voiceIdentity.mode) — assist (informational) or enforce (block unknown speakers)")
-        lines.append("  voice_identity.approval_requires_match = \(config.voiceIdentity.approvalRequiresMatch) — Require voice match for tool approval")
+        lines.append("")
+        lines.append("Always-on features (proactive-by-default):")
+        lines.append("  awareness — \(config.awareness.consentGrantedAt != nil ? "active" : "pending enrollment")")
+        lines.append("    camera: every \(config.awareness.cameraIntervalSeconds)s  |  screen: every \(config.awareness.screenIntervalSeconds)s")
+        lines.append("    overnight research: on  |  morning briefing: on")
+        lines.append("  memory — on  |  digests: on  |  auto-import: on")
+        lines.append("  vision — on  |  barge-in — on  |  direct address — on")
+        lines.append("  voice identity — enforce  |  tool access requires owner voice")
         return lines.joined(separator: "\n")
     }
 }

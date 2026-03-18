@@ -12,8 +12,43 @@ Fae should be:
 - **correct over fast** — Fae is not a real-time conversational chatbot. She is a thoughtful voice-first assistant that takes time to think, search, and verify before responding. Speed will improve as models improve, but correctness and thoroughness always come first.
 - reliable in conversation
 - memory-strong over long horizons
-- proactive where useful
-- quiet by default (no noise/clutter)
+- **proactive from day 1** — all awareness, memory, learning, and intelligence features are always-on from first launch. No setup required beyond voice enrollment.
+- the best, most proactive friend anyone can have
+
+## Proactive-by-default philosophy
+
+**Fae is proactive from the moment she's installed.** There are no feature toggles for core capabilities — voice identity is the security model, not settings switches.
+
+### Voice identity security model
+
+1. **Pre-enrollment (first launch)**: Fae listens to everyone, continually nudges to enroll as primary user. No tool calls except voice enrollment. Barge-in always on.
+2. **Primary user enrolled**: Fae ONLY responds to recognized voices. Primary user has full tool access.
+3. **Conversation mode**: While primary user is in an active conversation, Fae can hear and respond to others present (social context).
+4. **Guest access**: Primary user can introduce people and optionally grant them tool access.
+
+### Always-on features (cannot be toggled off)
+
+| Feature | Purpose |
+|---------|---------|
+| Proactive awareness | Watches for presence, monitors screen, researches overnight, delivers briefings |
+| Camera presence detection | Knows when you're at the desk — greetings, departure detection |
+| Screen monitoring | Understands what you're working on — builds silent context, never interrupts |
+| Overnight research | Researches topics you care about during quiet hours (22:00-06:00) |
+| Enhanced morning briefing | Calendar, mail, research findings, and reminders when you arrive |
+| Long-term memory | Remembers important things from every conversation |
+| Automatic note import | Ingests notes into memory without being asked |
+| Daily summaries | Creates daily digests of what happened |
+| Personal learning | Continuously improves based on your interactions |
+| Barge-in | User can always interrupt Fae mid-speech |
+| Voice identity enforcement | After primary enrollment, only recognized voices get responses |
+
+### Settings UI treatment
+
+These features are shown in Settings as an **informational showcase** — not toggle panels:
+- Each feature shows a clear explanation of WHAT it does and WHY it matters
+- No on/off toggles — these features define what Fae IS
+- Intensity/interval controls (e.g., camera check interval) remain adjustable
+- The section educates users about Fae's capabilities and builds trust
 
 ## Justfile recipes (canonical commands)
 
@@ -159,14 +194,17 @@ Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 | Task Tracking | `till_done` |
 | Voice Identity | `voice_identity` |
 
-**Tool modes** (Settings > Tools): `off`/`read_only` (read tools only), `read_write` (+ write/edit/self_config), `full` (all including bash), `full_no_approval` (all, skip approval for verified owner).
+**Tool access model**: Voice identity is the primary gate. Primary user (owner) gets `full` tool access. Guests get no tool access unless explicitly granted by the primary user. Pre-enrollment: no tool calls except voice enrollment.
+
+**Tool modes** (internal): `off`/`read_only` (read tools only), `read_write` (+ write/edit/self_config), `full` (all including bash), `full_no_approval` (all, skip approval for verified owner).
 
 **Native MLX tool calling**: tool specs passed via `UserInput.tools` → Qwen3.5 chat template. No separate intent classifier.
 
-### Tool security (7-layer model)
+### Tool security (8-layer model)
 
 | Layer | Implementation | Purpose |
 |-------|---------------|---------|
+| Voice identity | `SpeakerProfileStore` | Primary user verification — only recognized voices get tool access |
 | Damage control | `DamageControlPolicy` | Pre-broker: block/disaster/confirm for catastrophic ops |
 | Tool mode filtering | `ToolRegistry` | LLM never sees blocked tools |
 | Execution guard | `PipelineCoordinator` | Rejects hallucinated tool calls |
@@ -224,8 +262,8 @@ Config: `[channels]` in config.toml. Credentials in macOS Keychain via `Credenti
 
 ## Proactive awareness
 
-Requires explicit consent. Camera/screen NEVER auto-enabled.
-Consent: "Fae, set up awareness" → `first-launch-onboarding` skill → explicit ask BEFORE any capture.
+**Always-on from first launch.** Camera/screen awareness start automatically after primary user enrollment.
+No consent gate — these features are core to what Fae is, not optional add-ons.
 `injectProactiveQuery()` with immutable `ProactiveRequestContext`. Per-task tool allowlists in `TrustedActionBroker`.
 `AwarenessThrottle`: battery, thermal, quiet hours (22:00-07:00) gating.
 
@@ -252,24 +290,18 @@ In **rescue mode**: step 2 uses bundled default soul, step 4 uses empty string.
 
 Adjustable settings (bidirectional with Settings UI, via `FaeCore.patchConfig()`):
 
-| Key | Type | Range |
-|-----|------|-------|
-| `tts.speed` | Float | 0.8–1.4 |
-| `llm.temperature` | Float | 0.3–1.0 |
-| `llm.thinking_enabled` | Bool | — |
-| `barge_in.enabled` | Bool | — |
-| `conversation.require_direct_address` | Bool | — |
-| `conversation.direct_address_followup_s` | Int | 5–60 |
-| `vision.enabled` | Bool | — |
-| `awareness.enabled` | Bool | — |
-| `awareness.camera_enabled` | Bool | — |
-| `awareness.screen_enabled` | Bool | — |
-| `awareness.camera_interval_seconds` | Int | 10–120 |
-| `awareness.screen_interval_seconds` | Int | 10–60 |
-| `awareness.overnight_work` | Bool | — |
-| `awareness.enhanced_briefing` | Bool | — |
-| `awareness.pause_on_battery` | Bool | — |
-| `awareness.pause_on_thermal_pressure` | Bool | — |
+| Key | Type | Range | Notes |
+|-----|------|-------|-------|
+| `tts.speed` | Float | 0.8–1.4 | |
+| `llm.temperature` | Float | 0.3–1.0 | |
+| `llm.thinking_enabled` | Bool | — | |
+| `conversation.direct_address_followup_s` | Int | 5–60 | |
+| `awareness.camera_interval_seconds` | Int | 10–120 | Intensity control (always-on) |
+| `awareness.screen_interval_seconds` | Int | 10–60 | Intensity control (always-on) |
+| `awareness.pause_on_battery` | Bool | — | Power management only |
+| `awareness.pause_on_thermal_pressure` | Bool | — | Thermal management only |
+
+**Always-on (no toggle):** `barge_in`, `awareness.enabled`, `awareness.camera_enabled`, `awareness.screen_enabled`, `awareness.overnight_work`, `awareness.enhanced_briefing`, `memory.enabled`, `memory.generateDigests`, `vision.enabled`, `conversation.require_direct_address` (after primary enrollment).
 
 Directives: `get_directive`, `set_directive`, `append_directive`, `clear_directive`. Path: `~/Library/Application Support/fae/directive.md`.
 
@@ -297,48 +329,51 @@ Rolling backup at `~/.fae-vault/` — survives app deletion. Uses `/usr/bin/git`
 
 ## Configuration
 
-Config file: `~/Library/Application Support/fae/config.toml`
+Production mode uses code defaults (no config.toml). UserDefaults via Settings UI for user-adjustable values.
+
+**New defaults (proactive-by-default):**
 
 ```toml
 [llm]
-maxTokens = 512
-contextSizeTokens = 16384
+maxTokens = 4096
+contextSizeTokens = 0    # auto-sized by RAM
 temperature = 0.7
 voiceModelPreset = "auto"
 
 [memory]
-enabled = true
+enabled = true           # ALWAYS ON — not toggleable
 maxRecallResults = 6
+generateDigests = true   # ALWAYS ON — not toggleable
 
 [speaker]
 threshold = 0.70
 ownerThreshold = 0.75
-requireOwnerForTools = false
+requireOwnerForTools = true   # enforce voice identity for tool access
 progressiveEnrollment = true
 maxEnrollments = 50
 
 [bargeIn]
-enabled = true
+enabled = true           # ALWAYS ON — not toggleable
 minRms = 0.05
 confirmMs = 150
 
 [conversation]
-requireDirectAddress = false
+requireDirectAddress = true   # after primary enrollment, wake word required
 directAddressFollowupS = 20
 
 [vision]
-enabled = false
+enabled = true           # ALWAYS ON — not toggleable
 
 [awareness]
-enabled = false
-cameraEnabled = false
-screenEnabled = false
-cameraIntervalSeconds = 30
-screenIntervalSeconds = 19
-overnightWorkEnabled = false
-enhancedBriefingEnabled = false
-pauseOnBattery = true
-pauseOnThermalPressure = true
+enabled = true           # ALWAYS ON — not toggleable
+cameraEnabled = true     # ALWAYS ON — not toggleable
+screenEnabled = true     # ALWAYS ON — not toggleable
+cameraIntervalSeconds = 60    # adjustable intensity
+screenIntervalSeconds = 30    # adjustable intensity
+overnightWorkEnabled = true   # ALWAYS ON — not toggleable
+enhancedBriefingEnabled = true # ALWAYS ON — not toggleable
+pauseOnBattery = true         # power management (adjustable)
+pauseOnThermalPressure = true # thermal management (adjustable)
 ```
 
 Data paths:

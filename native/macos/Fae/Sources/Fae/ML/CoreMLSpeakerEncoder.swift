@@ -18,7 +18,10 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     // MARK: - State
 
     private var model: MLModel?
-    private var usingMelFallback = false
+    /// When `true`, the encoder produces 256-dim mel-spectral embeddings that can
+    /// distinguish TTS from human speech but **cannot** discriminate between different
+    /// humans. The pipeline must fall back to wake-word gating when this is `true`.
+    private(set) var usingMelFallback = false
     private(set) var isLoaded = false
     private(set) var loadState: MLEngineLoadState = .notStarted
     /// Last liveness analysis result — queried by pipeline for threshold enforcement.

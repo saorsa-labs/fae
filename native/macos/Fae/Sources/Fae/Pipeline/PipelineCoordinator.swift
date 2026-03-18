@@ -1041,6 +1041,11 @@ actor PipelineCoordinator {
     /// Distinguished from "not matched at all" (unknown/degraded) — only this
     /// flag should hard-block tools when `requireOwnerForTools` is enabled.
     private var currentSpeakerIsKnownNonOwner: Bool = false
+    /// Cached mel-fallback state of the speaker encoder. `nil` until first check.
+    /// When `true`, the encoder can only distinguish TTS from human speech — it
+    /// cannot discriminate between different humans. The pipeline skips human-to-human
+    /// matching and relies on wake-word gating instead.
+    private var speakerEncoderMelFallbackCached: Bool?
     private var previousSpeakerLabel: String?
     private var utterancesSinceOwnerVerified: Int = 0
     /// Wall-clock time when the current utterance was captured by the VAD.
@@ -1163,6 +1168,11 @@ actor PipelineCoordinator {
     private var streamingWakeLastEvaluatedSamples: Int = 0
     private var streamingWakeDetection: WakeWordAcousticDetector.Detection?
     private static let acousticWakeEvalStrideSamples = 4_800
+
+    /// Stashed segment from `handleSpeechSegment` for acoustic wake template learning.
+    private var lastProcessedSegment: SpeechSegment?
+    /// Maximum auto-enrolled acoustic wake templates (leave room for explicit enrollment).
+    private static let maxAutoWakeTemplates = 6
 
     // MARK: - Deferred Tool Jobs
 
@@ -2327,6 +2337,12 @@ actor PipelineCoordinator {
             return
         }
 
+        // Mel-spectral fallback cannot discriminate humans — skip the streaming
+        // speaker gate entirely (full-segment echo detection still runs).
+        if await isSpeakerEncoderMelFallback() {
+            return
+        }
+
         guard vadOutput.isSpeech,
               !assistantSpeaking,
               !assistantGenerating,
@@ -2685,6 +2701,49 @@ actor PipelineCoordinator {
         await wakeStore.recordAliasCandidate(alias, source: "owner_runtime")
         wakeAliases = await wakeStore.allAliases()
         debugLog(debugConsole, .command, "Wake alias learned: \(alias)")
+    }
+
+    /// Check (with one-shot caching) whether the speaker encoder is in mel-spectral
+    /// fallback mode, meaning it can distinguish TTS from human speech but CANNOT
+    /// discriminate between different humans.
+    private func isSpeakerEncoderMelFallback() async -> Bool {
+        if let cached = speakerEncoderMelFallbackCached { return cached }
+        guard let encoder = speakerEncoder, await encoder.isLoaded else {
+            speakerEncoderMelFallbackCached = false
+            return false
+        }
+        let result = await encoder.usingMelFallback
+        speakerEncoderMelFallbackCached = result
+        if result {
+            NSLog("PipelineCoordinator: speaker encoder using mel-spectral fallback — human speaker discrimination unavailable")
+        }
+        return result
+    }
+
+    /// Auto-enroll an acoustic wake template from the last processed speech segment.
+    /// Called after the text-based wake word fires in STT output, confirming the
+    /// segment prefix contains a wake phrase. This bootstraps the acoustic detector
+    /// so future "Hey Fae" utterances can be detected before STT completes.
+    private func learnAcousticWakeTemplateIfNeeded() async {
+        guard let segment = lastProcessedSegment,
+              let wakeStore = wakeWordProfileStore
+        else { return }
+
+        let currentCount = await wakeStore.acousticTemplateCount()
+        guard currentCount < Self.maxAutoWakeTemplates else { return }
+
+        let prefixMaxSamples = Int(Float(segment.sampleRate) * WakeWordAcousticDetector.maxDurationSeconds)
+        let prefix = Array(segment.samples.prefix(prefixMaxSamples))
+
+        guard let template = WakeWordAcousticDetector.makeTemplate(
+            samples: prefix,
+            sampleRate: segment.sampleRate
+        ) else { return }
+
+        await wakeStore.recordAcousticTemplate(template, source: "auto_text_wake")
+        let newCount = await wakeStore.acousticTemplateCount()
+        debugLog(debugConsole, .command, "Auto-enrolled acoustic wake template (\(newCount) total)")
+        NSLog("PipelineCoordinator: auto-enrolled acoustic wake template (%d total)", newCount)
     }
 
     private func resetConversationSession(trigger: String, source: String) async {
@@ -3439,6 +3498,11 @@ actor PipelineCoordinator {
         let addressedToFae = wakeMatch != nil || effectiveAcousticWakeDetection != nil
         if addressedToFae {
             await learnWakeAliasIfNeeded(rawText: effectiveRawText)
+            // Auto-enroll acoustic wake template from confirmed wake segments
+            // so the acoustic detector can fire before STT in future utterances.
+            if effectiveAcousticWakeDetection == nil {
+                await learnAcousticWakeTemplateIfNeeded()
+            }
         }
 
         let inFollowup = engagedUntil.map { Date() < $0 } ?? false
@@ -3632,6 +3696,10 @@ actor PipelineCoordinator {
         let rms = VoiceActivityDetector.computeRMS(segment.samples)
         let durationSecs = Float(segment.samples.count) / Float(segment.sampleRate)
 
+        // Stash segment for acoustic wake template auto-enrollment.
+        lastProcessedSegment = segment
+        defer { lastProcessedSegment = nil }
+
         // Capture wall-clock time from VAD onset for memory timestamps.
         currentUtteranceTimestamp = segment.capturedAt
 
@@ -3673,82 +3741,126 @@ actor PipelineCoordinator {
         currentSpeakerIsOwner = false
         currentSpeakerIsKnownNonOwner = false
         var speakerVerificationCompleted = false
+        var speakerVerificationDegraded = false
         // Speaker recognition is always on — no config gate.
         if let encoder = speakerEncoder, await encoder.isLoaded,
            let store = speakerProfileStore
         {
-            do {
-                let hasOwner = await store.hasOwnerProfile()
-                let previewDecision = await previewSpeakerVerification(
-                    segment: segment,
-                    encoder: encoder,
-                    store: store,
-                    hasOwner: hasOwner
-                )
+            let melFallback = await isSpeakerEncoderMelFallback()
 
-                switch previewDecision {
-                case .echoRejected(let faeSelfSim):
-                    NSLog(
-                        "PipelineCoordinator: dropping %.1fs segment (preview fae_self sim=%.3f, echo suppressor active)",
-                        durationSecs,
-                        faeSelfSim
-                    )
-                    debugLog(
-                        debugConsole,
-                        .pipeline,
-                        "Echo rejected [preview] (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)"
-                    )
-                    return
-
-                case .rejectUnknown:
-                    speakerVerificationCompleted = true
-                    NSLog("PipelineCoordinator: preview speaker verification rejected unknown speaker")
-                    debugLog(debugConsole, .speaker, "Preview rejected unknown speaker before full embed/STT")
-
-                case .useEmbedding(let embedding):
-                    speakerVerificationCompleted = true
-                    guard await evaluateSpeakerEmbedding(
-                        embedding,
-                        hasOwner: hasOwner,
-                        store: store,
-                        durationSecs: durationSecs,
-                        threshold: max(config.speaker.threshold - Self.previewSpeakerThresholdRelaxation, 0.55),
-                        progressiveEnrollment: true,
-                        source: "preview"
-                    ) else {
-                        return
-                    }
-
-                case .fallBackToFullSegment:
+            if melFallback {
+                // Mel-spectral fallback: effective for TTS vs human (echo detection)
+                // but CANNOT discriminate between different humans. Skip human-to-human
+                // matching and rely on wake-word / direct-address gating instead.
+                do {
                     let embedding = try await encoder.embed(
                         audio: segment.samples,
                         sampleRate: segment.sampleRate
                     )
-                    speakerVerificationCompleted = true
-
-                    guard await evaluateSpeakerEmbedding(
-                        embedding,
-                        hasOwner: hasOwner,
-                        store: store,
-                        durationSecs: durationSecs,
-                        threshold: config.speaker.threshold,
-                        progressiveEnrollment: true,
-                        source: "full"
-                    ) else {
+                    // Echo detection: reject if this sounds like Fae's TTS voice.
+                    if echoSuppressor.isInSuppression,
+                       let faeSelfSim = await store.matchesFaeSelf(
+                           embedding: embedding,
+                           threshold: config.speaker.threshold
+                       )
+                    {
+                        NSLog(
+                            "PipelineCoordinator: dropping %.1fs segment (mel-fallback echo, fae_self sim=%.3f)",
+                            durationSecs, faeSelfSim
+                        )
+                        debugLog(
+                            debugConsole,
+                            .pipeline,
+                            "Echo rejected [mel-fallback]: fae_self sim=\(String(format: "%.3f", faeSelfSim))"
+                        )
                         return
                     }
+                } catch {
+                    debugLog(debugConsole, .speaker, "Mel-fallback echo check failed: \(error.localizedDescription)")
                 }
-            } catch {
-                NSLog("PipelineCoordinator: speaker embed failed: %@", error.localizedDescription)
-                debugLog(debugConsole, .speaker, "Embed failed: \(error.localizedDescription)")
+                speakerVerificationDegraded = true
+                debugLog(
+                    debugConsole,
+                    .speaker,
+                    "Speaker verification degraded (mel-spectral fallback) — wake-word gating active"
+                )
+            } else {
+                // Neural speaker encoder available — full speaker verification.
+                do {
+                    let hasOwner = await store.hasOwnerProfile()
+                    let previewDecision = await previewSpeakerVerification(
+                        segment: segment,
+                        encoder: encoder,
+                        store: store,
+                        hasOwner: hasOwner
+                    )
+
+                    switch previewDecision {
+                    case .echoRejected(let faeSelfSim):
+                        NSLog(
+                            "PipelineCoordinator: dropping %.1fs segment (preview fae_self sim=%.3f, echo suppressor active)",
+                            durationSecs,
+                            faeSelfSim
+                        )
+                        debugLog(
+                            debugConsole,
+                            .pipeline,
+                            "Echo rejected [preview] (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)"
+                        )
+                        return
+
+                    case .rejectUnknown:
+                        speakerVerificationCompleted = true
+                        NSLog("PipelineCoordinator: preview speaker verification rejected unknown speaker")
+                        debugLog(debugConsole, .speaker, "Preview rejected unknown speaker before full embed/STT")
+
+                    case .useEmbedding(let embedding):
+                        speakerVerificationCompleted = true
+                        guard await evaluateSpeakerEmbedding(
+                            embedding,
+                            hasOwner: hasOwner,
+                            store: store,
+                            durationSecs: durationSecs,
+                            threshold: max(config.speaker.threshold - Self.previewSpeakerThresholdRelaxation, 0.55),
+                            progressiveEnrollment: true,
+                            source: "preview"
+                        ) else {
+                            return
+                        }
+
+                    case .fallBackToFullSegment:
+                        let embedding = try await encoder.embed(
+                            audio: segment.samples,
+                            sampleRate: segment.sampleRate
+                        )
+                        speakerVerificationCompleted = true
+
+                        guard await evaluateSpeakerEmbedding(
+                            embedding,
+                            hasOwner: hasOwner,
+                            store: store,
+                            durationSecs: durationSecs,
+                            threshold: config.speaker.threshold,
+                            progressiveEnrollment: true,
+                            source: "full"
+                        ) else {
+                            return
+                        }
+                    }
+                } catch {
+                    NSLog("PipelineCoordinator: speaker embed failed: %@", error.localizedDescription)
+                    debugLog(debugConsole, .speaker, "Embed failed: \(error.localizedDescription)")
+                }
             }
         } else {
             debugLog(debugConsole, .speaker, "Speaker encoder not loaded — owner verification skipped")
         }
 
         // Liveness enforcement: reject speech with low liveness score in enforce mode.
+        // Skip in mel-fallback mode — liveness heuristics assume neural embeddings.
         let ownerProfileExistsForLiveness = await speakerProfileStore?.hasOwnerProfile() ?? false
-        if config.voiceIdentity.enabled,
+        if !speakerVerificationDegraded,
+           config.voiceIdentity.enabled,
            config.voiceIdentity.mode == "enforce",
            config.speaker.livenessThreshold > 0,
            let encoder = speakerEncoder,
@@ -3770,11 +3882,19 @@ actor PipelineCoordinator {
         }
 
         let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
-        let speakerAllowsConversation = VoiceConversationPolicy.allowsConversation(
-            ownerProfileExists: ownerProfileExists,
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-            speakerRole: currentSpeakerRole
-        )
+        let speakerAllowsConversation: Bool
+        if speakerVerificationDegraded {
+            // Mel-spectral fallback cannot distinguish humans — allow conversation
+            // but rely on requireDirectAddress / wake-word gating for access control.
+            // Tools remain blocked (currentSpeakerIsOwner = false).
+            speakerAllowsConversation = true
+        } else {
+            speakerAllowsConversation = VoiceConversationPolicy.allowsConversation(
+                ownerProfileExists: ownerProfileExists,
+                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                speakerRole: currentSpeakerRole
+            )
+        }
 
         if Self.shouldSkipSTTAfterSpeakerVerification(
             ownerProfileExists: ownerProfileExists,

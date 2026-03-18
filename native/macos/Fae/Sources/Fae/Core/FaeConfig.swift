@@ -242,7 +242,9 @@ struct FaeConfig: Codable {
     struct SpeakerConfig: Codable {
         var threshold: Float = 0.70
         var ownerThreshold: Float = 0.75
-        var requireOwnerForTools: Bool = false
+        /// Voice identity gates tool access. Always true in proactive-by-default mode —
+        /// only the primary user (owner) or explicitly granted guests get tool access.
+        var requireOwnerForTools: Bool = true
         var progressiveEnrollment: Bool = true
         var maxEnrollments: Int = 50
         /// Minimum liveness score (0 = disabled, 1 = maximum strictness).
@@ -254,10 +256,12 @@ struct FaeConfig: Codable {
     // MARK: - Voice Identity
 
     struct VoiceIdentityConfig: Codable {
-        var enabled: Bool = false
-        /// assist|enforce
-        var mode: String = "assist"
-        var approvalRequiresMatch: Bool = false
+        /// Always enabled — voice identity is the primary security model.
+        var enabled: Bool = true
+        /// enforce: only recognized voices get tool access. assist: informational only.
+        var mode: String = "enforce"
+        /// Require voice match for tool approval.
+        var approvalRequiresMatch: Bool = true
     }
 
     // MARK: - Channels
@@ -317,31 +321,30 @@ struct FaeConfig: Codable {
     // MARK: - Awareness
 
     struct AwarenessConfig: Codable {
-        /// Master orchestration toggle.
-        /// Observation skills still require explicit consent (`consentGrantedAt`).
+        /// Master orchestration toggle. Always on — proactive-by-default.
         var enabled: Bool = true
-        /// Camera presence checks (greetings, mood, stranger detection).
-        /// Kept off by default until explicit consent flow enables it.
-        var cameraEnabled: Bool = false
+        /// Camera presence checks (greetings, mood, presence detection).
+        /// Always on after primary user enrollment — core to Fae's proactive nature.
+        var cameraEnabled: Bool = true
         /// Screen activity monitoring (passive context-building).
-        /// Kept off by default until explicit consent flow enables it.
-        var screenEnabled: Bool = false
-        /// Camera check interval in seconds.
-        var cameraIntervalSeconds: Int = 30
-        /// Screen check interval in seconds.
-        var screenIntervalSeconds: Int = 19
-        /// Research during quiet hours (22:00-06:00).
+        /// Always on after primary user enrollment — Fae builds silent context.
+        var screenEnabled: Bool = true
+        /// Camera check interval in seconds (adjustable intensity).
+        var cameraIntervalSeconds: Int = 60
+        /// Screen check interval in seconds (adjustable intensity).
+        var screenIntervalSeconds: Int = 30
+        /// Research during quiet hours (22:00-06:00). Always on.
         var overnightWorkEnabled: Bool = true
-        /// Enhanced morning briefing with calendar, mail, research.
+        /// Enhanced morning briefing with calendar, mail, research. Always on.
         var enhancedBriefingEnabled: Bool = true
-        /// Tier 1 proactive features (morning briefing, overnight research) run
-        /// without requiring full awareness consent. Defaults to true.
+        /// Tier 1 proactive features run without camera/screen consent. Always true.
         var proactiveLiteEnabled: Bool = true
-        /// Pause observations when on battery power.
+        /// Pause observations when on battery power (power management, adjustable).
         var pauseOnBattery: Bool = true
-        /// Pause observations under thermal pressure.
+        /// Pause observations under thermal pressure (thermal management, adjustable).
         var pauseOnThermalPressure: Bool = true
-        /// ISO8601 timestamp of explicit user consent. Nil means never consented.
+        /// ISO8601 timestamp when awareness was activated. Auto-set on primary
+        /// user enrollment — no separate consent flow required.
         var consentGrantedAt: String? = nil
     }
 

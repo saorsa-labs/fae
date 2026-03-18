@@ -201,14 +201,11 @@ struct SettingsModelsPerformanceTab: View {
             // Vision Model
             SettingsCard(title: "Vision", icon: "eye", color: .purple) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Enable Vision", isOn: $visionEnabled)
-                        .onChange(of: visionEnabled) {
-                            guard !hydratingFromConfig else { return }
-                            patchConfig("vision.enabled", value: visionEnabled)
-                            showRestartNotice = true
-                        }
+                    if FaeConfig.recommendedVLMModel() != nil {
+                        Text("Vision is always on — Fae can see screenshots, camera, and screen content.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
-                    if visionEnabled {
                         Picker("Vision Model", selection: $visionModelPreset) {
                             ForEach(visionModelOptions, id: \.value) { opt in
                                 Text(opt.label).tag(opt.value)
@@ -224,9 +221,17 @@ struct SettingsModelsPerformanceTab: View {
                         if let cacheStatus = LocalModelCatalog.visionCacheStatus(for: visionModelPreset) {
                             cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
                         }
+                    } else {
+                        Label {
+                            Text("Not enough RAM for vision — requires 16 GB or more.")
+                                .font(.caption)
+                        } icon: {
+                            Image(systemName: "memorychip")
+                                .foregroundStyle(.orange)
+                        }
                     }
 
-                    Text("Vision lets Fae see your screen and camera. Loads an extra model on demand. Requires 24+ GB RAM.")
+                    Text("Vision lets Fae see your screen and camera. Loads an extra model on demand.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
