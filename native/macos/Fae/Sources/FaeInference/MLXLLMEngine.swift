@@ -565,7 +565,7 @@ public actor MLXLLMEngine: LLMEngine {
         turnContextPrefix: String?
     ) -> [Chat.Message] {
         var chatMessages = makeChatMessages(from: messages)
-        attachTurnContext(turnContextPrefix, to: &chatMessages, mode: .firstMessage)
+        attachTurnContext(turnContextPrefix, to: &chatMessages, mode: .firstUserMessage)
         return chatMessages
     }
 
@@ -662,14 +662,29 @@ public actor MLXLLMEngine: LLMEngine {
             pendingToolResponses.removeAll()
         }
 
-        for msg in messages {
+        for (idx, msg) in messages.enumerated() {
             switch msg.role {
             case .user:
                 flushToolResponses()
                 result.append(.user(msg.content))
             case .assistant:
                 flushToolResponses()
-                result.append(.assistant(msg.content))
+                var content = msg.content
+                // Qwen3.5 template bug: when the assistant emits thinking + tool call
+                // with no visible text, the template leaves <think> unclosed. The model
+                // then sees corrupted context on the follow-up turn and produces 0 tokens.
+                //
+                // Fix: if this assistant message contains <tool_call> but no </think>
+                // marker, and the next message is a tool response, prepend </think>\n\n
+                // so the template properly closes its think block. This is model-agnostic:
+                // models without thinking have no <think> prefix in the template rendering.
+                let hasToolCall = content.contains("<tool_call>")
+                let hasThinkClose = content.contains("</think>")
+                let nextIsTool = idx + 1 < messages.count && messages[idx + 1].role == .tool
+                if hasToolCall && !hasThinkClose && nextIsTool {
+                    content = "</think>\n\n" + content.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                result.append(.assistant(content))
             case .system:
                 flushToolResponses()
                 result.append(.system(msg.content))

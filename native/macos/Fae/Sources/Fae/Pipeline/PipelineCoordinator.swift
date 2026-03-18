@@ -5925,7 +5925,8 @@ actor PipelineCoordinator {
            Self.canRunDeferredToolCalls(toolCalls, registry: registry),
            !Self.shouldPreferInlineToolExecution(userText: userText, toolCalls: toolCalls)
         {
-            let assistantToolMessage = Self.stripThinkContent(fullResponse)
+            // Preserve think content for deferred tool messages (same reason as inline path).
+            let assistantToolMessage = fullResponse
 
             let ack = "I’ll check that in the background and report back as soon as it’s ready."
             sendAssistantText(ack, isFinal: true)
@@ -5998,8 +5999,21 @@ actor PipelineCoordinator {
             }
         }
 
-        // Add the assistant's tool-calling message to history (strip think content).
-        await conversationState.addAssistantMessage(Self.stripThinkContent(fullResponse), tag: proactiveContext?.conversationTag)
+        // Add the assistant's tool-calling message to history.
+        //
+        // When tool calls are present, PRESERVE think content — the </think>
+        // marker is needed by Qwen3.5's Jinja template to properly close the
+        // think block before rendering tool calls. Stripping think content
+        // triggers a known template bug where <think> is left unclosed,
+        // corrupting every subsequent turn and causing 0-token generation.
+        //
+        // This is model-agnostic: any model that uses <think> blocks benefits
+        // from having the closing marker preserved. Models without thinking
+        // are unaffected (no <think> content to preserve).
+        let assistantHistoryText = toolCalls.isEmpty
+            ? Self.stripThinkContent(fullResponse)
+            : fullResponse
+        await conversationState.addAssistantMessage(assistantHistoryText, tag: proactiveContext?.conversationTag)
         await synchronizeLLMSession()
 
         let capabilityTicketForToolTurn = activeCapabilityTicket
