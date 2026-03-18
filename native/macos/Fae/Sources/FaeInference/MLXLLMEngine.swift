@@ -250,7 +250,9 @@ public actor MLXLLMEngine: LLMEngine {
                 let shouldParseToolCalls = !(options.tools?.isEmpty ?? true)
 
                 // Debug: dump chat messages for tool follow-up diagnosis.
-                let hasToolMessages = chatMessages.contains { $0.role == .tool }
+                // Check original messages (before tool→user conversion) since
+                // makeChatMessages converts tool messages to user messages.
+                let hasToolMessages = messages.contains { $0.role == .tool }
                 if hasToolMessages {
                     NSLog("MLXLLMEngine: ⚠️ TOOL FOLLOW-UP — dumping %d chat messages:", chatMessages.count)
                     for (i, msg) in chatMessages.enumerated() {
@@ -554,7 +556,7 @@ public actor MLXLLMEngine: LLMEngine {
     ) -> [Chat.Message] {
         var chatMessages: [Chat.Message] = [.system(systemPrompt)]
         chatMessages.append(contentsOf: makeChatMessages(from: messages))
-        attachTurnContext(turnContextPrefix, to: &chatMessages, mode: .lastMessage)
+        attachTurnContext(turnContextPrefix, to: &chatMessages, mode: .firstUserMessage)
         return chatMessages
     }
 
@@ -570,6 +572,7 @@ public actor MLXLLMEngine: LLMEngine {
     private enum TurnContextAttachmentMode {
         case firstMessage
         case lastMessage
+        case firstUserMessage
     }
 
     private func attachTurnContext(
@@ -591,6 +594,8 @@ public actor MLXLLMEngine: LLMEngine {
             targetIndex = chatMessages.indices.first
         case .lastMessage:
             targetIndex = chatMessages.indices.last
+        case .firstUserMessage:
+            targetIndex = chatMessages.firstIndex { $0.role == .user }
         }
 
         guard let index = targetIndex else {
@@ -612,6 +617,8 @@ public actor MLXLLMEngine: LLMEngine {
             case .firstMessage:
                 nearestUserIndex = chatMessages[chatMessages.index(after: index)...].firstIndex { $0.role == .user }
                     ?? chatMessages[..<index].lastIndex { $0.role == .user }
+            case .firstUserMessage:
+                nearestUserIndex = chatMessages.firstIndex { $0.role == .user }
             }
             if let userIdx = nearestUserIndex {
                 let userMsg = chatMessages[userIdx]
@@ -645,9 +652,12 @@ public actor MLXLLMEngine: LLMEngine {
 
         func flushToolResponses() {
             guard !pendingToolResponses.isEmpty else { return }
+            // Format must match what the Jinja template's multi_step_tool
+            // detection expects: content.startswith('<tool_response>') and
+            // content.endswith('</tool_response>') — no leading/trailing newlines.
             let combined = pendingToolResponses
-                .map { "\n<tool_response>\n\($0)\n</tool_response>" }
-                .joined()
+                .map { "<tool_response>\n\($0)\n</tool_response>" }
+                .joined(separator: "\n")
             result.append(.user(combined))
             pendingToolResponses.removeAll()
         }
