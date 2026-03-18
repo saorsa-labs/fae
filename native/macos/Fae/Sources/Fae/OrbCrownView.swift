@@ -151,20 +151,24 @@ struct OrbCrownView: View {
     private var moodArc: some View {
         let feeling = orbState.feeling
         let isActive = statusMode != nil
-        let showMood = moodExpanded && feeling != .neutral && (isActive || moodLingerActive)
+        // Show mood arc when engaged (Listening/Thinking/Speaking) OR when lingering after idle.
+        // During active states, show the mode as "engaged" mood even if feeling is still .neutral.
+        let showMood = moodExpanded && (isActive || moodLingerActive)
 
         if showMood {
             let color = feelingColor(feeling)
+            let label = (isActive && feeling == .neutral) ? statusModeLabel : feeling.label
+            let icon = (isActive && feeling == .neutral) ? statusModeIcon : feelingIcon(feeling)
 
             VStack(spacing: 4) {
                 // Icon — large, breathing.
-                Text(feelingIcon(feeling))
+                Text(icon)
                     .font(.system(size: 22))
                     .scaleEffect(breathe ? 1.12 : 0.92)
                     .opacity(breathe ? 1.0 : 0.7)
 
                 // Label — warm, readable.
-                Text(feeling.label)
+                Text(label)
                     .font(.system(size: 15, weight: .medium, design: .rounded))
                     .foregroundStyle(color)
                     .opacity(breathe ? 1.0 : 0.75)
@@ -186,6 +190,21 @@ struct OrbCrownView: View {
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.3)) { moodExpanded.toggle() }
             }
+        }
+    }
+
+    /// Mode name to use as mood label when feeling is .neutral during active states.
+    private var statusModeLabel: String {
+        statusMode ?? "Engaged"
+    }
+
+    /// Mode icon to use as mood icon when feeling is .neutral during active states.
+    private var statusModeIcon: String {
+        switch statusMode {
+        case "Listening\u{2026}": return "\u{1F50A}"  // 🔊
+        case "Thinking\u{2026}": return "\u{1F4AD}"  // 💭
+        case "Speaking\u{2026}": return "\u{1F50A}"  // 🔊
+        default: return "\u{25CB}"  // ○
         }
     }
 
