@@ -19,6 +19,13 @@ import SwiftUI
 /// The shader runs as a single-pass fragment shader applied via
 /// `.colorEffect()`, computing volumetric nebula layers, embers, rim glow,
 /// and grain per-pixel on the GPU.
+///
+/// ## Fallback Behavior
+///
+/// If the Metal shader is unavailable (GPU family mismatch, driver issue,
+/// missing bundle), a CPU-side radial gradient circle is shown instead.
+/// This ensures the orb is always visible and clickable, even on unsupported
+/// hardware, preventing the "invisible collapsed orb" UX trap.
 struct NativeOrbView: View {
     @ObservedObject var orbAnimation: OrbAnimationState
     var audioRMS: Double
@@ -69,8 +76,26 @@ struct NativeOrbView: View {
 
     // MARK: - Shader Canvas
 
+    /// Renders the orb using Metal shader if available, with a gradient fallback
+    /// always present underneath as a safety net for unsupported hardware.
     @ViewBuilder
     private func orbShaderCanvas(time: Float, size: CGSize, now: TimeInterval) -> some View {
+        ZStack {
+            // Gradient fallback — always rendered as the base layer.
+            // If the Metal shader is unavailable or fails to compile on this
+            // hardware, this gradient is the guaranteed visible orb.
+            gradientFallback(size: size)
+
+            // Metal shader canvas — layered on top.
+            // If the shader is unavailable the colorEffect falls back to the
+            // near-invisible base fill and the gradient underneath shows through.
+            metalOrbCanvas(time: time, size: size, now: now)
+        }
+    }
+
+    /// GPU-rendered orb via Metal shader.
+    @ViewBuilder
+    private func metalOrbCanvas(time: Float, size: CGSize, now: TimeInterval) -> some View {
         let snap = orbAnimation.current
         let colors = orbAnimation.colors
         let anticipation = orbAnimation.anticipationScale(at: now)
@@ -123,6 +148,45 @@ struct NativeOrbView: View {
                     .float(snap.radiusBias)
                 )
             )
+    }
+
+    /// CPU-side radial gradient fallback — always visible, no Metal required.
+    ///
+    /// Uses the orb's current color palette and breathing state to stay
+    /// visually consistent with the normal orb appearance.
+    @ViewBuilder
+    private func gradientFallback(size: CGSize) -> some View {
+        let colors = orbAnimation.colors
+        let breathe = sin(CACurrentMediaTime() * 1.2) > 0
+
+        ZStack {
+            // Outer glow
+            RadialGradient(
+                colors: [
+                    Color(simd: colors.1).opacity(0.9),
+                    Color(simd: colors.0).opacity(0.5),
+                    Color.clear,
+                ],
+                center: .center,
+                startRadius: size.width * 0.1,
+                endRadius: size.width * 0.5
+            )
+            .scaleEffect(breathe ? 1.08 : 1.0)
+
+            // Core glow
+            RadialGradient(
+                colors: [
+                    Color.white.opacity(0.7),
+                    Color(simd: colors.2).opacity(0.6),
+                    Color.clear,
+                ],
+                center: .center,
+                startRadius: 0,
+                endRadius: size.width * 0.3
+            )
+            .scaleEffect(breathe ? 1.05 : 1.0)
+        }
+        .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: breathe)
     }
 }
 
@@ -191,5 +255,17 @@ private final class OrbClickNSView: NSView {
     override func mouseExited(with event: NSEvent) {
         _ = event
         onHover?(nil)
+    }
+}
+
+// MARK: - Color Helper
+
+private extension Color {
+    init(simd vector: SIMD3<Float>) {
+        self.init(
+            red: Double(vector.x),
+            green: Double(vector.y),
+            blue: Double(vector.z)
+        )
     }
 }
