@@ -74,6 +74,23 @@ final class KeywordSpotterTests: XCTestCase {
         XCTAssertNil(match)
     }
 
+    func testFuzzyInterruptRejectsChannelAsCancel() async {
+        let spotter = KeywordSpotter(config: .default)
+        let match = await spotter.check(partialTranscript: "join the discord channel for me")
+        // "channel" is Levenshtein distance 2 from "cancel" — interrupt fuzzy
+        // matching uses max distance 1, so this must NOT trigger an interrupt.
+        XCTAssertNil(match)
+    }
+
+    func testFuzzyWakeAllowsDistance2() async {
+        let config = KeywordBiasConfig(interruptPhrases: [], wakePhrases: ["silence"], fuzzyMatching: true)
+        let spotter = KeywordSpotter(config: config)
+        // "salence" is distance 2 from "silence" — wake words allow distance 2 for >5 char phrases.
+        let match = await spotter.check(partialTranscript: "hey salence")
+        XCTAssertNotNil(match)
+        XCTAssertTrue(match?.isFuzzy ?? false)
+    }
+
     // MARK: - Case Sensitivity
 
     func testCaseInsensitiveMatch() async {

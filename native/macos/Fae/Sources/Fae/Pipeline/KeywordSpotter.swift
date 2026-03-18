@@ -162,7 +162,9 @@ public actor KeywordSpotter {
                 )
             }
 
-            if config.fuzzyMatching, let fuzzyMatch = fuzzyContains(searchText, phrase: keyword) {
+            if config.fuzzyMatching,
+               let fuzzyMatch = fuzzyContains(searchText, phrase: keyword, category: category)
+            {
                 detectedInCurrentSegment.insert(keyword)
                 return KeywordMatch(
                     category: category, matchedPhrase: fuzzyMatch,
@@ -182,8 +184,19 @@ public actor KeywordSpotter {
         return text.range(of: pattern, options: .regularExpression) != nil
     }
 
-    private func fuzzyContains(_ text: String, phrase: String) -> String? {
-        let maxDistance = phrase.count <= 5 ? 1 : 2
+    private func fuzzyContains(_ text: String, phrase: String, category: KeywordCategory) -> String? {
+        // Interrupt phrases use strict fuzzy matching (distance 1 only) because
+        // false positives are catastrophic — they reset the conversation.
+        // e.g. "channel" was matching "cancel" at distance 2, killing sessions.
+        // Wake words can tolerate distance 2 since a false positive just
+        // activates attention rather than destroying state.
+        let maxDistance: Int
+        switch category {
+        case .interrupt:
+            maxDistance = 1
+        case .wake:
+            maxDistance = phrase.count <= 5 ? 1 : 2
+        }
         guard !phrase.contains(" ") else { return nil }
 
         let words = text.components(separatedBy: .whitespaces)
