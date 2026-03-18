@@ -669,9 +669,9 @@ final class TestServer {
                 )
                 self.sendResponse(connection: connection, status: 200, body: [
                     "ok": true,
-                    "artifact_id": result.artifact.id,
-                    "record_id": result.record.id,
-                    "source_type": result.artifact.sourceType.rawValue,
+                    "imported": result.imported,
+                    "duplicates": result.duplicates,
+                    "total": result.total,
                     "was_duplicate": result.wasDuplicate,
                 ])
             } catch {

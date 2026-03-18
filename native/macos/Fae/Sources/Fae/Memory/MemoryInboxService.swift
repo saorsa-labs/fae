@@ -8,6 +8,13 @@ struct MemoryImportResult: Sendable {
     var wasDuplicate: Bool
 }
 
+struct MemoryBatchImportResult: Sendable {
+    var imported: Int
+    var duplicates: Int
+    var total: Int
+    var wasDuplicate: Bool { imported == 0 }
+}
+
 actor MemoryInboxService {
     enum ImportError: LocalizedError {
         case invalidURL
@@ -39,11 +46,59 @@ actor MemoryInboxService {
         self.store = store
     }
 
+    /// Import text, splitting multi-line input into individual memory records.
+    ///
+    /// When the text contains multiple lines, each non-empty line is stored as
+    /// a separate memory record so that individual facts can be recalled
+    /// independently. This matches the output format of the migration prompt
+    /// (one memory per line, optionally prefixed with `[date] -`).
+    ///
+    /// Single-line text is stored as one record (unchanged behavior).
     func importText(
         title: String? = nil,
         text: String,
         origin: String? = nil,
         sourceType: MemoryArtifactSourceType = .pastedText
+    ) async throws -> MemoryBatchImportResult {
+        let items = Self.splitImportedItems(text)
+        guard !items.isEmpty else {
+            throw ImportError.emptyContent
+        }
+
+        // Single item — fast path, same as before.
+        if items.count == 1 {
+            let result = try await storeSingleItem(
+                items[0], title: title, origin: origin, sourceType: sourceType
+            )
+            return MemoryBatchImportResult(
+                imported: result.wasDuplicate ? 0 : 1,
+                duplicates: result.wasDuplicate ? 1 : 0,
+                total: 1
+            )
+        }
+
+        // Multiple items — store each independently.
+        var imported = 0
+        var duplicates = 0
+        for item in items {
+            let result = try await storeSingleItem(
+                item, title: title, origin: origin, sourceType: sourceType
+            )
+            if result.wasDuplicate {
+                duplicates += 1
+            } else {
+                imported += 1
+            }
+        }
+        NSLog("MemoryInboxService: split import — %d items, %d imported, %d duplicates", items.count, imported, duplicates)
+        return MemoryBatchImportResult(imported: imported, duplicates: duplicates, total: items.count)
+    }
+
+    private func storeSingleItem(
+        _ text: String,
+        title: String?,
+        origin: String?,
+        sourceType: MemoryArtifactSourceType
     ) async throws -> MemoryImportResult {
         try await storeImportedArtifact(
             sourceType: sourceType,
@@ -58,6 +113,67 @@ actor MemoryInboxService {
                 extra: [:]
             )
         )
+    }
+
+    /// Split pasted text into individual memory items.
+    ///
+    /// Each non-empty line becomes a separate memory. Leading date prefixes
+    /// from the migration prompt format (`[2024-03-15] -`, `2024-03-15 -`) and
+    /// list markers (`- `, `* `, `1. `) are stripped.
+    static func splitImportedItems(_ text: String) -> [String] {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        return normalized
+            .components(separatedBy: "\n")
+            .map { line in
+                var cleaned = line.trimmingCharacters(in: .whitespaces)
+
+                // Strip migration prompt date prefix: [2024-03-15] - or [March 15, 2024] -
+                if cleaned.hasPrefix("["), let closeBracket = cleaned.firstIndex(of: "]") {
+                    var afterBracket = cleaned[cleaned.index(after: closeBracket)...]
+                        .trimmingCharacters(in: .whitespaces)
+                    if afterBracket.hasPrefix("-") || afterBracket.hasPrefix("—") {
+                        afterBracket = String(afterBracket.dropFirst())
+                            .trimmingCharacters(in: .whitespaces)
+                    }
+                    if !afterBracket.isEmpty {
+                        cleaned = afterBracket
+                    }
+                }
+
+                // Strip bare date prefix: 2024-03-15 - or March 15, 2024 -
+                if let dashRange = cleaned.range(of: " - ", range: cleaned.startIndex..<cleaned.index(cleaned.startIndex, offsetBy: min(30, cleaned.count))) {
+                    let beforeDash = cleaned[cleaned.startIndex..<dashRange.lowerBound]
+                    let looksLikeDate = beforeDash.contains(where: \.isNumber)
+                        && (beforeDash.contains("-") || beforeDash.contains("/") || beforeDash.contains(","))
+                    if looksLikeDate {
+                        cleaned = String(cleaned[dashRange.upperBound...])
+                            .trimmingCharacters(in: .whitespaces)
+                    }
+                }
+
+                // Strip list markers: "- ", "* ", "1. ", "2) "
+                if cleaned.hasPrefix("- ") || cleaned.hasPrefix("* ") {
+                    cleaned = String(cleaned.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                } else if let dotIdx = cleaned.firstIndex(of: "."),
+                          dotIdx < cleaned.index(cleaned.startIndex, offsetBy: min(4, cleaned.count)),
+                          cleaned[cleaned.startIndex..<dotIdx].allSatisfy(\.isNumber)
+                {
+                    cleaned = String(cleaned[cleaned.index(after: dotIdx)...])
+                        .trimmingCharacters(in: .whitespaces)
+                } else if let parenIdx = cleaned.firstIndex(of: ")"),
+                          parenIdx < cleaned.index(cleaned.startIndex, offsetBy: min(4, cleaned.count)),
+                          cleaned[cleaned.startIndex..<parenIdx].allSatisfy(\.isNumber)
+                {
+                    cleaned = String(cleaned[cleaned.index(after: parenIdx)...])
+                        .trimmingCharacters(in: .whitespaces)
+                }
+
+                return cleaned
+            }
+            .filter { !$0.isEmpty }
     }
 
     func importURL(_ urlString: String) async throws -> MemoryImportResult {

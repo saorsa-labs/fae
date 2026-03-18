@@ -25,7 +25,10 @@ struct MemoryImportWindowView: View {
         have stored about me, as well as any context you've learned about me from past \
         conversations. Output everything in a single code block so I can easily copy it.
 
-        Format each entry as: [date saved, if available] - memory content.
+        IMPORTANT: Put exactly ONE memory per line. Do not group or nest items. \
+        Each line should be a single standalone fact, preference, or detail.
+
+        Format each line as: [date saved, if available] - memory content
 
         Make sure to cover all of the following - preserve my words verbatim where possible:
         - Instructions I've given you about how to respond (tone, format, style, \
@@ -265,12 +268,17 @@ struct MemoryImportWindowView: View {
             pastedText = ""
             pastedTitle = ""
             focusMainWindow()
-            setStatus(
-                result.wasDuplicate
-                    ? "That text was already in the memory inbox."
-                    : "Imported pasted text into Fae's memory inbox.",
-                color: result.wasDuplicate ? .secondary : .green
-            )
+            if result.wasDuplicate {
+                setStatus("All items were already in the memory inbox.", color: .secondary)
+            } else if result.total == 1 {
+                setStatus("Imported 1 memory into Fae's inbox.", color: .green)
+            } else {
+                var msg = "Imported \(result.imported) memories into Fae's inbox."
+                if result.duplicates > 0 {
+                    msg += " Skipped \(result.duplicates) duplicate(s)."
+                }
+                setStatus(msg, color: .green)
+            }
         }
     }
 
