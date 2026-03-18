@@ -732,6 +732,20 @@ actor SQLiteMemoryStore {
         }
     }
 
+    /// Fetch all artifacts with a given content hash. Used by tests to verify
+    /// that distinct artifact records are created for the same content from
+    /// different origins (e.g. same text imported from different URLs).
+    func fetchArtifacts(matchingContentHash contentHash: String) throws -> [MemoryArtifact] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: "SELECT * FROM memory_artifacts WHERE content_hash = ? ORDER BY created_at ASC",
+                arguments: [contentHash]
+            )
+            return rows.map { Self.artifactFromRow($0) }
+        }
+    }
+
     func sourceLinks(recordID: String) throws -> [MemoryRecordSourceLink] {
         try dbQueue.read { db in
             let rows = try Row.fetchAll(

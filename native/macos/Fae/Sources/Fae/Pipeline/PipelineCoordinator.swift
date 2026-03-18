@@ -4789,15 +4789,20 @@ actor PipelineCoordinator {
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
-            // Detect conversation continuation: if there's already assistant history,
-            // the user is following up on a prior turn, not starting a new topic.
-            let conversationHasHistory = await conversationState.history.contains { $0.role == .assistant }
+            // Detect conversation continuation: the last assistant message must have
+            // been within 45 seconds. This gates the "show all tools on follow-up"
+            // heuristic so it doesn't over-trigger on new topics after long pauses.
+            let lastAssistantAt = await conversationState.lastAssistantMessageAt
+            let continuationWindowSeconds: TimeInterval = 45
+            let isRecentContinuation = lastAssistantAt.map {
+                Date().timeIntervalSince($0) <= continuationWindowSeconds
+            } ?? false
             let visibleToolNames = Self.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
                 userText: userText,
                 availableToolNames: registry.toolNames,
                 proactiveAllowedTools: proactiveContext?.allowedTools,
-                isConversationContinuation: conversationHasHistory
+                isConversationContinuation: isRecentContinuation
             )
             if let visibleToolNames {
                 debugLog(

@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Fae
 
@@ -39,6 +40,13 @@ final class MemoryInboxServiceTests: XCTestCase {
         XCTAssertEqual(first.imported, 1)
         XCTAssertEqual(second.imported, 0)
         XCTAssertEqual(second.duplicates, 1)
+
+        // Verify artifact sharing: only one artifact exists for the content hash,
+        // confirming the second import reused (not recreated) the artifact.
+        let contentHash = SHA256.hash(data: Data("Persistent memory should cite its sources.".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let artifacts = try await store.fetchArtifacts(matchingContentHash: contentHash)
+        XCTAssertEqual(artifacts.count, 1, "Duplicate import must share the same artifact record")
     }
 
     func testImportTextPreservesDistinctArtifactSourcesForSharedContent() async throws {
@@ -58,9 +66,18 @@ final class MemoryInboxServiceTests: XCTestCase {
             sourceType: .file
         )
 
-        // First is new, second links to existing record.
+        // Both imports succeed (different origins create distinct artifacts).
         XCTAssertFalse(first.wasDuplicate)
         XCTAssertFalse(second.wasDuplicate)
+
+        // Verify distinct artifacts: compute the content hash and query the store
+        // for all artifacts with that hash. Different origins must produce separate
+        // artifact records even when the content is identical.
+        let contentHash = SHA256.hash(data: Data("Shared content should keep both provenance labels.".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let artifacts = try await store.fetchArtifacts(matchingContentHash: contentHash)
+        let origins = Set(artifacts.compactMap(\.origin))
+        XCTAssertEqual(origins.count, 2, "Each distinct origin must produce its own artifact record")
     }
 
     func testGenerateDigestCreatesLinkedDerivedRecord() async throws {
@@ -77,11 +94,22 @@ final class MemoryInboxServiceTests: XCTestCase {
             text: "The overnight plan focuses on memory artifacts, source links, and digest-first recall."
         )
 
+        // Snapshot record IDs before generating the digest.
+        let preDigest = try await store.recentRecords(limit: 10)
+        let sourceRecordIDs = Set(preDigest.filter { $0.kind == .fact }.map(\.id))
+
         let digest = try await digestService.generateDigest()
         let unwrapped = try XCTUnwrap(digest)
 
         XCTAssertEqual(unwrapped.kind, .digest)
         XCTAssertTrue(unwrapped.text.contains("Recent memory digest"))
+
+        // Verify bidirectional source linking: the digest record is linked back to
+        // each imported source record via the digestSupport role.
+        let links = try await store.sourceLinks(recordID: unwrapped.id)
+        let linkedSourceIDs = Set(links.compactMap(\.sourceRecordId))
+        XCTAssertEqual(linkedSourceIDs, sourceRecordIDs, "Digest must link back to all imported source records")
+        XCTAssertTrue(links.allSatisfy { $0.role == .digestSupport })
     }
 
     func testGenerateDigestSkipsRepeatedSourceSetAcrossLaterRuns() async throws {

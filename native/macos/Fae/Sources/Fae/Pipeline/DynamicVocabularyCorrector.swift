@@ -39,29 +39,36 @@ actor DynamicVocabularyCorrector {
         let lower = result.lowercased()
 
         for entry in corrections {
-            guard let range = lower.range(of: entry.pattern) else { continue }
+            guard let lowerRange = lower.range(of: entry.pattern) else { continue }
 
-            // Word boundary check (same logic as TextProcessing.correctNameRecognition).
-            if range.lowerBound != lower.startIndex {
-                let before = lower[lower.index(before: range.lowerBound)]
+            // Verify word boundaries on the lowercased string.
+            if lowerRange.lowerBound != lower.startIndex {
+                let before = lower[lower.index(before: lowerRange.lowerBound)]
                 if before.isLetter || before.isNumber { continue }
             }
-            if range.upperBound != lower.endIndex {
-                let after = lower[range.upperBound]
+            if lowerRange.upperBound != lower.endIndex {
+                let after = lower[lowerRange.upperBound]
                 if after.isLetter || after.isNumber { continue }
             }
 
-            // Replace in original text preserving surrounding content.
-            let originalRange = result.index(
+            // Map the match range from `lower` back to `result` using position
+            // correspondence (lowercasing preserves character positions and length).
+            // We do this before any mutation so indices remain valid.
+            let resultStart = result.index(
                 result.startIndex,
-                offsetBy: lower.distance(from: lower.startIndex, to: range.lowerBound)
-            ) ..< result.index(
-                result.startIndex,
-                offsetBy: lower.distance(from: lower.startIndex, to: range.upperBound)
+                offsetBy: lower.distance(from: lower.startIndex, to: lowerRange.lowerBound)
             )
-            result.replaceSubrange(originalRange, with: entry.replacement)
+            let resultEnd = result.index(
+                result.startIndex,
+                offsetBy: lower.distance(from: lower.startIndex, to: lowerRange.upperBound)
+            )
+            let originalRange = resultStart..<resultEnd
 
-            // Only fix one dynamic correction per call to avoid cascading.
+            // Verify the characters at result's positions match what we found in
+            // lower (defensive: handles any edge-case Unicode normalisation).
+            guard result[originalRange].lowercased() == entry.pattern else { continue }
+
+            result.replaceSubrange(originalRange, with: entry.replacement)
             break
         }
 

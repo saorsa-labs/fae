@@ -22,3 +22,5 @@ Detailed version history moved from CLAUDE.md. For current architecture, see `CL
 - **v1.4.0** — Thinking crawl, capability discovery, enrollment UX, code quality pass
 - **v1.4.1** — CoWork approval flow fixes + camera tool fix
 - **v1.4.2** — ACP integration, channel adapters, training pipeline, skill hardening
+- **v0.8.125** — Memory inbox: multi-line pastes split into individual memory records; date prefixes and list markers from migration format are stripped automatically
+- **v0.8.124** — Tool visibility: conversational follow-ups now correctly show available tools; Discord channel setup fixed

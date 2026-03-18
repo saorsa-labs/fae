@@ -276,16 +276,10 @@ public actor MLXLLMEngine: LLMEngine {
                             let cachedTokenCount = cacheBox.value.first?.offset ?? 0
                             let totalPromptTokens = cachedTokenCount + input.text.tokens.size
 
-                            // Debug: decode prompt tail to see what the model receives.
+                            // Debug: log prompt token count for tool follow-up diagnosis.
                             if hasToolMessages {
-                                let tokens = input.text.tokens
-                                let tokenCount = tokens.size
+                                let tokenCount = input.text.tokens.size
                                 NSLog("MLXLLMEngine: TOOL FOLLOW-UP prompt: %d tokens total", tokenCount)
-                                // Dump the rendered prompt to a temp file for offline analysis.
-                                let dumpPath = "/tmp/fae-tool-followup-prompt.txt"
-                                let decoded = context.tokenizer.decode(tokens: (0..<tokenCount).map { input.text.tokens[$0].item() })
-                                try? decoded.write(toFile: dumpPath, atomically: true, encoding: .utf8)
-                                NSLog("MLXLLMEngine: prompt dumped to %@", dumpPath)
                             }
 
                             var effectiveParameters = baseParameters
@@ -575,8 +569,6 @@ public actor MLXLLMEngine: LLMEngine {
     }
 
     private enum TurnContextAttachmentMode {
-        case firstMessage
-        case lastMessage
         case firstUserMessage
     }
 
@@ -593,17 +585,7 @@ public actor MLXLLMEngine: LLMEngine {
 
         let payload = "<turn_context>\n\(turnContextPrefix)\n</turn_context>"
 
-        let targetIndex: Int?
-        switch mode {
-        case .firstMessage:
-            targetIndex = chatMessages.indices.first
-        case .lastMessage:
-            targetIndex = chatMessages.indices.last
-        case .firstUserMessage:
-            targetIndex = chatMessages.firstIndex { $0.role == .user }
-        }
-
-        guard let index = targetIndex else {
+        guard let index = chatMessages.firstIndex(where: { $0.role == .user }) else {
             chatMessages = [.user(payload)]
             return
         }
@@ -613,18 +595,10 @@ public actor MLXLLMEngine: LLMEngine {
         // Never inject turn context into tool result messages — the model
         // was trained to see clean tool responses. Mixing system context into
         // tool_response tags causes Qwen3.5 to produce 0 tokens on follow-ups.
-        // Instead, walk backward/forward to find the nearest user message.
+        // When the target message is a tool response, find the nearest user
+        // message instead so the context is available to the LLM.
         if message.role == .tool {
-            let nearestUserIndex: Int?
-            switch mode {
-            case .lastMessage:
-                nearestUserIndex = chatMessages[..<index].lastIndex { $0.role == .user }
-            case .firstMessage:
-                nearestUserIndex = chatMessages[chatMessages.index(after: index)...].firstIndex { $0.role == .user }
-                    ?? chatMessages[..<index].lastIndex { $0.role == .user }
-            case .firstUserMessage:
-                nearestUserIndex = chatMessages.firstIndex { $0.role == .user }
-            }
+            let nearestUserIndex = chatMessages.firstIndex { $0.role == .user }
             if let userIdx = nearestUserIndex {
                 let userMsg = chatMessages[userIdx]
                 chatMessages[userIdx] = Chat.Message(
@@ -634,7 +608,6 @@ public actor MLXLLMEngine: LLMEngine {
                     videos: userMsg.videos
                 )
             }
-            // If no user message found, skip — don't inject into tool message.
             return
         }
 

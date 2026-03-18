@@ -20,6 +20,10 @@ actor ConversationStateTracker {
     /// The last assistant response text (for context-aware intent classification).
     private(set) var lastAssistantText: String?
 
+    /// Wall-clock timestamp of the last assistant message, used for
+    /// conversation-continuation tool visibility gating.
+    private(set) var lastAssistantMessageAt: Date?
+
     // MARK: - Configuration
 
     /// Set the maximum history message count (called by FaeCore after pipeline setup).
@@ -73,6 +77,7 @@ actor ConversationStateTracker {
     func addAssistantMessage(_ text: String, tag: String? = nil) {
         history.append(LLMMessage(role: .assistant, content: text, tag: tag))
         lastAssistantText = text
+        lastAssistantMessageAt = Date()
         trimHistory()
     }
 
@@ -98,12 +103,18 @@ actor ConversationStateTracker {
     func removeMessages(taggedWith tag: String) {
         history.removeAll { $0.tag == tag }
         lastAssistantText = history.last(where: { $0.role == .assistant })?.content
+        // If the last assistant message was removed, clear the timestamp so the
+        // continuation window doesn't stay stale.
+        if lastAssistantText == nil {
+            lastAssistantMessageAt = nil
+        }
     }
 
     /// Clear all history.
     func clear() {
         history.removeAll()
         lastAssistantText = nil
+        lastAssistantMessageAt = nil
     }
 
     // MARK: - Private
