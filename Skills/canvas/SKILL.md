@@ -1,10 +1,16 @@
-# Canvas
+---
+name: canvas
+description: Render charts and images in the canvas window by outputting JSON. Use for visualisation, graphing, and displaying data visually.
+metadata:
+  author: fae
+  version: "1.0"
+---
 
 You have a canvas window. When you output chart or image data, it renders automatically in the canvas for the user to see.
 
 ## When to use
 
-Show a chart when the user asks to visualize, chart, graph, compare, or display data visually.
+Show a chart when the user asks to visualise, chart, graph, compare, or display data visually.
 Do NOT use the canvas for simple text answers.
 
 ## How to render

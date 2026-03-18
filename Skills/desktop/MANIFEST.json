@@ -4,13 +4,17 @@
     "instructions"
   ],
   "allowedTools": [
-    "activate_skill",
-    "self_config",
-    "voice_identity"
+    "screenshot",
+    "read_screen",
+    "click",
+    "type_text",
+    "scroll",
+    "find_element",
+    "camera"
   ],
   "allowedDomains": [],
   "dataClasses": [],
-  "riskTier": "low",
+  "riskTier": "medium",
   "timeoutSeconds": 15,
   "allowNetwork": false,
   "allowSubprocess": false,

@@ -1,12 +1,16 @@
-# Apple Ecosystem Integration
+---
+name: apple-ecosystem
+description: Use Fae's Apple ecosystem tools — Contacts, Calendar, Reminders, Notes, and Mail — to manage the user's information and productivity.
+metadata:
+  author: fae
+  version: "1.0"
+---
 
-Fae integrates with five core Apple apps through dedicated tools. Each app
-requires explicit user permission before you can use its tools.
+Fae integrates with five core Apple apps through dedicated tools. Each requires explicit user permission.
 
-**Permission model**: If you try a tool and permission hasn't been granted, the
-system will prompt the user to allow access. If they decline, respect their
-choice — never repeatedly request the same permission. Instead, explain what
-you could do with access and suggest they enable it later in Settings.
+## Permission Model
+
+If you try a tool and permission hasn't been granted, the system will prompt the user. If they decline, respect their choice — never repeatedly request the same permission. Explain what you could do with access and suggest they enable it later in Settings.
 
 ---
 
@@ -18,8 +22,7 @@ you could do with access and suggest they enable it later in Settings.
 | `get_contact` | Read | Get full details for a specific contact |
 | `create_contact` | Write | Create a new contact entry |
 
-When the user mentions a person by name, look up their contact to personalise
-your response (e.g. "call Sarah" → find Sarah's phone number).
+When the user mentions a person by name, look up their contact to personalise your response (e.g. "call Sarah" → find Sarah's phone number).
 
 ---
 
@@ -33,9 +36,7 @@ your response (e.g. "call Sarah" → find Sarah's phone number).
 | `update_calendar_event` | Write | Modify an existing event |
 | `delete_calendar_event` | Write | Remove a calendar event |
 
-Always confirm before creating, modifying, or deleting events. When creating
-events, check for conflicts first using `list_calendar_events`. Be specific
-about dates, times, and time zones.
+Always confirm before creating, modifying, or deleting events. When creating events, check for conflicts first using `list_calendar_events`. Be specific about dates, times, and time zones.
 
 ---
 
@@ -48,9 +49,7 @@ about dates, times, and time zones.
 | `create_reminder` | Write | Create a new reminder |
 | `set_reminder_completed` | Write | Mark a reminder as complete |
 
-When the user asks to "remember to..." or "remind me to...", create a reminder.
-Suggest a reasonable due date when the user doesn't specify one. When creating
-a task, offer to add a reminder with a due date.
+When the user says "remember to..." or "remind me to...", create a reminder. Suggest a reasonable due date when they don't specify one.
 
 ---
 
@@ -63,9 +62,7 @@ a task, offer to add a reminder with a due date.
 | `create_note` | Write | Create a new note |
 | `append_to_note` | Write | Append content to an existing note |
 
-Use notes for longer-form content the user wants to save — meeting summaries,
-research findings, lists, drafts. Prefer `append_to_note` over creating
-duplicates when adding to an existing topic.
+Use notes for longer-form content — meeting summaries, research findings, lists, drafts. Prefer `append_to_note` over creating duplicates.
 
 ---
 
@@ -77,15 +74,13 @@ duplicates when adding to an existing topic.
 | `get_mail` | Read | Get full content of a specific email |
 | `compose_mail` | Write | Compose and send an email |
 
-**Always confirm recipient and content before sending.** Summarise long email
-threads concisely. When composing replies, match the tone of the conversation.
+Always confirm recipient and content before sending. Summarise long email threads concisely. When composing replies, match the tone of the conversation.
 
 ---
 
 ## Extended Apps via AppleScript
 
-For apps without dedicated tools, use `bash` with `osascript` (requires
-DesktopAutomation permission):
+For apps without dedicated tools, use `bash` with `osascript` (requires DesktopAutomation permission):
 
 - **Messages** — `osascript -e 'tell application "Messages" to send "text" to buddy "name"'`
 - **Shortcuts** — `shortcuts run "Shortcut Name"`

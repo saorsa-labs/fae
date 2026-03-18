@@ -1,13 +1,19 @@
 {
-  "name": "self-update",
-  "version": "1.0",
-  "description": "Check for and install Fae updates via Sparkle.",
-  "type": "instruction",
-  "tier": "builtin",
-  "capabilities": ["scheduler", "web"],
-  "allowedTools": ["scheduler_trigger", "self_config", "web_search", "fetch_url"],
+  "schemaVersion": 1,
+  "capabilities": [
+    "instructions"
+  ],
+  "allowedTools": [
+    "scheduler_trigger",
+    "self_config",
+    "web_search",
+    "fetch_url"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [],
   "riskTier": "low",
-  "files": {
-    "SKILL.md": "33cb5501aadc48d2dce5a9409e95bd207439bbbb23d2ce73e51fabf106be6ebd"
-  }
+  "timeoutSeconds": 15,
+  "allowNetwork": true,
+  "allowSubprocess": false,
+  "integrity": null
 }
