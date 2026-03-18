@@ -6196,6 +6196,7 @@ actor PipelineCoordinator {
 
         var toolSuccessCount = 0
         var toolFailureCount = 0
+        var preflightDenialCount = 0
         var firstToolError: String?
         var directToolReply: String?
 
@@ -6212,6 +6213,7 @@ actor PipelineCoordinator {
             if let preflightDenial {
                 debugLog(debugConsole, .approval, "Blocked tool call before execution: \(call.name) — \(preflightDenial)")
                 toolFailureCount += 1
+                preflightDenialCount += 1
                 if firstToolError == nil {
                     firstToolError = preflightDenial
                 }
@@ -6335,17 +6337,26 @@ actor PipelineCoordinator {
         }
 
         if toolFailureCount > 0 && toolSuccessCount == 0 {
-            await conversationState.removeMessages(taggedWith: "tilldone_nudge")
-            let reason = firstToolError ?? "the tool call was denied or failed"
-            let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
-            sendAssistantText(msg, isFinal: true)
-            if generationContext.allowsAudibleOutput {
-                await speakText(msg, isFinal: true)
+            // Distinguish unrecoverable denials from recoverable tool errors.
+            // Preflight denials (tool blocked by mode/policy) can't be retried.
+            // Tool execution errors (wrong params, validation) should be fed back
+            // to the LLM so it can self-correct with the right arguments.
+            let allFailuresAreDenials = preflightDenialCount == toolFailureCount
+            if allFailuresAreDenials || turnCount >= 4 {
+                await conversationState.removeMessages(taggedWith: "tilldone_nudge")
+                let reason = firstToolError ?? "the tool call was denied or failed"
+                let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
+                sendAssistantText(msg, isFinal: true)
+                if generationContext.allowsAudibleOutput {
+                    await speakText(msg, isFinal: true)
+                }
+                endAssistantGeneration()
+                await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
+                activeCapabilityTicket = nil
+                return
             }
-            endAssistantGeneration()
-            await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
-            activeCapabilityTicket = nil
-            return
+            // Recoverable tool error — let LLM see the error and retry.
+            debugLog(debugConsole, .qa, "Tool error is recoverable (turn \(turnCount)) — feeding back to LLM for self-correction")
         }
 
         if turnCount == 0,
@@ -8085,6 +8096,7 @@ actor PipelineCoordinator {
 
         var toolSuccessCount = 0
         var toolFailureCount = 0
+        var preflightDenialCount = 0
         var firstToolError: String?
         var directToolReply: String?
 
@@ -8103,6 +8115,7 @@ actor PipelineCoordinator {
             if let preflightDenial {
                 debugLog(debugConsole, .approval, "Blocked deferred tool call before execution: \(call.name) — \(preflightDenial)")
                 toolFailureCount += 1
+                preflightDenialCount += 1
                 if firstToolError == nil {
                     firstToolError = preflightDenial
                 }
@@ -8163,14 +8176,20 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .qa, "Deferred tool summary: success=\(toolSuccessCount) failure=\(toolFailureCount)")
 
         if toolFailureCount > 0 && toolSuccessCount == 0 {
-            let reason = firstToolError ?? "the tool call was denied or failed"
-            let msg = "I couldn't complete that background check because the required tool didn't run: \(reason)"
-            sendAssistantText(msg, isFinal: true)
-            if job.generationContext.allowsAudibleOutput {
-                await speakText(msg, isFinal: true)
+            // Only short-circuit when all failures are preflight denials (unrecoverable).
+            // Tool execution errors (wrong params) are fed back to the LLM via follow-up.
+            let allFailuresAreDenials = preflightDenialCount == toolFailureCount
+            if allFailuresAreDenials {
+                let reason = firstToolError ?? "the tool call was denied or failed"
+                let msg = "I couldn't complete that background check because the required tool didn't run: \(reason)"
+                sendAssistantText(msg, isFinal: true)
+                if job.generationContext.allowsAudibleOutput {
+                    await speakText(msg, isFinal: true)
+                }
+                await finalizeWorkflowTraceIfNeeded(turnID: job.originTurnID, assistantOutcome: msg, success: false)
+                return
             }
-            await finalizeWorkflowTraceIfNeeded(turnID: job.originTurnID, assistantOutcome: msg, success: false)
-            return
+            debugLog(debugConsole, .qa, "Deferred tool error is recoverable — feeding back to LLM for self-correction")
         }
 
         // Wait for any in-progress speech to finish before starting the
