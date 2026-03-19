@@ -22,6 +22,9 @@ final class ApprovalOverlayController: ObservableObject {
     /// The currently active approval request, if any.
     @Published var activeApproval: ApprovalRequest?
 
+    /// The currently active batch approval request, if any.
+    @Published var activeBatchApproval: BatchApprovalDisplayRequest?
+
     /// The currently active input request, if any.
     @Published var activeInput: InputRequest?
 
@@ -44,6 +47,18 @@ final class ApprovalOverlayController: ObservableObject {
         let manualOnly: Bool
         /// When true, the overlay shows the DISASTER WARNING variant with a red border.
         let isDisasterLevel: Bool
+    }
+
+    /// A batch approval request displayed as a single grouped card.
+    struct BatchApprovalDisplayRequest: Identifiable {
+        /// Unique batch identifier.
+        let id: String
+        /// Name of the tool being batch-approved.
+        let toolName: String
+        /// Number of actions in the batch.
+        let count: Int
+        /// Representative description from the first action.
+        let description: String
     }
 
     struct InputField: Identifiable {
@@ -117,6 +132,18 @@ final class ApprovalOverlayController: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor in
                     self?.activeApproval = nil
+                }
+            }
+        )
+
+        observations.append(
+            center.addObserver(
+                forName: .faeBatchApprovalRequested,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleBatchRequested(notification.userInfo ?? [:])
                 }
             }
         )
@@ -265,6 +292,38 @@ final class ApprovalOverlayController: ObservableObject {
 
     // Bulk-approve methods (approveAllReadOnly, approveAll) removed.
     // Users build trust tool-by-tool via the "Always" button instead.
+
+    // MARK: - Batch Approval Actions
+
+    /// Approve all actions in the active batch.
+    func approveBatch() {
+        guard let batch = activeBatchApproval else { return }
+        NSLog("ApprovalOverlayController: approveBatch() batch_id=%@ tool=%@ count=%d", batch.id, batch.toolName, batch.count)
+        NotificationCenter.default.post(
+            name: .faeBatchApprovalRespond,
+            object: nil,
+            userInfo: [
+                "batch_id": batch.id,
+                "approved": true,
+            ]
+        )
+        activeBatchApproval = nil
+    }
+
+    /// Deny all actions in the active batch.
+    func denyBatch() {
+        guard let batch = activeBatchApproval else { return }
+        NSLog("ApprovalOverlayController: denyBatch() batch_id=%@ tool=%@", batch.id, batch.toolName)
+        NotificationCenter.default.post(
+            name: .faeBatchApprovalRespond,
+            object: nil,
+            userInfo: [
+                "batch_id": batch.id,
+                "approved": false,
+            ]
+        )
+        activeBatchApproval = nil
+    }
 
     // MARK: - Input Actions
 
@@ -597,6 +656,25 @@ final class ApprovalOverlayController: ObservableObject {
             title: title,
             message: message,
             confirmLabel: confirmLabel
+        )
+    }
+
+    private func handleBatchRequested(_ info: [AnyHashable: Any]) {
+        let batchId = info["batch_id"] as? String ?? UUID().uuidString
+        let toolName = info["tool_name"] as? String ?? "tool"
+        let count: Int
+        if let c = info["count"] as? Int {
+            count = c
+        } else {
+            count = 1
+        }
+        let description = info["description"] as? String ?? "Use \(toolName)"
+
+        activeBatchApproval = BatchApprovalDisplayRequest(
+            id: batchId,
+            toolName: toolName,
+            count: count,
+            description: description
         )
     }
 

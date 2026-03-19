@@ -199,6 +199,27 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
+                forName: .faeBatchApprovalRespond,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let batchId = notification.userInfo?["batch_id"] as? String,
+                      let approved = notification.userInfo?["approved"] as? Bool
+                else { return }
+                NSLog(
+                    "HostCommandBridge: approval.batch_respond batch_id=%@ approved=%@",
+                    batchId, String(describing: approved)
+                )
+                Task { @MainActor in
+                    self?.dispatch("approval.batch_respond", payload: [
+                        "batch_id": batchId,
+                        "approved": approved,
+                    ])
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
                 forName: .faeGovernanceActionRequested,
                 object: nil,
                 queue: .main

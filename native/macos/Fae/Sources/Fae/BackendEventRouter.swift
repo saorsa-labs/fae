@@ -256,6 +256,16 @@ final class BackendEventRouter: Sendable {
                 name: .faeApprovalResolved, object: nil, userInfo: userInfo
             )
 
+        case "approval.batch_requested":
+            var userInfo: [String: Any] = ["event": event]
+            if let batchId = payload["batch_id"] as? String { userInfo["batch_id"] = batchId }
+            if let toolName = payload["tool_name"] as? String { userInfo["tool_name"] = toolName }
+            if let count = payload["count"] { userInfo["count"] = count }
+            if let description = payload["description"] as? String { userInfo["description"] = description }
+            NotificationCenter.default.post(
+                name: .faeBatchApprovalRequested, object: nil, userInfo: userInfo
+            )
+
         // MARK: - Pipeline State (all remaining pipeline.* events)
 
         default:
@@ -446,6 +456,22 @@ extension Notification.Name {
     /// - `approved: Bool` — whether the tool was approved
     /// - `source: String` — `"voice"`, `"button"`, or `"timeout"`
     static let faeApprovalResolved = Notification.Name("faeApprovalResolved")
+
+    /// Posted when a batch of tool approvals is requested at once.
+    ///
+    /// userInfo keys:
+    /// - `batch_id: String` — unique batch identifier
+    /// - `tool_name: String` — the tool being batch-approved
+    /// - `count: Int` — number of actions in the batch
+    /// - `description: String` — representative description
+    static let faeBatchApprovalRequested = Notification.Name("faeBatchApprovalRequested")
+
+    /// Posted when the user responds to a batch approval request.
+    ///
+    /// userInfo keys:
+    /// - `batch_id: String` — the batch identifier
+    /// - `approved: Bool` — whether the batch was approved
+    static let faeBatchApprovalRespond = Notification.Name("faeBatchApprovalRespond")
 
     // MARK: Tool Mode Upgrade
 

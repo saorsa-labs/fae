@@ -21,10 +21,10 @@ SPEC_DIR="$PROJECT_DIR/tests/comprehensive/specs"
 REPORT_DIR="$PROJECT_DIR/tests/comprehensive/reports"
 AGENT_PROMPT="$PROJECT_DIR/tests/comprehensive/agent-prompt.md"
 FAE_URL="http://127.0.0.1:7433"
-CHATTERBOX_URL="http://127.0.0.1:8000"
+VOICE_CMD="${VOICE_CMD:-voice}"
 RECORDING_PID=""
 RECORDING_FILE=""
-CHATTERBOX_AVAILABLE=false
+VOICE_AVAILABLE=false
 
 # Defaults
 MODEL="claude"
@@ -852,29 +852,18 @@ execute_step() {
             fi
             ;;
         speak)
-            # Speak text through Chatterbox TTS → speakers → Fae's mic (full voice pipeline)
-            local text voice play_audio
+            # Speak text through voice CLI → speakers → Fae's mic (full voice pipeline)
+            local text speak_voice
             text=$(echo "$step_json" | jq -r '.text // empty')
-            voice=$(echo "$step_json" | jq -r '.voice // "jarvis"')
-            play_audio=$(echo "$step_json" | jq -r '.play // true')
+            speak_voice=$(echo "$step_json" | jq -r '.voice // "af_heart"')
             if [ -z "$text" ]; then
                 yellow "  Warning: speak step has no text"
                 return
             fi
             PHRASING_USED="$text"
-            local escaped_text
-            escaped_text=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
-            if $VERBOSE; then dim "  speak: '$text' (voice=$voice)"; fi
-            local speak_body
-            speak_body="{\"text\":${escaped_text},\"voice\":\"${voice}\",\"play\":${play_audio}}"
-            local speak_status
-            speak_status=$(curl -s -o /dev/null -w "%{http_code}" \
-                --connect-timeout 5 --max-time 30 \
-                -X POST "${CHATTERBOX_URL}/speak" \
-                -H "Content-Type: application/json" \
-                -d "${speak_body}" 2>/dev/null || echo "000")
-            if [ "$speak_status" != "200" ]; then
-                yellow "  Warning: Chatterbox /speak returned $speak_status (is Chatterbox running?)"
+            if $VERBOSE; then dim "  speak: '$text' (voice=$speak_voice)"; fi
+            if ! $VOICE_CMD -q -v "$speak_voice" "$text" 2>/dev/null; then
+                yellow "  Warning: voice command failed (is voice installed?)"
             fi
             ;;
         record_audio_start)
@@ -1032,10 +1021,10 @@ print(json.dumps({
         return
     fi
 
-    # Skip live_audio if Chatterbox not available
-    if [ "$test_class" = "live_audio" ] && ! $CHATTERBOX_AVAILABLE; then
+    # Skip live_audio if voice CLI not available
+    if [ "$test_class" = "live_audio" ] && ! $VOICE_AVAILABLE; then
         SKIPPED=$((SKIPPED + 1))
-        yellow "  SKIP $test_id ($test_name) — live_audio, Chatterbox not available"
+        yellow "  SKIP $test_id ($test_name) — live_audio, voice CLI not available"
         record_result "$(python3 -c "
 import json
 print(json.dumps({
@@ -1519,14 +1508,14 @@ main() {
     check_prereqs
     wait_for_fae || exit 1
 
-    # Check Chatterbox TTS availability (required for live_audio tests)
-    dim "  Checking Chatterbox TTS availability..."
-    if curl -s --max-time 2 "$CHATTERBOX_URL/health" > /dev/null 2>&1; then
-        CHATTERBOX_AVAILABLE=true
-        dim "  Chatterbox: available at $CHATTERBOX_URL"
+    # Check voice CLI availability (required for live_audio tests)
+    dim "  Checking voice CLI availability..."
+    if command -v "$VOICE_CMD" > /dev/null 2>&1; then
+        VOICE_AVAILABLE=true
+        dim "  Voice: available at $(command -v "$VOICE_CMD")"
     else
-        CHATTERBOX_AVAILABLE=false
-        dim "  Chatterbox: not available — live_audio tests will be skipped"
+        VOICE_AVAILABLE=false
+        dim "  Voice: not available — live_audio tests will be skipped"
     fi
 
     # Disable thinking mode for consistent, faster test execution.

@@ -911,6 +911,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 respondToApproval(requestID: requestId, decisionStr: decisionStr, toolName: toolName, payload: payload)
             }
 
+        case "approval.batch_respond":
+            if let batchId = payload["batch_id"] as? String,
+               let approved = payload["approved"] as? Bool
+            {
+                Task {
+                    await self.approvalManager.resolveBatch(batchId: batchId, approved: approved, source: "button")
+                }
+            }
+
         case "speaker.rename":
             if let label = payload["label"] as? String,
                let displayName = payload["displayName"] as? String

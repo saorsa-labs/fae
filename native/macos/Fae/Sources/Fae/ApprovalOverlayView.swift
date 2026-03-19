@@ -30,6 +30,12 @@ struct ApprovalOverlayView: View {
                         insertion: .move(edge: .bottom).combined(with: .opacity),
                         removal: .opacity
                     ))
+            } else if let request = controller.activeBatchApproval {
+                BatchApprovalCard(request: request, controller: controller)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .opacity
+                    ))
             } else if let request = controller.activeApproval {
                 Group {
                     if request.isDisasterLevel {
@@ -47,6 +53,7 @@ struct ApprovalOverlayView: View {
             }
         }
         .animation(.spring(duration: 0.3), value: controller.activeApproval?.id)
+        .animation(.spring(duration: 0.3), value: controller.activeBatchApproval?.id)
         .animation(.spring(duration: 0.3), value: controller.activeInput?.id)
         .animation(.spring(duration: 0.3), value: controller.activeToolModeRequest?.id)
         .animation(.spring(duration: 0.3), value: controller.activeGovernanceConfirmation?.id)
@@ -125,6 +132,76 @@ private struct ApprovalCard: View {
         .background(.ultraThinMaterial)
         .overlay(alignment: .topTrailing) {
             DismissOverlayButton(action: controller.deny)
+                .padding(.top, 10)
+                .padding(.trailing, 10)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+    }
+}
+
+// MARK: - Batch Approval Card
+
+/// Grouped approval card for scripts that invoke the same tool multiple times.
+/// Shows the tool name and count, with Allow All / Deny All buttons.
+/// Never used for manual-only or disaster-level requests.
+private struct BatchApprovalCard: View {
+    let request: ApprovalOverlayController.BatchApprovalDisplayRequest
+    let controller: ApprovalOverlayController
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Batch Permission Required")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+
+            Text("\(request.toolName) wants to run \(request.count) times")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.primary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            Text(request.description)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            Text("Say no or yes, or press a button.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Button(action: { controller.denyBatch() }) {
+                    Text("Deny All")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .keyboardShortcut(.escape, modifiers: [])
+
+                Button(action: { controller.approveBatch() }) {
+                    Text("Allow All (\(request.count))")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+            }
+        }
+        .padding(14)
+        .frame(width: 320)
+        .background(.ultraThinMaterial)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.blue.opacity(0.4), lineWidth: 1)
+        )
+        .overlay(alignment: .topTrailing) {
+            DismissOverlayButton(action: controller.denyBatch)
                 .padding(.top, 10)
                 .padding(.trailing, 10)
         }

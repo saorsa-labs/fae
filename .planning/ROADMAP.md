@@ -1,45 +1,113 @@
-# Remove Dual-Model System
+# Fae JSC Tool-as-Code Runtime — Roadmap
 
-## Problem
-Technical debt: the dual-model system (worker subprocesses, turn routing, inference priority, concierge model) adds significant complexity that is no longer maintained or needed. Fae is a single-LLM pipeline.
+## Overview
+Two-lane runtime model:
+- **JavaScriptCore** for in-process tool programs that orchestrate host-approved tools.
+- **uv Python** for package-heavy or ecosystem-heavy skills.
+
+The goal is to replace repeated LLM tool-call round-trips for multi-step workflows
+without bypassing Fae's existing governance stack.
 
 ## Success Criteria
-- Zero references to concierge, dual-model, worker subprocess, inference priority, or turn routing in code, tests, or docs
-- DualModelCompat.swift shim deleted
-- swift build — zero errors, zero warnings
-- swift test — all tests pass
-- CLAUDE.md updated to reflect single-model architecture
+- LLM can emit a JavaScript tool program for multi-step orchestration.
+- All approvals, broker checks, damage control, rate limits, and audit stay in Swift.
+- Script path consumes machine-friendly structured results; LLM path keeps prose.
+- Batch approval UX prevents N popups for N loop iterations.
+- Script budgets exist: max invocations, runtime, concurrency, cancellation.
+- `swift build` and `swift test` pass for touched code.
+
+## Technical Decisions
+- **Runtime**: JavaScriptCore.
+- **Bridge model**: Promise-based `fae.*` API; do not block JS with semaphores on the main actor.
+- **Governance**: Extract and reuse the existing tool execution/security path.
+- **Structured data**: Introduce script-safe structured results incrementally.
+- **Non-goals**: No Lua/Luau, no Wasm, no policy bypass.
+
+## Plan Location
+The active project uses dedicated phase plans under:
+`.planning/plans/jsc-tool-as-code/`
+
+Always use `STATE.json.phase.plan` instead of inferring filenames.
 
 ---
 
-## Milestone 1: Remove Dual-Model System
+## Milestone 1: Runtime Foundation
 
-### Phase 1.1: Delete shim + clean FaeConfig
-- Delete Core/DualModelCompat.swift
-- Remove 5 LLM config properties: dualModelEnabled, conciergeModelPreset, dualModelMinSystemRAMGB, keepConciergeHot, allowConciergeDuringVoiceTurns
-- Remove 3 types: LocalPipelineMode, LocalLLMSelection, LocalModelStackPlan
-- Remove 6+ static methods: isDualModelEligible, recommendedConciergeModel, canonicalConciergeModelPreset, shouldHoldStartupForConciergeHotLoad, recommendedLocalModelStack, isDualModelActive
-- Remove TOML parsing/serialization for deleted keys
-- Remove patchConfig key cases for deleted keys
+### Phase 1.1: Extract ToolExecutor Actor
+- Extract reusable tool execution/governance logic from `PipelineCoordinator`.
+- Preserve mode checks, damage control, broker decisions, approvals, rate limits, and audit.
 
-### Phase 1.2: Clean PipelineCoordinator
-- Remove conciergeEngine stored property and init param
-- Remove 7 methods: currentDualModelPlan(), selectedLocalModel(for:), selectLLMRoute(...), publishRouteDiagnostics(...), engine(for:), selectedModelId(for:)
-- Remove InferencePriorityController begin/end calls
-- Simplify generation: always use llmEngine directly (no route selection)
-- Remove TurnLLMRoute/TurnRoutingPolicy usage — replace with direct calls
-- Remove shouldPreferToolFreeFastPath usage
+### Phase 1.2: Build JSCRuntime + Promise Bridge
+- Add `JSCRuntime` actor and `JSCToolBridge`.
+- Expose a narrow Promise-based `fae.*` API to scripts.
+- Keep the runtime fresh per execution; no persistent cross-turn JS state.
 
-### Phase 1.3: Clean FaeCore + ModelManager + FaeApp
-- FaeCore: remove conciergeEngine: nil init param, remove startup concierge block, remove dual-model config from settings dict
-- ModelManager: remove loadedConciergeModelId, dualModelActive, loadConciergeIfNeeded(), simplify publishLocalStackStatus()
-- FaeApp: remove worker subprocess launch path (WorkerProcessRole/LLMWorkerService)
+### Phase 1.3: Script Budgets & Cooperative Cancellation
+- Add script budgets for tool count, wall-clock runtime, and concurrency.
+- Add turn-end cancellation and host-enforced timeouts.
+- Treat instruction-level interruption as optional/follow-up work, not a prerequisite.
 
-### Phase 1.4: Clean UI + secondary files
-- SettingsModelsPerformanceTab, SettingsOverviewTab, SettingsDiagnosticsTab
-- PipelineAuxBridgeController, LocalModelStatusFormatter, AboutWindowView
-- ConversationBridgeController, TestServer, PersonalityManager
+### Phase 1.4: Developer Harness & Runtime Validation
+- Add a developer/test harness for executing JS tool programs outside the live LLM path.
+- Validate runtime, logging, and cancellation before pipeline integration.
 
-### Phase 1.5: Clean tests + update docs
-- FaeConfigTests, LocalModelStatusFormatterTests, RuntimeContractTests, PipelineCoordinatorPolicyTests
-- Update CLAUDE.md to reflect single-model architecture
+---
+
+## Milestone 2: Structured Script APIs
+
+### Phase 2.1: Structured Tool Result Primitives
+- Extend `ToolResult` or add a parallel script-result envelope for structured data.
+- Keep existing prose outputs intact for the LLM path.
+
+### Phase 2.2: Core Tool Structured Results
+- Add structured results for the highest-value orchestration tools first:
+  `calendar`, `reminders`, `contacts`, `mail`, `notes`, `web_search`, `fetch_url`.
+
+### Phase 2.3: Script-Facing Typed Adapters
+- Add typed bridge helpers so JS scripts consume stable objects instead of prose parsing.
+- Prefer script-safe adapters over directly exposing every legacy tool shape.
+
+---
+
+## Milestone 3: Governance UX & Pipeline Integration
+
+### Phase 3.1: Batch Approval UX
+- Group looped or repeated actions into a single user decision where appropriate.
+
+### Phase 3.2: Script-Scoped Capability Tickets
+- Bind capability grants to the script lifetime and allowed tool set.
+
+### Phase 3.3: Pipeline Integration
+- Route JS tool programs through the new runtime alongside the existing tool-call path.
+- Remove the `prefix(5)` cap only for the script path after budgets and governance are in place.
+
+### Phase 3.4: Dry-Run Mode
+- Add a plan/preview mode so users can inspect what a script intends to do before real execution.
+
+---
+
+## Milestone 4: Prompting, Testing, Documentation
+
+### Phase 4.1: Prompting & Model Routing
+- Teach the model when to emit a JS tool program versus normal tool calls.
+
+### Phase 4.2: End-to-End Testing
+- Cover runtime execution, approvals, cancellation, error recovery, and structured results.
+
+### Phase 4.3: Documentation & Release Validation
+- Update developer docs, changelog, and release validation for the new execution path.
+
+---
+
+## Risks & Mitigations
+- **Approval loops**: batch approval in Phase 3.1.
+- **Structured API effort**: phased tool rollout in Milestone 2.
+- **Model quality**: prefer stronger local models for tool-program generation.
+- **Runtime safety**: keep host-side enforcement authoritative; JS never gets direct file/network access.
+- **Bridge complexity**: Promise-based bridge only; no main-thread semaphore hacks.
+
+## Out of Scope
+- Lua/Luau runtime
+- Wasm runtime
+- Direct JS access to filesystem/network outside host-injected tools
+- Persistent JS contexts across turns

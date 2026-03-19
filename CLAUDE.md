@@ -663,3 +663,9 @@ Known blockers: dependency fetch requires network; first app run blocks on model
 See `docs/CHANGELOG.md` for detailed milestone history.
 
 Current: v1.4.2 — ACP integration, channel adapters, training pipeline, skill hardening.
+
+## Web browsing
+
+Use the `/browse` skill from gstack for all web browsing tasks. Do NOT use `mcp__claude-in-chrome__*` tools.
+
+Available gstack skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/review`, `/ship`, `/browse`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`.
