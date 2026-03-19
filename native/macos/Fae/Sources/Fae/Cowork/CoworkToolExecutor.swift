@@ -7,33 +7,48 @@ import Foundation
 /// same security layers (DamageControlPolicy, OutboundExfiltrationGuard,
 /// TrustedActionBroker) apply to CoWork calls as to native tool calls.
 ///
-/// The actor is created by PipelineCoordinator after ToolExecutor is initialized,
-/// and is exposed via FaeCore for use by CoworkWorkspaceController.
+/// ## Lifecycle
 ///
-/// ## Architecture
+/// 1. ``PipelineCoordinator/makeCoworkToolExecutor()`` creates this actor after
+///    ``ToolExecutor`` is initialized, wiring the real security stack.
+/// 2. ``FaeCore`` exposes it via ``FaeCore/coworkToolExecutor``.
+/// 3. ``CoworkWorkspaceController`` calls ``submit(request:provider:)``,
+///    ``submitStreaming(request:provider:onPartialText:)``, or
+///    ``submitWithWebSearch(request:provider:)`` for every non-local LLM call.
+/// 4. If the executor is unavailable (pipeline not started), the controller
+///    falls back to direct provider access (graceful degradation).
+///
+/// ## Security Stack (per call)
 ///
 /// ```
 /// CoworkWorkspaceController
 ///     │
 ///     ├── CoworkToolExecutor.submit(request:, provider:)
 ///     │       │
-///     │       ├── performSecurityCheck() ← DRY helper
-///     │       │       ├── DamageControlPolicy — blocks credential access
+///     │       ├── performSecurityCheck()
+///     │       │       ├── ToolExecutorContext.coworkExternal() — nonLocal locality
+///     │       │       ├── DamageControlPolicy — blocks credential/vault access
 ///     │       │       ├── OutboundExfiltrationGuard — novel recipient detection
 ///     │       │       └── TrustedActionBroker — default-deny chokepoint
 ///     │       │
-///     │       ├── [emit FaeEvent.coworkRedactionApplied if content stripped]
+///     │       ├── provider.submit() / .stream() / .submitWithWebSearch()
 ///     │       │
-///     │       ├── provider.submit() ← actual HTTP call
+///     │       ├── guardNonEmpty() — rejects empty responses
+///     │       ├── guardNoInjection() — prompt injection pattern scan
 ///     │       │
-///     │       ├── guardNonEmpty() + scanForInjection()
-///     │       │
-///     │       ├── SecurityEventLogger (block/flag/allow)
-///     │       │
+///     │       ├── SecurityEventLogger (block/flag/allow audit trail)
+///     │       ├── FaeEventBus (UI security notifications)
 ///     │       └── metrics.increment(provider, outcome)
 ///     │
 ///     └── Response returned to CoWork UI
 /// ```
+///
+/// ## Protected Paths (via DamageControlPolicy nonLocal rules)
+///
+/// - `~/.fae-vault/` — Git Vault backup repository
+/// - `~/Library/Application Support/fae/speakers.json` — voice identity data
+/// - `~/Library/Application Support/fae/directive.md` — system directive
+/// - `~/.ssh/`, `~/.gnupg/`, `~/.aws/`, etc. — credential stores
 actor CoworkToolExecutor {
 
     // MARK: - Per-Provider Metrics
@@ -102,7 +117,18 @@ actor CoworkToolExecutor {
 
     // MARK: - Submit (Blocking)
 
-    /// Submit a request to an external LLM through the unified security pipeline.
+    /// Submit a blocking request to an external LLM through the unified security pipeline.
+    ///
+    /// Runs the full security check (DamageControlPolicy, OutboundExfiltrationGuard,
+    /// TrustedActionBroker), calls the provider, then validates the response for
+    /// empty content and prompt injection patterns.
+    ///
+    /// - Parameters:
+    ///   - request: The prepared CoWork provider request.
+    ///   - provider: The external LLM provider to call.
+    /// - Returns: The validated provider response.
+    /// - Throws: ``CoworkToolExecutorError`` for security blocks, injection detection,
+    ///   empty responses, provider errors, or network failures.
     func submit(
         request: CoworkProviderRequest,
         provider: some CoworkLLMProvider
@@ -128,6 +154,19 @@ actor CoworkToolExecutor {
     // MARK: - Submit (Streaming)
 
     /// Submit a streaming request through the unified security pipeline.
+    ///
+    /// Security check runs before streaming begins. Partial text is forwarded
+    /// via ``onPartialText`` as tokens arrive. The final assembled response is
+    /// validated for empty content and prompt injection patterns after the
+    /// stream completes.
+    ///
+    /// - Parameters:
+    ///   - request: The prepared CoWork provider request.
+    ///   - provider: The external streaming LLM provider.
+    ///   - onPartialText: Called with accumulated text as tokens arrive.
+    /// - Returns: The validated final provider response.
+    /// - Throws: ``CoworkToolExecutorError`` for security blocks, injection detection,
+    ///   empty responses, provider errors, or network failures.
     func submitStreaming(
         request: CoworkProviderRequest,
         provider: some CoworkStreamingProvider,
@@ -173,6 +212,17 @@ actor CoworkToolExecutor {
     // MARK: - Submit (Web Search)
 
     /// Submit a web-search request through the unified security pipeline.
+    ///
+    /// Used when the provider supports web search tool loops (e.g. OpenAI
+    /// with browsing). Security check runs before the call; response is
+    /// validated for empty content and prompt injection patterns.
+    ///
+    /// - Parameters:
+    ///   - request: The prepared CoWork provider request.
+    ///   - provider: The external web-search-capable LLM provider.
+    /// - Returns: The validated provider response.
+    /// - Throws: ``CoworkToolExecutorError`` for security blocks, injection detection,
+    ///   empty responses, provider errors, or network failures.
     func submitWithWebSearch(
         request: CoworkProviderRequest,
         provider: some CoworkWebSearchProvider

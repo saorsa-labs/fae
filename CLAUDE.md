@@ -219,6 +219,21 @@ Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 
 **Apple tool reads are INTENTIONALLY ungated** — only writes/mutations need approval. macOS permission is the only read gate.
 
+### CoWork unified intercept (`CoworkToolExecutor`)
+
+All external (non-local) LLM calls from CoWork are routed through `CoworkToolExecutor`, which delegates to the same `ToolExecutor` security pipeline used by native tool calls. This ensures DamageControlPolicy, OutboundExfiltrationGuard, and TrustedActionBroker apply uniformly.
+
+**Wiring**: `PipelineCoordinator.makeCoworkToolExecutor()` → `FaeCore.coworkToolExecutor` → `CoworkWorkspaceController`.
+
+**Protected paths** (blocked for nonLocal models via DamageControlPolicy):
+- `~/.fae-vault/` — Git Vault backup
+- `~/Library/Application Support/fae/speakers.json` — voice identity
+- `~/Library/Application Support/fae/directive.md` — system directive
+
+**Inbound response scan**: 10 prompt injection patterns checked on every response. Flagged responses emit `FaeEvent.coworkInjectionFlagged`.
+
+**Graceful degradation**: if `coworkToolExecutor` is nil (pipeline not started), calls fall back to direct provider access.
+
 ### Skill manifest contract
 
 All executable built-in skills MUST have: `schemaVersion: 1`, `capabilities: ["execute"]`, `allowedTools: ["run_skill"]`, SHA-256 checksums in `integrity.checksums`.
@@ -576,7 +591,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `WhatsAppAdapter.swift` | HTTP webhook + Graph API, HMAC-SHA256 verification |
 | `iMessageAdapter.swift` | SQLite polling + AppleScript, `is_from_me = 0` echo filter |
 
-### Cowork/ (10 files)
+### Cowork/ (12 files)
 
 | File | Role |
 |------|------|
@@ -589,6 +604,8 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `CoworkModelRegistry.swift` | Available remote model registry |
 | `CoworkRemoteModelCatalog.swift` | Remote model catalog |
 | `CoworkExportPacket.swift` | Conversation export |
+| `CoworkToolExecutor.swift` | Unified security intercept for external LLM calls |
+| `CoworkToolExecutorError.swift` | Error types for CoWork security pipeline |
 | `WorkWithFaeWorkspace.swift` | "Work with Fae" workspace integration |
 
 ### Audio/ (3 files), Backup/ (1 file), Agent/ (1 file)
