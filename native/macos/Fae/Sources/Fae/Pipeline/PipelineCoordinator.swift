@@ -8691,10 +8691,12 @@ actor PipelineCoordinator {
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
         let effectiveTicket = activeCapabilityTicket
         let currentToolMode = effectiveToolMode()
-        // For scripts, per-tool capability is checked by the bridge's ticket
-        // manager on each fae.tool() call, not here. Default to false so the
-        // broker doesn't skip approval based on a stale snapshot.
-        let hasCapabilityTicket = currentToolMode == "full"
+        // For scripts, per-tool capability is checked by the bridge's
+        // ScriptScopedTicketManager on each fae.tool() call. The broker's
+        // hasCapabilityTicket check is a supplementary signal — set true here
+        // so the broker doesn't hard-deny script tool calls. The ticket
+        // manager provides the real access control.
+        let hasCapabilityTicket = true
         let effectiveGenerationContext = currentTurnGenerationContext
 
         let scriptContext = ToolExecutorContext(

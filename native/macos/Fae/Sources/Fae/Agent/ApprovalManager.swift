@@ -145,9 +145,12 @@ actor ApprovalManager {
         scriptBudgetRemaining = budgetToolCalls
     }
 
-    /// Exit script mode and clear any remaining script-originated batch state.
+    /// Exit script mode and clear all script-originated batch grants/denials
+    /// so they don't leak into subsequent non-script tool calls.
     func exitScriptMode() {
         scriptBudgetRemaining = 0
+        batchGrants.removeAll()
+        batchDenials.removeAll()
     }
 
     // MARK: - Batch Approval
