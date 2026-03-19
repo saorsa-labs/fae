@@ -95,15 +95,22 @@ actor ToolExecutor {
         // Record the tool call, then delegate to the inner pipeline.
         // The result trace is recorded once at this single exit point.
         await traceToolCall(call: call, context: context)
+        let startTime = Date()
         let outcome = await executeInner(call, context: context, callbacks: callbacks)
+        let totalLatencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
         await traceToolResult(
             call: call,
             context: context,
             result: outcome.result,
             approved: outcome.approvedByUser,
-            latencyMs: nil // latency is already recorded in analytics
+            latencyMs: totalLatencyMs
         )
-        return outcome
+        return ToolExecutorResult(
+            result: outcome.result,
+            approvedByUser: outcome.approvedByUser,
+            damageControlIntervened: outcome.damageControlIntervened,
+            latencyMs: totalLatencyMs
+        )
     }
 
     /// Inner execution — all security layers, approval, and tool invocation.
@@ -130,7 +137,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error("Tool '\(call.name)' is not available in read-only mode. The user can switch to 'Everything (with approval)' to enable this tool."),
                 approvedByUser: nil,
-                damageControlIntervened: false
+                damageControlIntervened: false,
+                latencyMs: nil
             )
         }
 
@@ -142,7 +150,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error("Tool '\(call.name)' is not allowed for proactive task '\(proactiveContext.taskId)'"),
                 approvedByUser: nil,
-                damageControlIntervened: false
+                damageControlIntervened: false,
+                latencyMs: nil
             )
         }
 
@@ -165,7 +174,8 @@ actor ToolExecutor {
                 return ToolExecutorResult(
                     result: .error(msg),
                     approvedByUser: nil,
-                    damageControlIntervened: false
+                    damageControlIntervened: false,
+                        latencyMs: nil
                 )
             }
         }
@@ -178,7 +188,8 @@ actor ToolExecutor {
                 return ToolExecutorResult(
                     result: .error("Computer use step limit reached (\(Self.maxComputerUseSteps) per turn). Ask the user before continuing."),
                     approvedByUser: nil,
-                    damageControlIntervened: false
+                    damageControlIntervened: false,
+                        latencyMs: nil
                 )
             }
         }
@@ -197,7 +208,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error("Unknown tool: \(call.name)"),
                 approvedByUser: nil,
-                damageControlIntervened: false
+                damageControlIntervened: false,
+                latencyMs: nil
             )
         }
 
@@ -218,7 +230,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error(limitError),
                 approvedByUser: nil,
-                damageControlIntervened: false
+                damageControlIntervened: false,
+                latencyMs: nil
             )
         }
 
@@ -269,7 +282,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error("Blocked by damage-control policy: \(reason)"),
                 approvedByUser: nil,
-                damageControlIntervened: true
+                damageControlIntervened: true,
+                latencyMs: nil
             )
 
         case .disaster(let reason):
@@ -399,7 +413,8 @@ actor ToolExecutor {
                 return ToolExecutorResult(
                     result: .error(transformError),
                     approvedByUser: nil,
-                    damageControlIntervened: workflowDamageControlIntervened
+                    damageControlIntervened: workflowDamageControlIntervened,
+                        latencyMs: nil
                 )
             }
 
@@ -444,7 +459,8 @@ actor ToolExecutor {
                     return ToolExecutorResult(
                         result: .error("Tool execution denied by user."),
                         approvedByUser: false,
-                        damageControlIntervened: workflowDamageControlIntervened
+                        damageControlIntervened: workflowDamageControlIntervened,
+                            latencyMs: nil
                     )
                 }
             } else {
@@ -471,7 +487,8 @@ actor ToolExecutor {
                 return ToolExecutorResult(
                     result: .error("Tool requires approval, but no approval manager is available."),
                     approvedByUser: nil,
-                    damageControlIntervened: workflowDamageControlIntervened
+                    damageControlIntervened: workflowDamageControlIntervened,
+                        latencyMs: nil
                 )
             }
 
@@ -500,7 +517,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error(reason.message),
                 approvedByUser: nil,
-                damageControlIntervened: workflowDamageControlIntervened
+                damageControlIntervened: workflowDamageControlIntervened,
+                latencyMs: nil
             )
         }
 
@@ -561,7 +579,8 @@ actor ToolExecutor {
             return ToolExecutorResult(
                 result: .error("Tool error: \(error.localizedDescription)"),
                 approvedByUser: approvedByUser ? true : nil,
-                damageControlIntervened: workflowDamageControlIntervened
+                damageControlIntervened: workflowDamageControlIntervened,
+                latencyMs: nil
             )
         }
 
@@ -596,7 +615,8 @@ actor ToolExecutor {
         return ToolExecutorResult(
             result: result,
             approvedByUser: approvedByUser ? true : nil,
-            damageControlIntervened: workflowDamageControlIntervened
+            damageControlIntervened: workflowDamageControlIntervened,
+                latencyMs: nil
         )
     }
 

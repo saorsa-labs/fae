@@ -15,6 +15,12 @@ struct ToolExecutorResult: Sendable {
     /// Whether `DamageControlPolicy` intervened (block, disaster, or
     /// confirmManual) during evaluation.
     let damageControlIntervened: Bool
+
+    /// Tool execution latency in milliseconds. Measured from the start of
+    /// the outer `execute()` call (includes all security checks, approval
+    /// wait, and actual tool invocation). `nil` only for early rejections
+    /// that never reach the tool.
+    let latencyMs: Int?
 }
 
 /// Operations that ``ToolExecutor`` delegates back to its owner because they

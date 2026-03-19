@@ -8538,7 +8538,7 @@ actor PipelineCoordinator {
             call: call,
             result: outcome.result,
             approved: outcome.approvedByUser,
-            latencyMs: nil,
+            latencyMs: outcome.latencyMs,
             damageControlIntervened: outcome.damageControlIntervened
         )
 

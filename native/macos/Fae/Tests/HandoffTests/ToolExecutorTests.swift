@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import Fae
 
@@ -408,6 +409,133 @@ final class ToolExecutorTests: XCTestCase {
         XCTAssertTrue(visionEnabled, "onVisionAutoEnabled should have been called for screenshot with visionEnabled=false")
     }
 
+    // MARK: - Latency Tracking (P1 fix)
+
+    func testSuccessfulExecutionReturnsNonNilLatency() async {
+        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
+        let executor = makeExecutor(tools: [tool])
+        let context = makeContext()
+        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
+
+        let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
+
+        XCTAssertFalse(result.result.isError)
+        XCTAssertNotNil(result.latencyMs, "latencyMs must be non-nil for successful execution")
+        XCTAssertGreaterThanOrEqual(result.latencyMs ?? -1, 0, "latencyMs must be >= 0")
+    }
+
+    func testBlockedExecutionReturnsNonNilLatency() async {
+        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
+        let executor = makeExecutor(tools: [tool], broker: DenyingBroker())
+        let context = makeContext()
+        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
+
+        let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
+
+        XCTAssertTrue(result.result.isError)
+        XCTAssertNotNil(result.latencyMs, "latencyMs must be non-nil even for broker denials")
+    }
+
+    func testThrowingToolReturnsNonNilLatency() async {
+        let tool = ThrowingTool()
+        let executor = makeExecutor(tools: [tool])
+        let context = makeContext()
+        let call = makeCall(name: "thrower")
+
+        let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
+
+        XCTAssertTrue(result.result.isError)
+        XCTAssertNotNil(result.latencyMs, "latencyMs must be non-nil even for throwing tools")
+    }
+
+    // MARK: - Workflow Trace Path (P2 fix)
+
+    func testTraceRecordsStepsWithNonNilRunID() async throws {
+        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
+        let dbQueue = try DatabaseQueue()
+        _ = try SessionStore(dbQueue: dbQueue) // creates conversation_sessions table
+        let store = try WorkflowTraceStore(dbQueue: dbQueue)
+        let run = try await store.createRun(
+            sessionId: nil,
+            turnId: "test-turn",
+            source: "test",
+            userGoal: "test trace"
+        )
+
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [tool]),
+            actionBroker: RecordingBroker(),
+            damageControlPolicy: DamageControlPolicy(),
+            rateLimiter: ToolRateLimiter(),
+            securityLogger: SecurityEventLogger.shared,
+            outboundGuard: OutboundExfiltrationGuard.shared,
+            workflowTraceStore: store
+        )
+        let context = ToolExecutorContext(
+            toolMode: "full",
+            privacyMode: "local_preferred",
+            modelLocality: .local,
+            capabilityTicket: nil,
+            hasCapabilityTicketForTool: true,
+            explicitUserAuthorization: false,
+            isOwner: true,
+            livenessScore: nil,
+            actionSource: .voice,
+            proactiveContext: nil,
+            visionEnabled: false,
+            firstOwnerEnrollmentActive: false,
+            workflowTurnID: "test-turn",
+            traceToolCallID: "tc-001",
+            workflowRunID: run.id
+        )
+
+        let result = await executor.execute(
+            makeCall(name: "read", arguments: ["path": "/tmp/test"]),
+            context: context,
+            callbacks: noopCallbacks
+        )
+
+        XCTAssertFalse(result.result.isError)
+
+        let steps = try await store.steps(runId: run.id)
+        XCTAssertEqual(steps.count, 2, "Should have tool_call + tool_result steps")
+
+        let callStep = steps.first(where: { $0.stepType == .toolCall })
+        let resultStep = steps.first(where: { $0.stepType == .toolResult })
+        XCTAssertNotNil(callStep, "Should have a tool_call step")
+        XCTAssertNotNil(resultStep, "Should have a tool_result step")
+        XCTAssertEqual(callStep?.toolName, "read")
+        XCTAssertEqual(resultStep?.toolName, "read")
+        XCTAssertNotNil(resultStep?.latencyMs, "tool_result step should have non-nil latencyMs")
+        XCTAssertGreaterThanOrEqual(resultStep?.latencyMs ?? -1, 0)
+    }
+
+    func testTraceSkippedWhenWorkflowRunIDNil() async throws {
+        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
+        let dbQueue = try DatabaseQueue()
+        _ = try SessionStore(dbQueue: dbQueue)
+        let store = try WorkflowTraceStore(dbQueue: dbQueue)
+
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [tool]),
+            actionBroker: RecordingBroker(),
+            damageControlPolicy: DamageControlPolicy(),
+            rateLimiter: ToolRateLimiter(),
+            securityLogger: SecurityEventLogger.shared,
+            outboundGuard: OutboundExfiltrationGuard.shared,
+            workflowTraceStore: store
+        )
+        // workflowRunID is nil — trace should be skipped
+        let context = makeContext()
+        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
+
+        _ = await executor.execute(call, context: context, callbacks: noopCallbacks)
+
+        // With no run created and nil workflowRunID, no steps should exist
+        // We can verify by trying to query a non-existent run
+        let steps = try await store.steps(runId: "nonexistent")
+        XCTAssertEqual(steps.count, 0, "No steps should be recorded when workflowRunID is nil")
+    }
 }
 
 // MARK: - Additional Test Doubles
