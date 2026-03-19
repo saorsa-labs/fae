@@ -34,7 +34,7 @@ actor CoworkToolExecutor {
 
     /// Reference to the shared ToolExecutor security pipeline.
     /// Set during init by PipelineCoordinator; exposed via FaeCore.coworkToolExecutor.
-    private let toolExecutor: ToolExecutor
+    private let toolExecutor: any ToolExecutorProtocol
 
     /// Prompt injection patterns to detect in inbound responses.
     /// These are detected via simple substring/pattern matching — not ML.
@@ -50,7 +50,7 @@ actor CoworkToolExecutor {
     ///   - inboundScanPatterns: Patterns checked in responses to detect prompt
     ///     injection attempts. If nil, uses the default set.
     init(
-        toolExecutor: ToolExecutor,
+        toolExecutor: any ToolExecutorProtocol,
         inboundScanPatterns: [String]? = nil
     ) {
         self.toolExecutor = toolExecutor
@@ -85,15 +85,16 @@ actor CoworkToolExecutor {
 
         let outcome = await toolExecutor.execute(call, context: context, callbacks: callbacks)
 
-        // If security blocked, propagate the error
-        if outcome.result.isError {
-            throw CoworkToolExecutorError.securityBlocked(reason: outcome.result.output)
-        }
-
+        // Check damageControlIntervened first — it takes precedence over generic isError
         if outcome.damageControlIntervened {
             throw CoworkToolExecutorError.damageControlIntervened(
                 reason: outcome.result.output
             )
+        }
+
+        // If security blocked, propagate the error
+        if outcome.result.isError {
+            throw CoworkToolExecutorError.securityBlocked(reason: outcome.result.output)
         }
 
         // Execute the actual provider call
@@ -106,6 +107,9 @@ actor CoworkToolExecutor {
             }
 
             return response
+        } catch let error as CoworkToolExecutorError {
+            // Re-throw CoworkToolExecutorError variants unchanged (e.g. inboundScanFlagged)
+            throw error
         } catch let error as CoworkProviderError {
             throw CoworkToolExecutorError.providerError(underlying: error)
         } catch {
@@ -138,14 +142,14 @@ actor CoworkToolExecutor {
 
         let outcome = await toolExecutor.execute(call, context: context, callbacks: callbacks)
 
-        if outcome.result.isError {
-            throw CoworkToolExecutorError.securityBlocked(reason: outcome.result.output)
-        }
-
         if outcome.damageControlIntervened {
             throw CoworkToolExecutorError.damageControlIntervened(
                 reason: outcome.result.output
             )
+        }
+
+        if outcome.result.isError {
+            throw CoworkToolExecutorError.securityBlocked(reason: outcome.result.output)
         }
 
         var finalResponse: CoworkProviderResponse?
@@ -158,6 +162,8 @@ actor CoworkToolExecutor {
             finalResponse = response
         } catch let error as CoworkProviderError {
             finalError = CoworkToolExecutorError.providerError(underlying: error)
+        } catch let error as CoworkToolExecutorError {
+            finalError = error
         } catch {
             finalError = CoworkToolExecutorError.networkError(underlying: error)
         }
@@ -200,14 +206,14 @@ actor CoworkToolExecutor {
 
         let outcome = await toolExecutor.execute(call, context: context, callbacks: callbacks)
 
-        if outcome.result.isError {
-            throw CoworkToolExecutorError.securityBlocked(reason: outcome.result.output)
-        }
-
         if outcome.damageControlIntervened {
             throw CoworkToolExecutorError.damageControlIntervened(
                 reason: outcome.result.output
             )
+        }
+
+        if outcome.result.isError {
+            throw CoworkToolExecutorError.securityBlocked(reason: outcome.result.output)
         }
 
         do {
@@ -218,6 +224,8 @@ actor CoworkToolExecutor {
             }
 
             return response
+        } catch let error as CoworkToolExecutorError {
+            throw error
         } catch let error as CoworkProviderError {
             throw CoworkToolExecutorError.providerError(underlying: error)
         } catch {

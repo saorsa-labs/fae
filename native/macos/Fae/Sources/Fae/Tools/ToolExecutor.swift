@@ -16,7 +16,20 @@ import Foundation
 /// 8. Approval overlay
 /// 9. Timeout-wrapped execution
 /// 10. Analytics + audit logging
-actor ToolExecutor {
+
+/// Protocol for tool executor functionality, enabling test doubles.
+///
+/// Conformed to by the real `ToolExecutor` actor and the test-only
+/// `MockToolExecutor` actor used in CoworkToolExecutor tests.
+protocol ToolExecutorProtocol: Actor {
+    func execute(
+        _ call: PipelineCoordinator.ToolCall,
+        context: ToolExecutorContext,
+        callbacks: ToolExecutorCallbacks
+    ) async -> ToolExecutorResult
+}
+
+actor ToolExecutor: ToolExecutorProtocol {
 
     // MARK: - Dependencies
 
