@@ -117,6 +117,19 @@ actor ConversationStateTracker {
         lastAssistantMessageAt = nil
     }
 
+    /// Replace the current history with external messages and return the old history.
+    ///
+    /// Used by channel message processing to temporarily swap in a per-sender
+    /// session's history, run the LLM turn, then restore the original history.
+    @discardableResult
+    func swapHistory(_ newHistory: [LLMMessage]) -> [LLMMessage] {
+        let old = history
+        history = newHistory
+        lastAssistantText = newHistory.last(where: { $0.role == .assistant })?.content
+        lastAssistantMessageAt = nil
+        return old
+    }
+
     // MARK: - Private
 
     private func trimHistory() {

@@ -645,3 +645,113 @@ final class ChannelGatewayTests: XCTestCase {
         XCTAssertTrue(adapter.sentResponses.isEmpty)
     }
 }
+
+// MARK: - Per-Sender Conversation Isolation Tests
+
+final class ChannelConversationIsolationTests: XCTestCase {
+
+    func testTwoSendersHaveIndependentSessionHistories() async {
+        let sessionStore = ChannelSessionStore()
+
+        let aliceKey = SessionKey(channel: .discord, senderId: "alice")
+        let bobKey = SessionKey(channel: .discord, senderId: "bob")
+
+        let aliceSession = await sessionStore.session(for: aliceKey, displayName: "Alice")
+        let bobSession = await sessionStore.session(for: bobKey, displayName: "Bob")
+
+        // Alice sends 3 messages.
+        aliceSession.addUserMessage("Alice message 1")
+        aliceSession.addAssistantMessage("Reply to Alice 1")
+        aliceSession.addUserMessage("Alice message 2")
+        aliceSession.addAssistantMessage("Reply to Alice 2")
+        aliceSession.addUserMessage("Alice message 3")
+        aliceSession.addAssistantMessage("Reply to Alice 3")
+
+        // Bob sends 1 message.
+        bobSession.addUserMessage("Bob says hi")
+        bobSession.addAssistantMessage("Hello Bob")
+
+        // Verify isolation.
+        XCTAssertEqual(aliceSession.messages.count, 6)
+        XCTAssertEqual(bobSession.messages.count, 2)
+        XCTAssertEqual(aliceSession.messages[0].content, "Alice message 1")
+        XCTAssertEqual(bobSession.messages[0].content, "Bob says hi")
+    }
+
+    func testSameSenderDifferentChannelsAreSeparateSessions() async {
+        let sessionStore = ChannelSessionStore()
+
+        let discordKey = SessionKey(channel: .discord, senderId: "user-42")
+        let whatsappKey = SessionKey(channel: .whatsapp, senderId: "user-42")
+
+        let discordSession = await sessionStore.session(for: discordKey)
+        let whatsappSession = await sessionStore.session(for: whatsappKey)
+
+        discordSession.addUserMessage("Discord message")
+        discordSession.addAssistantMessage("Discord reply")
+
+        whatsappSession.addUserMessage("WhatsApp message")
+        whatsappSession.addAssistantMessage("WhatsApp reply")
+        whatsappSession.addUserMessage("WhatsApp follow-up")
+        whatsappSession.addAssistantMessage("WhatsApp follow-up reply")
+
+        XCTAssertEqual(discordSession.messages.count, 2)
+        XCTAssertEqual(whatsappSession.messages.count, 4)
+
+        let count = await sessionStore.activeSessionCount
+        XCTAssertEqual(count, 2)
+    }
+
+    func testConversationStateSwapHistoryRoundTrips() async {
+        let state = ConversationStateTracker()
+        await state.setMaxHistory(20)
+
+        // Add some messages to the shared state.
+        await state.addUserMessage("Original user message")
+        await state.addAssistantMessage("Original assistant message")
+
+        let originalHistory = await state.history
+        XCTAssertEqual(originalHistory.count, 2)
+
+        // Swap in session history.
+        let sessionHistory = [
+            LLMMessage(role: .user, content: "Session user msg"),
+            LLMMessage(role: .assistant, content: "Session assistant msg"),
+            LLMMessage(role: .user, content: "Session user msg 2"),
+        ]
+        let savedHistory = await state.swapHistory(sessionHistory)
+
+        // Saved should be the original.
+        XCTAssertEqual(savedHistory.count, 2)
+        XCTAssertEqual(savedHistory[0].content, "Original user message")
+
+        // Current state should have session history.
+        let currentHistory = await state.history
+        XCTAssertEqual(currentHistory.count, 3)
+        XCTAssertEqual(currentHistory[0].content, "Session user msg")
+
+        // Restore original.
+        await state.swapHistory(savedHistory)
+        let restoredHistory = await state.history
+        XCTAssertEqual(restoredHistory.count, 2)
+        XCTAssertEqual(restoredHistory[0].content, "Original user message")
+    }
+
+    func testSessionHistoryTrimming() async {
+        let session = ChannelSession(key: SessionKey(channel: .discord, senderId: "verbose"))
+
+        // Add many messages.
+        for i in 0..<50 {
+            session.addUserMessage("msg \(i)")
+            session.addAssistantMessage("reply \(i)")
+        }
+
+        XCTAssertEqual(session.messages.count, 100)
+
+        session.trimHistory(maxMessages: 40)
+
+        XCTAssertEqual(session.messages.count, 40)
+        // Last message should be the most recent.
+        XCTAssertEqual(session.messages.last?.content, "reply 49")
+    }
+}

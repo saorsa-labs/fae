@@ -1562,6 +1562,78 @@ actor PipelineCoordinator {
         )
     }
 
+    /// Inject a normalised channel message with per-sender conversation isolation.
+    ///
+    /// The caller provides a `ChannelSession` whose history is temporarily loaded
+    /// into the shared `ConversationStateTracker` for the duration of this turn.
+    /// After the LLM responds, new messages are captured back into the session
+    /// and the shared state is restored. This ensures each channel sender has
+    /// an independent conversation history.
+    ///
+    /// - Parameters:
+    ///   - message: The normalised `ChannelMessage` from the gateway.
+    ///   - session: The per-sender `ChannelSession` holding this sender's history.
+    /// - Returns: The assistant's response text, or nil.
+    func injectChannelMessage(_ message: ChannelMessage, session: ChannelSession) async -> String? {
+        let channel = message.channel.rawValue
+        let sender = message.senderId
+        let text = message.text
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Swap in the session's history so the LLM sees per-sender context.
+        let savedHistory = await conversationState.swapHistory(session.messages)
+        defer {
+            // Restore shared conversation state after this turn completes.
+            // We must use a Task here because defer cannot be async.
+            let restored = savedHistory
+            Task { [conversationState] in
+                await conversationState.swapHistory(restored)
+            }
+        }
+
+        // Remote senders are explicitly non-owner.
+        currentSpeakerLabel = "channel:\(channel):\(sender)"
+        currentSpeakerDisplayName = message.senderDisplayName ?? sender
+        currentSpeakerRole = .guest
+        currentSpeakerIsOwner = false
+        currentSpeakerIsKnownNonOwner = true
+        relayReplyCaptureText = nil
+        defer { relayReplyCaptureText = nil }
+
+        let assistantCountBefore = session.messages.lazy.filter { $0.role == .assistant }.count
+
+        await processTranscription(
+            text: trimmed,
+            rms: nil,
+            durationSecs: nil,
+            turnSource: .relay,
+            playsThinkingTone: false,
+            allowsAudibleOutput: false
+        )
+
+        // Capture new messages generated during this turn back into the session.
+        let historyAfter = await conversationState.history
+        let assistantCountAfter = historyAfter.lazy.filter { $0.role == .assistant }.count
+
+        // Sync session with whatever the LLM turn produced.
+        session.addUserMessage(trimmed)
+        if let reply = Self.resolveRelayReply(
+            capturedReply: relayReplyCaptureText,
+            assistantCountBefore: assistantCountBefore,
+            assistantCountAfter: assistantCountAfter,
+            assistantHistoryAfter: historyAfter.last(where: { $0.role == .assistant })?.content
+        ) {
+            session.addAssistantMessage(reply)
+            session.trimHistory(maxMessages: 40)
+            return reply
+        }
+
+        session.trimHistory(maxMessages: 40)
+        return nil
+    }
+
     /// Inject text from a remote channel (Discord, WhatsApp, iMessage).
     ///
     /// Unlike `injectText`, this path does NOT grant owner trust: the speaker is
@@ -1569,6 +1641,10 @@ actor PipelineCoordinator {
     /// captured from conversation state and returned so the channel adapter can
     /// send it back as a reply.
     /// TTS playback is suppressed — the response is text-only for the remote user.
+    ///
+    /// - Note: This is the legacy entry point used by `ChannelManager`. New code
+    ///   should use `injectChannelMessage(_:session:)` via `ChannelGateway` for
+    ///   per-sender conversation isolation.
     func injectChannelText(channel: String, sender: String, text: String) async -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
