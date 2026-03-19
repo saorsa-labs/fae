@@ -985,6 +985,132 @@ final class CoworkToolExecutorTests: XCTestCase {
         XCTAssertEqual(providerMetrics?.allowed, 0)
     }
 
+    // MARK: - Test: Web search routes through security stack
+
+    func testCoworkToolExecutorWebSearchRoutesThroughSecurityStack() async throws {
+        let mockExecutor = MockToolExecutor(
+            nextResult: ToolExecutorResult(
+                result: ToolResult.success("ok"),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: 5
+            )
+        )
+
+        let original = CoworkNetworkTransport.loader
+        defer { CoworkNetworkTransport.loader = original }
+        CoworkNetworkTransport.loader = { _ in
+            let data = """
+            {"choices":[{"message":{"content":"Search result"}}]}
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(url: URL(string: "https://api.openai.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (data, response)
+        }
+
+        let executor = CoworkToolExecutor(toolExecutor: mockExecutor)
+        let provider = OpenAICompatibleCoworkProvider(baseURL: "https://api.openai.com", apiKey: "secret")
+
+        let response = try await executor.submitWithWebSearch(
+            request: CoworkProviderRequest(model: "gpt-4.1", preparedPrompt: preparedPrompt()),
+            provider: provider
+        )
+
+        XCTAssertEqual(response.content, "Search result")
+        let record = await mockExecutor.lastCall
+        XCTAssertNotNil(record)
+        XCTAssertEqual(record?.call.name, "external_llm_websearch")
+        XCTAssertEqual(record?.context.modelLocality, .nonLocal)
+    }
+
+    // MARK: - Test: ToolExecutorContext factory methods
+
+    func testCoworkExternalContextFactoryHasCorrectDefaults() {
+        let context = ToolExecutorContext.coworkExternal()
+        XCTAssertEqual(context.toolMode, "full")
+        XCTAssertEqual(context.privacyMode, "shareable")
+        XCTAssertEqual(context.modelLocality, .nonLocal)
+        XCTAssertNil(context.capabilityTicket)
+        XCTAssertFalse(context.hasCapabilityTicketForTool)
+        XCTAssertFalse(context.explicitUserAuthorization)
+        XCTAssertTrue(context.isOwner)
+        XCTAssertNil(context.livenessScore)
+        XCTAssertEqual(context.actionSource, .relay)
+        XCTAssertNil(context.proactiveContext)
+        XCTAssertFalse(context.visionEnabled)
+        XCTAssertFalse(context.firstOwnerEnrollmentActive)
+        XCTAssertNil(context.workflowTurnID)
+        XCTAssertNil(context.traceToolCallID)
+        XCTAssertNil(context.workflowRunID)
+    }
+
+    func testRestrictedFallbackContextFactoryHasCorrectDefaults() {
+        let context = ToolExecutorContext.restrictedFallback()
+        XCTAssertEqual(context.toolMode, "off")
+        XCTAssertEqual(context.privacyMode, "strict_local")
+        XCTAssertEqual(context.modelLocality, .local)
+        XCTAssertFalse(context.isOwner)
+        XCTAssertFalse(context.visionEnabled)
+        XCTAssertNil(context.capabilityTicket)
+    }
+
+    // MARK: - Test: ToolExecutorCallbacks.noop
+
+    func testNoopCallbacksDoNotCrash() async {
+        let callbacks = ToolExecutorCallbacks.noop
+        await callbacks.onApprovalPending(true, false)
+        await callbacks.onVisionAutoEnabled()
+        let step = await callbacks.onComputerUseStep()
+        XCTAssertEqual(step, 0)
+    }
+
+    // MARK: - Test: markReady transitions pipelineNotReady to working
+
+    func testCoworkToolExecutorMarkReadyEnablesSubmit() async throws {
+        let mockExecutor = MockToolExecutor(
+            nextResult: ToolExecutorResult(
+                result: ToolResult.success("ok"),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: 5
+            )
+        )
+
+        let original = CoworkNetworkTransport.loader
+        defer { CoworkNetworkTransport.loader = original }
+        CoworkNetworkTransport.loader = { _ in
+            let data = """
+            {"choices":[{"message":{"content":"Ready now"}}]}
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(url: URL(string: "https://api.openai.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (data, response)
+        }
+
+        let executor = CoworkToolExecutor(toolExecutor: mockExecutor, isReady: false)
+        let provider = OpenAICompatibleCoworkProvider(baseURL: "https://api.openai.com", apiKey: "secret")
+
+        // Should fail when not ready
+        do {
+            _ = try await executor.submit(
+                request: CoworkProviderRequest(model: "gpt-4.1", preparedPrompt: preparedPrompt()),
+                provider: provider
+            )
+            XCTFail("Expected pipelineNotReady")
+        } catch let error as CoworkToolExecutorError {
+            guard case .pipelineNotReady = error else {
+                XCTFail("Expected .pipelineNotReady, got \(error)")
+                return
+            }
+        }
+
+        // Mark ready and retry
+        await executor.markReady()
+        let response = try await executor.submit(
+            request: CoworkProviderRequest(model: "gpt-4.1", preparedPrompt: preparedPrompt()),
+            provider: provider
+        )
+        XCTAssertEqual(response.content, "Ready now")
+    }
+
     // MARK: - Helpers
 
     private func preparedPrompt() -> WorkWithFaePreparedPrompt {
