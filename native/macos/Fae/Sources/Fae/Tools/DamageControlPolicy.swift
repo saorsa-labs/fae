@@ -193,6 +193,10 @@ actor DamageControlPolicy {
             PathRule(path: "~/.netrc",                nonLocalOnly: true),
             PathRule(path: "~/.npmrc",                nonLocalOnly: true),
             PathRule(path: "~/.pypirc",               nonLocalOnly: true),
+            // Fae workspace secrets — zero-access for non-local models (CoWork intercept)
+            PathRule(path: "~/.fae-vault",                                        nonLocalOnly: true),
+            PathRule(path: "~/Library/Application Support/fae/speakers.json",     nonLocalOnly: true),
+            PathRule(path: "~/Library/Application Support/fae/directive.md",       nonLocalOnly: true),
         ]
 
         // MARK: No-delete paths (bash rm/mv → confirm_manual, always active)

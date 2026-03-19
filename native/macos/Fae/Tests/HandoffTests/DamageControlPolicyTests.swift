@@ -296,4 +296,43 @@ final class DamageControlPolicyTests: XCTestCase {
         assertAllow(await bash("curl https://api.example.com/data"), "curl without pipe-to-shell should be allowed")
         assertAllow(await bash("curl -o output.json https://api.example.com/data"), "curl -o should be allowed")
     }
+
+    // MARK: - Fae Workspace Secrets (CoWork intercept)
+
+    func testZeroAccessFaeVaultBlockedForNonLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        assertBlock(await readTool("\(home)/.fae-vault/fae.db", locality: .nonLocal), "reading ~/.fae-vault must be blocked for non-local model")
+        assertBlock(await writeTool("\(home)/.fae-vault/test.db", locality: .nonLocal), "writing ~/.fae-vault must be blocked for non-local model")
+    }
+
+    func testZeroAccessFaeVaultAllowedForLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        assertAllow(await readTool("\(home)/.fae-vault/fae.db", locality: .local), "reading ~/.fae-vault must be allowed for local model")
+    }
+
+    func testZeroAccessSpeakersJsonBlockedForNonLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/speakers.json"
+        assertBlock(await readTool(path, locality: .nonLocal), "reading speakers.json must be blocked for non-local model")
+        assertBlock(await editTool(path, locality: .nonLocal), "editing speakers.json must be blocked for non-local model")
+    }
+
+    func testZeroAccessSpeakersJsonAllowedForLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/speakers.json"
+        assertAllow(await readTool(path, locality: .local), "reading speakers.json must be allowed for local model")
+    }
+
+    func testZeroAccessDirectiveMdBlockedForNonLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/directive.md"
+        assertBlock(await readTool(path, locality: .nonLocal), "reading directive.md must be blocked for non-local model")
+        assertBlock(await writeTool(path, locality: .nonLocal), "writing directive.md must be blocked for non-local model")
+    }
+
+    func testZeroAccessDirectiveMdAllowedForLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/directive.md"
+        assertAllow(await readTool(path, locality: .local), "reading directive.md must be allowed for local model")
+    }
 }
