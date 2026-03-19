@@ -83,6 +83,10 @@ struct ChannelMessage: Sendable, Equatable {
     /// Attachments (currently always empty — placeholder for future media support).
     let attachments: [ChannelAttachment]
 
+    /// Optional cross-channel context injected by the gateway when the sender
+    /// has linked identities on other channels.
+    let crossChannelContext: String?
+
     /// Create a new channel message with all fields.
     init(
         id: String = UUID().uuidString,
@@ -93,7 +97,8 @@ struct ChannelMessage: Sendable, Equatable {
         timestamp: Date = Date(),
         threadId: String? = nil,
         replyToId: String? = nil,
-        attachments: [ChannelAttachment] = []
+        attachments: [ChannelAttachment] = [],
+        crossChannelContext: String? = nil
     ) {
         self.id = id
         self.channel = channel
@@ -104,5 +109,6 @@ struct ChannelMessage: Sendable, Equatable {
         self.threadId = threadId
         self.replyToId = replyToId
         self.attachments = attachments
+        self.crossChannelContext = crossChannelContext
     }
 }

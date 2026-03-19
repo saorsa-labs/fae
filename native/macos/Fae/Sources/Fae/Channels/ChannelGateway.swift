@@ -27,6 +27,7 @@ actor ChannelGateway {
 
     private let eventBus: FaeEventBus
     private let sessionStore: ChannelSessionStore
+    private let identityResolver: ChannelIdentityResolver
     private var adapters: [ChannelKind: any ChannelAdapter] = [:]
     private var responseHandler: ResponseHandler?
     private var isRunning = false
@@ -36,9 +37,20 @@ actor ChannelGateway {
     /// - Parameters:
     ///   - eventBus: The event bus for emitting channel activity events.
     ///   - sessionStore: The session store (injected for testability).
-    init(eventBus: FaeEventBus, sessionStore: ChannelSessionStore = ChannelSessionStore()) {
+    ///   - identityResolver: The identity resolver (injected for testability).
+    init(
+        eventBus: FaeEventBus,
+        sessionStore: ChannelSessionStore = ChannelSessionStore(),
+        identityResolver: ChannelIdentityResolver = ChannelIdentityResolver()
+    ) {
         self.eventBus = eventBus
         self.sessionStore = sessionStore
+        self.identityResolver = identityResolver
+    }
+
+    /// The identity resolver used by this gateway for cross-channel identity linking.
+    var resolver: ChannelIdentityResolver {
+        identityResolver
     }
 
     /// Set the handler that processes inbound messages through the LLM pipeline.
@@ -136,6 +148,9 @@ actor ChannelGateway {
         let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
+        // Attempt identity auto-linking for phone-based channels.
+        await attemptAutoLink(for: message)
+
         // Resolve or create per-sender session.
         let key = SessionKey(channel: message.channel, senderId: message.senderId)
         let session = await sessionStore.session(
@@ -143,11 +158,34 @@ actor ChannelGateway {
             displayName: message.senderDisplayName
         )
 
-        NSLog("ChannelGateway: inbound %@ message from %@ (session messages: %d)",
-              message.channel.displayName, message.senderId, session.messages.count)
+        // Inject cross-channel context if identities are linked.
+        let crossChannelContext = await buildCrossChannelContext(for: message)
+
+        NSLog("ChannelGateway: inbound %@ message from %@ (session messages: %d, cross-channel: %@)",
+              message.channel.displayName, message.senderId, session.messages.count,
+              crossChannelContext != nil ? "yes" : "no")
+
+        // Enrich message with cross-channel context if available.
+        let enrichedMessage: ChannelMessage
+        if let context = crossChannelContext {
+            enrichedMessage = ChannelMessage(
+                id: message.id,
+                channel: message.channel,
+                senderId: message.senderId,
+                senderDisplayName: message.senderDisplayName,
+                text: message.text,
+                timestamp: message.timestamp,
+                threadId: message.threadId,
+                replyToId: message.replyToId,
+                attachments: message.attachments,
+                crossChannelContext: context
+            )
+        } else {
+            enrichedMessage = message
+        }
 
         // Dispatch through the pipeline.
-        let response = await handler(message, session)
+        let response = await handler(enrichedMessage, session)
 
         if let response {
             let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -172,5 +210,79 @@ actor ChannelGateway {
         }
 
         return nil
+    }
+
+    // MARK: - Identity Linking
+
+    /// Attempt to auto-link the sender's identity across channels.
+    ///
+    /// For phone-based channels (WhatsApp, iMessage), this normalises the phone
+    /// number and checks if the same number exists on another channel. For all
+    /// channels, display name matching is attempted.
+    private func attemptAutoLink(for message: ChannelMessage) async {
+        // Check if already resolved.
+        let existing = await identityResolver.resolve(
+            channel: message.channel, senderId: message.senderId
+        )
+        if existing != nil { return }
+
+        // Try phone-based linking for WhatsApp and iMessage.
+        let isPhoneChannel = message.channel == .whatsapp || message.channel == .imessage
+        if isPhoneChannel {
+            let matched = await identityResolver.autoLinkByPhone(
+                channel: message.channel,
+                senderId: message.senderId,
+                displayName: message.senderDisplayName
+            )
+            if matched != nil { return }
+        }
+
+        // Try display name matching if a display name is available.
+        if let displayName = message.senderDisplayName, !displayName.isEmpty {
+            let matched = await identityResolver.autoLinkByDisplayName(
+                channel: message.channel,
+                senderId: message.senderId,
+                displayName: displayName
+            )
+            if matched != nil { return }
+        }
+
+        // Register this sender as a new standalone identity for future matching.
+        await identityResolver.link(
+            channel: message.channel,
+            senderId: message.senderId,
+            displayName: message.senderDisplayName,
+            source: .manual
+        )
+    }
+
+    /// Build cross-channel context string for the LLM if identities are linked.
+    ///
+    /// Returns a human-readable summary of the sender's activity on other channels,
+    /// including recent message counts.
+    private func buildCrossChannelContext(for message: ChannelMessage) async -> String? {
+        let linkedKeys = await identityResolver.linkedSessionKeys(
+            channel: message.channel, senderId: message.senderId
+        )
+        guard !linkedKeys.isEmpty else { return nil }
+
+        var parts: [String] = []
+        for key in linkedKeys {
+            let session = await sessionStore.session(for: key)
+            let messageCount = session.messages.count
+            guard messageCount > 0 else { continue }
+            parts.append(
+                "\(key.channel.displayName) (\(messageCount) messages)"
+            )
+        }
+
+        guard !parts.isEmpty else { return nil }
+
+        let identity = await identityResolver.resolve(
+            channel: message.channel, senderId: message.senderId
+        )
+        let name = identity?.displayName ?? message.senderDisplayName ?? message.senderId
+
+        return "This person (\(name)) also messaged on: \(parts.joined(separator: ", "))"
     }
 }
