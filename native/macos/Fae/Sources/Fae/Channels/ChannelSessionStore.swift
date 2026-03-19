@@ -82,4 +82,79 @@ actor ChannelSessionStore {
         }
         sessions.removeAll()
     }
+
+    // MARK: - Cross-Channel Context
+
+    /// Gather conversation summaries from linked sessions on other channels.
+    ///
+    /// This enables cross-channel conversation continuity: when a person
+    /// messages on iMessage after chatting on WhatsApp, the LLM can see
+    /// a summary of the WhatsApp conversation.
+    ///
+    /// - Parameters:
+    ///   - linkedKeys: Session keys for the same person on other channels.
+    ///   - maxMessagesPerSession: Maximum recent messages to include per linked session.
+    /// - Returns: Array of `LinkedSessionSummary` structs for non-empty linked sessions.
+    func linkedSessionSummaries(
+        for linkedKeys: [SessionKey],
+        maxMessagesPerSession: Int = 6
+    ) -> [LinkedSessionSummary] {
+        var summaries: [LinkedSessionSummary] = []
+
+        for key in linkedKeys {
+            guard let session = sessions[key] else { continue }
+            let messages = session.messages
+            guard !messages.isEmpty else { continue }
+
+            // Take the most recent messages.
+            let recentMessages = Array(messages.suffix(maxMessagesPerSession))
+
+            summaries.append(LinkedSessionSummary(
+                channel: key.channel,
+                senderId: key.senderId,
+                displayName: session.senderDisplayName,
+                messageCount: messages.count,
+                recentMessages: recentMessages,
+                lastActivity: session.lastActivity
+            ))
+        }
+
+        return summaries
+    }
+}
+
+// MARK: - LinkedSessionSummary
+
+/// Summary of a linked session on another channel for cross-channel context.
+struct LinkedSessionSummary: Sendable {
+    /// The channel this linked session is on.
+    let channel: ChannelKind
+
+    /// The sender ID on this channel.
+    let senderId: String
+
+    /// The display name, if known.
+    let displayName: String?
+
+    /// Total number of messages in the linked session.
+    let messageCount: Int
+
+    /// The most recent messages (up to `maxMessagesPerSession`).
+    let recentMessages: [LLMMessage]
+
+    /// When the linked session was last active.
+    let lastActivity: Date
+
+    /// Format this summary as a human-readable string for the LLM.
+    var formattedContext: String {
+        let name = displayName ?? senderId
+        var lines = [
+            "--- \(channel.displayName) conversation with \(name) (\(messageCount) messages) ---",
+        ]
+        for msg in recentMessages {
+            let role = msg.role == .user ? name : "Fae"
+            lines.append("[\(role)]: \(msg.content)")
+        }
+        return lines.joined(separator: "\n")
+    }
 }

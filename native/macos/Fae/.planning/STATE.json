@@ -6,10 +6,11 @@
     "2.1 — Migrate iMessageAdapter to ChannelAdapter protocol",
     "2.2 — Migrate DiscordAdapter to ChannelAdapter protocol",
     "2.3 — Migrate WhatsAppAdapter to ChannelAdapter protocol",
-    "3.1 — Shared Identity (ChannelIdentityResolver)"
+    "3.1 — Shared Identity (ChannelIdentityResolver)",
+    "3.2 — Cross-Channel Context (LinkedSessionSummary, gateway enrichment)"
   ],
-  "current_phase": "3.2 — Cross-Channel Context",
-  "test_count": 1272,
+  "current_phase": "3.3 — Channel Health Monitoring + Auto-Reconnect",
+  "test_count": 1282,
   "test_failures": 0,
   "build_warnings": 0
 }

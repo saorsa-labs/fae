@@ -259,30 +259,26 @@ actor ChannelGateway {
     /// Build cross-channel context string for the LLM if identities are linked.
     ///
     /// Returns a human-readable summary of the sender's activity on other channels,
-    /// including recent message counts.
+    /// including recent conversation snippets for continuity.
     private func buildCrossChannelContext(for message: ChannelMessage) async -> String? {
         let linkedKeys = await identityResolver.linkedSessionKeys(
             channel: message.channel, senderId: message.senderId
         )
         guard !linkedKeys.isEmpty else { return nil }
 
-        var parts: [String] = []
-        for key in linkedKeys {
-            let session = await sessionStore.session(for: key)
-            let messageCount = session.messages.count
-            guard messageCount > 0 else { continue }
-            parts.append(
-                "\(key.channel.displayName) (\(messageCount) messages)"
-            )
-        }
-
-        guard !parts.isEmpty else { return nil }
+        let summaries = await sessionStore.linkedSessionSummaries(for: linkedKeys)
+        guard !summaries.isEmpty else { return nil }
 
         let identity = await identityResolver.resolve(
             channel: message.channel, senderId: message.senderId
         )
         let name = identity?.displayName ?? message.senderDisplayName ?? message.senderId
 
-        return "This person (\(name)) also messaged on: \(parts.joined(separator: ", "))"
+        var context = "Cross-channel context for \(name):\n"
+        for summary in summaries {
+            context += summary.formattedContext + "\n"
+        }
+
+        return context
     }
 }
