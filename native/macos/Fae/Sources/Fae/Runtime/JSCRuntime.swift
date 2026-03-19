@@ -298,6 +298,10 @@ actor JSCRuntime {
         script: String,
         budget: ScriptBudget = .default
     ) async -> DryRunPlan {
+        // Budget tracker enforces tool-call and wall-clock limits even in dry-run.
+        let budgetTracker = ScriptBudgetTracker(budget: budget)
+        let startTime = Date()
+
         // Thread-safe collector for intended tool calls.
         let collector = DryRunCallCollector()
 
@@ -344,7 +348,23 @@ actor JSCRuntime {
         var pendingCallbacks: [() -> Void] = []
         let callbackQueue = DispatchQueue(label: "fae.dryrun.callbacks")
 
-        let nativeBlock: @convention(block) (Int, String, String) -> Void = { callId, name, argsJSON in
+        let nativeBlock: @convention(block) (Int, String, String) -> Void = { [budgetTracker] callId, name, argsJSON in
+            // Check budget before recording.
+            if let budgetError = budgetTracker.tryStartToolCall() {
+                callbackQueue.sync {
+                    pendingCallbacks.append {
+                        let resolvers = jsContext.objectForKeyedSubscript("fae")
+                            .objectForKeyedSubscript("_toolResolvers")
+                            .objectForKeyedSubscript(callId)
+                        resolvers?.objectForKeyedSubscript("reject")
+                            .call(withArguments: [budgetError as NSString])
+                        jsContext.evaluateScript("delete fae._toolResolvers[\(callId)];")
+                    }
+                }
+                return
+            }
+            budgetTracker.finishToolCall()
+
             // Record the intended call.
             collector.record(toolName: name, argumentsJSON: argsJSON)
 
@@ -430,6 +450,17 @@ actor JSCRuntime {
         let maxIterations = Self.maxDrainIterations
         while iterations < maxIterations {
             iterations += 1
+
+            // Wall-clock budget check.
+            if Date().timeIntervalSince(startTime) > budget.maxWallClockSeconds {
+                return DryRunPlan(
+                    intendedCalls: collector.calls,
+                    scriptResult: .budgetExceeded(
+                        reason: "Dry-run wall-clock budget exceeded (\(Int(budget.maxWallClockSeconds))s)",
+                        logs: collector.logs
+                    )
+                )
+            }
 
             let batch: [() -> Void] = callbackQueue.sync {
                 let current = pendingCallbacks

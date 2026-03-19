@@ -123,10 +123,13 @@ actor ApprovalManager {
         }
 
         // In script mode, first approval for a tool auto-grants remaining budget.
+        // Decrement scriptBudgetRemaining so subsequent different-tool approvals
+        // don't re-grant the full original budget.
         if approved && scriptBudgetRemaining > 0 && !manualOnly && !isDisasterLevel {
             let grant = max(scriptBudgetRemaining - 1, 0)
             if grant > 0 {
                 batchGrants[toolName] = (batchGrants[toolName] ?? 0) + grant
+                scriptBudgetRemaining = max(scriptBudgetRemaining - grant, 0)
             }
         }
 

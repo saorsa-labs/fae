@@ -7140,6 +7140,10 @@ actor PipelineCoordinator {
 
         /// Optional budget override. When `nil`, ``ScriptBudget/default`` is used.
         let budget: ScriptBudget?
+
+        /// When `true`, run in dry-run mode: record intended tool calls
+        /// without executing them, then return the plan for user review.
+        let dryRun: Bool
     }
 
     /// Parse `<tool_program>` blocks from response text.
@@ -7177,6 +7181,7 @@ actor PipelineCoordinator {
             // Look for a preceding <tool_program_meta> block.
             var allowedTools: Set<String>?
             var budget: ScriptBudget?
+            var dryRun = false
             if let metaEnd = text.range(of: "</tool_program_meta>", range: searchStart..<openRange.lowerBound),
                let metaStart = text.range(of: "<tool_program_meta>", range: searchStart..<metaEnd.lowerBound)
             {
@@ -7195,13 +7200,17 @@ actor PipelineCoordinator {
                             maxConcurrentToolCalls: (json["max_concurrent_tool_calls"] as? Int) ?? ScriptBudget.default.maxConcurrentToolCalls
                         )
                     }
+                    if let dr = json["dry_run"] as? Bool {
+                        dryRun = dr
+                    }
                 }
             }
 
             blocks.append(ScriptBlock(
                 source: source,
                 allowedTools: allowedTools,
-                budget: budget
+                budget: budget,
+                dryRun: dryRun
             ))
 
             searchStart = closeRange?.upperBound ?? text.endIndex
@@ -8682,9 +8691,10 @@ actor PipelineCoordinator {
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
         let effectiveTicket = activeCapabilityTicket
         let currentToolMode = effectiveToolMode()
+        // For scripts, per-tool capability is checked by the bridge's ticket
+        // manager on each fae.tool() call, not here. Default to false so the
+        // broker doesn't skip approval based on a stale snapshot.
         let hasCapabilityTicket = currentToolMode == "full"
-            ? true
-            : (effectiveTicket?.allows(toolName: "*") ?? false)
         let effectiveGenerationContext = currentTurnGenerationContext
 
         let scriptContext = ToolExecutorContext(
@@ -8719,6 +8729,21 @@ actor PipelineCoordinator {
                 return await self.incrementComputerUseStep()
             }
         )
+
+        // Dry-run: record intended tool calls without executing them.
+        if block.dryRun {
+            let plan = await runtime.runDryRun(script: block.source, budget: budget)
+            let dryOutput = plan.summary()
+            let drySuccess = plan.scriptResult.status == .success
+            debugLog(debugConsole, .toolResult, "Dry-run finished: \(plan.intendedCalls.count) intended calls, success=\(drySuccess)")
+            eventBus.send(.toolResult(
+                id: "script-\(UUID().uuidString.prefix(8))",
+                name: "tool_program_dry_run",
+                success: drySuccess,
+                output: String(dryOutput.prefix(200))
+            ))
+            return (dryOutput, drySuccess)
+        }
 
         let result = await runtime.run(
             script: block.source,

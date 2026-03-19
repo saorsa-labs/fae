@@ -168,21 +168,23 @@ final class ScriptBlockParsingTests: XCTestCase {
     // MARK: - ScriptBlock Equatable
 
     func testScriptBlockEquality() {
-        let a = PipelineCoordinator.ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil)
-        let b = PipelineCoordinator.ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil)
-        let c = PipelineCoordinator.ScriptBlock(source: "return 2;", allowedTools: nil, budget: nil)
+        let a = PipelineCoordinator.ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil, dryRun: false)
+        let b = PipelineCoordinator.ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil, dryRun: false)
+        let c = PipelineCoordinator.ScriptBlock(source: "return 2;", allowedTools: nil, budget: nil, dryRun: false)
         XCTAssertEqual(a, b)
         XCTAssertNotEqual(a, c)
 
         let d = PipelineCoordinator.ScriptBlock(
             source: "return 1;",
             allowedTools: Set(["read"]),
-            budget: ScriptBudget(maxToolCalls: 5, maxWallClockSeconds: 30, maxConcurrentToolCalls: 2)
+            budget: ScriptBudget(maxToolCalls: 5, maxWallClockSeconds: 30, maxConcurrentToolCalls: 2),
+            dryRun: false
         )
         let e = PipelineCoordinator.ScriptBlock(
             source: "return 1;",
             allowedTools: Set(["read"]),
-            budget: ScriptBudget(maxToolCalls: 5, maxWallClockSeconds: 30, maxConcurrentToolCalls: 2)
+            budget: ScriptBudget(maxToolCalls: 5, maxWallClockSeconds: 30, maxConcurrentToolCalls: 2),
+            dryRun: false
         )
         XCTAssertEqual(d, e)
     }
@@ -334,7 +336,8 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
             return 'done: ' + r;
             """,
             allowedTools: nil,
-            budget: nil
+            budget: nil,
+            dryRun: false
         )
 
         let result = await runtime.run(
@@ -360,7 +363,8 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
             return 'should not reach';
             """,
             allowedTools: nil,
-            budget: ScriptBudget(maxToolCalls: 2, maxWallClockSeconds: 30, maxConcurrentToolCalls: 5)
+            budget: ScriptBudget(maxToolCalls: 2, maxWallClockSeconds: 30, maxConcurrentToolCalls: 5),
+            dryRun: false
         )
 
         let result = await runtime.run(
@@ -383,7 +387,8 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
             return 'got: ' + r;
             """,
             allowedTools: Set(["read"]),
-            budget: nil
+            budget: nil,
+            dryRun: false
         )
 
         let result = await runtime.run(
@@ -401,7 +406,8 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let block = PipelineCoordinator.ScriptBlock(
             source: "throw new Error('intentional test error');",
             allowedTools: nil,
-            budget: nil
+            budget: nil,
+            dryRun: false
         )
 
         let result = await runtime.run(
@@ -418,9 +424,9 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let runtime = makeRuntime()
 
         let blocks = [
-            PipelineCoordinator.ScriptBlock(source: "return 'first';", allowedTools: nil, budget: nil),
-            PipelineCoordinator.ScriptBlock(source: "return 'second';", allowedTools: nil, budget: nil),
-            PipelineCoordinator.ScriptBlock(source: "return 'third';", allowedTools: nil, budget: nil),
+            PipelineCoordinator.ScriptBlock(source: "return 'first';", allowedTools: nil, budget: nil, dryRun: false),
+            PipelineCoordinator.ScriptBlock(source: "return 'second';", allowedTools: nil, budget: nil, dryRun: false),
+            PipelineCoordinator.ScriptBlock(source: "return 'third';", allowedTools: nil, budget: nil, dryRun: false),
         ]
 
         var results: [String] = []
@@ -457,7 +463,8 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
             }
             """,
             allowedTools: nil,
-            budget: nil
+            budget: nil,
+            dryRun: false
         )
 
         let result = await runtime.run(
