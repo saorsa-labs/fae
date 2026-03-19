@@ -1,24 +1,39 @@
 import Foundation
 
-/// Routes CoWork external LLM calls through ToolExecutor's unified security pipeline.
+/// Gates CoWork external LLM calls with DamageControlPolicy and inbound injection scanning.
 ///
-/// All external LLM calls — whether to OpenAI-compatible APIs, Anthropic, or any
-/// third-party provider — are routed through this actor. This ensures that the
-/// same security layers (DamageControlPolicy, OutboundExfiltrationGuard,
-/// TrustedActionBroker) apply to CoWork calls as to native tool calls.
+/// This is a **provider-level** security gate, not a full ToolExecutor pipeline.
+/// CoWork provider calls are not individual tool dispatches — they are HTTP requests
+/// to external LLM APIs. The security enforcement is:
+///
+/// - `DamageControlPolicy.evaluate()` with `locality: .nonLocal` (zero-access paths)
+/// - Inbound prompt injection pattern scan (post-response)
+/// - Fail-closed startup gate (`.pipelineNotReady` if pipeline unavailable)
+/// - `SecurityEventLogger` audit trail (block/flag/allow)
+/// - Per-provider metrics counters (allowed/blocked/flagged)
+///
+/// ## Why Not Full ToolExecutor Parity
+///
+/// `ToolExecutor.execute()` checks `registry.isToolAllowed(name)` at step 1, which
+/// returns `false` for unregistered tool names. CoWork uses synthetic names like
+/// `"external_llm"` that are not (and should not be) in the ToolRegistry. Rather
+/// than registering fake tools, we call DamageControlPolicy directly — the layer
+/// that actually provides value for provider-level security gating.
+///
+/// The following layers are intentionally NOT applied to CoWork provider calls:
+/// - `TrustedActionBroker` — applies to individual tool calls, not provider requests
+/// - `OutboundExfiltrationGuard` — applies to tool output destinations
+/// - `ToolRegistry` mode filtering — requires registered tool names
+/// - Approval overlay — DamageControlPolicy blocks are immediate
 ///
 /// ## Lifecycle
 ///
-/// 1. ``PipelineCoordinator/makeCoworkToolExecutor()`` creates this actor after
-///    ``ToolExecutor`` is initialized, wiring the real security stack.
-/// 2. ``FaeCore`` exposes it via ``FaeCore/coworkToolExecutor``.
-/// 3. ``CoworkWorkspaceController`` calls ``submit(request:provider:)``,
-///    ``submitStreaming(request:provider:onPartialText:)``, or
-///    ``submitWithWebSearch(request:provider:)`` for every non-local LLM call.
-/// 4. If the executor is unavailable (pipeline not started), the controller
-///    falls back to direct provider access (graceful degradation).
+/// 1. `PipelineCoordinator.makeCoworkToolExecutor()` creates this actor
+/// 2. `FaeCore.coworkToolExecutor` exposes it to CoWork UI
+/// 3. `CoworkWorkspaceController` calls submit/streaming/webSearch methods
+/// 4. If executor is nil, controller throws `.pipelineNotReady` (fail-closed)
 ///
-/// ## Security Stack (per call)
+/// ## Flow (per call)
 ///
 /// ```
 /// CoworkWorkspaceController
@@ -26,10 +41,8 @@ import Foundation
 ///     ├── CoworkToolExecutor.submit(request:, provider:)
 ///     │       │
 ///     │       ├── performSecurityCheck()
-///     │       │       ├── ToolExecutorContext.coworkExternal() — nonLocal locality
-///     │       │       ├── DamageControlPolicy — blocks credential/vault access
-///     │       │       ├── OutboundExfiltrationGuard — novel recipient detection
-///     │       │       └── TrustedActionBroker — default-deny chokepoint
+///     │       │       └── DamageControlPolicy.evaluate(locality: .nonLocal)
+///     │       │           └── zero-access paths: vault, speakers, soul, ssh, etc.
 ///     │       │
 ///     │       ├── provider.submit() / .stream() / .submitWithWebSearch()
 ///     │       │
@@ -42,13 +55,6 @@ import Foundation
 ///     │
 ///     └── Response returned to CoWork UI
 /// ```
-///
-/// ## Protected Paths (via DamageControlPolicy nonLocal rules)
-///
-/// - `~/.fae-vault/` — Git Vault backup repository
-/// - `~/Library/Application Support/fae/speakers.json` — voice identity data
-/// - `~/Library/Application Support/fae/directive.md` — system directive
-/// - `~/.ssh/`, `~/.gnupg/`, `~/.aws/`, etc. — credential stores
 actor CoworkToolExecutor {
 
     // MARK: - Per-Provider Metrics
@@ -76,7 +82,8 @@ actor CoworkToolExecutor {
     private var isReady: Bool = false
 
     /// Optional security event logger for structured JSONL audit trail.
-    private let securityLogger: SecurityEventLogger?
+    /// Uses SecurityEventLogging protocol to allow test spy injection.
+    private let securityLogger: (any SecurityEventLogging)?
 
     /// Optional event bus for publishing CoWork security events to the UI.
     private let eventBus: FaeEventBus?
@@ -96,13 +103,13 @@ actor CoworkToolExecutor {
     ///   - damageControlPolicy: The DamageControlPolicy for catastrophic op blocking.
     ///   - inboundScanPatterns: Patterns checked in responses to detect prompt injection.
     ///   - isReady: Whether the executor is ready to handle requests.
-    ///   - securityLogger: Logger for structured security event audit trail.
+    ///   - securityLogger: Logger for structured security event audit trail (protocol for testability).
     ///   - eventBus: Event bus for UI-visible security notifications.
     init(
         damageControlPolicy: DamageControlPolicy,
         inboundScanPatterns: [String]? = nil,
         isReady: Bool = true,
-        securityLogger: SecurityEventLogger? = nil,
+        securityLogger: (any SecurityEventLogging)? = nil,
         eventBus: FaeEventBus? = nil
     ) {
         self.damageControlPolicy = damageControlPolicy
@@ -140,7 +147,7 @@ actor CoworkToolExecutor {
         request: CoworkProviderRequest,
         provider: some CoworkLLMProvider
     ) async throws -> CoworkProviderResponse {
-        let providerKind = String(describing: provider.kind)
+        let providerKind = provider.kind.rawValue
         try await performSecurityCheck(toolName: "external_llm", providerKind: providerKind, request: request)
 
         do {
@@ -179,7 +186,7 @@ actor CoworkToolExecutor {
         provider: some CoworkStreamingProvider,
         onPartialText: @escaping @Sendable (String) async -> Void
     ) async throws -> CoworkProviderResponse {
-        let providerKind = String(describing: provider.kind)
+        let providerKind = provider.kind.rawValue
         try await performSecurityCheck(toolName: "external_llm_streaming", providerKind: providerKind, request: request)
 
         var finalResponse: CoworkProviderResponse?
@@ -234,7 +241,7 @@ actor CoworkToolExecutor {
         request: CoworkProviderRequest,
         provider: some CoworkWebSearchProvider
     ) async throws -> CoworkProviderResponse {
-        let providerKind = String(describing: provider.kind)
+        let providerKind = provider.kind.rawValue
         try await performSecurityCheck(toolName: "external_llm_websearch", providerKind: providerKind, request: request)
 
         do {
@@ -293,6 +300,12 @@ actor CoworkToolExecutor {
             recordBlock(providerKind: providerKind, model: request.model, reason: reason)
             eventBus?.send(.coworkSecurityBlocked(provider: providerKind, reason: reason))
             throw CoworkToolExecutorError.damageControlIntervened(reason: reason)
+        }
+
+        // Emit redaction visibility event if pre-send egress policy stripped content.
+        if let export = request.preparedPrompt.shareableExport, export.hasRedactions {
+            let stripped = export.excludedContext
+            eventBus?.send(.coworkRedactionApplied(provider: providerKind, strippedFields: stripped))
         }
     }
 

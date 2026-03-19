@@ -1,10 +1,42 @@
 import CryptoKit
 import Foundation
 
+/// Protocol for security event logging, enabling test spies.
+protocol SecurityEventLogging: Actor {
+    func log(
+        event: String,
+        toolName: String,
+        decision: String?,
+        reasonCode: String?,
+        approved: Bool?,
+        success: Bool?,
+        error: String?,
+        arguments: [String: Any]?
+    )
+}
+
+extension SecurityEventLogging {
+    /// Default-argument convenience to match SecurityEventLogger's call sites.
+    func log(
+        event: String,
+        toolName: String,
+        decision: String? = nil,
+        reasonCode: String? = nil,
+        approved: Bool? = nil,
+        success: Bool? = nil,
+        error: String? = nil,
+        arguments: [String: Any]? = nil
+    ) {
+        log(event: event, toolName: toolName, decision: decision,
+            reasonCode: reasonCode, approved: approved, success: success,
+            error: error, arguments: arguments)
+    }
+}
+
 /// Append-only local security event logger.
 ///
 /// Writes JSONL events to `~/Library/Application Support/fae/security-events.jsonl`.
-actor SecurityEventLogger {
+actor SecurityEventLogger: SecurityEventLogging {
     static let shared = SecurityEventLogger()
 
     private let fileURL: URL

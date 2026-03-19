@@ -1,17 +1,33 @@
-# Fae Unified Intercept Roadmap
+# Fae CoWork Security Intercept Roadmap
 
 ## Overview
 
-Route all CoWork external LLM calls through ToolExecutor's unified security pipeline. One security logic everywhere — DamageControl, OutboundGuard, TrustedActionBroker, ApprovalMgr all apply to CoWork calls the same way they apply to native tool calls.
+Gate all CoWork external LLM calls with DamageControlPolicy (nonLocal locality enforcement) and inbound prompt injection scanning. CoWork calls are **provider-level** operations — not individual tool dispatches — so they use DamageControlPolicy directly rather than routing through the full ToolExecutor pipeline (which requires registered tool names in ToolRegistry).
 
-**Problem:** CoWork external LLM calls (Claude, GPT-5, MiniMax via HTTP) bypass the ToolExecutor security stack. They only have pre-send redaction (CoworkPromptEgressPolicy, SensitiveContentPolicy) but no security enforcement.
+**What IS enforced for CoWork calls:**
+- DamageControlPolicy zero-access paths (vault, speakers, soul, directive, config) for nonLocal models
+- Inbound prompt injection scan (10 patterns, post-response)
+- Fail-closed startup gate (throws .pipelineNotReady if pipeline unavailable)
+- SecurityEventLogger audit trail (block/flag/allow)
+- Per-provider metrics counters
 
-**Success:** Production ready — complete, tested, documented.
+**What is NOT enforced (by design):**
+- TrustedActionBroker — applies to individual tool calls, not provider-level LLM requests
+- OutboundExfiltrationGuard — applies to tool output destinations, not LLM API endpoints
+- ToolRegistry mode filtering — CoWork provider calls have no registered tool name
+- Approval overlay — DamageControlPolicy blocks are immediate, not interactive
+
+**Why:** ToolExecutor.execute() checks registry.isToolAllowed() at step 1, which rejects unregistered tool names. CoWork provider calls use synthetic names ("external_llm") that are not in the registry. Rather than registering fake tools, we call DamageControlPolicy directly — the layer that actually matters for provider-level security gating.
+
+**Problem:** CoWork external LLM calls (Claude, GPT-5, MiniMax via HTTP) previously bypassed all security enforcement. They only had pre-send redaction (CoworkPromptEgressPolicy, SensitiveContentPolicy).
+
+**Success:** Production ready — DamageControlPolicy-gated, inbound-scanned, fail-closed, tested, documented.
 
 ## Success Criteria
-- All external CoWork calls route through ToolExecutor security pipeline
-- DamageControlPolicy blocks credential access for non-local models
+- All external CoWork calls gated by DamageControlPolicy with nonLocal locality
+- DamageControlPolicy blocks credential/vault access for non-local models
 - Inbound response scan catches prompt injection attempts
+- Fail-closed: no fallback to unguarded provider access
 - Full test coverage: unit + integration
 - Public API docs for CoworkToolExecutor
 
@@ -35,6 +51,12 @@ Route all CoWork external LLM calls through ToolExecutor's unified security pipe
 - **Deliverables**: ToolExecutor.makeContext() helper, no behavior change
 - **Dependencies**: Phase 1.1
 - **Estimated Tasks**: 2-3
+
+### Phase 1.3: CoworkToolExecutor Hardening & Contracts
+- **Focus**: Pick up unresolved Phase 1.1 review findings before broader rollout
+- **Deliverables**: logger test seam, redaction metadata contract, synthetic tool identity contract, streaming empty-response semantics, stable provider metrics key
+- **Dependencies**: Phase 1.2
+- **Estimated Tasks**: 4-6
 
 ---
 

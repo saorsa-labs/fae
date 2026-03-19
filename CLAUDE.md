@@ -219,9 +219,15 @@ Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 
 **Apple tool reads are INTENTIONALLY ungated** — only writes/mutations need approval. macOS permission is the only read gate.
 
-### CoWork unified intercept (`CoworkToolExecutor`)
+### CoWork security intercept (`CoworkToolExecutor`)
 
-All external (non-local) LLM calls from CoWork are routed through `CoworkToolExecutor`, which delegates to the same `ToolExecutor` security pipeline used by native tool calls. This ensures DamageControlPolicy, OutboundExfiltrationGuard, and TrustedActionBroker apply uniformly.
+All external (non-local) LLM calls from CoWork are gated by `CoworkToolExecutor`, which calls `DamageControlPolicy.evaluate()` directly with `locality: .nonLocal`. This is a **provider-level** security gate, not a full ToolExecutor pipeline — CoWork provider calls are not individual tool dispatches and do not go through ToolRegistry, TrustedActionBroker, or OutboundExfiltrationGuard.
+
+**What is enforced**: DamageControlPolicy zero-access paths, inbound injection scan, fail-closed startup gate, SecurityEventLogger audit, per-provider metrics.
+
+**What is NOT enforced (by design)**: TrustedActionBroker, OutboundExfiltrationGuard, ToolRegistry mode filtering, approval overlay. These apply to individual tool calls, not provider-level LLM requests.
+
+**Why not full ToolExecutor parity**: `ToolExecutor.execute()` checks `registry.isToolAllowed()` at step 1, rejecting unregistered tool names. CoWork uses synthetic names ("external_llm") that are not in the registry. DamageControlPolicy is the layer that matters for provider-level gating.
 
 **Wiring**: `PipelineCoordinator.makeCoworkToolExecutor()` → `FaeCore.coworkToolExecutor` → `CoworkWorkspaceController`.
 
@@ -232,7 +238,7 @@ All external (non-local) LLM calls from CoWork are routed through `CoworkToolExe
 
 **Inbound response scan**: 10 prompt injection patterns checked on every response. Flagged responses emit `FaeEvent.coworkInjectionFlagged`.
 
-**Graceful degradation**: if `coworkToolExecutor` is nil (pipeline not started), calls fall back to direct provider access.
+**Fail-closed**: if `coworkToolExecutor` is nil (pipeline not started), calls throw `.pipelineNotReady` — no silent fallback to unguarded provider access.
 
 ### Skill manifest contract
 
@@ -604,7 +610,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `CoworkModelRegistry.swift` | Available remote model registry |
 | `CoworkRemoteModelCatalog.swift` | Remote model catalog |
 | `CoworkExportPacket.swift` | Conversation export |
-| `CoworkToolExecutor.swift` | Unified security intercept for external LLM calls |
+| `CoworkToolExecutor.swift` | DamageControlPolicy gate + inbound scan for external LLM calls |
 | `CoworkToolExecutorError.swift` | Error types for CoWork security pipeline |
 | `WorkWithFaeWorkspace.swift` | "Work with Fae" workspace integration |
 
