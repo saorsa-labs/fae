@@ -477,3 +477,60 @@ private actor DenyBroker: TrustedActionBroker {
         .deny(reason: DecisionReason(code: .ownerRequired, message: "denied by test broker"))
     }
 }
+
+// MARK: - Prompt Routing Tests
+
+final class ToolProgramPromptTests: XCTestCase {
+
+    func testNativeToolPromptIncludesToolProgramGuidance() {
+        let prompt = PersonalityManager.assemblePrompt(
+            nativeToolsAvailable: true,
+            toolSchemas: nil
+        )
+
+        XCTAssertTrue(
+            prompt.contains("tool_program"),
+            "Prompt should mention tool_program when native tools are available"
+        )
+        XCTAssertTrue(
+            prompt.contains("fae.tool"),
+            "Prompt should show fae.tool() API usage"
+        )
+    }
+
+    func testLegacyToolPromptMentionsToolProgram() {
+        let prompt = PersonalityManager.assemblePrompt(
+            nativeToolsAvailable: false,
+            toolSchemas: "read: reads a file"
+        )
+
+        XCTAssertTrue(
+            prompt.contains("tool_program"),
+            "Legacy prompt should mention tool_program for multi-step tasks"
+        )
+    }
+
+    func testNoToolsPromptOmitsToolProgramGuidance() {
+        let prompt = PersonalityManager.assemblePrompt(
+            nativeToolsAvailable: false,
+            toolSchemas: nil
+        )
+
+        XCTAssertFalse(
+            prompt.contains("tool_program"),
+            "Prompt should NOT mention tool_program when no tools available"
+        )
+    }
+
+    func testToolProgramGuidancePrefersSingleToolCallForSimpleTasks() {
+        let prompt = PersonalityManager.assemblePrompt(
+            nativeToolsAvailable: true,
+            toolSchemas: nil
+        )
+
+        XCTAssertTrue(
+            prompt.contains("Prefer single tool_call"),
+            "Guidance should tell model to prefer single tool_call for simple tasks"
+        )
+    }
+}

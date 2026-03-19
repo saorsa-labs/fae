@@ -657,6 +657,22 @@ enum PersonalityManager {
                 - After a tool result, respond naturally in 1-4 spoken sentences.
                 - General knowledge and simple conversation: respond directly without tools.
                 - NEVER expose tool markup, JSON, or code in your spoken response.
+
+                Tool programs (advanced):
+                When a task requires MULTIPLE sequential tool calls that depend on each other's results, \
+                you can emit a JavaScript program inside <tool_program></tool_program> tags instead of \
+                separate tool_call blocks. Use fae.tool(name, argsJSON) to call tools and fae.log(msg) \
+                for debug output. Example:
+                <tool_program>
+                var events = await fae.tool('calendar', '{"action":"list_today"}');
+                var weather = await fae.tool('web_search', '{"query":"weather today"}');
+                return 'Events: ' + events + ' Weather: ' + weather;
+                </tool_program>
+                Rules:
+                - Prefer single tool_call for simple one-tool tasks.
+                - Use tool_program only when you need 3+ dependent tool calls or control flow (if/for/try-catch).
+                - Never mix tool_call and tool_program in the same response.
+                - Tool programs run through the same security stack as normal tool calls.
                 """
             if let schemas = toolSchemas, !schemas.isEmpty {
                 toolSection += "\n\n" + schemas
@@ -674,6 +690,7 @@ enum PersonalityManager {
                 - For simple conversation, just respond directly without tools
                 - Keep your spoken responses concise (1-4 sentences)
                 - NEVER expose raw tool call markup or JSON to the user
+                - For multi-step tasks needing 3+ dependent tool calls, you can use a <tool_program> block with JavaScript.
 
                 Available tools:
                 \(schemas)
