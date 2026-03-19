@@ -28,6 +28,7 @@ actor ChannelGateway {
     private let eventBus: FaeEventBus
     private let sessionStore: ChannelSessionStore
     private let identityResolver: ChannelIdentityResolver
+    private let healthMonitor: ChannelHealthMonitor
     private var adapters: [ChannelKind: any ChannelAdapter] = [:]
     private var responseHandler: ResponseHandler?
     private var isRunning = false
@@ -38,19 +39,27 @@ actor ChannelGateway {
     ///   - eventBus: The event bus for emitting channel activity events.
     ///   - sessionStore: The session store (injected for testability).
     ///   - identityResolver: The identity resolver (injected for testability).
+    ///   - healthMonitor: The health monitor (injected for testability).
     init(
         eventBus: FaeEventBus,
         sessionStore: ChannelSessionStore = ChannelSessionStore(),
-        identityResolver: ChannelIdentityResolver = ChannelIdentityResolver()
+        identityResolver: ChannelIdentityResolver = ChannelIdentityResolver(),
+        healthMonitor: ChannelHealthMonitor? = nil
     ) {
         self.eventBus = eventBus
         self.sessionStore = sessionStore
         self.identityResolver = identityResolver
+        self.healthMonitor = healthMonitor ?? ChannelHealthMonitor(eventBus: eventBus)
     }
 
     /// The identity resolver used by this gateway for cross-channel identity linking.
     var resolver: ChannelIdentityResolver {
         identityResolver
+    }
+
+    /// The health monitor used by this gateway.
+    var health: ChannelHealthMonitor {
+        healthMonitor
     }
 
     /// Set the handler that processes inbound messages through the LLM pipeline.
@@ -80,16 +89,23 @@ actor ChannelGateway {
         adapters[kind] = adapter
     }
 
-    /// Start all registered adapters.
+    /// Start all registered adapters and health monitoring.
     func start() async {
         guard !isRunning else { return }
         isRunning = true
 
+        // Start health monitoring first so adapter status reports are not overwritten.
+        await healthMonitor.start(adapters: adapters)
+
         for (kind, adapter) in adapters {
             do {
                 try await adapter.start()
+                await healthMonitor.reportConnected(kind: kind)
                 NSLog("ChannelGateway: started %@ adapter", kind.displayName)
             } catch {
+                await healthMonitor.reportError(
+                    kind: kind, error: error.localizedDescription
+                )
                 NSLog("ChannelGateway: failed to start %@ adapter — %@",
                       kind.displayName, error.localizedDescription)
             }
@@ -98,9 +114,11 @@ actor ChannelGateway {
         NSLog("ChannelGateway: running with %d adapter(s)", adapters.count)
     }
 
-    /// Stop all adapters and clean up sessions.
+    /// Stop all adapters, health monitoring, and clean up sessions.
     func stop() async {
         guard isRunning else { return }
+
+        await healthMonitor.stop()
 
         for (kind, adapter) in adapters {
             await adapter.stop()
@@ -201,6 +219,10 @@ actor ChannelGateway {
                 do {
                     try await adapter.send(response: trimmedResponse, to: message)
                 } catch {
+                    await healthMonitor.reportError(
+                        kind: message.channel,
+                        error: "send failed: \(error.localizedDescription)"
+                    )
                     NSLog("ChannelGateway: failed to send response via %@ — %@",
                           message.channel.displayName, error.localizedDescription)
                 }
