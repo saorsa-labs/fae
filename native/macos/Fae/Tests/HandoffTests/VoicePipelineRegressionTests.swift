@@ -545,7 +545,7 @@ final class VoicePipelineRegressionTests: XCTestCase {
                 configMinSilenceMs: 1000,
                 bargeInSilenceMs: 600
             ),
-            1400
+            1800
         )
         XCTAssertEqual(
             PipelineCoordinator.silenceThresholdMs(

@@ -1174,7 +1174,7 @@ actor PipelineCoordinator {
     private var pendingSemanticTurn: PendingSemanticTurn?
     private var pendingSemanticTurnTask: Task<Void, Never>?
     private static let semanticTurnHoldMs: Int = 1200
-    private static let conversationalSilenceFloorMs: Int = 1400
+    private static let conversationalSilenceFloorMs: Int = 1800
 
     private var streamingWakeSamples: [Float] = []
     private var streamingWakeLastEvaluatedSamples: Int = 0
