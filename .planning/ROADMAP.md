@@ -1,112 +1,156 @@
-# Fae CoWork Security Intercept Roadmap
+# Unified Channel Gateway Roadmap
 
 ## Overview
 
-Gate all CoWork external LLM calls with DamageControlPolicy (nonLocal locality enforcement) and inbound prompt injection scanning. CoWork calls are **provider-level** operations — not individual tool dispatches — so they use DamageControlPolicy directly rather than routing through the full ToolExecutor pipeline (which requires registered tool names in ToolRegistry).
+Replace Fae's per-adapter channel system with a single-process multi-channel gateway. One routing layer, normalised message format, per-sender conversation isolation, shared sessions, and race-free concurrency.
 
-**What IS enforced for CoWork calls:**
-- DamageControlPolicy zero-access paths (vault, speakers, soul, directive, config) for nonLocal models
-- Inbound prompt injection scan (10 patterns, post-response)
-- Fail-closed startup gate (throws .pipelineNotReady if pipeline unavailable)
-- SecurityEventLogger audit trail (block/flag/allow)
-- Per-provider metrics counters
+**Problems solved:**
+- **Integration gap**: Channels don't share context — WhatsApp conversations invisible to Discord. No cross-channel identity.
+- **Poor experience**: Confusing setup, messages lost during reconnect, 5s iMessage polling delay.
+- **Technical debt**: 3 adapters with no shared types, race conditions in `injectChannelText`, stub Python scripts, false docs about per-sender isolation.
 
-**What is NOT enforced (by design):**
-- TrustedActionBroker — applies to individual tool calls, not provider-level LLM requests
-- OutboundExfiltrationGuard — applies to tool output destinations, not LLM API endpoints
-- ToolRegistry mode filtering — CoWork provider calls have no registered tool name
-- Approval overlay — DamageControlPolicy blocks are immediate, not interactive
-
-**Why:** ToolExecutor.execute() checks registry.isToolAllowed() at step 1, which rejects unregistered tool names. CoWork provider calls use synthetic names ("external_llm") that are not in the registry. Rather than registering fake tools, we call DamageControlPolicy directly — the layer that actually matters for provider-level security gating.
-
-**Problem:** CoWork external LLM calls (Claude, GPT-5, MiniMax via HTTP) previously bypassed all security enforcement. They only had pre-send redaction (CoworkPromptEgressPolicy, SensitiveContentPolicy).
-
-**Success:** Production ready — DamageControlPolicy-gated, inbound-scanned, fail-closed, tested, documented.
-
-## Success Criteria
-- All external CoWork calls gated by DamageControlPolicy with nonLocal locality
-- DamageControlPolicy blocks credential/vault access for non-local models
-- Inbound response scan catches prompt injection attempts
-- Fail-closed: no fallback to unguarded provider access
-- Full test coverage: unit + integration
-- Public API docs for CoworkToolExecutor
+**Success:** Production ready — complete, tested, documented. Per-sender isolation, shared sessions, race-free. Ship it.
 
 ## Technical Decisions
-- Error Handling: Dedicated error types (CoworkToolExecutorError enum)
-- Async Model: Actor pattern matching ToolExecutor
-- Testing: Unit (mock ToolExecutor) + Integration (real CoworkWorkspaceController flow) + Property (fuzz injection patterns)
+- Error Handling: Dedicated `ChannelGatewayError` enum
+- Async Model: Swift actor (matching ChannelManager pattern)
+- Testing: Unit + Integration + Concurrency stress tests
 - Approach: TDD — tests first, then implementation
 - Task Size: Smallest possible (~50 lines per task)
+- Migration: Strangler fig — new gateway wraps old adapters, migrate one at a time
 
-## Milestone 1: CoworkToolExecutor Core
+## Key Architecture
 
-### Phase 1.1: CoworkToolExecutor Actor
-- **Focus**: Create CoworkToolExecutor actor that wraps provider.submit() calls
-- **Deliverables**: CoworkToolExecutor.swift actor, inbound scan
+```
+External Messages
+    │
+    ├── iMessage (SQLite poll) ──┐
+    ├── Discord (WebSocket) ─────┤── ChannelAdapter protocol
+    └── WhatsApp (HTTP webhook) ─┘
+                                 │
+                        ChannelGateway (actor)
+                           │
+                           ├── Normalise → ChannelMessage envelope
+                           ├── Route → ChannelSession (per-sender)
+                           ├── Serialise (no concurrent processTranscription)
+                           └── Dispatch → PipelineCoordinator.injectChannelText()
+                                 │
+                           Return response
+                                 │
+                        ChannelGateway routes back to adapter
+                           │
+                           └── Adapter sends response to external platform
+```
+
+## Success Criteria
+- All channel messages route through ChannelGateway (no direct adapter→pipeline path)
+- Per-sender conversation isolation (WhatsApp Alice ≠ Discord Bob)
+- Race-free: concurrent messages serialised through gateway actor
+- Cross-channel identity: same person recognised across channels
+- All 3 adapters migrated to ChannelAdapter protocol
+- Channel health monitoring with auto-reconnect
+- Full test coverage: unit + integration + concurrency stress
+- Documentation accurate (no false claims about isolation)
+
+---
+
+## Milestone 1: Gateway Core
+
+### Phase 1.1: ChannelMessage Envelope + ChannelSession Actor
+- **Focus**: Define `ChannelMessage` struct (normalised envelope with channel, sender, text, timestamp, messageId, threadId, attachments). Define `ChannelSession` actor for per-sender conversation state.
+- **Deliverables**: `ChannelMessage.swift`, `ChannelSession.swift`, `ChannelSessionStore.swift`
 - **Dependencies**: None (pure addition)
+- **Estimated Tasks**: 4-5
+
+### Phase 1.2: ChannelGateway Actor
+- **Focus**: Create `ChannelGateway` actor that receives normalised messages, resolves sessions, serialises concurrent dispatch, and routes responses back.
+- **Deliverables**: `ChannelGateway.swift`, `ChannelAdapter` protocol
+- **Dependencies**: Phase 1.1
 - **Estimated Tasks**: 4-6
 
-### Phase 1.2: ToolExecutorContext Factory
-- **Focus**: Extract context-building logic into ToolExecutor factory method (DRY)
-- **Deliverables**: ToolExecutor.makeContext() helper, no behavior change
-- **Dependencies**: Phase 1.1
-- **Estimated Tasks**: 2-3
-
-### Phase 1.3: CoworkToolExecutor Hardening & Contracts
-- **Focus**: Pick up unresolved Phase 1.1 review findings before broader rollout
-- **Deliverables**: logger test seam, redaction metadata contract, synthetic tool identity contract, streaming empty-response semantics, stable provider metrics key
+### Phase 1.3: Per-Sender Conversation Isolation
+- **Focus**: Replace single `ConversationState` for channels with per-sender isolated conversation histories. Gateway maintains a `[SessionKey: ConversationState]` map.
+- **Deliverables**: Changes to `PipelineCoordinator.injectChannelText()`, `ConversationState` factory
 - **Dependencies**: Phase 1.2
-- **Estimated Tasks**: 4-6
+- **Estimated Tasks**: 3-5
 
 ---
 
-## Milestone 2: FaeCore Integration
+## Milestone 2: Adapter Migration
 
-### Phase 2.1: Expose ToolExecutor through FaeCore
-- **Focus**: Add coworkToolExecutor property to FaeCore after PipelineCoordinator starts
-- **Deliverables**: FaeCore.coworkToolExecutor, PipelineCoordinator wires it
-- **Dependencies**: Phase 1.1
-- **Estimated Tasks**: 2-3
-
-### Phase 2.2: Wire CoworkWorkspaceController
-- **Focus**: Replace direct provider.submit() with CoworkToolExecutor.submit()
-- **Deliverables**: 3 call sites updated (streaming, blocking, web search)
-- **Dependencies**: Phase 2.1
-- **Estimated Tasks**: 2-3
-
----
-
-## Milestone 3: Testing & Hardening
-
-### Phase 3.1: Unit + Integration Tests
-- **Focus**: CoworkToolExecutor tests in CoworkRemoteProviderTests.swift
-- **Deliverables**: 6 test cases covering security routing, error conversion, inbound scan
-- **Dependencies**: Phase 2.2
+### Phase 2.1: Migrate iMessageAdapter
+- **Focus**: Conform `iMessageAdapter` to `ChannelAdapter` protocol. Replace direct messageHandler closure with gateway dispatch.
+- **Deliverables**: Updated `iMessageAdapter.swift`, protocol conformance
+- **Dependencies**: Phase 1.2
 - **Estimated Tasks**: 3-4
 
-### Phase 3.2: DamageControlPolicy Enhancement
-- **Focus**: Add Fae workspace secrets to zeroAccessPaths
-- **Deliverables**: DamageControlPolicy.swift change, tests
-- **Dependencies**: Phase 2.2
-- **Estimated Tasks**: 1-2
+### Phase 2.2: Migrate DiscordAdapter
+- **Focus**: Conform `DiscordAdapter` to `ChannelAdapter` protocol. Preserve WebSocket lifecycle, gateway-managed reconnect.
+- **Deliverables**: Updated `DiscordAdapter.swift`, protocol conformance
+- **Dependencies**: Phase 1.2
+- **Estimated Tasks**: 3-4
 
-### Phase 3.3: Documentation
-- **Focus**: Public API docs for CoworkToolExecutor, ASCII diagram in code
-- **Deliverables**: Doc comments, updated architecture diagram
+### Phase 2.3: Migrate WhatsAppAdapter
+- **Focus**: Conform `WhatsAppAdapter` to `ChannelAdapter` protocol. Preserve HMAC verification, webhook handling.
+- **Deliverables**: Updated `WhatsAppAdapter.swift`, protocol conformance
+- **Dependencies**: Phase 1.2
+- **Estimated Tasks**: 3-4
+
+---
+
+## Milestone 3: Cross-Channel Features
+
+### Phase 3.1: Shared Identity
+- **Focus**: Recognise the same person across channels (e.g., phone number in WhatsApp matches iMessage handle). Link sessions.
+- **Deliverables**: `ChannelIdentityResolver.swift`, entity graph integration
+- **Dependencies**: Phase 2.3 (all adapters migrated)
+- **Estimated Tasks**: 3-4
+
+### Phase 3.2: Cross-Channel Context
+- **Focus**: Continue a conversation started on WhatsApp from Discord. Shared conversation history for linked identities.
+- **Deliverables**: Session linking in `ChannelSessionStore`, history merge
 - **Dependencies**: Phase 3.1
-- **Estimated Tasks**: 1-2
+- **Estimated Tasks**: 3-4
+
+### Phase 3.3: Channel Health Monitoring + Auto-Reconnect
+- **Focus**: Gateway monitors adapter health, auto-reconnects on failure, reports status via FaeEvent. Replace teardown/restart with graceful reconnect.
+- **Deliverables**: Health check protocol, reconnect policy, `FaeEvent.channelHealth`
+- **Dependencies**: Phase 2.3
+- **Estimated Tasks**: 3-4
+
+---
+
+## Milestone 4: Testing & Hardening
+
+### Phase 4.1: Integration Tests
+- **Focus**: End-to-end tests: message arrives at adapter → gateway → pipeline → response → adapter
+- **Deliverables**: `ChannelGatewayIntegrationTests.swift`
+- **Dependencies**: Phase 2.3
+- **Estimated Tasks**: 4-5
+
+### Phase 4.2: Concurrency Stress Tests
+- **Focus**: Simultaneous messages from multiple channels/senders. Verify no race conditions, no shared state corruption.
+- **Deliverables**: `ChannelGatewayConcurrencyTests.swift`
+- **Dependencies**: Phase 4.1
+- **Estimated Tasks**: 3-4
+
+### Phase 4.3: Documentation + channel-hub Skill Update
+- **Focus**: Update CLAUDE.md, channel-hub skill, channel setup docs. Remove false claims. Document the real architecture.
+- **Deliverables**: Updated docs, accurate skill content
+- **Dependencies**: Phase 4.2
+- **Estimated Tasks**: 2-3
 
 ---
 
 ## Risks & Mitigations
-- PipelineCoordinator not started when CoWork call made: CoworkToolExecutor returns error result, not crash
-- Actor isolation violations: Follow ToolExecutor actor pattern exactly
-- Test flakiness with network mocks: Use in-process mock provider, not real HTTP
+- **iMessage polling latency**: Consider switching to FSEvents file watcher for chat.db changes (sub-second detection vs 5s poll)
+- **WhatsApp external port**: Document ngrok/Cloudflare Tunnel setup in channel-whatsapp skill
+- **Discord rate limits**: Gateway should respect per-channel rate limits from Discord REST API
+- **Memory growth**: Per-sender sessions need cleanup policy (idle timeout, max sessions)
+- **Migration risk**: Strangler fig pattern — old adapters wrapped first, replaced incrementally
 
 ## Out of Scope
-- Web search loop intercept (CoworkPromptEgressPolicy sufficient)
-- Full inbound validation (basic scan only, upgrade path defined)
-- Memory portability (design doc open question)
-- CoWork model-switching UX (product decision)
-- Audit trail UI for non-technical users (design doc open question)
-- Configurable zeroAccessPaths (DamageControlPolicy redesign needed)
+- New channel adapters (Telegram, Slack, Signal) — future work after gateway ships
+- Voice messages in channels (currently text-only)
+- File/image attachments in channel messages (ChannelMessage has the field but processing deferred)
+- BlueBubbles iMessage replacement (architecture change, separate project)
