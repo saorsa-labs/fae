@@ -324,6 +324,7 @@ final class JSCToolBridge: @unchecked Sendable {
         if result.result.isError {
             return .failure(result.result.output)
         }
-        return .success(result.result.output)
+        // Return the script envelope so JS callers get both prose and structured data.
+        return .success(result.result.scriptEnvelope())
     }
 }

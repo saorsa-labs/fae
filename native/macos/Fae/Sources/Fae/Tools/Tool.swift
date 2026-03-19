@@ -2,21 +2,85 @@ import Foundation
 import Tokenizers
 
 /// Result of a tool execution.
+///
+/// Every tool produces at minimum a prose ``output`` string consumed by the LLM.
+/// Tools may additionally carry ``structuredData`` — a JSON-serialisable dictionary
+/// that script-based callers (JSC tool-programs) can access without parsing prose.
+///
+/// Existing tool callers that only read ``output`` are unaffected; structured data
+/// is an additive, optional path.
 struct ToolResult: Sendable {
+    /// Human-readable prose output consumed by the LLM for conversation.
     let output: String
+
+    /// Whether this result represents an error condition.
     let isError: Bool
 
-    init(output: String, isError: Bool = false) {
+    /// Optional structured data for script-facing callers.
+    ///
+    /// When present, this dictionary is JSON-serialised and delivered alongside
+    /// the prose ``output`` so that JSC tool-programs can work with typed values
+    /// instead of parsing free-form text.
+    ///
+    /// Keys must be `String`; values must be JSON-serialisable (`Sendable`).
+    /// Tools that do not produce structured data leave this `nil`.
+    let structuredData: [String: any Sendable]?
+
+    init(output: String, isError: Bool = false, structuredData: [String: any Sendable]? = nil) {
         self.output = output
         self.isError = isError
+        self.structuredData = structuredData
     }
 
+    /// Create a successful result with prose output only.
     static func success(_ output: String) -> ToolResult {
         ToolResult(output: output)
     }
 
+    /// Create a successful result with both prose and structured data.
+    static func success(_ output: String, structuredData: [String: any Sendable]) -> ToolResult {
+        ToolResult(output: output, structuredData: structuredData)
+    }
+
+    /// Create an error result.
     static func error(_ message: String) -> ToolResult {
         ToolResult(output: message, isError: true)
+    }
+
+    // MARK: - Serialisation
+
+    /// Serialise the structured data to a JSON string, or `nil` if no structured data.
+    ///
+    /// Falls back gracefully: if serialisation fails, returns `nil` rather than throwing.
+    func serialiseStructuredData() -> String? {
+        guard let data = structuredData else { return nil }
+        guard JSONSerialization.isValidJSONObject(data) else { return nil }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.sortedKeys]),
+              let json = String(data: jsonData, encoding: .utf8)
+        else { return nil }
+        return json
+    }
+
+    /// Build the script-facing envelope: `{"output": "...", "data": {...}}`.
+    ///
+    /// Scripts receive this JSON string from `fae.tool()` promises. When no
+    /// structured data is present, the envelope contains only `"output"`.
+    func scriptEnvelope() -> String {
+        var envelope: [String: Any] = ["output": output, "isError": isError]
+        if let data = structuredData, JSONSerialization.isValidJSONObject(data) {
+            envelope["data"] = data
+        }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]),
+              let json = String(data: jsonData, encoding: .utf8)
+        else {
+            // Fallback: return minimal JSON with just the output.
+            let escaped = output
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: "\\n")
+            return #"{"isError":\#(isError),"output":"\#(escaped)"}"#
+        }
+        return json
     }
 }
 

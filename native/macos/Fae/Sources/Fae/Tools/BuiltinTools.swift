@@ -581,21 +581,43 @@ struct WebSearchTool: Tool {
         do {
             let results = try await Self.orchestrator.search(query: query, config: config)
             if results.isEmpty {
-                return .success("No results found for \"\(query)\".")
+                return .success("No results found for \"\(query)\".", structuredData: [
+                    "results": [] as [any Sendable],
+                    "count": 0,
+                    "query": query,
+                ])
             }
 
             var output = "## Search Results for \"\(query)\"\n\n"
+            var structured: [[String: any Sendable]] = []
+
             for (i, result) in results.enumerated() {
                 let category = Self.domainCategory(for: result.url)
                 let domain = Self.displayDomain(for: result.url)
                 let tag = category.isEmpty ? domain : "\(category) \(domain)"
                 output += "\(i + 1). **\(result.title)** (\(tag))\n   URL: \(result.url)\n   \(result.snippet)\n\n"
+
+                var item: [String: any Sendable] = [
+                    "title": result.title,
+                    "url": result.url,
+                    "snippet": result.snippet,
+                    "domain": domain,
+                    "rank": i + 1,
+                ]
+                if !category.isEmpty {
+                    item["category"] = category
+                }
+                structured.append(item)
             }
 
             if output.count > Self.maxOutputChars {
-                return .success(String(output.prefix(Self.maxOutputChars)) + "\n[truncated]")
+                output = String(output.prefix(Self.maxOutputChars)) + "\n[truncated]"
             }
-            return .success(output)
+            return .success(output, structuredData: [
+                "results": structured as [any Sendable],
+                "count": results.count,
+                "query": query,
+            ])
         } catch {
             return .error("Web search failed: \(error.localizedDescription)")
         }
@@ -657,14 +679,29 @@ struct FetchURLTool: Tool {
             let page = try await Self.orchestrator.fetchPageContent(urlString: urlString)
 
             if page.text.isEmpty {
-                return .success("No extractable text content at \(urlString)")
+                return .success("No extractable text content at \(urlString)", structuredData: [
+                    "url": urlString,
+                    "title": "",
+                    "text": "",
+                    "wordCount": 0,
+                ])
             }
 
             var output = "## Page Content: \(page.title)\n\nURL: \(page.url)\nWords: \(page.wordCount)\n\n\(page.text)"
+            let truncated: Bool
             if output.count > ContentExtractor.maxChars {
                 output = String(output.prefix(ContentExtractor.maxChars)) + "\n\n[Content truncated]"
+                truncated = true
+            } else {
+                truncated = false
             }
-            return .success(output)
+            return .success(output, structuredData: [
+                "url": page.url,
+                "title": page.title,
+                "text": page.text,
+                "wordCount": page.wordCount,
+                "truncated": truncated,
+            ])
         } catch {
             return .error("Fetch failed: \(error.localizedDescription)")
         }

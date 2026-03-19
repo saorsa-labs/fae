@@ -112,6 +112,10 @@ actor JSCRuntime {
         // Install the fae.* bridge.
         bridge.install(in: jsContext)
 
+        // Install typed adapters (fae.calendar, fae.reminders, etc.)
+        // on top of the raw fae.tool() bridge.
+        JSCTypedAdapters.install(in: jsContext)
+
         // Wrap the user script in an async IIFE so top-level `await` works.
         // The IIFE's return value is stored in `__fae_result`.
         let wrappedScript = """

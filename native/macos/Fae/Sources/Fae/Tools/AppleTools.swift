@@ -202,21 +202,50 @@ struct CalendarTool: Tool {
             .sorted { $0.startDate < $1.startDate }
 
         if events.isEmpty {
-            return .success("No events found for that period.")
+            return .success("No events found for that period.", structuredData: [
+                "events": [] as [any Sendable],
+                "count": 0,
+            ])
         }
 
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
 
-        let lines = events.prefix(20).map { event in
+        let iso = ISO8601DateFormatter()
+
+        let displayed = Array(events.prefix(20))
+        let lines = displayed.map { event in
             let time = event.isAllDay ? "All day" : formatter.string(from: event.startDate)
             let title = event.title ?? "(no title)"
             return "- \(time): \(title)"
         }
 
+        let structured: [[String: any Sendable]] = displayed.map { event in
+            var dict: [String: any Sendable] = [
+                "title": event.title ?? "(no title)",
+                "start": iso.string(from: event.startDate),
+                "end": iso.string(from: event.endDate),
+                "isAllDay": event.isAllDay,
+            ]
+            if let calendar = event.calendar {
+                dict["calendar"] = calendar.title
+            }
+            if let location = event.location, !location.isEmpty {
+                dict["location"] = location
+            }
+            if let notes = event.notes, !notes.isEmpty {
+                dict["notes"] = String(notes.prefix(500))
+            }
+            dict["eventId"] = event.eventIdentifier
+            return dict
+        }
+
         let header = events.count > 20 ? "Showing 20 of \(events.count) events:" : "\(events.count) events:"
-        return .success(header + "\n" + lines.joined(separator: "\n"))
+        return .success(header + "\n" + lines.joined(separator: "\n"), structuredData: [
+            "events": structured as [any Sendable],
+            "count": events.count,
+        ])
     }
 
     private func searchEvents(store: EKEventStore, query: String, start: Date, end: Date) -> ToolResult {
@@ -226,19 +255,47 @@ struct CalendarTool: Tool {
             .sorted { $0.startDate < $1.startDate }
 
         if events.isEmpty {
-            return .success("No events matching '\(query)' found.")
+            return .success("No events matching '\(query)' found.", structuredData: [
+                "events": [] as [any Sendable],
+                "count": 0,
+                "query": query,
+            ])
         }
 
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
 
-        let lines = events.prefix(10).map { event in
+        let iso = ISO8601DateFormatter()
+
+        let displayed = Array(events.prefix(10))
+        let lines = displayed.map { event in
             let time = event.isAllDay ? "All day" : formatter.string(from: event.startDate)
             return "- \(time): \(event.title ?? "(no title)")"
         }
 
-        return .success("Found \(events.count) events matching '\(query)':\n" + lines.joined(separator: "\n"))
+        let structured: [[String: any Sendable]] = displayed.map { event in
+            var dict: [String: any Sendable] = [
+                "title": event.title ?? "(no title)",
+                "start": iso.string(from: event.startDate),
+                "end": iso.string(from: event.endDate),
+                "isAllDay": event.isAllDay,
+            ]
+            if let calendar = event.calendar {
+                dict["calendar"] = calendar.title
+            }
+            if let location = event.location, !location.isEmpty {
+                dict["location"] = location
+            }
+            dict["eventId"] = event.eventIdentifier
+            return dict
+        }
+
+        return .success("Found \(events.count) events matching '\(query)':\n" + lines.joined(separator: "\n"), structuredData: [
+            "events": structured as [any Sendable],
+            "count": events.count,
+            "query": query,
+        ])
     }
 }
 
@@ -317,17 +374,45 @@ struct RemindersTool: Tool {
         }
 
         guard let reminders, !reminders.isEmpty else {
-            return .success("No incomplete reminders found.")
+            return .success("No incomplete reminders found.", structuredData: [
+                "reminders": [] as [any Sendable],
+                "count": 0,
+            ])
         }
 
-        let lines = reminders.prefix(20).map { reminder in
+        let iso = ISO8601DateFormatter()
+
+        let displayed = Array(reminders.prefix(20))
+        let lines = displayed.map { reminder in
             let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
             let dueStr = due.map { DateFormatter.localizedString(from: $0, dateStyle: .short, timeStyle: .none) } ?? ""
             let title = reminder.title ?? "(no title)"
             return dueStr.isEmpty ? "- \(title)" : "- \(title) (due: \(dueStr))"
         }
 
-        return .success("\(reminders.count) incomplete reminders:\n" + lines.joined(separator: "\n"))
+        let structured: [[String: any Sendable]] = displayed.map { reminder in
+            var dict: [String: any Sendable] = [
+                "title": reminder.title ?? "(no title)",
+                "isCompleted": reminder.isCompleted,
+                "priority": reminder.priority,
+            ]
+            if let due = reminder.dueDateComponents.flatMap({ Calendar.current.date(from: $0) }) {
+                dict["dueDate"] = iso.string(from: due)
+            }
+            if let calendar = reminder.calendar {
+                dict["list"] = calendar.title
+            }
+            if let notes = reminder.notes, !notes.isEmpty {
+                dict["notes"] = String(notes.prefix(500))
+            }
+            dict["reminderId"] = reminder.calendarItemIdentifier
+            return dict
+        }
+
+        return .success("\(reminders.count) incomplete reminders:\n" + lines.joined(separator: "\n"), structuredData: [
+            "reminders": structured as [any Sendable],
+            "count": reminders.count,
+        ])
     }
 
     private func searchReminders(store: EKEventStore, query: String) async -> ToolResult {
@@ -339,20 +424,51 @@ struct RemindersTool: Tool {
         }
 
         guard let reminders else {
-            return .success("No reminders found.")
+            return .success("No reminders found.", structuredData: [
+                "reminders": [] as [any Sendable],
+                "count": 0,
+                "query": query,
+            ])
         }
 
         let matches = reminders.filter { ($0.title ?? "").localizedCaseInsensitiveContains(query) }
         if matches.isEmpty {
-            return .success("No reminders matching '\(query)' found.")
+            return .success("No reminders matching '\(query)' found.", structuredData: [
+                "reminders": [] as [any Sendable],
+                "count": 0,
+                "query": query,
+            ])
         }
 
-        let lines = matches.prefix(10).map { reminder in
+        let iso = ISO8601DateFormatter()
+
+        let displayed = Array(matches.prefix(10))
+        let lines = displayed.map { reminder in
             let status = reminder.isCompleted ? "done" : "pending"
             return "- [\(status)] \(reminder.title ?? "(no title)")"
         }
 
-        return .success("Found \(matches.count) reminders matching '\(query)':\n" + lines.joined(separator: "\n"))
+        let structured: [[String: any Sendable]] = displayed.map { reminder in
+            var dict: [String: any Sendable] = [
+                "title": reminder.title ?? "(no title)",
+                "isCompleted": reminder.isCompleted,
+                "priority": reminder.priority,
+            ]
+            if let due = reminder.dueDateComponents.flatMap({ Calendar.current.date(from: $0) }) {
+                dict["dueDate"] = iso.string(from: due)
+            }
+            if let calendar = reminder.calendar {
+                dict["list"] = calendar.title
+            }
+            dict["reminderId"] = reminder.calendarItemIdentifier
+            return dict
+        }
+
+        return .success("Found \(matches.count) reminders matching '\(query)':\n" + lines.joined(separator: "\n"), structuredData: [
+            "reminders": structured as [any Sendable],
+            "count": matches.count,
+            "query": query,
+        ])
     }
 }
 
@@ -407,12 +523,32 @@ struct ContactsTool: Tool {
             let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: keysToFetch)
 
             if contacts.isEmpty {
-                return .success("No contacts found matching '\(query)'.")
+                return .success("No contacts found matching '\(query)'.", structuredData: [
+                    "contacts": [] as [any Sendable],
+                    "count": 0,
+                    "query": query,
+                ])
+            }
+
+            // Build structured contact data once for all actions.
+            let displayed = Array(contacts.prefix(10))
+            let structured: [[String: any Sendable]] = displayed.map { contact in
+                let name = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+                var dict: [String: any Sendable] = [
+                    "name": name,
+                    "givenName": contact.givenName,
+                    "familyName": contact.familyName,
+                ]
+                let emails = contact.emailAddresses.map { $0.value as String }
+                if !emails.isEmpty { dict["emails"] = emails as [any Sendable] }
+                let phones = contact.phoneNumbers.map { $0.value.stringValue }
+                if !phones.isEmpty { dict["phones"] = phones as [any Sendable] }
+                return dict
             }
 
             switch action {
             case "search":
-                let lines = contacts.prefix(10).map { contact in
+                let lines = displayed.map { contact in
                     let name = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
                     let email = contact.emailAddresses.first.map { $0.value as String } ?? ""
                     let phone = contact.phoneNumbers.first?.value.stringValue ?? ""
@@ -421,7 +557,11 @@ struct ContactsTool: Tool {
                     if !phone.isEmpty { parts.append(phone) }
                     return "- " + parts.joined(separator: " | ")
                 }
-                return .success("Found \(contacts.count) contacts:\n" + lines.joined(separator: "\n"))
+                return .success("Found \(contacts.count) contacts:\n" + lines.joined(separator: "\n"), structuredData: [
+                    "contacts": structured as [any Sendable],
+                    "count": contacts.count,
+                    "query": query,
+                ])
 
             case "get_phone":
                 let results = contacts.compactMap { contact -> String? in
@@ -430,9 +570,17 @@ struct ContactsTool: Tool {
                     return "\(name): \(phone)"
                 }
                 if results.isEmpty {
-                    return .success("No phone numbers found for '\(query)'.")
+                    return .success("No phone numbers found for '\(query)'.", structuredData: [
+                        "contacts": structured as [any Sendable],
+                        "count": contacts.count,
+                        "query": query,
+                    ])
                 }
-                return .success(results.joined(separator: "\n"))
+                return .success(results.joined(separator: "\n"), structuredData: [
+                    "contacts": structured as [any Sendable],
+                    "count": contacts.count,
+                    "query": query,
+                ])
 
             case "get_email":
                 let results = contacts.compactMap { contact -> String? in
@@ -441,9 +589,17 @@ struct ContactsTool: Tool {
                     return "\(name): \(email.value as String)"
                 }
                 if results.isEmpty {
-                    return .success("No email addresses found for '\(query)'.")
+                    return .success("No email addresses found for '\(query)'.", structuredData: [
+                        "contacts": structured as [any Sendable],
+                        "count": contacts.count,
+                        "query": query,
+                    ])
                 }
-                return .success(results.joined(separator: "\n"))
+                return .success(results.joined(separator: "\n"), structuredData: [
+                    "contacts": structured as [any Sendable],
+                    "count": contacts.count,
+                    "query": query,
+                ])
 
             default:
                 return .error("Unknown action: \(action). Use search, get_phone, or get_email.")
@@ -495,6 +651,7 @@ struct MailTool: Tool {
     }
 
     private func runMailScript(count: Int) -> ToolResult {
+        // Use a delimiter-based AppleScript to enable structured parsing.
         let script = """
             tell application "Mail"
                 set msgs to messages 1 through \(count) of inbox
@@ -525,7 +682,33 @@ struct MailTool: Tool {
         }
 
         let output = result.stringValue ?? "No messages found."
-        return .success(output.isEmpty ? "No messages found." : output)
+        if output.isEmpty {
+            return .success("No messages found.", structuredData: [
+                "messages": [] as [any Sendable],
+                "count": 0,
+            ])
+        }
+
+        // Parse the "- date | sender | subject" lines into structured data.
+        let messages: [[String: any Sendable]] = output
+            .components(separatedBy: "\n")
+            .compactMap { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("- ") else { return nil }
+                let content = String(trimmed.dropFirst(2))
+                let parts = content.components(separatedBy: " | ")
+                guard parts.count >= 3 else { return nil }
+                return [
+                    "date": parts[0],
+                    "sender": parts[1],
+                    "subject": parts.dropFirst(2).joined(separator: " | "),
+                ] as [String: any Sendable]
+            }
+
+        return .success(output, structuredData: [
+            "messages": messages as [any Sendable],
+            "count": messages.count,
+        ])
     }
 }
 
@@ -571,12 +754,12 @@ struct NotesTool: Tool {
                 return .error("Missing required parameter: query")
             }
             let sanitized = sanitizeForAppleScript(query)
-            let firstAttempt = runNotesSearchScript(query: sanitized)
+            let firstAttempt = runNotesSearchScript(query: sanitized, originalQuery: query)
             if firstAttempt.isError, isAppleScriptPermissionError(firstAttempt.output) {
                 guard await requestPermission(capability: "notes") else {
                     return .error("I need Notes access to do that. You can grant it in System Settings > Privacy & Security.")
                 }
-                return runNotesSearchScript(query: sanitized)
+                return runNotesSearchScript(query: sanitized, originalQuery: query)
             }
             return firstAttempt
 
@@ -597,10 +780,10 @@ struct NotesTool: Tool {
             end tell
             """
 
-        return executeAppleScript(script)
+        return executeAppleScript(script, query: nil)
     }
 
-    private func runNotesSearchScript(query: String) -> ToolResult {
+    private func runNotesSearchScript(query: String, originalQuery: String) -> ToolResult {
         let script = """
             tell application "Notes"
                 set matchingNotes to notes of default account whose name contains "\(query)"
@@ -619,10 +802,10 @@ struct NotesTool: Tool {
             end tell
             """
 
-        return executeAppleScript(script)
+        return executeAppleScript(script, query: originalQuery)
     }
 
-    private func executeAppleScript(_ source: String) -> ToolResult {
+    private func executeAppleScript(_ source: String, query: String? = nil) -> ToolResult {
         guard let appleScript = NSAppleScript(source: source) else {
             return .error("Failed to create AppleScript.")
         }
@@ -639,7 +822,32 @@ struct NotesTool: Tool {
         }
 
         let output = result.stringValue ?? "No results."
-        return .success(output.isEmpty ? "No results." : output)
+        if output.isEmpty || output == "No results." || output == "No notes matching the search." {
+            var data: [String: any Sendable] = [
+                "notes": [] as [any Sendable],
+                "count": 0,
+            ]
+            if let query { data["query"] = query }
+            return .success(output.isEmpty ? "No results." : output, structuredData: data)
+        }
+
+        // Parse the "- title" lines into structured data.
+        let notes: [[String: any Sendable]] = output
+            .components(separatedBy: "\n")
+            .compactMap { line in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("- ") else { return nil }
+                let title = String(trimmed.dropFirst(2))
+                guard !title.isEmpty else { return nil }
+                return ["title": title] as [String: any Sendable]
+            }
+
+        var data: [String: any Sendable] = [
+            "notes": notes as [any Sendable],
+            "count": notes.count,
+        ]
+        if let query { data["query"] = query }
+        return .success(output, structuredData: data)
     }
 
     /// Sanitize user input for safe AppleScript string interpolation.
