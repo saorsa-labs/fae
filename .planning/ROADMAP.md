@@ -1,113 +1,90 @@
-# Fae JSC Tool-as-Code Runtime — Roadmap
+# Fae Unified Intercept Roadmap
 
 ## Overview
-Two-lane runtime model:
-- **JavaScriptCore** for in-process tool programs that orchestrate host-approved tools.
-- **uv Python** for package-heavy or ecosystem-heavy skills.
 
-The goal is to replace repeated LLM tool-call round-trips for multi-step workflows
-without bypassing Fae's existing governance stack.
+Route all CoWork external LLM calls through ToolExecutor's unified security pipeline. One security logic everywhere — DamageControl, OutboundGuard, TrustedActionBroker, ApprovalMgr all apply to CoWork calls the same way they apply to native tool calls.
+
+**Problem:** CoWork external LLM calls (Claude, GPT-5, MiniMax via HTTP) bypass the ToolExecutor security stack. They only have pre-send redaction (CoworkPromptEgressPolicy, SensitiveContentPolicy) but no security enforcement.
+
+**Success:** Production ready — complete, tested, documented.
 
 ## Success Criteria
-- LLM can emit a JavaScript tool program for multi-step orchestration.
-- All approvals, broker checks, damage control, rate limits, and audit stay in Swift.
-- Script path consumes machine-friendly structured results; LLM path keeps prose.
-- Batch approval UX prevents N popups for N loop iterations.
-- Script budgets exist: max invocations, runtime, concurrency, cancellation.
-- `swift build` and `swift test` pass for touched code.
+- All external CoWork calls route through ToolExecutor security pipeline
+- DamageControlPolicy blocks credential access for non-local models
+- Inbound response scan catches prompt injection attempts
+- Full test coverage: unit + integration
+- Public API docs for CoworkToolExecutor
 
 ## Technical Decisions
-- **Runtime**: JavaScriptCore.
-- **Bridge model**: Promise-based `fae.*` API; do not block JS with semaphores on the main actor.
-- **Governance**: Extract and reuse the existing tool execution/security path.
-- **Structured data**: Introduce script-safe structured results incrementally.
-- **Non-goals**: No Lua/Luau, no Wasm, no policy bypass.
+- Error Handling: Dedicated error types (CoworkToolExecutorError enum)
+- Async Model: Actor pattern matching ToolExecutor
+- Testing: Unit (mock ToolExecutor) + Integration (real CoworkWorkspaceController flow) + Property (fuzz injection patterns)
+- Approach: TDD — tests first, then implementation
+- Task Size: Smallest possible (~50 lines per task)
 
-## Plan Location
-The active project uses dedicated phase plans under:
-`.planning/plans/jsc-tool-as-code/`
+## Milestone 1: CoworkToolExecutor Core
 
-Always use `STATE.json.phase.plan` instead of inferring filenames.
+### Phase 1.1: CoworkToolExecutor Actor
+- **Focus**: Create CoworkToolExecutor actor that wraps provider.submit() calls
+- **Deliverables**: CoworkToolExecutor.swift actor, inbound scan
+- **Dependencies**: None (pure addition)
+- **Estimated Tasks**: 4-6
 
----
-
-## Milestone 1: Runtime Foundation
-
-### Phase 1.1: Extract ToolExecutor Actor
-- Extract reusable tool execution/governance logic from `PipelineCoordinator`.
-- Preserve mode checks, damage control, broker decisions, approvals, rate limits, and audit.
-
-### Phase 1.2: Build JSCRuntime + Promise Bridge
-- Add `JSCRuntime` actor and `JSCToolBridge`.
-- Expose a narrow Promise-based `fae.*` API to scripts.
-- Keep the runtime fresh per execution; no persistent cross-turn JS state.
-
-### Phase 1.3: Script Budgets & Cooperative Cancellation
-- Add script budgets for tool count, wall-clock runtime, and concurrency.
-- Add turn-end cancellation and host-enforced timeouts.
-- Treat instruction-level interruption as optional/follow-up work, not a prerequisite.
-
-### Phase 1.4: Developer Harness & Runtime Validation
-- Add a developer/test harness for executing JS tool programs outside the live LLM path.
-- Validate runtime, logging, and cancellation before pipeline integration.
+### Phase 1.2: ToolExecutorContext Factory
+- **Focus**: Extract context-building logic into ToolExecutor factory method (DRY)
+- **Deliverables**: ToolExecutor.makeContext() helper, no behavior change
+- **Dependencies**: Phase 1.1
+- **Estimated Tasks**: 2-3
 
 ---
 
-## Milestone 2: Structured Script APIs
+## Milestone 2: FaeCore Integration
 
-### Phase 2.1: Structured Tool Result Primitives
-- Extend `ToolResult` or add a parallel script-result envelope for structured data.
-- Keep existing prose outputs intact for the LLM path.
+### Phase 2.1: Expose ToolExecutor through FaeCore
+- **Focus**: Add coworkToolExecutor property to FaeCore after PipelineCoordinator starts
+- **Deliverables**: FaeCore.coworkToolExecutor, PipelineCoordinator wires it
+- **Dependencies**: Phase 1.1
+- **Estimated Tasks**: 2-3
 
-### Phase 2.2: Core Tool Structured Results
-- Add structured results for the highest-value orchestration tools first:
-  `calendar`, `reminders`, `contacts`, `mail`, `notes`, `web_search`, `fetch_url`.
-
-### Phase 2.3: Script-Facing Typed Adapters
-- Add typed bridge helpers so JS scripts consume stable objects instead of prose parsing.
-- Prefer script-safe adapters over directly exposing every legacy tool shape.
-
----
-
-## Milestone 3: Governance UX & Pipeline Integration
-
-### Phase 3.1: Batch Approval UX
-- Group looped or repeated actions into a single user decision where appropriate.
-
-### Phase 3.2: Script-Scoped Capability Tickets
-- Bind capability grants to the script lifetime and allowed tool set.
-
-### Phase 3.3: Pipeline Integration
-- Route JS tool programs through the new runtime alongside the existing tool-call path.
-- Remove the `prefix(5)` cap only for the script path after budgets and governance are in place.
-
-### Phase 3.4: Dry-Run Mode
-- Add a plan/preview mode so users can inspect what a script intends to do before real execution.
+### Phase 2.2: Wire CoworkWorkspaceController
+- **Focus**: Replace direct provider.submit() with CoworkToolExecutor.submit()
+- **Deliverables**: 3 call sites updated (streaming, blocking, web search)
+- **Dependencies**: Phase 2.1
+- **Estimated Tasks**: 2-3
 
 ---
 
-## Milestone 4: Prompting, Testing, Documentation
+## Milestone 3: Testing & Hardening
 
-### Phase 4.1: Prompting & Model Routing
-- Teach the model when to emit a JS tool program versus normal tool calls.
+### Phase 3.1: Unit + Integration Tests
+- **Focus**: CoworkToolExecutor tests in CoworkRemoteProviderTests.swift
+- **Deliverables**: 6 test cases covering security routing, error conversion, inbound scan
+- **Dependencies**: Phase 2.2
+- **Estimated Tasks**: 3-4
 
-### Phase 4.2: End-to-End Testing
-- Cover runtime execution, approvals, cancellation, error recovery, and structured results.
+### Phase 3.2: DamageControlPolicy Enhancement
+- **Focus**: Add Fae workspace secrets to zeroAccessPaths
+- **Deliverables**: DamageControlPolicy.swift change, tests
+- **Dependencies**: Phase 2.2
+- **Estimated Tasks**: 1-2
 
-### Phase 4.3: Documentation & Release Validation
-- Update developer docs, changelog, and release validation for the new execution path.
+### Phase 3.3: Documentation
+- **Focus**: Public API docs for CoworkToolExecutor, ASCII diagram in code
+- **Deliverables**: Doc comments, updated architecture diagram
+- **Dependencies**: Phase 3.1
+- **Estimated Tasks**: 1-2
 
 ---
 
 ## Risks & Mitigations
-- **Approval loops**: batch approval in Phase 3.1.
-- **Structured API effort**: phased tool rollout in Milestone 2.
-- **Model quality**: prefer stronger local models for tool-program generation.
-- **Runtime safety**: keep host-side enforcement authoritative; JS never gets direct file/network access.
-- **Bridge complexity**: Promise-based bridge only; no main-thread semaphore hacks.
+- PipelineCoordinator not started when CoWork call made: CoworkToolExecutor returns error result, not crash
+- Actor isolation violations: Follow ToolExecutor actor pattern exactly
+- Test flakiness with network mocks: Use in-process mock provider, not real HTTP
 
 ## Out of Scope
-- Lua/Luau runtime
-- Wasm runtime
-- Direct JS access to filesystem/network outside host-injected tools
-- Persistent JS contexts across turns
+- Web search loop intercept (CoworkPromptEgressPolicy sufficient)
+- Full inbound validation (basic scan only, upgrade path defined)
+- Memory portability (design doc open question)
+- CoWork model-switching UX (product decision)
+- Audit trail UI for non-technical users (design doc open question)
+- Configurable zeroAccessPaths (DamageControlPolicy redesign needed)

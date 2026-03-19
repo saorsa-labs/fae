@@ -1,109 +1,21 @@
 {
-  "version": 2,
-  "project": "jsc-tool-as-code",
-  "active": false,
+  "version": 1,
+  "project": "Fae Unified Intercept",
+  "active": true,
   "milestone": {
-    "number": 4,
-    "name": "Polish & Ship"
+    "number": 1,
+    "name": "CoworkToolExecutor Core"
   },
   "phase": {
-    "number": "4.3",
-    "name": "Documentation & Release Validation",
-    "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-4.3.md"
+    "number": "1.1",
+    "name": "CoworkToolExecutor Actor",
+    "plan": ".planning/PLAN-phase-1.1.md"
   },
-  "phase_order": [
-    {
-      "number": "1.1",
-      "name": "Extract ToolExecutor Actor",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-1.1.md",
-      "depends_on": []
-    },
-    {
-      "number": "1.2",
-      "name": "Build JSCRuntime + Promise Bridge",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-1.2.md",
-      "depends_on": ["1.1"]
-    },
-    {
-      "number": "1.3",
-      "name": "Script Budgets & Cooperative Cancellation",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-1.3.md",
-      "depends_on": ["1.2"]
-    },
-    {
-      "number": "1.4",
-      "name": "Developer Harness & Runtime Validation",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-1.4.md",
-      "depends_on": ["1.3"]
-    },
-    {
-      "number": "2.1",
-      "name": "Structured Tool Result Primitives",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-2.1.md",
-      "depends_on": ["1.4"]
-    },
-    {
-      "number": "2.2",
-      "name": "Core Tool Structured Results",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-2.2.md",
-      "depends_on": ["2.1"]
-    },
-    {
-      "number": "2.3",
-      "name": "Script-Facing Typed Adapters",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-2.3.md",
-      "depends_on": ["2.2"]
-    },
-    {
-      "number": "3.1",
-      "name": "Batch Approval UX",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-3.1.md",
-      "depends_on": ["1.4"]
-    },
-    {
-      "number": "3.2",
-      "name": "Script-Scoped Capability Tickets",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-3.2.md",
-      "depends_on": ["3.1", "2.3"]
-    },
-    {
-      "number": "3.3",
-      "name": "Pipeline Integration",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-3.3.md",
-      "depends_on": ["3.2"]
-    },
-    {
-      "number": "3.4",
-      "name": "Dry-Run Mode",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-3.4.md",
-      "depends_on": ["3.3"]
-    },
-    {
-      "number": "4.1",
-      "name": "Prompting & Model Routing",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-4.1.md",
-      "depends_on": ["3.3"]
-    },
-    {
-      "number": "4.2",
-      "name": "End-to-End Testing",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-4.2.md",
-      "depends_on": ["4.1", "3.4"]
-    },
-    {
-      "number": "4.3",
-      "name": "Documentation & Release Validation",
-      "plan": ".planning/plans/jsc-tool-as-code/PLAN-phase-4.3.md",
-      "depends_on": ["4.2"]
-    }
-  ],
   "progress": {
-    "total_tasks": 4,
-    "completed_tasks": 4,
-    "current_task": "All phases complete"
+    "total_tasks": 5,
+    "completed_tasks": 0,
+    "current_task": 1
   },
-  "status": "milestone_complete",
-  "blocked_reason": null,
-  "last_updated": "2026-03-19T09:45:00Z",
-  "remaining_files": []
+  "status": "executing",
+  "last_updated": "2026-03-19T12:52:00Z"
 }
