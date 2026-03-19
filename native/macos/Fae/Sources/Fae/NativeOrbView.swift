@@ -157,7 +157,8 @@ struct NativeOrbView: View {
     @ViewBuilder
     private func gradientFallback(size: CGSize) -> some View {
         let colors = orbAnimation.colors
-        let breathe = sin(CACurrentMediaTime() * 1.2) > 0
+        let speed = Double(orbAnimation.current.speedScale)
+        let breathe = sin(CACurrentMediaTime() * 0.42 * speed) > 0
 
         ZStack {
             // Outer glow
@@ -186,7 +187,7 @@ struct NativeOrbView: View {
             )
             .scaleEffect(breathe ? 1.05 : 1.0)
         }
-        .animation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: breathe)
+        .animation(.easeInOut(duration: 3.0).repeatForever(autoreverses: true), value: breathe)
     }
 }
 

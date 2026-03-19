@@ -210,14 +210,14 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
         applyHueShift(color2, hueShift)
     };
 
-    // Breathing animation — modulated by audio.
-    float breath = 1.0 + sin(time * 0.42) * breathAmplitude;
+    // Breathing animation — frequency scales with speedScale for peaceful idle.
+    float breath = 1.0 + sin(time * 0.42 * speedScale) * breathAmplitude;
     breath += audioRMS * 0.03;
     breath *= anticipationScale;
 
-    // Organic drift.
-    float driftX = snoise2D(float2(time * 0.08, 0.0)) * R * 0.06;
-    float driftY = snoise2D(float2(0.0, time * 0.08 + 50.0)) * R * 0.06;
+    // Organic drift — scales with speedScale.
+    float driftX = snoise2D(float2(time * 0.08 * speedScale, 0.0)) * R * 0.06;
+    float driftY = snoise2D(float2(0.0, time * 0.08 * speedScale + 50.0)) * R * 0.06;
 
     // Pointer influence.
     driftX += (pointerXY.x - 0.5) * 30.0 * pointerInfluence;
@@ -277,7 +277,7 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
 
         // Asymmetry — bias density based on angle.
         float uvAngle = atan2(uv.y, uv.x);
-        float asymBias = 1.0 + asymmetry * sin(uvAngle + time * 0.3);
+        float asymBias = 1.0 + asymmetry * sin(uvAngle + time * 0.3 * speedScale);
         layerAlpha *= asymBias;
 
         outColor = outColor + layerColor * layerAlpha * (1.0 - outAlpha);
@@ -311,8 +311,8 @@ static float warpedFBM(float2 p, float time, float warpAmount, float warpSpeed) 
 
         // Position driven by noise (flows with the nebula).
         float2 emberPos = float2(
-            snoise2D(float2(seed, time * 0.1)) * R * 0.7,
-            snoise2D(float2(seed + 50.0, time * 0.1)) * R * 0.7
+            snoise2D(float2(seed, time * 0.1 * speedScale)) * R * 0.7,
+            snoise2D(float2(seed + 50.0, time * 0.1 * speedScale)) * R * 0.7
         );
 
         float rate = 1.5 + hashF2(seed + 1.0) * 3.0;

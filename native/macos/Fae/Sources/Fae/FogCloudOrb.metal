@@ -164,7 +164,7 @@ static float getMorphAt(
         shimN = snoise2D(float2(angle * 8.0, time * 3.0)) * shimmer * 0.02;
     }
 
-    float asymF = 1.0 + asymmetry * sin(angle + time * 0.3);
+    float asymF = 1.0 + asymmetry * sin(angle + time * 0.2);
     float displacement = n1 * morphAmplitude * 0.7 + n2 * morphAmplitude * 0.3 + shimN;
 
     return (1.0 + displacement) * asymF;
@@ -226,13 +226,13 @@ static float getMorphAt(
         applyHueShift(color2, hueShift)
     };
 
-    // Breathing animation.
-    float throb = 1.0 + sin(time * 0.42) * breathAmplitude;
+    // Breathing animation — frequency scales with speedScale for peaceful idle.
+    float throb = 1.0 + sin(time * 0.42 * speedScale) * breathAmplitude;
     throb *= anticipationScale;
 
-    // Organic drift.
-    float driftX = snoise2D(float2(time * 0.08, 0.0)) * R * 0.06;
-    float driftY = snoise2D(float2(0.0, time * 0.08 + 50.0)) * R * 0.06;
+    // Organic drift — scales with speedScale.
+    float driftX = snoise2D(float2(time * 0.08 * speedScale, 0.0)) * R * 0.06;
+    float driftY = snoise2D(float2(0.0, time * 0.08 * speedScale + 50.0)) * R * 0.06;
 
     // Pointer influence.
     driftX += (pointerXY.x - 0.5) * 30.0 * pointerInfluence;
@@ -267,7 +267,7 @@ static float getMorphAt(
         float wy = CY + sin(wAngle) * wDist + driftY * 0.5;
 
         float wR = wispSize * sizeBase * R;
-        float wPulse = 1.0 + sin(time * 0.3 + fi * 1.5) * 0.15;
+        float wPulse = 1.0 + sin(time * 0.3 * speedScale + fi * 1.5) * 0.15;
         wR *= wPulse;
 
         float wa = wispAlpha * alphaBase;

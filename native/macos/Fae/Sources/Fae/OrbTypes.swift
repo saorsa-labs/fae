@@ -83,6 +83,15 @@ enum OrbMode: String, CaseIterable, Identifiable {
         }
     }
 
+    var speedScaleMul: Float {
+        switch self {
+        case .idle: return 0.4
+        case .listening: return 1.0
+        case .thinking: return 0.7
+        case .speaking: return 1.15
+        }
+    }
+
     /// Default palette colours for each mode (when palette is .modeDefault).
     /// Gold is the resting-state colour; Scottish greens/purples/reds accent different modes.
     var defaultColors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) {
@@ -421,6 +430,7 @@ struct OrbSnapshot: Equatable {
         result.morphSpeed *= mode.morphSpeedMul
         result.starAlpha *= mode.starIntensity
         result.breathAmplitude *= mode.breathIntensity
+        result.speedScale *= mode.speedScaleMul
         result.innerGlow *= mode.innerGlowIntensity
         result.liquidFlow *= mode.liquidFlowMul
         return result
