@@ -1,0 +1,888 @@
+import Foundation
+
+/// Standalone actor that encapsulates the full tool execution security stack.
+///
+/// Extracted from `PipelineCoordinator.executeTool()` so that both the existing
+/// pipeline tool-call path and the new JSC tool-program runtime can share the
+/// same governance enforcement:
+///
+/// 1. Tool mode / privacy filtering
+/// 2. Proactive allowlist check
+/// 3. TillDone hard gate
+/// 4. Computer-use step limit
+/// 5. Vision auto-enable
+/// 6. Tool lookup + rate limiting
+/// 7. DamageControl → OutboundGuard → Broker policy chain
+/// 8. Approval overlay
+/// 9. Timeout-wrapped execution
+/// 10. Analytics + audit logging
+actor ToolExecutor {
+
+    // MARK: - Dependencies
+
+    let registry: ToolRegistry
+    let actionBroker: any TrustedActionBroker
+    let damageControlPolicy: DamageControlPolicy
+    let rateLimiter: ToolRateLimiter
+    let securityLogger: SecurityEventLogger
+    let outboundGuard: OutboundExfiltrationGuard
+    let approvalManager: ApprovalManager?
+    let workflowTraceStore: WorkflowTraceStore?
+    let toolAnalytics: ToolAnalytics?
+    weak var delegate: (any ToolExecutorDelegate)?
+    nonisolated(unsafe) var debugConsole: DebugConsoleController?
+
+    // MARK: - Constants
+
+    /// Maximum computer-use action steps (click/type_text/scroll) per turn.
+    static let maxComputerUseSteps = 10
+
+    private static let defaultToolTimeoutSeconds: TimeInterval = 30
+    private static let extendedVisionToolTimeoutSeconds: TimeInterval = 180
+
+    // MARK: - Init
+
+    init(
+        registry: ToolRegistry,
+        actionBroker: any TrustedActionBroker,
+        damageControlPolicy: DamageControlPolicy,
+        rateLimiter: ToolRateLimiter,
+        securityLogger: SecurityEventLogger,
+        outboundGuard: OutboundExfiltrationGuard,
+        approvalManager: ApprovalManager? = nil,
+        workflowTraceStore: WorkflowTraceStore? = nil,
+        toolAnalytics: ToolAnalytics? = nil,
+        delegate: (any ToolExecutorDelegate)? = nil,
+        debugConsole: DebugConsoleController? = nil
+    ) {
+        self.registry = registry
+        self.actionBroker = actionBroker
+        self.damageControlPolicy = damageControlPolicy
+        self.rateLimiter = rateLimiter
+        self.securityLogger = securityLogger
+        self.outboundGuard = outboundGuard
+        self.approvalManager = approvalManager
+        self.workflowTraceStore = workflowTraceStore
+        self.toolAnalytics = toolAnalytics
+        self.delegate = delegate
+        self.debugConsole = debugConsole
+    }
+
+    /// Wire the delegate after init (since `self` is not available during actor init).
+    func setDelegate(_ delegate: (any ToolExecutorDelegate)?) {
+        self.delegate = delegate
+    }
+
+    /// Forward the debug console from the owning coordinator.
+    func setDebugConsole(_ console: DebugConsoleController?) {
+        debugConsole = console
+    }
+
+    // MARK: - Execute
+
+    /// Execute a single tool call through the full security stack.
+    ///
+    /// - Parameters:
+    ///   - call: The parsed tool call from the LLM.
+    ///   - context: All per-call runtime state (built by the caller).
+    ///   - callbacks: Closures to push side effects back to the caller.
+    /// - Returns: The tool result plus execution metadata.
+    func execute(
+        _ call: PipelineCoordinator.ToolCall,
+        context: ToolExecutorContext,
+        callbacks: ToolExecutorCallbacks
+    ) async -> ToolExecutorResult {
+        // Record the tool call, then delegate to the inner pipeline.
+        // The result trace is recorded once at this single exit point.
+        await traceToolCall(call: call, context: context)
+        let outcome = await executeInner(call, context: context, callbacks: callbacks)
+        await traceToolResult(
+            call: call,
+            context: context,
+            result: outcome.result,
+            approved: outcome.approvedByUser,
+            latencyMs: nil // latency is already recorded in analytics
+        )
+        return outcome
+    }
+
+    /// Inner execution — all security layers, approval, and tool invocation.
+    /// Trace recording is handled by the caller (`execute`).
+    private func executeInner(
+        _ call: PipelineCoordinator.ToolCall,
+        context: ToolExecutorContext,
+        callbacks: ToolExecutorCallbacks
+    ) async -> ToolExecutorResult {
+
+        // ── 1. Tool mode / privacy enforcement ──────────────────────────
+        debugLog(debugConsole, .toolCall, "Execute request: \(call.name) mode=\(context.toolMode) privacy=\(context.privacyMode)")
+        guard registry.isToolAllowed(call.name, mode: context.toolMode, privacyMode: context.privacyMode) else {
+            debugLog(debugConsole, .toolResult, "Blocked by mode/privacy: \(call.name) mode=\(context.toolMode) privacy=\(context.privacyMode)")
+            if context.toolMode == "assistant" {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .faeToolModeUpgradeRequested,
+                        object: nil,
+                        userInfo: ["reason": "toolMode=assistant"]
+                    )
+                }
+            }
+            return ToolExecutorResult(
+                result: .error("Tool '\(call.name)' is not available in read-only mode. The user can switch to 'Everything (with approval)' to enable this tool."),
+                approvedByUser: nil,
+                damageControlIntervened: false
+            )
+        }
+
+        // ── 2. Proactive allowlist ──────────────────────────────────────
+        if let proactiveContext = context.proactiveContext,
+           !proactiveContext.allowedTools.contains(call.name)
+        {
+            debugLog(debugConsole, .toolResult, "Blocked by proactive allowlist: \(call.name) task=\(proactiveContext.taskId)")
+            return ToolExecutorResult(
+                result: .error("Tool '\(call.name)' is not allowed for proactive task '\(proactiveContext.taskId)'"),
+                approvedByUser: nil,
+                damageControlIntervened: false
+            )
+        }
+
+        // ── 3. TillDone hard gate ───────────────────────────────────────
+        if call.name != "till_done",
+           context.proactiveContext == nil,
+           await TillDoneManager.shared.isListActive
+        {
+            let hasInprogress = await TillDoneManager.shared.currentTask != nil
+            let allComplete = await TillDoneManager.shared.allDone
+            if !hasInprogress && !allComplete {
+                let hasTasks = await TillDoneManager.shared.hasActiveTasks
+                let msg: String
+                if !hasTasks {
+                    msg = "All TillDone tasks are done or skipped. Use till_done report to generate the summary, or till_done add to add more tasks."
+                } else {
+                    msg = "No task is in progress. Use till_done start to mark a task as inprogress before doing any work."
+                }
+                debugLog(debugConsole, .toolResult, "TillDone gate blocked \(call.name): \(msg)")
+                return ToolExecutorResult(
+                    result: .error(msg),
+                    approvedByUser: nil,
+                    damageControlIntervened: false
+                )
+            }
+        }
+
+        // ── 4. Computer-use step limit ──────────────────────────────────
+        let actionTools: Set<String> = ["click", "type_text", "scroll"]
+        if actionTools.contains(call.name) {
+            let stepCount = await callbacks.onComputerUseStep()
+            if stepCount > Self.maxComputerUseSteps {
+                return ToolExecutorResult(
+                    result: .error("Computer use step limit reached (\(Self.maxComputerUseSteps) per turn). Ask the user before continuing."),
+                    approvedByUser: nil,
+                    damageControlIntervened: false
+                )
+            }
+        }
+
+        // ── 5. Vision auto-enable ───────────────────────────────────────
+        let visionTools: Set<String> = ["screenshot", "camera", "read_screen",
+                                         "click", "type_text", "scroll", "find_element"]
+        if visionTools.contains(call.name), !context.visionEnabled {
+            await callbacks.onVisionAutoEnabled()
+            debugLog(debugConsole, .pipeline, "Vision auto-enabled: user approved a vision tool")
+        }
+
+        // ── 6. Tool lookup ──────────────────────────────────────────────
+        let vlmProvider = await delegate?.toolExecutorVLMProvider()
+        guard let tool = registry.tool(named: call.name, vlmProvider: vlmProvider) else {
+            return ToolExecutorResult(
+                result: .error("Unknown tool: \(call.name)"),
+                approvedByUser: nil,
+                damageControlIntervened: false
+            )
+        }
+
+        let selfConfigRead = Self.isSelfConfigReadAction(arguments: call.arguments)
+        let effectiveRequiresApproval = Self.toolRequiresApproval(
+            toolName: call.name,
+            arguments: call.arguments,
+            defaultRequiresApproval: tool.requiresApproval
+        )
+        let effectiveRiskLevel: ToolRiskLevel = (call.name == "self_config" && selfConfigRead) ? .low : tool.riskLevel
+
+        // ── 7. Rate limiting ────────────────────────────────────────────
+        if let limitError = await rateLimiter.checkLimit(
+            tool: call.name,
+            riskLevel: effectiveRiskLevel
+        ) {
+            debugLog(debugConsole, .toolResult, "Rate limited: \(call.name) reason=\(limitError)")
+            return ToolExecutorResult(
+                result: .error(limitError),
+                approvedByUser: nil,
+                damageControlIntervened: false
+            )
+        }
+
+        // ── 8. Build ActionIntent ───────────────────────────────────────
+        let intent = ActionIntent(
+            source: context.actionSource,
+            toolName: call.name,
+            riskLevel: effectiveRiskLevel,
+            requiresApproval: effectiveRequiresApproval,
+            isOwner: context.isOwner,
+            livenessScore: context.livenessScore,
+            explicitUserAuthorization: context.explicitUserAuthorization,
+            hasCapabilityTicket: context.hasCapabilityTicketForTool,
+            argumentSummary: Self.buildApprovalDescription(
+                toolName: call.name,
+                reason: "confirmation required",
+                arguments: call.arguments
+            ),
+            schedulerTaskId: context.proactiveContext?.taskId,
+            schedulerAllowedTools: context.proactiveContext?.allowedTools ?? [],
+            schedulerConsentGranted: context.proactiveContext?.consentGranted ?? false
+        )
+
+        let brokerDecisionStartedAt = Date()
+        var workflowDamageControlIntervened = false
+
+        // ── 9. Damage Control — Layer 0 (pre-broker) ───────────────────
+        let dcVerdict = await damageControlPolicy.evaluate(
+            toolName: call.name,
+            arguments: call.arguments,
+            locality: context.modelLocality
+        )
+        var dcManualDecision: BrokerDecision?
+        switch dcVerdict {
+        case .allow:
+            break
+
+        case .block(let reason):
+            workflowDamageControlIntervened = true
+            await securityLogger.log(
+                event: "dc_block",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: "damageControlBlock",
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
+            return ToolExecutorResult(
+                result: .error("Blocked by damage-control policy: \(reason)"),
+                approvedByUser: nil,
+                damageControlIntervened: true
+            )
+
+        case .disaster(let reason):
+            workflowDamageControlIntervened = true
+            await securityLogger.log(
+                event: "dc_disaster",
+                toolName: call.name,
+                decision: "confirm",
+                reasonCode: "damageControlDisaster",
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC disaster: \(call.name) — \(reason)")
+            dcManualDecision = .confirm(
+                prompt: ConfirmationPrompt(message: reason),
+                reason: DecisionReason(code: .damageControlDisaster, message: reason),
+                manualOnly: true,
+                isDisasterLevel: true
+            )
+
+        case .confirmManual(let reason):
+            workflowDamageControlIntervened = true
+            await securityLogger.log(
+                event: "dc_confirm_manual",
+                toolName: call.name,
+                decision: "confirm",
+                reasonCode: "damageControlConfirmManual",
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC confirm manual: \(call.name) — \(reason)")
+            dcManualDecision = .confirm(
+                prompt: ConfirmationPrompt(message: reason),
+                reason: DecisionReason(code: .damageControlConfirmManual, message: reason),
+                manualOnly: true,
+                isDisasterLevel: false
+            )
+        }
+
+        // ── 10. Outbound Guard + Broker ─────────────────────────────────
+        let brokerDecision: BrokerDecision
+        if let dcVerdict = dcManualDecision {
+            brokerDecision = dcVerdict
+        } else if let outboundDecision = await outboundGuard.evaluate(
+            toolName: call.name,
+            arguments: call.arguments
+        ) {
+            switch outboundDecision {
+            case .confirm(let message):
+                brokerDecision = .confirm(
+                    prompt: ConfirmationPrompt(message: message),
+                    reason: DecisionReason(
+                        code: .outboundRecipientNovelty,
+                        message: message
+                    )
+                )
+            case .deny(let message):
+                brokerDecision = .deny(
+                    reason: DecisionReason(
+                        code: .outboundPayloadRisk,
+                        message: message
+                    )
+                )
+            }
+        } else {
+            brokerDecision = await actionBroker.evaluate(intent)
+        }
+
+        let brokerDecisionString: String
+        let brokerReasonCode: String?
+        switch brokerDecision {
+        case .allow(let reason):
+            brokerDecisionString = "allow"
+            brokerReasonCode = reason.code.rawValue
+        case .allowWithTransform(_, let reason):
+            brokerDecisionString = "allow_with_transform"
+            brokerReasonCode = reason.code.rawValue
+        case .confirm(_, let reason, _, _):
+            brokerDecisionString = "confirm"
+            brokerReasonCode = reason.code.rawValue
+        case .deny(let reason):
+            brokerDecisionString = "deny"
+            brokerReasonCode = reason.code.rawValue
+        }
+
+        debugLog(debugConsole, .approval, "Broker decision for \(call.name): \(brokerDecisionString) reason=\(brokerReasonCode ?? "none")")
+
+        await securityLogger.log(
+            event: "broker_decision",
+            toolName: call.name,
+            decision: brokerDecisionString,
+            reasonCode: brokerReasonCode,
+            arguments: call.arguments
+        )
+
+        // ── 11. Shadow mode bypass ──────────────────────────────────────
+        var effectiveDecision = brokerDecision
+        if FaeEnvironment.defaults.bool(forKey: "fae.security.shadowMode") {
+            switch brokerDecision {
+            case .confirm(_, let reason, _, _), .deny(let reason):
+                await securityLogger.log(
+                    event: "shadow_decision",
+                    toolName: call.name,
+                    decision: brokerDecisionString,
+                    reasonCode: reason.code.rawValue,
+                    approved: nil,
+                    success: true,
+                    error: "Shadow mode bypassed enforcement",
+                    arguments: call.arguments
+                )
+                effectiveDecision = .allow(reason: reason)
+            default:
+                break
+            }
+        }
+
+        // ── 12. Approval gate ───────────────────────────────────────────
+        var approvedByUser = false
+        switch effectiveDecision {
+        case .allow:
+            break
+
+        case .allowWithTransform(let transform, _):
+            if let transformError = await applySafetyTransform(
+                transform,
+                toolName: call.name,
+                arguments: call.arguments
+            ) {
+                return ToolExecutorResult(
+                    result: .error(transformError),
+                    approvedByUser: nil,
+                    damageControlIntervened: workflowDamageControlIntervened
+                )
+            }
+
+        case .confirm(let prompt, _, let manualOnly, let isDisasterLevel):
+            if let manager = approvalManager {
+                debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message) manualOnly=\(manualOnly)")
+                await callbacks.onApprovalPending(true, manualOnly)
+                async let approvalDecision = manager.requestApproval(
+                    toolName: call.name,
+                    description: prompt.message,
+                    manualOnly: manualOnly,
+                    isDisasterLevel: isDisasterLevel
+                )
+                if !manualOnly {
+                    await delegate?.toolExecutorSpeakDirect(prompt.message)
+                }
+                let approved = await approvalDecision
+                await callbacks.onApprovalPending(false, false)
+                approvedByUser = approved
+                debugLog(debugConsole, .approval, "Approval result for \(call.name): \(approved)")
+                if !approved {
+                    let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
+                    if let analytics = toolAnalytics {
+                        await analytics.record(
+                            toolName: call.name,
+                            success: false,
+                            latencyMs: latencyMs,
+                            approved: false,
+                            error: "Tool execution denied by user"
+                        )
+                    }
+                    await securityLogger.log(
+                        event: "tool_denied",
+                        toolName: call.name,
+                        decision: "confirm",
+                        reasonCode: brokerReasonCode,
+                        approved: false,
+                        success: false,
+                        error: "Tool execution denied by user",
+                        arguments: call.arguments
+                    )
+                    return ToolExecutorResult(
+                        result: .error("Tool execution denied by user."),
+                        approvedByUser: false,
+                        damageControlIntervened: workflowDamageControlIntervened
+                    )
+                }
+            } else {
+                let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
+                if let analytics = toolAnalytics {
+                    await analytics.record(
+                        toolName: call.name,
+                        success: false,
+                        latencyMs: latencyMs,
+                        approved: nil,
+                        error: "Tool requires approval, but no approval manager is available"
+                    )
+                }
+                await securityLogger.log(
+                    event: "tool_denied",
+                    toolName: call.name,
+                    decision: "confirm",
+                    reasonCode: brokerReasonCode,
+                    approved: nil,
+                    success: false,
+                    error: "No approval manager available",
+                    arguments: call.arguments
+                )
+                return ToolExecutorResult(
+                    result: .error("Tool requires approval, but no approval manager is available."),
+                    approvedByUser: nil,
+                    damageControlIntervened: workflowDamageControlIntervened
+                )
+            }
+
+        case .deny(let reason):
+            debugLog(debugConsole, .toolResult, "Denied by broker: \(call.name) reason=\(reason.code.rawValue)")
+            let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
+            if let analytics = toolAnalytics {
+                await analytics.record(
+                    toolName: call.name,
+                    success: false,
+                    latencyMs: latencyMs,
+                    approved: nil,
+                    error: "Denied by broker: \(reason.code.rawValue)"
+                )
+            }
+            await securityLogger.log(
+                event: "tool_denied",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: reason.code.rawValue,
+                approved: nil,
+                success: false,
+                error: reason.message,
+                arguments: call.arguments
+            )
+            return ToolExecutorResult(
+                result: .error(reason.message),
+                approvedByUser: nil,
+                damageControlIntervened: workflowDamageControlIntervened
+            )
+        }
+
+        // ── 13. Argument augmentation ───────────────────────────────────
+        var executionArguments = call.arguments
+        if call.name == "run_skill", let ticketId = context.capabilityTicket?.id {
+            executionArguments["capability_ticket"] = ticketId
+        }
+        if call.name == "voice_identity",
+           let action = executionArguments["action"] as? String,
+           action == "collect_sample"
+        {
+            executionArguments["enrollment_active"] = context.firstOwnerEnrollmentActive
+        }
+
+        // ── 14. Execute with timeout ────────────────────────────────────
+        let timeoutSeconds = Self.toolTimeoutSeconds(for: call.name)
+        let startTime = Date()
+        let result: ToolResult
+        do {
+            result = try await withThrowingTaskGroup(of: ToolResult.self) { group in
+                group.addTask {
+                    try await tool.execute(input: executionArguments)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    return .error("Tool timed out after \(Int(timeoutSeconds))s")
+                }
+                guard let r = try await group.next() else {
+                    group.cancelAll()
+                    return .error("Tool execution did not return a result")
+                }
+                group.cancelAll()
+                return r
+            }
+        } catch {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Tool threw error: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
+            if let analytics = toolAnalytics {
+                await analytics.record(
+                    toolName: call.name,
+                    success: false,
+                    latencyMs: latencyMs,
+                    approved: approvedByUser ? true : nil,
+                    error: error.localizedDescription
+                )
+            }
+            await securityLogger.log(
+                event: "tool_result",
+                toolName: call.name,
+                decision: brokerDecisionString,
+                reasonCode: brokerReasonCode,
+                approved: approvedByUser ? true : nil,
+                success: false,
+                error: error.localizedDescription,
+                arguments: call.arguments
+            )
+            return ToolExecutorResult(
+                result: .error("Tool error: \(error.localizedDescription)"),
+                approvedByUser: approvedByUser ? true : nil,
+                damageControlIntervened: workflowDamageControlIntervened
+            )
+        }
+
+        // ── 15. Post-execution analytics + logging ──────────────────────
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
+        if let analytics = toolAnalytics {
+            await analytics.record(
+                toolName: call.name,
+                success: !result.isError,
+                latencyMs: latencyMs,
+                approved: approvedByUser ? true : nil,
+                error: result.isError ? result.output : nil
+            )
+        }
+
+        await securityLogger.log(
+            event: "tool_result",
+            toolName: call.name,
+            decision: brokerDecisionString,
+            reasonCode: brokerReasonCode,
+            approved: approvedByUser ? true : nil,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            arguments: call.arguments
+        )
+
+        if !result.isError {
+            await outboundGuard.recordSuccessfulSend(toolName: call.name, arguments: call.arguments)
+        }
+
+        return ToolExecutorResult(
+            result: result,
+            approvedByUser: approvedByUser ? true : nil,
+            damageControlIntervened: workflowDamageControlIntervened
+        )
+    }
+
+    // MARK: - Workflow Trace Recording
+
+    private static func serializeArguments(_ args: [String: Any]) -> String {
+        if let data = try? JSONSerialization.data(withJSONObject: args),
+           let str = String(data: data, encoding: .utf8)
+        {
+            return str
+        }
+        return "{}"
+    }
+
+    /// Record a `tool_call` step in the workflow trace.
+    private func traceToolCall(
+        call: PipelineCoordinator.ToolCall,
+        context: ToolExecutorContext
+    ) async {
+        guard let store = workflowTraceStore,
+              let runID = context.workflowRunID
+        else { return }
+        do {
+            try await store.appendStep(
+                runId: runID,
+                toolCallId: context.traceToolCallID,
+                stepType: .toolCall,
+                toolName: call.name,
+                sanitizedInputJSON: Self.serializeArguments(call.arguments),
+                outputPreview: nil,
+                success: nil,
+                approved: nil,
+                latencyMs: nil
+            )
+        } catch {
+            NSLog("ToolExecutor: workflow tool-call trace error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Record a `tool_result` step in the workflow trace.
+    private func traceToolResult(
+        call: PipelineCoordinator.ToolCall,
+        context: ToolExecutorContext,
+        result: ToolResult,
+        approved: Bool?,
+        latencyMs: Int?
+    ) async {
+        guard let store = workflowTraceStore,
+              let runID = context.workflowRunID
+        else { return }
+        do {
+            try await store.appendStep(
+                runId: runID,
+                toolCallId: context.traceToolCallID,
+                stepType: .toolResult,
+                toolName: call.name,
+                sanitizedInputJSON: nil,
+                outputPreview: result.output,
+                success: !result.isError,
+                approved: approved,
+                latencyMs: latencyMs
+            )
+        } catch {
+            NSLog("ToolExecutor: workflow tool-result trace error: %@", error.localizedDescription)
+        }
+    }
+
+    // MARK: - Safety Transform
+
+    /// Apply deterministic safety wrappers before executing a tool.
+    private func applySafetyTransform(
+        _ transform: SafetyTransform,
+        toolName: String,
+        arguments: [String: Any]
+    ) async -> String? {
+        switch transform {
+        case .none:
+            return nil
+
+        case .checkpointBeforeMutation:
+            if ["write", "edit"].contains(toolName) {
+                guard let path = arguments["path"] as? String else {
+                    return "Safety checkpoint failed: missing path argument"
+                }
+
+                switch PathPolicy.validateWritePath(path) {
+                case .blocked(let reason):
+                    return reason
+                case .allowed(let canonical):
+                    let checkpointId = ReversibilityEngine.createCheckpoint(
+                        for: canonical,
+                        reason: "\(toolName) transform"
+                    )
+                    if checkpointId == nil {
+                        return "Safety checkpoint failed: could not create reversible snapshot"
+                    }
+
+                    await securityLogger.log(
+                        event: "safety_transform",
+                        toolName: toolName,
+                        decision: "checkpointBeforeMutation",
+                        reasonCode: nil,
+                        approved: nil,
+                        success: true,
+                        error: nil,
+                        arguments: ["path": canonical, "checkpoint_id": checkpointId ?? ""]
+                    )
+                    return nil
+                }
+            }
+
+            if toolName == "manage_skill",
+               let action = arguments["action"] as? String,
+               action == "delete",
+               let name = arguments["name"] as? String,
+               Self.isSafeSkillName(name)
+            {
+                let path = SkillManager.skillsDirectory.appendingPathComponent(name).path
+                let checkpointId = ReversibilityEngine.createCheckpoint(
+                    for: path,
+                    reason: "manage_skill delete transform"
+                )
+                if checkpointId == nil {
+                    return "Safety checkpoint failed: could not snapshot skill before delete"
+                }
+                await securityLogger.log(
+                    event: "safety_transform",
+                    toolName: toolName,
+                    decision: "checkpointBeforeMutation",
+                    reasonCode: nil,
+                    approved: nil,
+                    success: true,
+                    error: nil,
+                    arguments: ["path": path, "checkpoint_id": checkpointId ?? ""]
+                )
+            }
+
+            return nil
+        }
+    }
+
+    // MARK: - Static Helpers
+
+    /// Per-tool timeout: vision tools get an extended budget.
+    static func toolTimeoutSeconds(for toolName: String) -> TimeInterval {
+        switch toolName {
+        case "screenshot", "camera", "read_screen":
+            return extendedVisionToolTimeoutSeconds
+        default:
+            return defaultToolTimeoutSeconds
+        }
+    }
+
+    /// Self-config actions that are read-only and should bypass approval.
+    private static let selfConfigReadActions: Set<String> = [
+        "get_settings", "get_directive", "get_instructions",
+    ]
+
+    /// Whether a self_config call is a read-only action.
+    static func isSelfConfigReadAction(arguments: [String: Any]) -> Bool {
+        guard let action = (arguments["action"] as? String)?.lowercased() else { return false }
+        return selfConfigReadActions.contains(action)
+    }
+
+    /// Whether a tool invocation requires user approval, accounting for
+    /// tool-specific overrides (self_config reads, calendar/reminders creates).
+    static func toolRequiresApproval(
+        toolName: String,
+        arguments: [String: Any],
+        defaultRequiresApproval: Bool
+    ) -> Bool {
+        if toolName == "self_config" {
+            return !isSelfConfigReadAction(arguments: arguments)
+        }
+        if toolName == "calendar" {
+            let action = (arguments["action"] as? String)?.lowercased() ?? ""
+            if action == "create" {
+                return true
+            }
+        }
+        if toolName == "reminders" {
+            let action = (arguments["action"] as? String)?.lowercased() ?? ""
+            if action == "create" || action == "complete" {
+                return true
+            }
+        }
+        return defaultRequiresApproval
+    }
+
+    /// Build a self_config-specific approval summary.
+    private static func selfConfigApprovalSummary(arguments: [String: Any]) -> String {
+        let action = (arguments["action"] as? String)?.lowercased() ?? ""
+        if selfConfigReadActions.contains(action) {
+            return "I can check your current settings."
+        }
+
+        if action == "adjust_setting" {
+            let key = arguments["key"] as? String ?? "a setting"
+            return "I can update \(key)."
+        }
+
+        if action.contains("directive") || action.contains("instructions") {
+            switch action {
+            case "set_directive", "set_instructions":
+                return "I can replace your persistent directive."
+            case "append_directive", "append_instructions":
+                return "I can append to your persistent directive."
+            case "clear_directive", "clear_instructions":
+                return "I can clear your persistent directive."
+            default:
+                return "I can update your persistent directive."
+            }
+        }
+
+        return "I can update your Fae settings."
+    }
+
+    /// Build a plain-language confirmation prompt with concrete action context.
+    static func buildApprovalDescription(
+        toolName: String, reason: String, arguments: [String: Any]
+    ) -> String {
+        let summary: String
+        switch toolName {
+        case "bash":
+            if let command = arguments["command"] as? String {
+                let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preview = trimmed.count > 140 ? String(trimmed.prefix(140)) + "…" : trimmed
+                summary = "I can run this command: \(preview)."
+            } else {
+                summary = "I can run a shell command for this step."
+            }
+
+        case "write":
+            if let path = arguments["path"] as? String {
+                summary = "I can write to \(path)."
+            } else {
+                summary = "I can write file content for this step."
+            }
+
+        case "edit":
+            if let path = arguments["path"] as? String {
+                summary = "I can edit \(path)."
+            } else {
+                summary = "I can edit a file for this step."
+            }
+
+        case "self_config":
+            summary = selfConfigApprovalSummary(arguments: arguments)
+
+        case "run_skill":
+            let skillName = arguments["name"] as? String ?? "a skill"
+            summary = "I can run \(skillName) now."
+
+        case "manage_skill":
+            let action = arguments["action"] as? String ?? "modify"
+            summary = "I can \(action) a skill in your local skills library."
+
+        case "delegate_agent":
+            let provider = arguments["provider"] as? String ?? "an external agent"
+            let mode = arguments["mode"] as? String ?? "read_only"
+            summary = "I can delegate this task to \(provider) in \(mode) mode."
+
+        case "scheduler_create":
+            summary = "I can create a scheduled task that runs automatically later."
+
+        case "scheduler_update":
+            summary = "I can update a scheduled task."
+
+        case "scheduler_delete":
+            summary = "I can delete this scheduled task."
+
+        default:
+            summary = "I can use \(toolName) for this step."
+        }
+
+        return "\(summary) Say yes or no, or press the Yes/No button."
+    }
+
+    /// Whether a skill name is safe for filesystem use (alphanumeric, hyphens, underscores).
+    static func isSafeSkillName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed.contains("/") || trimmed.contains("\\") || trimmed.contains("..") { return false }
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+        )
+        return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+}
