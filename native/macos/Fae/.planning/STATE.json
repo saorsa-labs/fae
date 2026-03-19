@@ -9,10 +9,11 @@
     "3.1 — Shared Identity (ChannelIdentityResolver)",
     "3.2 — Cross-Channel Context (LinkedSessionSummary, gateway enrichment)",
     "3.3 — Channel Health Monitoring + Auto-Reconnect",
-    "4.1 — Integration Tests"
+    "4.1 — Integration Tests",
+    "4.2 — Concurrency Stress Tests"
   ],
-  "current_phase": "4.2 — Concurrency Stress Tests",
-  "test_count": 1310,
+  "current_phase": "4.3 — Documentation + channel-hub Skill Update",
+  "test_count": 1316,
   "test_failures": 0,
   "build_warnings": 0
 }
