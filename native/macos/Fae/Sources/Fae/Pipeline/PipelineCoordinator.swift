@@ -73,6 +73,11 @@ actor PipelineCoordinator {
     private let isRescueMode: Bool
     private let toolExecutor: ToolExecutor
 
+    /// CoWork security intercept — routes all external LLM calls through
+    /// ToolExecutor's unified security pipeline. Created lazily by
+    /// ``makeCoworkToolExecutor()`` and exposed to FaeCore.
+    private(set) var coworkToolExecutor: CoworkToolExecutor?
+
     /// JSC runtime for executing `<tool_program>` script blocks.
     /// Lazily created on first script execution to avoid unnecessary
     /// JSC overhead when no scripts are used.
@@ -1325,6 +1330,26 @@ actor PipelineCoordinator {
 
         // Configure VAD from config.
         vad.applyConfiguration(config.vad)
+    }
+
+    // MARK: - CoWork Security Executor
+
+    /// Create and store the ``CoworkToolExecutor`` that routes all external
+    /// LLM calls through the shared security pipeline.
+    ///
+    /// Called once by ``FaeCore`` after the pipeline has started. Subsequent
+    /// calls are no-ops (returns the existing instance).
+    @discardableResult
+    func makeCoworkToolExecutor() -> CoworkToolExecutor {
+        if let existing = coworkToolExecutor { return existing }
+        let executor = CoworkToolExecutor(
+            toolExecutor: toolExecutor,
+            isReady: true,
+            securityLogger: SecurityEventLogger.shared,
+            eventBus: eventBus
+        )
+        coworkToolExecutor = executor
+        return executor
     }
 
     // MARK: - Lifecycle
