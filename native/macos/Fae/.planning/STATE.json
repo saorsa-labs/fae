@@ -1,18 +1,14 @@
 {
-  "project": "Unified Intercept",
+  "project": "Channel Gateway — Adapter Migration",
   "status": "milestone_complete",
-  "milestone": "Route all CoWork external LLM calls through ToolExecutor's unified security pipeline",
+  "milestone": "Migrate all three adapters to ChannelAdapter protocol for unified ChannelGateway routing",
   "phases_completed": [
-    "1.1 — CoworkToolExecutor actor + 16 unit tests",
-    "1.2 — ToolExecutorContext factory methods (DRY improvement)",
-    "2.1 — Expose CoworkToolExecutor through FaeCore",
-    "2.2 — Wire CoworkWorkspaceController through security pipeline",
-    "3.1 — Integration tests (5 new tests)",
-    "3.2 — DamageControlPolicy enhancement (6 new tests)",
-    "3.3 — Documentation (API docs + CLAUDE.md update)"
+    "2.1 — Migrate iMessageAdapter to ChannelAdapter protocol",
+    "2.2 — Migrate DiscordAdapter to ChannelAdapter protocol",
+    "2.3 — Migrate WhatsAppAdapter to ChannelAdapter protocol"
   ],
-  "test_count": 1158,
+  "test_count": 1247,
   "test_failures": 0,
   "build_warnings": 0,
-  "completed_at": "2026-03-19T15:05:00Z"
+  "completed_at": "2026-03-19T21:45:00Z"
 }

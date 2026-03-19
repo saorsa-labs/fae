@@ -4,13 +4,20 @@ import Network
 
 /// Receives WhatsApp Cloud API webhooks over HTTP and sends replies via Graph API.
 ///
+/// Conforms to `ChannelAdapter` so it can be registered with `ChannelGateway`.
+/// Produces `ChannelMessage` envelopes from inbound webhook payloads.
+///
 /// - Note: This adapter is intentionally minimal and self-contained:
 ///   - Runs a lightweight HTTP server using `NWListener`
 ///   - Verifies webhook challenge requests against `verifyToken`
-///   - Parses inbound text messages and forwards them to `messageHandler`
+///   - Parses inbound text messages and forwards them to `onMessage`
 ///   - Sends outbound responses with WhatsApp Cloud API
-actor WhatsAppAdapter {
-    typealias MessageHandler = @Sendable (_ sender: String, _ text: String) async -> String?
+///
+/// - Note: This is a class (not actor) to satisfy the `ChannelAdapter` protocol's
+///   `onMessage` property requirement. Internal state is protected by `ListenerState`.
+final class WhatsAppAdapter: ChannelAdapter, @unchecked Sendable {
+    /// Legacy handler type retained for backward compatibility with `ChannelManager`.
+    typealias LegacyMessageHandler = @Sendable (_ sender: String, _ text: String) async -> String?
 
     struct Config: Sendable {
         var accessToken: String
@@ -19,6 +26,7 @@ actor WhatsAppAdapter {
         var allowedNumbers: [String]
         var webhookPath: String
         var appSecret: String?
+        var webhookPort: UInt16
 
         init(
             accessToken: String,
@@ -26,7 +34,8 @@ actor WhatsAppAdapter {
             verifyToken: String,
             allowedNumbers: [String] = [],
             webhookPath: String = "/webhook",
-            appSecret: String? = nil
+            appSecret: String? = nil,
+            webhookPort: UInt16 = 8443
         ) {
             self.accessToken = accessToken
             self.phoneNumberId = phoneNumberId
@@ -34,6 +43,7 @@ actor WhatsAppAdapter {
             self.allowedNumbers = allowedNumbers
             self.webhookPath = webhookPath
             self.appSecret = appSecret
+            self.webhookPort = webhookPort
         }
     }
 
@@ -108,6 +118,7 @@ actor WhatsAppAdapter {
 
         struct Message: Decodable {
             let from: String
+            let id: String?
             let type: String?
             let text: TextContent?
 
@@ -147,29 +158,79 @@ actor WhatsAppAdapter {
         }
     }
 
+    /// Thread-safe wrapper for mutable listener state.
+    private final class ListenerState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _listener: NWListener?
+        private var _runningPort: UInt16?
+
+        var isRunning: Bool {
+            lock.withLock { _listener != nil }
+        }
+
+        var runningPort: UInt16? {
+            lock.withLock { _runningPort }
+        }
+
+        func bind(listener: NWListener, port: UInt16) {
+            lock.withLock {
+                _listener = listener
+                _runningPort = port
+            }
+        }
+
+        func cancelAndClear() {
+            lock.withLock {
+                _listener?.cancel()
+                _listener = nil
+                _runningPort = nil
+            }
+        }
+    }
+
+    let kind: ChannelKind = .whatsapp
+    var onMessage: (@Sendable (ChannelMessage) async -> String?)?
+
     private let config: Config
     private let urlSession: URLSession
-    private var messageHandler: MessageHandler?
+    private var legacyHandler: LegacyMessageHandler?
+    private let listenerState = ListenerState()
 
-    private var listener: NWListener?
-    private var runningPort: UInt16?
+    var isRunning: Bool { listenerState.isRunning }
 
+    /// Create an adapter for use with `ChannelGateway`.
+    ///
+    /// The gateway sets `onMessage` after creation to receive `ChannelMessage` envelopes.
     init(config: Config, urlSession: URLSession = .shared) {
         self.config = config
         self.urlSession = urlSession
     }
 
-    var isRunning: Bool {
-        listener != nil
+    /// Set a legacy message handler (backward compatibility with `ChannelManager`).
+    func setMessageHandler(_ handler: @escaping LegacyMessageHandler) {
+        legacyHandler = handler
     }
 
-    func setMessageHandler(_ handler: @escaping MessageHandler) {
-        messageHandler = handler
+    // MARK: - ChannelAdapter
+
+    func start() async throws {
+        try await start(port: config.webhookPort)
     }
+
+    func stop() async {
+        listenerState.cancelAndClear()
+        NSLog("WhatsAppAdapter: stopped")
+    }
+
+    func send(response: String, to message: ChannelMessage) async throws {
+        await sendText(to: message.senderId, text: response)
+    }
+
+    // MARK: - HTTP Listener
 
     func start(port: UInt16) async throws {
-        if listener != nil {
-            NSLog("WhatsAppAdapter: already running on port %@", String(runningPort ?? 0))
+        if listenerState.isRunning {
+            NSLog("WhatsAppAdapter: already running on port %@", String(listenerState.runningPort ?? 0))
             return
         }
 
@@ -202,9 +263,7 @@ actor WhatsAppAdapter {
                     guard !resumed else { return }
                     resumed = true
                     NSLog("WhatsAppAdapter: listening on port %@", String(port))
-                    Task {
-                        await self?.didBind(listener: newListener, port: port)
-                    }
+                    self?.listenerState.bind(listener: newListener, port: port)
                     continuation.resume()
                 case .failed(let error):
                     guard !resumed else { return }
@@ -220,18 +279,6 @@ actor WhatsAppAdapter {
 
             newListener.start(queue: .global(qos: .utility))
         }
-    }
-
-    private func didBind(listener: NWListener, port: UInt16) {
-        self.listener = listener
-        self.runningPort = port
-    }
-
-    func stop() {
-        listener?.cancel()
-        listener = nil
-        runningPort = nil
-        NSLog("WhatsAppAdapter: stopped")
     }
 
     func sendText(to recipient: String, text: String) async {
@@ -322,13 +369,13 @@ actor WhatsAppAdapter {
         guard let requestData,
               let request = parseHTTPRequest(from: requestData)
         else {
-            await send(response: .text("Bad Request", statusCode: 400, statusText: "Bad Request"), on: connection)
+            await sendHTTP(response: .text("Bad Request", statusCode: 400, statusText: "Bad Request"), on: connection)
             connection.cancel()
             return
         }
 
         let response = await handle(request: request)
-        await send(response: response, on: connection)
+        await sendHTTP(response: response, on: connection)
         connection.cancel()
     }
 
@@ -531,9 +578,25 @@ actor WhatsAppAdapter {
                     }
 
                     handledCount += 1
-                    if let handler = messageHandler,
-                       let reply = await handler(sender, text) {
-                        await sendText(to: sender, text: reply)
+
+                    // Gateway path: convert to ChannelMessage and dispatch.
+                    if let onMessage {
+                        let channelMessage = ChannelMessage(
+                            id: message.id ?? UUID().uuidString,
+                            channel: .whatsapp,
+                            senderId: sender,
+                            senderDisplayName: nil,
+                            text: text,
+                            timestamp: Date()
+                        )
+                        if let reply = await onMessage(channelMessage) {
+                            await sendText(to: sender, text: reply)
+                        }
+                    } else if let legacyHandler {
+                        // Legacy path: forward to ChannelManager callback.
+                        if let reply = await legacyHandler(sender, text) {
+                            await sendText(to: sender, text: reply)
+                        }
                     }
                 }
             }
@@ -553,7 +616,7 @@ actor WhatsAppAdapter {
         return config.allowedNumbers.contains(sender)
     }
 
-    private func send(response: HTTPResponse, on connection: NWConnection) async {
+    private func sendHTTP(response: HTTPResponse, on connection: NWConnection) async {
         await withCheckedContinuation { continuation in
             connection.send(content: response.serialized(), completion: .contentProcessed { error in
                 if let error {

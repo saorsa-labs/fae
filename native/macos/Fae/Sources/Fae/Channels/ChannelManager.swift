@@ -85,7 +85,11 @@ actor ChannelManager {
                 }
             )
             discordAdapter = adapter
-            await adapter.start()
+            do {
+                try await adapter.start()
+            } catch {
+                NSLog("ChannelManager: failed to start Discord adapter — %@", error.localizedDescription)
+            }
         }
 
         if whatsappReady {
@@ -95,10 +99,11 @@ actor ChannelManager {
                 verifyToken: config.whatsapp.verifyToken ?? "",
                 allowedNumbers: config.whatsapp.allowedNumbers,
                 webhookPath: "/webhook",
-                appSecret: config.whatsapp.appSecret
+                appSecret: config.whatsapp.appSecret,
+                webhookPort: config.whatsapp.webhookPort
             )
             let adapter = WhatsAppAdapter(config: waConfig)
-            await adapter.setMessageHandler { [weak self] sender, text in
+            adapter.setMessageHandler { [weak self] sender, text in
                 guard let self else { return nil }
                 return await self.handleIncomingMessage(
                     channel: "whatsapp", sender: sender, text: text
@@ -113,16 +118,20 @@ actor ChannelManager {
         }
 
         if config.imessage.enabled {
-            let adapter = IMessageAdapter { [weak self] message in
+            let adapter = IMessageAdapter(handler: { [weak self] message in
                 guard let self else { return }
                 if let reply = await self.handleIncomingMessage(
                     channel: "imessage", sender: message.sender, text: message.text
                 ) {
                     await self.replyViaIMessage(text: reply, to: message.sender)
                 }
-            }
+            })
             imessageAdapter = adapter
-            await adapter.start()
+            do {
+                try await adapter.start()
+            } catch {
+                NSLog("ChannelManager: failed to start iMessage adapter — %@", error.localizedDescription)
+            }
         }
 
         NSLog("ChannelManager: started (discord=%@, whatsapp=%@, imessage=%@)",

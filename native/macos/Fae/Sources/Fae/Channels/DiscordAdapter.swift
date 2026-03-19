@@ -1,96 +1,303 @@
 import Foundation
 
-/// Native Discord channel adapter backed by Discord Gateway + REST APIs.
+/// Native Discord channel adapter conforming to `ChannelAdapter`.
 ///
-/// The adapter is dependency-free (Foundation + URLSession) and intended to be
-/// wired by `ChannelManager` via the provided `messageHandler` callback.
-actor DiscordAdapter {
-    typealias MessageHandler = @Sendable (_ senderId: String, _ channelId: String, _ text: String) async -> String?
+/// Connects to the Discord Gateway via WebSocket, receives `MESSAGE_CREATE` events,
+/// converts them into `ChannelMessage` envelopes for the `ChannelGateway`, and sends
+/// replies via the Discord REST API with 2000-character message splitting.
+///
+/// Preserves the full WebSocket lifecycle: heartbeat, resume, reconnect with
+/// exponential backoff.
+///
+/// - Note: This is a class (not actor) to satisfy the `ChannelAdapter` protocol's
+///   `onMessage` property requirement. Internal state is protected by `AdapterState`.
+final class DiscordAdapter: ChannelAdapter, @unchecked Sendable {
+    /// Legacy handler type retained for backward compatibility with `ChannelManager`.
+    typealias LegacyMessageHandler = @Sendable (_ senderId: String, _ channelId: String, _ text: String) async -> String?
 
     private static let gatewayURL = URL(string: "wss://gateway.discord.gg/?v=10&encoding=json")!
     private static let restBaseURL = URL(string: "https://discord.com/api/v10")!
 
+    let kind: ChannelKind = .discord
+    var onMessage: (@Sendable (ChannelMessage) async -> String?)?
+
     private let config: ChannelManager.ChannelConfig.DiscordConfig
-    private let messageHandler: MessageHandler
+    private let legacyHandler: LegacyMessageHandler?
     private let session: URLSession
 
     private let allowedChannelIds: Set<String>
     private let guildId: String?
 
-    private var webSocketTask: URLSessionWebSocketTask?
-    private var receiveTask: Task<Void, Never>?
-    private var heartbeatTask: Task<Void, Never>?
-    private var reconnectTask: Task<Void, Never>?
+    /// Thread-safe wrapper for mutable adapter state.
+    private final class AdapterState: @unchecked Sendable {
+        private let lock = NSLock()
 
-    private var shouldRun = false
-    private var isGatewayReady = false
-    private var reconnectAttempt = 0
+        private var _webSocketTask: URLSessionWebSocketTask?
+        private var _receiveTask: Task<Void, Never>?
+        private var _heartbeatTask: Task<Void, Never>?
+        private var _reconnectTask: Task<Void, Never>?
 
-    private var sessionId: String?
-    private var resumeGatewayURL: URL?
-    private var lastSequenceNumber: Int?
+        private var _shouldRun = false
+        private var _isGatewayReady = false
+        private var _reconnectAttempt = 0
 
-    private var heartbeatIntervalNanos: UInt64 = 45_000_000_000
-    private var awaitingHeartbeatAck = false
+        private var _sessionId: String?
+        private var _resumeGatewayURL: URL?
+        private var _lastSequenceNumber: Int?
 
-    var isConnected: Bool {
-        shouldRun && isGatewayReady && webSocketTask != nil
+        private var _heartbeatIntervalNanos: UInt64 = 45_000_000_000
+        private var _awaitingHeartbeatAck = false
+
+        var shouldRun: Bool {
+            get { lock.withLock { _shouldRun } }
+            set { lock.withLock { _shouldRun = newValue } }
+        }
+
+        var isGatewayReady: Bool {
+            get { lock.withLock { _isGatewayReady } }
+            set { lock.withLock { _isGatewayReady = newValue } }
+        }
+
+        var reconnectAttempt: Int {
+            get { lock.withLock { _reconnectAttempt } }
+            set { lock.withLock { _reconnectAttempt = newValue } }
+        }
+
+        var sessionId: String? {
+            get { lock.withLock { _sessionId } }
+            set { lock.withLock { _sessionId = newValue } }
+        }
+
+        var resumeGatewayURL: URL? {
+            get { lock.withLock { _resumeGatewayURL } }
+            set { lock.withLock { _resumeGatewayURL = newValue } }
+        }
+
+        var lastSequenceNumber: Int? {
+            get { lock.withLock { _lastSequenceNumber } }
+            set { lock.withLock { _lastSequenceNumber = newValue } }
+        }
+
+        var heartbeatIntervalNanos: UInt64 {
+            get { lock.withLock { _heartbeatIntervalNanos } }
+            set { lock.withLock { _heartbeatIntervalNanos = newValue } }
+        }
+
+        var awaitingHeartbeatAck: Bool {
+            get { lock.withLock { _awaitingHeartbeatAck } }
+            set { lock.withLock { _awaitingHeartbeatAck = newValue } }
+        }
+
+        var webSocketTask: URLSessionWebSocketTask? {
+            get { lock.withLock { _webSocketTask } }
+            set { lock.withLock { _webSocketTask = newValue } }
+        }
+
+        var hasReconnectTask: Bool {
+            lock.withLock { _reconnectTask != nil }
+        }
+
+        func setWebSocketAndClearReady(_ task: URLSessionWebSocketTask) {
+            lock.withLock {
+                _webSocketTask = task
+                _isGatewayReady = false
+                _awaitingHeartbeatAck = false
+            }
+        }
+
+        func setReceiveTask(_ task: Task<Void, Never>?) {
+            lock.withLock { _receiveTask = task }
+        }
+
+        func setHeartbeatTask(_ task: Task<Void, Never>?) {
+            lock.withLock { _heartbeatTask = task }
+        }
+
+        func setReconnectTask(_ task: Task<Void, Never>?) {
+            lock.withLock { _reconnectTask = task }
+        }
+
+        func clearReconnectTask() {
+            lock.withLock { _reconnectTask = nil }
+        }
+
+        func markStarted() {
+            lock.withLock {
+                _shouldRun = true
+                _reconnectAttempt = 0
+            }
+        }
+
+        func teardownForReconnect() {
+            lock.withLock {
+                _heartbeatTask?.cancel()
+                _heartbeatTask = nil
+
+                _receiveTask?.cancel()
+                _receiveTask = nil
+
+                if let ws = _webSocketTask {
+                    ws.cancel(with: .goingAway, reason: nil)
+                    _webSocketTask = nil
+                }
+
+                _isGatewayReady = false
+            }
+        }
+
+        func fullStop() {
+            lock.withLock {
+                _shouldRun = false
+                _reconnectAttempt = 0
+                _isGatewayReady = false
+                _awaitingHeartbeatAck = false
+
+                _sessionId = nil
+                _resumeGatewayURL = nil
+                _lastSequenceNumber = nil
+
+                _reconnectTask?.cancel()
+                _reconnectTask = nil
+
+                _heartbeatTask?.cancel()
+                _heartbeatTask = nil
+
+                _receiveTask?.cancel()
+                _receiveTask = nil
+
+                if let ws = _webSocketTask {
+                    ws.cancel(with: .goingAway, reason: nil)
+                    _webSocketTask = nil
+                }
+            }
+        }
+
+        func markReady(sessionId: String?, resumeGatewayURL: URL?) {
+            lock.withLock {
+                _sessionId = sessionId
+                if let url = resumeGatewayURL {
+                    _resumeGatewayURL = url
+                }
+                _isGatewayReady = true
+                _reconnectAttempt = 0
+            }
+        }
+
+        func markResumed() {
+            lock.withLock {
+                _isGatewayReady = true
+                _reconnectAttempt = 0
+            }
+        }
+
+        func clearSessionForInvalidSession() {
+            lock.withLock {
+                _sessionId = nil
+                _resumeGatewayURL = nil
+                _lastSequenceNumber = nil
+            }
+        }
+
+        /// Increments reconnect attempt and returns the delay.
+        func incrementReconnectAndGetDelay() -> Double {
+            lock.withLock {
+                _awaitingHeartbeatAck = false
+                let delay = min(30.0, pow(2.0, Double(max(0, _reconnectAttempt))))
+                _reconnectAttempt += 1
+                return delay
+            }
+        }
+
+        /// Returns true if heartbeat ack was pending (timeout), sets it to true otherwise.
+        func checkAndSetHeartbeatAck() -> Bool {
+            lock.withLock {
+                if _awaitingHeartbeatAck {
+                    return true
+                }
+                _awaitingHeartbeatAck = true
+                return false
+            }
+        }
+
+        var isConnected: Bool {
+            lock.withLock {
+                _shouldRun && _isGatewayReady && _webSocketTask != nil
+            }
+        }
+
+        func shouldContinueHeartbeatLoop() -> Bool {
+            lock.withLock {
+                _shouldRun && _webSocketTask != nil
+            }
+        }
     }
 
+    private let state = AdapterState()
+
+    var isConnected: Bool { state.isConnected }
+
+    /// Create an adapter for use with `ChannelGateway`.
+    ///
+    /// The gateway sets `onMessage` after creation to receive `ChannelMessage` envelopes.
     init(
         config: ChannelManager.ChannelConfig.DiscordConfig,
-        messageHandler: @escaping MessageHandler,
         urlSession: URLSession = .shared
     ) {
         self.config = config
-        self.messageHandler = messageHandler
+        self.legacyHandler = nil
         self.session = urlSession
         self.allowedChannelIds = Set(config.allowedChannelIds)
         self.guildId = config.guildId?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: - Public API
+    /// Create an adapter with a legacy handler (backward compatibility with `ChannelManager`).
+    init(
+        config: ChannelManager.ChannelConfig.DiscordConfig,
+        messageHandler: @escaping LegacyMessageHandler,
+        urlSession: URLSession = .shared
+    ) {
+        self.config = config
+        self.legacyHandler = messageHandler
+        self.session = urlSession
+        self.allowedChannelIds = Set(config.allowedChannelIds)
+        self.guildId = config.guildId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
-    func start() {
-        guard !shouldRun else { return }
+    // MARK: - ChannelAdapter
+
+    func start() async throws {
+        guard !state.shouldRun else { return }
         guard normalizedToken != nil else {
             NSLog("DiscordAdapter: missing bot token; start aborted")
             return
         }
 
-        shouldRun = true
-        reconnectAttempt = 0
-
-        Task { await connect() }
+        state.markStarted()
+        await connect()
     }
 
-    func stop() {
-        guard shouldRun else { return }
+    func stop() async {
+        guard state.shouldRun else { return }
+        state.fullStop()
+        NSLog("DiscordAdapter: stopped")
+    }
 
-        shouldRun = false
-        reconnectAttempt = 0
-        isGatewayReady = false
-        awaitingHeartbeatAck = false
-
-        sessionId = nil
-        resumeGatewayURL = nil
-        lastSequenceNumber = nil
-
-        reconnectTask?.cancel()
-        reconnectTask = nil
-
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-
-        receiveTask?.cancel()
-        receiveTask = nil
-
-        if let webSocketTask {
-            webSocketTask.cancel(with: .goingAway, reason: nil)
-            self.webSocketTask = nil
+    func send(response: String, to message: ChannelMessage) async throws {
+        guard let channelId = message.threadId else {
+            NSLog("DiscordAdapter: cannot send response — message has no threadId (channelId)")
+            return
         }
 
-        NSLog("DiscordAdapter: stopped")
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let chunks = splitMessage(trimmed, limit: 2000)
+        for (index, chunk) in chunks.enumerated() {
+            try await sendMessage(chunk, toChannelId: channelId)
+            if index < chunks.count - 1 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
     }
 
     // MARK: - Connection Lifecycle
@@ -105,44 +312,30 @@ actor DiscordAdapter {
     }
 
     private func connect() async {
-        guard shouldRun else { return }
+        guard state.shouldRun else { return }
         guard normalizedToken != nil else {
             NSLog("DiscordAdapter: cannot connect without bot token")
             return
         }
 
-        teardownForReconnect()
+        state.teardownForReconnect()
 
-        let gatewayURL = resumeGatewayURL ?? Self.gatewayURL
+        let gatewayURL = state.resumeGatewayURL ?? Self.gatewayURL
         let task = session.webSocketTask(with: gatewayURL)
-        webSocketTask = task
+        state.setWebSocketAndClearReady(task)
         task.resume()
 
-        isGatewayReady = false
-        awaitingHeartbeatAck = false
-
-        receiveTask = Task { await receiveLoop(socket: task) }
+        let receiveTask: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            await self.receiveLoop(socket: task)
+        }
+        state.setReceiveTask(receiveTask)
 
         NSLog("DiscordAdapter: connecting to gateway %@", gatewayURL.absoluteString)
     }
 
-    private func teardownForReconnect() {
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-
-        receiveTask?.cancel()
-        receiveTask = nil
-
-        if let webSocketTask {
-            webSocketTask.cancel(with: .goingAway, reason: nil)
-            self.webSocketTask = nil
-        }
-
-        isGatewayReady = false
-    }
-
     private func receiveLoop(socket: URLSessionWebSocketTask) async {
-        while shouldRun {
+        while state.shouldRun {
             do {
                 let message = try await socket.receive()
                 let text: String
@@ -163,7 +356,7 @@ actor DiscordAdapter {
 
                 await handleGatewayPayload(text)
             } catch {
-                guard shouldRun else { return }
+                guard state.shouldRun else { return }
                 NSLog("DiscordAdapter: gateway receive failed: %@", String(describing: error))
                 await scheduleReconnect(reason: "receive failure")
                 return
@@ -172,27 +365,26 @@ actor DiscordAdapter {
     }
 
     private func scheduleReconnect(reason: String) async {
-        guard shouldRun else { return }
-        guard reconnectTask == nil else { return }
+        guard state.shouldRun else { return }
+        guard !state.hasReconnectTask else { return }
 
-        teardownForReconnect()
-        awaitingHeartbeatAck = false
+        state.teardownForReconnect()
 
-        let delaySeconds = min(30.0, pow(2.0, Double(max(0, reconnectAttempt))))
-        reconnectAttempt += 1
-
+        let delaySeconds = state.incrementReconnectAndGetDelay()
         NSLog("DiscordAdapter: reconnect scheduled in %.1fs (%@)", delaySeconds, reason)
 
-        reconnectTask = Task {
+        let reconnectTask: Task<Void, Never> = Task { [weak self] in
             let nanos = UInt64(delaySeconds * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)
-            await performReconnectAfterDelay()
+            guard let self else { return }
+            await self.performReconnectAfterDelay()
         }
+        state.setReconnectTask(reconnectTask)
     }
 
     private func performReconnectAfterDelay() async {
-        reconnectTask = nil
-        guard shouldRun else { return }
+        state.clearReconnectTask()
+        guard state.shouldRun else { return }
         await connect()
     }
 
@@ -207,7 +399,7 @@ actor DiscordAdapter {
         }
 
         if let sequence = json["s"] as? Int {
-            lastSequenceNumber = sequence
+            state.lastSequenceNumber = sequence
         }
 
         guard let opcode = json["op"] as? Int else {
@@ -228,9 +420,7 @@ actor DiscordAdapter {
         case 9: // INVALID_SESSION
             let resumable = (json["d"] as? Bool) ?? false
             if !resumable {
-                sessionId = nil
-                resumeGatewayURL = nil
-                lastSequenceNumber = nil
+                state.clearSessionForInvalidSession()
             }
             await scheduleReconnect(reason: "invalid session")
 
@@ -238,7 +428,7 @@ actor DiscordAdapter {
             await handleHello(json)
 
         case 11: // HEARTBEAT_ACK
-            awaitingHeartbeatAck = false
+            state.awaitingHeartbeatAck = false
 
         default:
             break
@@ -253,10 +443,13 @@ actor DiscordAdapter {
             return
         }
 
-        heartbeatIntervalNanos = UInt64(intervalMillis * 1_000_000)
+        state.heartbeatIntervalNanos = UInt64(intervalMillis * 1_000_000)
         startHeartbeatLoop()
 
-        if let sessionId, let sequence = lastSequenceNumber {
+        let sessionId = state.sessionId
+        let lastSeq = state.lastSequenceNumber
+
+        if let sessionId, let sequence = lastSeq {
             await sendResume(sessionId: sessionId, sequence: sequence)
         } else {
             await sendIdentify()
@@ -269,19 +462,17 @@ actor DiscordAdapter {
         switch eventType {
         case "READY":
             if let data = json["d"] as? [String: Any] {
-                sessionId = data["session_id"] as? String
+                let sid = data["session_id"] as? String
+                var resumeURL: URL?
                 if let resumeGateway = data["resume_gateway_url"] as? String {
-                    resumeGatewayURL = makeResumeGatewayURL(from: resumeGateway)
+                    resumeURL = makeResumeGatewayURL(from: resumeGateway)
                 }
+                state.markReady(sessionId: sid, resumeGatewayURL: resumeURL)
             }
-
-            isGatewayReady = true
-            reconnectAttempt = 0
             NSLog("DiscordAdapter: gateway READY")
 
         case "RESUMED":
-            isGatewayReady = true
-            reconnectAttempt = 0
+            state.markResumed()
             NSLog("DiscordAdapter: gateway RESUMED")
 
         case "MESSAGE_CREATE":
@@ -306,39 +497,37 @@ actor DiscordAdapter {
     }
 
     private func startHeartbeatLoop() {
-        heartbeatTask?.cancel()
+        state.setHeartbeatTask(nil) // cancel previous
 
-        heartbeatTask = Task {
-            while shouldContinueHeartbeatLoop() {
-                let interval = heartbeatIntervalNanos
+        let heartbeatTask = Task { [weak self] in
+            guard let self else { return }
+            while self.state.shouldContinueHeartbeatLoop() {
+                let interval = self.state.heartbeatIntervalNanos
                 let jitter = UInt64.random(in: 0...500_000_000) // 0-500ms jitter
                 try? await Task.sleep(nanoseconds: interval + jitter)
                 if Task.isCancelled { return }
-                await heartbeatTick()
+                await self.heartbeatTick()
             }
         }
-    }
-
-    private func shouldContinueHeartbeatLoop() -> Bool {
-        shouldRun && webSocketTask != nil
+        state.setHeartbeatTask(heartbeatTask)
     }
 
     private func heartbeatTick() async {
-        guard shouldRun else { return }
+        guard state.shouldRun else { return }
 
-        if awaitingHeartbeatAck {
+        if state.checkAndSetHeartbeatAck() {
             await scheduleReconnect(reason: "heartbeat ack timeout")
             return
         }
 
-        awaitingHeartbeatAck = true
         await sendHeartbeat()
     }
 
     private func sendHeartbeat() async {
+        let seq = state.lastSequenceNumber
         let payload: [String: Any] = [
             "op": 1,
-            "d": lastSequenceNumber.map { $0 as Any } ?? NSNull(),
+            "d": seq.map { $0 as Any } ?? NSNull(),
         ]
         await sendGatewayPayload(payload)
     }
@@ -381,7 +570,7 @@ actor DiscordAdapter {
     }
 
     private func sendGatewayPayload(_ payload: [String: Any]) async {
-        guard let socket = webSocketTask else { return }
+        guard let socket = state.webSocketTask else { return }
 
         do {
             let data = try JSONSerialization.data(withJSONObject: payload)
@@ -389,7 +578,7 @@ actor DiscordAdapter {
             try await socket.send(.string(text))
         } catch {
             NSLog("DiscordAdapter: failed sending gateway payload: %@", String(describing: error))
-            guard shouldRun else { return }
+            guard state.shouldRun else { return }
             await scheduleReconnect(reason: "gateway send failure")
         }
     }
@@ -421,22 +610,56 @@ actor DiscordAdapter {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
-        let response = await messageHandler(senderId, channelId, text)
-        guard let response else { return }
+        let senderName = author["username"] as? String
+        let messageId = event["id"] as? String
 
-        let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedResponse.isEmpty else { return }
-
-        let chunks = splitMessage(trimmedResponse, limit: 2000)
-        for (index, chunk) in chunks.enumerated() {
-            do {
-                try await sendMessage(chunk, toChannelId: channelId)
-                if index < chunks.count - 1 {
-                    try? await Task.sleep(nanoseconds: 250_000_000)
+        // Gateway path: convert to ChannelMessage and dispatch.
+        if let onMessage {
+            let envelope = ChannelMessage(
+                id: messageId ?? UUID().uuidString,
+                channel: .discord,
+                senderId: senderId,
+                senderDisplayName: senderName,
+                text: text,
+                timestamp: Date(),
+                threadId: channelId
+            )
+            let response = await onMessage(envelope)
+            if let response {
+                let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedResponse.isEmpty else { return }
+                let chunks = splitMessage(trimmedResponse, limit: 2000)
+                for (index, chunk) in chunks.enumerated() {
+                    do {
+                        try await sendMessage(chunk, toChannelId: channelId)
+                        if index < chunks.count - 1 {
+                            try? await Task.sleep(nanoseconds: 250_000_000)
+                        }
+                    } catch {
+                        NSLog("DiscordAdapter: failed sending message via REST: %@", String(describing: error))
+                        break
+                    }
                 }
-            } catch {
-                NSLog("DiscordAdapter: failed sending message via REST: %@", String(describing: error))
-                break
+            }
+        } else if let legacyHandler {
+            // Legacy path: forward to ChannelManager callback.
+            let response = await legacyHandler(senderId, channelId, text)
+            guard let response else { return }
+
+            let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedResponse.isEmpty else { return }
+
+            let chunks = splitMessage(trimmedResponse, limit: 2000)
+            for (index, chunk) in chunks.enumerated() {
+                do {
+                    try await sendMessage(chunk, toChannelId: channelId)
+                    if index < chunks.count - 1 {
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                    }
+                } catch {
+                    NSLog("DiscordAdapter: failed sending message via REST: %@", String(describing: error))
+                    break
+                }
             }
         }
     }

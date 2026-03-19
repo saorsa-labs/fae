@@ -1,11 +1,16 @@
 import Foundation
 import GRDB
 
-/// Poll-based iMessage adapter.
+/// Poll-based iMessage adapter conforming to `ChannelAdapter`.
 ///
 /// Reads new messages from `~/Library/Messages/chat.db` in read-only mode and
-/// forwards inbound payloads to a caller-provided async handler.
-actor IMessageAdapter {
+/// produces `ChannelMessage` envelopes for the `ChannelGateway`. Replies are
+/// sent back via AppleScript through the Messages app.
+///
+/// - Note: This is a class (not actor) to satisfy the `ChannelAdapter` protocol's
+///   `onMessage` property requirement. Internal state is protected by `AdapterState`.
+final class IMessageAdapter: ChannelAdapter, @unchecked Sendable {
+    /// Internal representation of a message row from `chat.db`.
     struct IncomingMessage: Sendable {
         let rowID: Int64
         let text: String
@@ -15,7 +20,11 @@ actor IMessageAdapter {
         let rawDateValue: Int64
     }
 
-    typealias MessageHandler = @Sendable (IncomingMessage) async -> Void
+    /// Legacy handler type retained for backward compatibility with `ChannelManager`.
+    typealias LegacyMessageHandler = @Sendable (IncomingMessage) async -> Void
+
+    let kind: ChannelKind = .imessage
+    var onMessage: (@Sendable (ChannelMessage) async -> String?)?
 
     private enum AdapterError: LocalizedError {
         case chatDatabaseMissing(String)
@@ -31,52 +40,103 @@ actor IMessageAdapter {
         }
     }
 
+    /// Thread-safe wrapper for mutable adapter state.
+    private final class AdapterState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _dbQueue: DatabaseQueue?
+        private var _pollTask: Task<Void, Never>?
+        private var _isRunning = false
+        private var _lastProcessedRowID: Int64 = 0
+
+        var dbQueue: DatabaseQueue? {
+            get { lock.withLock { _dbQueue } }
+            set { lock.withLock { _dbQueue = newValue } }
+        }
+
+        var isRunning: Bool {
+            get { lock.withLock { _isRunning } }
+            set { lock.withLock { _isRunning = newValue } }
+        }
+
+        var lastProcessedRowID: Int64 {
+            get { lock.withLock { _lastProcessedRowID } }
+            set { lock.withLock { _lastProcessedRowID = newValue } }
+        }
+
+        func setPollTask(_ task: Task<Void, Never>?) {
+            lock.withLock { _pollTask = task }
+        }
+
+        func cancelAndClear() {
+            lock.withLock {
+                _isRunning = false
+                _pollTask?.cancel()
+                _pollTask = nil
+                _dbQueue = nil
+            }
+        }
+    }
+
     private let pollIntervalNanoseconds: UInt64 = 5_000_000_000
-    private let handler: MessageHandler
     private let chatDBPath: String
+    private let legacyHandler: LegacyMessageHandler?
+    private let state = AdapterState()
 
-    private var dbQueue: DatabaseQueue?
-    private var pollTask: Task<Void, Never>?
-    private(set) var isRunning = false
-    private(set) var lastProcessedRowID: Int64 = 0
+    var isRunning: Bool { state.isRunning }
+    var lastProcessedRowID: Int64 { state.lastProcessedRowID }
 
-    init(handler: @escaping MessageHandler) {
-        self.handler = handler
+    /// Create an adapter for use with `ChannelGateway`.
+    ///
+    /// The gateway sets `onMessage` after creation to receive `ChannelMessage` envelopes.
+    init() {
+        self.legacyHandler = nil
         self.chatDBPath = ("~/Library/Messages/chat.db" as NSString).expandingTildeInPath
     }
 
-    func start() async {
-        guard !isRunning else { return }
-
-        do {
-            try openReadOnlyDatabaseIfNeeded()
-            try primeLastProcessedRowIDIfNeeded()
-            _ = try await runMessagesAppleScriptProbe()
-        } catch {
-            NSLog("iMessageAdapter: failed to start: %@", error.localizedDescription)
-            isRunning = false
-            return
-        }
-
-        isRunning = true
-        pollTask = Task {
-            await self.pollLoop()
-        }
-
-        NSLog("iMessageAdapter: started (lastProcessedRowID=%lld)", lastProcessedRowID)
+    /// Create an adapter with a legacy handler (backward compatibility with `ChannelManager`).
+    ///
+    /// - Parameter handler: Callback invoked for each raw `IncomingMessage`.
+    init(handler: @escaping LegacyMessageHandler) {
+        self.legacyHandler = handler
+        self.chatDBPath = ("~/Library/Messages/chat.db" as NSString).expandingTildeInPath
     }
 
-    func stop() {
-        guard isRunning else { return }
+    // MARK: - ChannelAdapter
 
-        isRunning = false
-        pollTask?.cancel()
-        pollTask = nil
-        dbQueue = nil
+    func start() async throws {
+        guard !state.isRunning else { return }
 
+        try openReadOnlyDatabaseIfNeeded()
+        try primeLastProcessedRowIDIfNeeded()
+        _ = try await runMessagesAppleScriptProbe()
+
+        state.isRunning = true
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            await self.pollLoop()
+        }
+        state.setPollTask(task)
+
+        NSLog("iMessageAdapter: started (lastProcessedRowID=%lld)", state.lastProcessedRowID)
+    }
+
+    func stop() async {
+        guard state.isRunning else { return }
+        state.cancelAndClear()
         NSLog("iMessageAdapter: stopped")
     }
 
+    func send(response: String, to message: ChannelMessage) async throws {
+        try await sendReply(text: response, to: message.senderId)
+    }
+
+    // MARK: - Legacy Send API
+
+    /// Send a reply via AppleScript to the Messages app.
+    ///
+    /// - Parameters:
+    ///   - text: The reply text.
+    ///   - buddyNumber: The recipient's phone number or Apple ID.
     func sendReply(text: String, to buddyNumber: String) async throws {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBuddy = buddyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,7 +160,7 @@ actor IMessageAdapter {
     // MARK: - Polling
 
     private func pollLoop() async {
-        while isRunning, !Task.isCancelled {
+        while state.isRunning, !Task.isCancelled {
             do {
                 try await pollOnce()
             } catch {
@@ -118,18 +178,36 @@ actor IMessageAdapter {
     private func pollOnce() async throws {
         try openReadOnlyDatabaseIfNeeded()
 
-        let messages = try fetchMessages(after: lastProcessedRowID)
+        let messages = try fetchMessages(after: state.lastProcessedRowID)
         guard !messages.isEmpty else { return }
 
         for message in messages {
-            await handler(message)
-            lastProcessedRowID = message.rowID
+            // Gateway path: convert to ChannelMessage and dispatch.
+            if let onMessage {
+                let envelope = ChannelMessage(
+                    id: "imsg-\(message.rowID)",
+                    channel: .imessage,
+                    senderId: message.sender,
+                    senderDisplayName: nil,
+                    text: message.text,
+                    timestamp: message.sentAt
+                )
+                let reply = await onMessage(envelope)
+                if let reply, !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    try? await sendReply(text: reply, to: message.sender)
+                }
+            } else if let legacyHandler {
+                // Legacy path: forward raw IncomingMessage to ChannelManager callback.
+                await legacyHandler(message)
+            }
+            state.lastProcessedRowID = message.rowID
         }
     }
+
     // MARK: - Database
 
     private func openReadOnlyDatabaseIfNeeded() throws {
-        if dbQueue != nil {
+        if state.dbQueue != nil {
             return
         }
 
@@ -140,7 +218,7 @@ actor IMessageAdapter {
         var config = Configuration()
         config.readonly = true
         do {
-            dbQueue = try DatabaseQueue(path: chatDBPath, configuration: config)
+            state.dbQueue = try DatabaseQueue(path: chatDBPath, configuration: config)
         } catch {
             let desc = error.localizedDescription
             if desc.contains("permission") || desc.contains("not permitted") {
@@ -153,8 +231,8 @@ actor IMessageAdapter {
     }
 
     private func primeLastProcessedRowIDIfNeeded() throws {
-        guard lastProcessedRowID == 0 else { return }
-        guard let dbQueue else { return }
+        guard state.lastProcessedRowID == 0 else { return }
+        guard let dbQueue = state.dbQueue else { return }
 
         let currentMax: Int64 = try dbQueue.read { db in
             try Int64.fetchOne(
@@ -163,11 +241,11 @@ actor IMessageAdapter {
             ) ?? 0
         }
 
-        lastProcessedRowID = currentMax
+        state.lastProcessedRowID = currentMax
     }
 
     private func fetchMessages(after rowID: Int64) throws -> [IncomingMessage] {
-        guard let dbQueue else { return [] }
+        guard let dbQueue = state.dbQueue else { return [] }
 
         return try dbQueue.read { db in
             let rows = try Row.fetchAll(
@@ -279,7 +357,7 @@ actor IMessageAdapter {
     // MARK: - Date conversion
 
     /// Converts Message.framework date (Apple epoch, often nanoseconds) into `Date`.
-    private static func appleMessageDateToDate(_ rawValue: Int64) -> Date {
+    static func appleMessageDateToDate(_ rawValue: Int64) -> Date {
         guard rawValue > 0 else { return Date() }
 
         let appleReferenceSeconds = 978_307_200.0 // 2001-01-01 00:00:00 UTC

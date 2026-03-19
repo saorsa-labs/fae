@@ -755,3 +755,283 @@ final class ChannelConversationIsolationTests: XCTestCase {
         XCTAssertEqual(session.messages.last?.content, "reply 49")
     }
 }
+
+// MARK: - Adapter Protocol Conformance Tests
+
+final class AdapterProtocolConformanceTests: XCTestCase {
+
+    // MARK: - iMessage Adapter
+
+    func testIMessageAdapterConformsToChannelAdapter() {
+        let adapter = IMessageAdapter()
+        let channelAdapter: any ChannelAdapter = adapter
+        XCTAssertEqual(channelAdapter.kind, .imessage)
+    }
+
+    func testIMessageAdapterKind() {
+        let adapter = IMessageAdapter()
+        XCTAssertEqual(adapter.kind, .imessage)
+    }
+
+    func testIMessageAdapterOnMessageCallbackDefaultsToNil() {
+        let adapter = IMessageAdapter()
+        XCTAssertNil(adapter.onMessage)
+    }
+
+    func testIMessageAdapterOnMessageCallbackCanBeSet() {
+        let adapter = IMessageAdapter()
+        adapter.onMessage = { _ in return "test" }
+        XCTAssertNotNil(adapter.onMessage)
+    }
+
+    func testIMessageAdapterLegacyHandlerInit() async {
+        var received: IMessageAdapter.IncomingMessage?
+        let adapter = IMessageAdapter(handler: { message in
+            received = message
+        })
+        XCTAssertEqual(adapter.kind, .imessage)
+        // Legacy handler should not conflict with onMessage.
+        XCTAssertNil(adapter.onMessage)
+        // Just verify it was created without crash.
+        _ = received
+    }
+
+    func testIMessageAdapterInitialState() {
+        let adapter = IMessageAdapter()
+        XCTAssertFalse(adapter.isRunning)
+        XCTAssertEqual(adapter.lastProcessedRowID, 0)
+    }
+
+    func testIMessageDateConversionZeroReturnsNow() {
+        let before = Date()
+        let result = IMessageAdapter.appleMessageDateToDate(0)
+        let after = Date()
+        XCTAssertTrue(result >= before && result <= after)
+    }
+
+    func testIMessageDateConversionNanoseconds() {
+        // A known nanosecond-scale Messages date (post-2001 epoch).
+        let rawNanos: Int64 = 700_000_000_000_000_000 // ~22 years in nanos
+        let date = IMessageAdapter.appleMessageDateToDate(rawNanos)
+        // Should produce a date after 2001 + 22 years = ~2023.
+        let referenceDate = Date(timeIntervalSince1970: 978_307_200.0) // 2001-01-01
+        XCTAssertTrue(date > referenceDate)
+    }
+
+    func testIMessageDateConversionSeconds() {
+        // A seconds-scale Messages date.
+        let rawSeconds: Int64 = 700_000_000 // ~22 years in seconds
+        let date = IMessageAdapter.appleMessageDateToDate(rawSeconds)
+        let referenceDate = Date(timeIntervalSince1970: 978_307_200.0) // 2001-01-01
+        XCTAssertTrue(date > referenceDate)
+    }
+
+    // MARK: - Discord Adapter
+
+    func testDiscordAdapterConformsToChannelAdapter() {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        let channelAdapter: any ChannelAdapter = adapter
+        XCTAssertEqual(channelAdapter.kind, .discord)
+    }
+
+    func testDiscordAdapterKind() {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        XCTAssertEqual(adapter.kind, .discord)
+    }
+
+    func testDiscordAdapterOnMessageCallbackDefaultsToNil() {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        XCTAssertNil(adapter.onMessage)
+    }
+
+    func testDiscordAdapterOnMessageCallbackCanBeSet() {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        adapter.onMessage = { _ in return "test" }
+        XCTAssertNotNil(adapter.onMessage)
+    }
+
+    func testDiscordAdapterLegacyHandlerInit() {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config, messageHandler: { _, _, _ in return nil })
+        XCTAssertEqual(adapter.kind, .discord)
+        XCTAssertNil(adapter.onMessage)
+    }
+
+    func testDiscordAdapterInitialState() {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        XCTAssertFalse(adapter.isConnected)
+    }
+
+    func testDiscordAdapterStartWithoutTokenIsNoOp() async throws {
+        let config = ChannelManager.ChannelConfig.DiscordConfig(botToken: nil)
+        let adapter = DiscordAdapter(config: config)
+        // Should not throw or crash even without a token.
+        try await adapter.start()
+        XCTAssertFalse(adapter.isConnected)
+    }
+
+    func testDiscordAdapterStopWithoutStartIsNoOp() async {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        // Should not crash.
+        await adapter.stop()
+        XCTAssertFalse(adapter.isConnected)
+    }
+
+    func testDiscordAdapterSendRequiresThreadId() async {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        // Message without threadId should not crash.
+        let msg = ChannelMessage(channel: .discord, senderId: "user-1", text: "hi")
+        // No threadId means no channelId to send to — should log but not throw.
+        do {
+            try await adapter.send(response: "reply", to: msg)
+        } catch {
+            XCTFail("send should not throw for missing threadId, just log")
+        }
+    }
+
+    // MARK: - WhatsApp Adapter
+
+    func testWhatsAppAdapterConformsToChannelAdapter() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        let channelAdapter: any ChannelAdapter = adapter
+        XCTAssertEqual(channelAdapter.kind, .whatsapp)
+    }
+
+    func testWhatsAppAdapterKind() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        XCTAssertEqual(adapter.kind, .whatsapp)
+    }
+
+    func testWhatsAppAdapterOnMessageCallbackDefaultsToNil() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        XCTAssertNil(adapter.onMessage)
+    }
+
+    func testWhatsAppAdapterOnMessageCallbackCanBeSet() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        adapter.onMessage = { _ in return "test" }
+        XCTAssertNotNil(adapter.onMessage)
+    }
+
+    func testWhatsAppAdapterInitialState() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        XCTAssertFalse(adapter.isRunning)
+    }
+
+    func testWhatsAppAdapterStopWithoutStartIsNoOp() async {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        await adapter.stop()
+        XCTAssertFalse(adapter.isRunning)
+    }
+
+    func testWhatsAppAdapterConfigDefaultPort() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        XCTAssertEqual(config.webhookPort, 8443)
+    }
+
+    func testWhatsAppAdapterConfigCustomPort() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify",
+            webhookPort: 9090
+        )
+        XCTAssertEqual(config.webhookPort, 9090)
+    }
+
+    func testWhatsAppAdapterLegacyHandler() {
+        let config = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: config)
+        adapter.setMessageHandler { _, _ in return nil }
+        // Should not conflict with onMessage.
+        XCTAssertNil(adapter.onMessage)
+    }
+
+    // MARK: - Gateway Registration
+
+    func testGatewayRegistersIMessageAdapter() async {
+        let gateway = ChannelGateway(eventBus: FaeEventBus())
+        let adapter = IMessageAdapter()
+        await gateway.registerAdapter(adapter)
+        // Adapter should have onMessage wired by gateway.
+        XCTAssertNotNil(adapter.onMessage)
+    }
+
+    func testGatewayRegistersDiscordAdapter() async {
+        let config = ChannelManager.ChannelConfig.DiscordConfig()
+        let adapter = DiscordAdapter(config: config)
+        let gateway = ChannelGateway(eventBus: FaeEventBus())
+        await gateway.registerAdapter(adapter)
+        XCTAssertNotNil(adapter.onMessage)
+    }
+
+    func testGatewayRegistersWhatsAppAdapter() async {
+        let waConfig = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let adapter = WhatsAppAdapter(config: waConfig)
+        let gateway = ChannelGateway(eventBus: FaeEventBus())
+        await gateway.registerAdapter(adapter)
+        XCTAssertNotNil(adapter.onMessage)
+    }
+
+    func testGatewayRegistersAllThreeAdapters() async {
+        let gateway = ChannelGateway(eventBus: FaeEventBus())
+
+        let imsg = IMessageAdapter()
+        let discord = DiscordAdapter(config: ChannelManager.ChannelConfig.DiscordConfig())
+        let waConfig = WhatsAppAdapter.Config(
+            accessToken: "test", phoneNumberId: "123", verifyToken: "verify"
+        )
+        let whatsapp = WhatsAppAdapter(config: waConfig)
+
+        await gateway.registerAdapter(imsg)
+        await gateway.registerAdapter(discord)
+        await gateway.registerAdapter(whatsapp)
+
+        // All should have onMessage wired.
+        XCTAssertNotNil(imsg.onMessage)
+        XCTAssertNotNil(discord.onMessage)
+        XCTAssertNotNil(whatsapp.onMessage)
+    }
+
+    func testGatewayReplacesAdapterOfSameKind() async {
+        let gateway = ChannelGateway(eventBus: FaeEventBus())
+
+        let adapter1 = IMessageAdapter()
+        let adapter2 = IMessageAdapter()
+
+        await gateway.registerAdapter(adapter1)
+        XCTAssertNotNil(adapter1.onMessage)
+
+        await gateway.registerAdapter(adapter2)
+        XCTAssertNotNil(adapter2.onMessage)
+    }
+}
