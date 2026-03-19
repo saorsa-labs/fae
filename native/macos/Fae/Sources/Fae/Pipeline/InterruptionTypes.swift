@@ -28,6 +28,15 @@ struct InterruptionInput: Sendable {
     let peakRms: Float
     /// Number of consecutive speech chunks accumulated.
     let consecutiveSpeechChunks: Int
+
+    // MARK: - Semantic signals (Phase 2b)
+
+    /// Partial transcript from streaming STT (nil if unavailable).
+    let partialTranscript: String?
+    /// Word count in the partial transcript.
+    let partialWordCount: Int
+    /// Whether an interrupt keyword was detected in the partial transcript.
+    let hasInterruptKeyword: Bool
 }
 
 /// Decision output from an interruption decider.
@@ -63,6 +72,28 @@ struct InterruptionOutcome: Sendable {
     let interruptedText: String?
     /// How much of the response had been spoken (approximate percentage).
     let spokenFraction: Float
+}
+
+/// Backchannel detection — short acknowledgment phrases that should not
+/// trigger a hard interrupt unless the user continues speaking.
+enum BackchannelClassifier {
+    /// Phrases that are pure backchannels when spoken in isolation.
+    static let phrases: Set<String> = [
+        "mm", "mhm", "uh-huh", "uh huh", "yeah", "yep", "yup",
+        "right", "okay", "ok", "sure", "wow", "huh", "ah",
+        "hmm", "gotcha", "nice", "cool", "great", "interesting",
+    ]
+
+    /// Returns true if the transcript is purely a backchannel phrase.
+    static func isBackchannel(_ text: String?) -> Bool {
+        guard let text, !text.isEmpty else { return false }
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "[.,!?]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        return phrases.contains(normalized)
+    }
 }
 
 /// Configuration for the adaptive interruption system.

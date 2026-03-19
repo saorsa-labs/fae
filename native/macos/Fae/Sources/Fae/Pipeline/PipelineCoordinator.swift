@@ -1121,6 +1121,10 @@ actor PipelineCoordinator {
         var peakRms: Float = 0
         var consecutiveSpeechChunks: Int = 0
         var audioSamples: [Float] = []
+        /// Partial transcript from keyword spotter check (Phase 2b).
+        var partialTranscript: String?
+        /// Whether an interrupt keyword was detected during accumulation.
+        var hasInterruptKeyword: Bool = false
     }
 
     /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
@@ -1135,6 +1139,9 @@ actor PipelineCoordinator {
 
     /// Buffer of assistant text at the point of interruption (for recovery).
     private var lastAssistantTextBuffer: String = ""
+
+    /// Last partial transcript seen from streaming STT, used for transcript-aware endpointing.
+    private var lastStreamingPartialTranscript: String?
 
     // MARK: - Pipeline Tasks
 
@@ -2133,13 +2140,40 @@ actor PipelineCoordinator {
         inFollowup: Bool,
         hasPendingSemanticTurn: Bool,
         configMinSilenceMs: Int,
-        bargeInSilenceMs: Int
+        bargeInSilenceMs: Int,
+        lastPartialTranscript: String? = nil
     ) -> Int {
         if assistantSpeaking {
             return bargeInSilenceMs
         }
 
         let conversationalTurnActive = gateState == .active && (inFollowup || hasPendingSemanticTurn)
+
+        // Transcript-aware endpointing (Milestone 4):
+        // If we have a partial transcript, adjust silence threshold based on
+        // whether the utterance appears complete or incomplete.
+        if let transcript = lastPartialTranscript, !transcript.isEmpty {
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Continuation cue ("hold on", "wait", "let me think"):
+            // Very patient — the user explicitly asked for time.
+            // Checked first because these are more specific than incomplete-turn heuristics.
+            if TextProcessing.isLikelyContinuationCue(trimmed) {
+                let continuationFloorMs = 3000
+                return max(configMinSilenceMs, continuationFloorMs)
+            }
+
+            // Likely incomplete (trailing conjunction, preposition, hesitation):
+            // Be extra patient — the user is mid-thought.
+            if TextProcessing.isLikelyIncompleteTurn(trimmed) {
+                let incompleteFloorMs = 2200
+                return max(configMinSilenceMs, incompleteFloorMs)
+            }
+
+            // Clearly complete utterance — use the config minimum (faster response).
+            return configMinSilenceMs
+        }
+
         if conversationalTurnActive {
             return max(configMinSilenceMs, Self.conversationalSilenceFloorMs)
         }
@@ -2909,6 +2943,8 @@ actor PipelineCoordinator {
         currentTurnGenerationContext = nil
         engagedUntil = nil
         lastAssistantResponseText = ""
+        lastStreamingPartialTranscript = nil
+        falseInterruptionRecovery.cancel()
         activeCapabilityTicket = nil
         awaitingApproval = false
         manualOnlyApprovalPending = false
@@ -3364,6 +3400,14 @@ actor PipelineCoordinator {
                     }
 
                     let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
+
+                    // Semantic signals from partial transcript (populated by StreamingSTT when available).
+                    let transcript = barge.partialTranscript
+                    let wordCount = transcript?
+                        .split(separator: " ")
+                        .filter { !$0.isEmpty }
+                        .count ?? 0
+
                     let input = InterruptionInput(
                         assistantSpeaking: assistantSpeaking,
                         speechStarted: vadOutput.speechStarted,
@@ -3376,7 +3420,10 @@ actor PipelineCoordinator {
                         bargeInSuppressed: bargeInSuppressed,
                         inDenyCooldown: inDenyCooldown,
                         peakRms: barge.peakRms,
-                        consecutiveSpeechChunks: barge.consecutiveSpeechChunks
+                        consecutiveSpeechChunks: barge.consecutiveSpeechChunks,
+                        partialTranscript: transcript,
+                        partialWordCount: wordCount,
+                        hasInterruptKeyword: barge.hasInterruptKeyword
                     )
 
                     let decision = interruptionDecider.process(input)
@@ -3407,7 +3454,8 @@ actor PipelineCoordinator {
                 inFollowup: inFollowup,
                 hasPendingSemanticTurn: pendingSemanticTurn != nil,
                 configMinSilenceMs: config.vad.minSilenceDurationMs,
-                bargeInSilenceMs: config.bargeIn.bargeInSilenceMs
+                bargeInSilenceMs: config.bargeIn.bargeInSilenceMs,
+                lastPartialTranscript: lastStreamingPartialTranscript
             )
             vad.setSilenceThresholdMs(silenceThresholdMs)
             if assistantSpeaking {
@@ -3858,6 +3906,9 @@ actor PipelineCoordinator {
         }
 
         eventBus.send(.transcription(text: effectiveText, isFinal: true))
+
+        // Update partial transcript for transcript-aware endpointing (Milestone 4).
+        lastStreamingPartialTranscript = effectiveText
 
         // Keyword spotter: check for interrupt phrases (replaces hardcoded stop triggers).
         if let match = await keywordSpotter.check(partialTranscript: effectiveText) {

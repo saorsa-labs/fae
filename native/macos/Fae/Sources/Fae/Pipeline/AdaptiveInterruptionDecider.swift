@@ -1,12 +1,9 @@
 import Foundation
 
-/// Acoustic-only adaptive interruption decider (Phase 2a).
+/// Adaptive interruption decider with acoustic + semantic signals.
 ///
-/// Replaces the fixed confirmation-duration threshold with a multi-signal
-/// heuristic that considers overlap duration, RMS energy persistence,
-/// peak-to-floor ratio, and consecutive speech chunk count.
-///
-/// Does NOT use transcript data — that is Phase 2b (StreamingSTT integration).
+/// Phase 2a: Acoustic heuristics (RMS persistence, peak ratio, sustained chunks).
+/// Phase 2b: Semantic signals (partial transcript, keyword detection, backchannel suppression).
 ///
 /// Design principles:
 /// - Echo suppression and barge-in suppression remain hard pre-filters
@@ -66,6 +63,23 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
             rmsHistory.removeFirst(rmsHistory.count - Self.rmsHistoryMaxSize)
         }
 
+        // --- Semantic fast paths (Phase 2b) ---
+
+        // Interrupt keyword detected — fire immediately (no overlap minimum).
+        if input.hasInterruptKeyword {
+            return .interruptNow(reason: "interrupt_keyword")
+        }
+
+        // Backchannel suppression — if the only transcript evidence is a
+        // backchannel phrase, suppress unless overlap is very long.
+        if BackchannelClassifier.isBackchannel(input.partialTranscript) {
+            let longOverlapMs = config.minOverlapMs * 3
+            if input.overlapDurationMs < longOverlapMs {
+                return .ignore(reason: "backchannel_suppressed")
+            }
+            // Very long backchannel — user may be continuing, fall through.
+        }
+
         // --- Adaptive decision logic ---
 
         let overlapMs = input.overlapDurationMs
@@ -75,10 +89,20 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
             return .candidate
         }
 
+        // Transcript-boosted path: if we have real words (not just a backchannel),
+        // lower the overlap threshold — the user is genuinely speaking.
+        let hasTranscriptEvidence = input.partialWordCount >= 1
+            && !BackchannelClassifier.isBackchannel(input.partialTranscript)
+
         // Strong acoustic evidence: sustained overlap + energy persistence.
         let hasSustainedEnergy = isSustainedEnergy(floor: config.rmsSustainFloor)
         let hasStrongPeak = input.peakRms >= config.rmsSustainFloor * config.peakRmsRatio
         let hasSufficientChunks = input.consecutiveSpeechChunks >= config.minSustainedChunks
+
+        // Semantic-boosted fast path: transcript evidence lowers the bar.
+        if hasTranscriptEvidence && overlapMs >= 200 && (hasSustainedEnergy || hasStrongPeak) {
+            return .interruptNow(reason: "adaptive_transcript_boosted")
+        }
 
         // Fast path: clear sustained speech with strong energy.
         if overlapMs >= config.minOverlapMs && hasSustainedEnergy && hasStrongPeak && hasSufficientChunks {

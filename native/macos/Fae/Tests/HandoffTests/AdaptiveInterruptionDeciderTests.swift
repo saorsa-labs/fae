@@ -16,7 +16,10 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
         bargeInSuppressed: Bool = false,
         inDenyCooldown: Bool = false,
         peakRms: Float = 0.15,
-        consecutiveSpeechChunks: Int = 6
+        consecutiveSpeechChunks: Int = 6,
+        partialTranscript: String? = nil,
+        partialWordCount: Int = 0,
+        hasInterruptKeyword: Bool = false
     ) -> InterruptionInput {
         InterruptionInput(
             assistantSpeaking: assistantSpeaking,
@@ -30,7 +33,10 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             bargeInSuppressed: bargeInSuppressed,
             inDenyCooldown: inDenyCooldown,
             peakRms: peakRms,
-            consecutiveSpeechChunks: consecutiveSpeechChunks
+            consecutiveSpeechChunks: consecutiveSpeechChunks,
+            partialTranscript: partialTranscript,
+            partialWordCount: partialWordCount,
+            hasInterruptKeyword: hasInterruptKeyword
         )
     }
 
@@ -352,5 +358,191 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             InterruptionDecision.candidate,
             InterruptionDecision.ignore(reason: "test")
         )
+    }
+
+    // MARK: - Phase 2b: Semantic Signals
+
+    func testAdaptiveDeciderInterruptsOnKeyword() {
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            overlapDurationMs: 150,
+            consecutiveSpeechChunks: 2,
+            hasInterruptKeyword: true
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "interrupt_keyword"))
+    }
+
+    func testAdaptiveDeciderSuppressesBackchannel() {
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            overlapDurationMs: 400,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 6,
+            partialTranscript: "yeah",
+            partialWordCount: 1
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .ignore(reason: "backchannel_suppressed"))
+    }
+
+    func testAdaptiveDeciderAllowsLongBackchannel() {
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+
+        // Build RMS history for sustained energy.
+        for _ in 0..<5 {
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 500))
+        }
+
+        // Very long overlap even with backchannel — falls through to acoustic paths.
+        let input = makeInput(
+            overlapDurationMs: 1000,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 6,
+            partialTranscript: "yeah",
+            partialWordCount: 1
+        )
+        let decision = decider.process(input)
+        // Should fire via adaptive_sustained_speech since backchannel threshold (900ms) is passed.
+        XCTAssertEqual(decision, .interruptNow(reason: "adaptive_sustained_speech"))
+    }
+
+    func testAdaptiveDeciderTranscriptBoostedInterrupt() {
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+
+        // Build RMS history.
+        for _ in 0..<5 {
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 150))
+        }
+
+        // 200ms overlap with transcript evidence — lower than normal 300ms threshold.
+        let input = makeInput(
+            rms: 0.12,
+            overlapDurationMs: 200,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 3,
+            partialTranscript: "actually I wanted",
+            partialWordCount: 3
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "adaptive_transcript_boosted"))
+    }
+
+    func testAdaptiveDeciderTranscriptBoostIgnoresBackchannel() {
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+
+        for _ in 0..<5 {
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 150))
+        }
+
+        // Backchannel word should NOT get transcript boost.
+        let input = makeInput(
+            rms: 0.12,
+            overlapDurationMs: 200,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 3,
+            partialTranscript: "okay",
+            partialWordCount: 1
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .ignore(reason: "backchannel_suppressed"))
+    }
+
+    // MARK: - Backchannel Classifier
+
+    func testBackchannelClassifierDetectsCommonPhrases() {
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("yeah"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("mhm"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("uh-huh"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("okay"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("right"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("Wow"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("  Yeah  "))
+    }
+
+    func testBackchannelClassifierRejectsRealSpeech() {
+        XCTAssertFalse(BackchannelClassifier.isBackchannel("actually I wanted to say"))
+        XCTAssertFalse(BackchannelClassifier.isBackchannel("stop that"))
+        XCTAssertFalse(BackchannelClassifier.isBackchannel("yeah but actually"))
+        XCTAssertFalse(BackchannelClassifier.isBackchannel(nil))
+        XCTAssertFalse(BackchannelClassifier.isBackchannel(""))
+    }
+
+    func testBackchannelClassifierHandlesPunctuation() {
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("yeah."))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("okay!"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("right?"))
+    }
+
+    // MARK: - Milestone 4: Transcript-Aware Endpointing
+
+    func testSilenceThresholdShortensForCompleteUtterance() {
+        let result = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: true,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 600,
+            lastPartialTranscript: "What time is it?"
+        )
+        // Complete utterance → config minimum (1000), NOT conversational floor (1800).
+        XCTAssertEqual(result, 1000)
+    }
+
+    func testSilenceThresholdLengthensForIncompleteUtterance() {
+        let result = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: true,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 600,
+            lastPartialTranscript: "set a timer for"
+        )
+        // Incomplete utterance → at least 2200ms.
+        XCTAssertGreaterThanOrEqual(result, 2200)
+    }
+
+    func testSilenceThresholdVeryPatientForContinuationCue() {
+        let result = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: true,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 600,
+            lastPartialTranscript: "hold on"
+        )
+        // Continuation cue → at least 3000ms.
+        XCTAssertGreaterThanOrEqual(result, 3000)
+    }
+
+    func testSilenceThresholdIgnoresTranscriptWhenAssistantSpeaking() {
+        let result = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: true,
+            gateState: .active,
+            inFollowup: true,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 600,
+            lastPartialTranscript: "hold on"
+        )
+        // While assistant speaking, always use bargeInSilenceMs.
+        XCTAssertEqual(result, 600)
+    }
+
+    func testSilenceThresholdFallsBackWithoutTranscript() {
+        let result = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: true,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 600,
+            lastPartialTranscript: nil
+        )
+        // No transcript → conversational floor (1800).
+        XCTAssertEqual(result, 1800)
     }
 }
