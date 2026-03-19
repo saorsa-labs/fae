@@ -73,6 +73,11 @@ actor PipelineCoordinator {
     private let isRescueMode: Bool
     private let toolExecutor: ToolExecutor
 
+    /// JSC runtime for executing `<tool_program>` script blocks.
+    /// Lazily created on first script execution to avoid unnecessary
+    /// JSC overhead when no scripts are used.
+    private var jscRuntime: JSCRuntime?
+
     /// Counter for computer-use action steps per conversation turn (click/type/scroll).
     private var computerUseStepCount: Int = 0
     private static let maxComputerUseSteps = 10
@@ -5524,6 +5529,12 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .qa, "⚠️ Model emitted tool_call markup but no valid calls parsed")
         }
 
+        // Parse script blocks from the response.
+        let scriptBlocks = Self.parseScriptBlocks(from: fullResponse)
+        if !scriptBlocks.isEmpty {
+            debugLog(debugConsole, .pipeline, "Found \(scriptBlocks.count) script block(s)")
+        }
+
         if turnCount == 0,
            toolCalls.isEmpty,
            proactiveContext == nil,
@@ -5671,8 +5682,8 @@ actor PipelineCoordinator {
             return
         }
 
-        if toolCalls.isEmpty {
-            // No tool calls — flush remaining speech and finish.
+        if toolCalls.isEmpty && scriptBlocks.isEmpty {
+            // No tool calls or script blocks — flush remaining speech and finish.
             if roleplayActive {
                 // Flush voice tag stripper with remaining think-tag text.
                 let roleplaySegments = voiceTagStripper.process(remaining) + voiceTagStripper.flush()
@@ -6096,6 +6107,101 @@ actor PipelineCoordinator {
             engage()
             activeCapabilityTicket = nil
             debugLog(debugConsole, .qa, "=== TURN END spoken_chars=\(assistantTextForStorage.count) tool_calls=0 ===")
+            return
+        }
+
+        // ── Script block execution ────────────────────────────────────────
+        // Script blocks run without the prefix(5) cap. Each block executes
+        // through JSCRuntime with its own budget and governance. Results are
+        // added to conversation history as tool results so the LLM can see
+        // them in the follow-up turn.
+        if !scriptBlocks.isEmpty {
+            // Add the assistant's response (including script markup) to history.
+            await conversationState.addAssistantMessage(fullResponse, tag: proactiveContext?.conversationTag)
+            await synchronizeLLMSession()
+
+            // Speak a brief acknowledgement if no text was spoken yet.
+            if turnCount == 0,
+               !isToolFollowUp,
+               spokenTextThisTurn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                let filler = "Let me run that for you."
+                sendAssistantText(filler, isFinal: false)
+                if generationContext.allowsAudibleOutput {
+                    recordSpokenText(filler)
+                    enqueueTTS(filler, isFinal: false, generationID: generationID)
+                }
+            }
+
+            // Wait for any queued speech to finish before starting script execution.
+            if assistantSpeaking || pendingTTSTask != nil {
+                await awaitPendingTTS()
+                await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_script_execution")
+            }
+
+            var scriptSuccessCount = 0
+            var scriptFailureCount = 0
+
+            for (index, block) in scriptBlocks.enumerated() {
+                let scriptId = "script-\(index)"
+                debugLog(debugConsole, .toolCall, "Executing script block \(index + 1)/\(scriptBlocks.count)")
+
+                let (output, success) = await executeScriptBlock(
+                    block,
+                    proactiveContext: proactiveContext
+                )
+
+                if success {
+                    scriptSuccessCount += 1
+                } else {
+                    scriptFailureCount += 1
+                }
+
+                await conversationState.addToolResult(
+                    id: scriptId,
+                    name: "tool_program",
+                    content: output,
+                    tag: proactiveContext?.conversationTag
+                )
+            }
+
+            debugLog(debugConsole, .qa, "Script execution summary: success=\(scriptSuccessCount) failure=\(scriptFailureCount)")
+            await synchronizeLLMSession()
+
+            // Now execute any tool calls that were alongside the script blocks
+            // (using the normal prefix(5) cap for tool calls).
+            if !toolCalls.isEmpty {
+                for call in toolCalls.prefix(5) {
+                    let callId = UUID().uuidString
+                    let result = await executeTool(
+                        call,
+                        capabilityTicketOverride: activeCapabilityTicket,
+                        explicitUserAuthorizationOverride: explicitUserAuthorizationForTurn,
+                        proactiveContext: proactiveContext,
+                        generationContextOverride: generationContext,
+                        traceTurnID: currentTurnID,
+                        traceToolCallID: callId
+                    )
+                    await conversationState.addToolResult(
+                        id: callId,
+                        name: call.name,
+                        content: result.output,
+                        tag: proactiveContext?.conversationTag
+                    )
+                }
+                await synchronizeLLMSession()
+            }
+
+            // Trigger a follow-up LLM turn to synthesize the script results.
+            await generateWithTools(
+                userText: userText,
+                isToolFollowUp: true,
+                turnCount: turnCount + 1,
+                forceSuppressThinking: true,
+                generationContext: generationContext,
+                generationID: generationID,
+                proactiveContext: proactiveContext
+            )
             return
         }
 
@@ -7015,6 +7121,93 @@ actor PipelineCoordinator {
         return [parameterOpen, functionClose, content.endIndex]
             .compactMap { $0 }
             .min() ?? content.endIndex
+    }
+
+    // MARK: - Tool Program (Script) Parsing
+
+    /// A parsed `<tool_program>` block from the LLM response.
+    ///
+    /// The LLM may emit one or more script blocks alongside (or instead of)
+    /// `<tool_call>` blocks. Each block contains JavaScript source that is
+    /// executed via ``JSCRuntime``.
+    struct ScriptBlock: Sendable, Equatable {
+        /// The JavaScript source code to execute.
+        let source: String
+
+        /// Optional set of tools this script is allowed to call.
+        /// When `nil`, the script inherits the current turn's tool access.
+        let allowedTools: Set<String>?
+
+        /// Optional budget override. When `nil`, ``ScriptBudget/default`` is used.
+        let budget: ScriptBudget?
+    }
+
+    /// Parse `<tool_program>` blocks from response text.
+    ///
+    /// Format:
+    /// ```
+    /// <tool_program>
+    /// // JavaScript source
+    /// </tool_program>
+    /// ```
+    ///
+    /// Optional attributes (JSON) can be provided in a `<tool_program_meta>` block
+    /// immediately before the `<tool_program>`:
+    /// ```
+    /// <tool_program_meta>{"allowed_tools":["read","write"],"max_tool_calls":10}</tool_program_meta>
+    /// <tool_program>
+    /// // JS source
+    /// </tool_program>
+    /// ```
+    static func parseScriptBlocks(from text: String) -> [ScriptBlock] {
+        var blocks: [ScriptBlock] = []
+        var searchStart = text.startIndex
+
+        while let openRange = text.range(of: "<tool_program>", range: searchStart..<text.endIndex) {
+            let closeRange = text.range(of: "</tool_program>", range: openRange.upperBound..<text.endIndex)
+            let contentEnd = closeRange?.lowerBound ?? text.endIndex
+            let source = String(text[openRange.upperBound..<contentEnd])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !source.isEmpty else {
+                searchStart = closeRange?.upperBound ?? text.endIndex
+                continue
+            }
+
+            // Look for a preceding <tool_program_meta> block.
+            var allowedTools: Set<String>?
+            var budget: ScriptBudget?
+            if let metaEnd = text.range(of: "</tool_program_meta>", range: searchStart..<openRange.lowerBound),
+               let metaStart = text.range(of: "<tool_program_meta>", range: searchStart..<metaEnd.lowerBound)
+            {
+                let metaContent = String(text[metaStart.upperBound..<metaEnd.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let data = metaContent.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                {
+                    if let tools = json["allowed_tools"] as? [String] {
+                        allowedTools = Set(tools)
+                    }
+                    if let maxCalls = json["max_tool_calls"] as? Int {
+                        budget = ScriptBudget(
+                            maxToolCalls: maxCalls,
+                            maxWallClockSeconds: (json["max_wall_clock_seconds"] as? TimeInterval) ?? ScriptBudget.default.maxWallClockSeconds,
+                            maxConcurrentToolCalls: (json["max_concurrent_tool_calls"] as? Int) ?? ScriptBudget.default.maxConcurrentToolCalls
+                        )
+                    }
+                }
+            }
+
+            blocks.append(ScriptBlock(
+                source: source,
+                allowedTools: allowedTools,
+                budget: budget
+            ))
+
+            searchStart = closeRange?.upperBound ?? text.endIndex
+        }
+
+        return blocks
     }
 
     private static func toolCallAcknowledgement(for calls: [ToolCall]) -> String {
@@ -8369,6 +8562,142 @@ actor PipelineCoordinator {
     private func incrementComputerUseStep() -> Int {
         computerUseStepCount += 1
         return computerUseStepCount
+    }
+
+    // MARK: - JSC Script Execution
+
+    /// Lazily create or return the shared ``JSCRuntime`` for script execution.
+    ///
+    /// The runtime is wired to the same ``ToolExecutor`` that handles normal
+    /// tool calls, so all governance, approval, and audit layers apply.
+    private func ensureJSCRuntime() -> JSCRuntime {
+        if let existing = jscRuntime {
+            return existing
+        }
+
+        let runtime = JSCRuntime(
+            executor: toolExecutor,
+            contextFactory: { [weak self] in
+                // Build a fresh context snapshot from the coordinator's current state.
+                // If the coordinator is gone, return a restrictive default.
+                guard self != nil else {
+                    return ToolExecutorContext(
+                        toolMode: "off",
+                        privacyMode: "strict_local",
+                        modelLocality: .local,
+                        capabilityTicket: nil,
+                        hasCapabilityTicketForTool: false,
+                        explicitUserAuthorization: false,
+                        isOwner: false,
+                        livenessScore: nil,
+                        actionSource: .voice,
+                        proactiveContext: nil,
+                        visionEnabled: false,
+                        firstOwnerEnrollmentActive: false,
+                        workflowTurnID: nil,
+                        traceToolCallID: nil,
+                        workflowRunID: nil
+                    )
+                }
+
+                // NOTE: This closure is @Sendable so we can't access actor state
+                // directly. The actual context is provided per-call via
+                // `executeScriptBlock()` which overrides contextFactory output.
+                return ToolExecutorContext(
+                    toolMode: "full",
+                    privacyMode: "local_preferred",
+                    modelLocality: .local,
+                    capabilityTicket: nil,
+                    hasCapabilityTicketForTool: true,
+                    explicitUserAuthorization: false,
+                    isOwner: true,
+                    livenessScore: nil,
+                    actionSource: .voice,
+                    proactiveContext: nil,
+                    visionEnabled: false,
+                    firstOwnerEnrollmentActive: false,
+                    workflowTurnID: nil,
+                    traceToolCallID: nil,
+                    workflowRunID: nil
+                )
+            },
+            callbacksFactory: { [weak self] in
+                let weakSelf = self
+                return ToolExecutorCallbacks(
+                    onApprovalPending: { awaiting, manualOnly in
+                        guard let s = weakSelf else { return }
+                        await s.setApprovalState(awaiting: awaiting, manualOnly: manualOnly)
+                    },
+                    onVisionAutoEnabled: {
+                        guard let s = weakSelf else { return }
+                        await s.autoEnableVision()
+                    },
+                    onComputerUseStep: {
+                        guard let s = weakSelf else { return 0 }
+                        return await s.incrementComputerUseStep()
+                    }
+                )
+            },
+            ticketManager: ScriptScopedTicketManager()
+        )
+
+        jscRuntime = runtime
+        return runtime
+    }
+
+    /// Execute a ``ScriptBlock`` through the JSC runtime and return the result
+    /// as a tool-result-style string for inclusion in conversation history.
+    ///
+    /// - Parameters:
+    ///   - block: The parsed script block from the LLM response.
+    ///   - proactiveContext: Optional proactive context for scheduler tasks.
+    /// - Returns: A tuple of (result text, success flag).
+    func executeScriptBlock(
+        _ block: ScriptBlock,
+        proactiveContext: ProactiveRequestContext? = nil
+    ) async -> (output: String, success: Bool) {
+        let runtime = ensureJSCRuntime()
+        let budget = block.budget ?? .default
+
+        debugLog(debugConsole, .toolCall, "Script execution started (budget: \(budget.maxToolCalls) calls, \(Int(budget.maxWallClockSeconds))s)")
+        eventBus.send(.toolCall(
+            id: "script-\(UUID().uuidString.prefix(8))",
+            name: "tool_program",
+            inputJSON: "{\"source_length\":\(block.source.count)}"
+        ))
+
+        let result = await runtime.run(
+            script: block.source,
+            budget: budget,
+            allowedTools: block.allowedTools
+        )
+
+        let output: String
+        let success: Bool
+        switch result.status {
+        case .success:
+            output = result.value ?? "(script completed with no output)"
+            success = true
+        case .failure:
+            output = "Script error: \(result.error ?? "unknown error")"
+            success = false
+        case .cancelled:
+            output = "Script was cancelled: \(result.error ?? "cancelled")"
+            success = false
+        case .budgetExceeded:
+            output = "Script budget exceeded: \(result.error ?? "budget limit reached")"
+            success = false
+        }
+
+        debugLog(debugConsole, .toolResult, "Script execution finished: success=\(success) output_length=\(output.count)")
+        eventBus.send(.toolResult(
+            id: "script-\(UUID().uuidString.prefix(8))",
+            name: "tool_program",
+            success: success,
+            output: String(output.prefix(200))
+        ))
+
+        return (output, success)
     }
 
     /// Forward to ``ToolExecutor/isSafeSkillName(_:)`` for call sites outside executeTool.
