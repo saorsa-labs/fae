@@ -6557,8 +6557,19 @@ actor PipelineCoordinator {
                     privacyMode: effectivePrivacyMode(),
                     limitedTo: expandedSet
                 )
+                // Rebuild system prompt with the newly activated skill body.
+                // The original generationContext.systemPrompt was assembled BEFORE
+                // activate_skill ran, so it does NOT contain the skill instructions.
+                // Without this, the LLM sees "use the skill instructions" in the nudge
+                // but the instructions aren't in context → Qwen3.5 0-token stall.
+                var updatedSystemPrompt = generationContext.systemPrompt
+                if let activatedCtx = await skillManager?.activatedContext() {
+                    updatedSystemPrompt += "\n\n" + activatedCtx
+                    debugLog(debugConsole, .pipeline, "Injected activated skill body into follow-up system prompt (\(activatedCtx.count) chars)")
+                }
+
                 followUpContext = GenerationContext(
-                    systemPrompt: generationContext.systemPrompt,
+                    systemPrompt: updatedSystemPrompt,
                     turnContextPrefix: generationContext.turnContextPrefix,
                     nativeTools: expandedTools,
                     actionSource: generationContext.actionSource,

@@ -54,6 +54,8 @@ struct OrbCrownView: View {
                             name: .faeConversationEngage,
                             object: nil
                         )
+                    } else if windowState.mode == .compact {
+                        windowState.transitionToCollapsed()
                     }
                 },
                 onOrbContextMenu: {
