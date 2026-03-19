@@ -2,8 +2,8 @@ import Foundation
 
 /// Errors produced by CoworkToolExecutor.
 ///
-/// These are the failure modes when routing CoWork external LLM calls
-/// through ToolExecutor's unified security pipeline.
+/// These are the failure modes when gating CoWork external LLM calls
+/// with DamageControlPolicy and inbound response scanning.
 enum CoworkToolExecutorError: LocalizedError, Sendable {
     /// ToolExecutor is not yet initialized — PipelineCoordinator has not started.
     case pipelineNotReady

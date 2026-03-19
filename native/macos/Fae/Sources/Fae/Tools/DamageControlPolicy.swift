@@ -197,6 +197,8 @@ actor DamageControlPolicy {
             PathRule(path: "~/.fae-vault",                                        nonLocalOnly: true),
             PathRule(path: "~/Library/Application Support/fae/speakers.json",     nonLocalOnly: true),
             PathRule(path: "~/Library/Application Support/fae/directive.md",       nonLocalOnly: true),
+            PathRule(path: "~/Library/Application Support/fae/config.toml",        nonLocalOnly: true),
+            PathRule(path: "~/Library/Application Support/fae/soul.md",            nonLocalOnly: true),
         ]
 
         // MARK: No-delete paths (bash rm/mv → confirm_manual, always active)

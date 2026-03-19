@@ -335,4 +335,30 @@ final class DamageControlPolicyTests: XCTestCase {
         let path = "\(home)/Library/Application Support/fae/directive.md"
         assertAllow(await readTool(path, locality: .local), "reading directive.md must be allowed for local model")
     }
+
+    func testZeroAccessConfigTomlBlockedForNonLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/config.toml"
+        assertBlock(await readTool(path, locality: .nonLocal), "reading config.toml must be blocked for non-local model")
+        assertBlock(await writeTool(path, locality: .nonLocal), "writing config.toml must be blocked for non-local model")
+    }
+
+    func testZeroAccessConfigTomlAllowedForLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/config.toml"
+        assertAllow(await readTool(path, locality: .local), "reading config.toml must be allowed for local model")
+    }
+
+    func testZeroAccessSoulMdBlockedForNonLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/soul.md"
+        assertBlock(await readTool(path, locality: .nonLocal), "reading soul.md must be blocked for non-local model")
+        assertBlock(await editTool(path, locality: .nonLocal), "editing soul.md must be blocked for non-local model")
+    }
+
+    func testZeroAccessSoulMdAllowedForLocal() async {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Application Support/fae/soul.md"
+        assertAllow(await readTool(path, locality: .local), "reading soul.md must be allowed for local model")
+    }
 }

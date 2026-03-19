@@ -967,6 +967,80 @@ final class CoworkToolExecutorTests: XCTestCase {
         XCTAssertNotNil(metrics[CoworkLLMProviderKind.openAICompatibleExternal.rawValue])
     }
 
+    func testCoworkRedactionAppliedEventIsEmitted() async throws {
+        let original = CoworkNetworkTransport.loader
+        defer { CoworkNetworkTransport.loader = original }
+        CoworkNetworkTransport.loader = { _ in
+            let data = """
+            {"choices":[{"message":{"content":"Hello"}}]}
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(url: URL(string: "https://api.openai.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (data, response)
+        }
+
+        let eventBus = FaeEventBus()
+        let executor = CoworkToolExecutor(
+            damageControlPolicy: DamageControlPolicy(),
+            eventBus: eventBus
+        )
+        let provider = OpenAICompatibleCoworkProvider(baseURL: "https://api.openai.com", apiKey: "secret")
+
+        let export = CoworkExportPacket(
+            destinationTrustTier: .thirdPartyCloud,
+            mode: .redactedRemote,
+            sections: [
+                CoworkExportSection(
+                    id: "user_prompt",
+                    kind: .userPrompt,
+                    dataClass: .generalPublic,
+                    transforms: [.trimmed],
+                    artifactHandle: nil,
+                    content: "visible prompt"
+                )
+            ],
+            excludedDataClasses: [.privateLocalOnly],
+            excludedContext: ["workspace inventory", "private memory"]
+        )
+
+        let exp = expectation(description: "cowork redaction event")
+        var capturedProvider: String?
+        var capturedFields: [String] = []
+        let obs = NotificationCenter.default.addObserver(
+            forName: .faeBackendEvent,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let event = note.userInfo?["event"] as? String,
+                  event == "cowork.redaction_applied",
+                  let payload = note.userInfo?["payload"] as? [String: Any]
+            else {
+                return
+            }
+            capturedProvider = payload["provider"] as? String
+            capturedFields = payload["stripped_fields"] as? [String] ?? []
+            exp.fulfill()
+        }
+        defer { NotificationCenter.default.removeObserver(obs) }
+
+        _ = try await executor.submit(
+            request: CoworkProviderRequest(
+                model: "gpt-4.1",
+                preparedPrompt: WorkWithFaePreparedPrompt(
+                    userVisiblePrompt: "visible prompt",
+                    faeLocalPrompt: "local prompt",
+                    shareablePrompt: export.renderedPrompt,
+                    containsLocalOnlyContext: true,
+                    shareableExport: export
+                )
+            ),
+            provider: provider
+        )
+
+        wait(for: [exp], timeout: 2.0)
+        XCTAssertEqual(capturedProvider, CoworkLLMProviderKind.openAICompatibleExternal.rawValue)
+        XCTAssertEqual(capturedFields, ["workspace inventory", "private memory"])
+    }
+
     // MARK: - Helpers
 
     private func preparedPrompt() -> WorkWithFaePreparedPrompt {

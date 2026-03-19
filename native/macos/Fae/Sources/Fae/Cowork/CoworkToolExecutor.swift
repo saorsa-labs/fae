@@ -131,10 +131,10 @@ actor CoworkToolExecutor {
 
     // MARK: - Submit (Blocking)
 
-    /// Submit a blocking request to an external LLM through the unified security pipeline.
+    /// Submit a blocking request to an external LLM through the CoWork security gate.
     ///
-    /// Runs the full security check (DamageControlPolicy, OutboundExfiltrationGuard,
-    /// TrustedActionBroker), calls the provider, then validates the response for
+    /// Runs the provider-level security check (DamageControlPolicy with
+    /// `locality: .nonLocal`), calls the provider, then validates the response for
     /// empty content and prompt injection patterns.
     ///
     /// - Parameters:
@@ -167,7 +167,7 @@ actor CoworkToolExecutor {
 
     // MARK: - Submit (Streaming)
 
-    /// Submit a streaming request through the unified security pipeline.
+    /// Submit a streaming request through the CoWork security gate.
     ///
     /// Security check runs before streaming begins. Partial text is forwarded
     /// via ``onPartialText`` as tokens arrive. The final assembled response is
@@ -225,7 +225,7 @@ actor CoworkToolExecutor {
 
     // MARK: - Submit (Web Search)
 
-    /// Submit a web-search request through the unified security pipeline.
+    /// Submit a web-search request through the CoWork security gate.
     ///
     /// Used when the provider supports web search tool loops (e.g. OpenAI
     /// with browsing). Security check runs before the call; response is

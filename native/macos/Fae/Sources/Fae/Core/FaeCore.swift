@@ -46,8 +46,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Rescue mode reference — set by FaeAppDelegate before start().
     weak var rescueMode: RescueMode?
 
-    /// CoWork security executor — routes all external LLM calls through
-    /// ToolExecutor's unified security pipeline. Available after pipeline startup.
+    /// CoWork security executor — gates all external LLM calls with
+    /// DamageControlPolicy and inbound response scanning. Available after pipeline startup.
     var coworkToolExecutor: CoworkToolExecutor? {
         get async { await pipelineCoordinator?.coworkToolExecutor }
     }
@@ -416,7 +416,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 }
 
                 // Create the CoWork security executor so external LLM calls
-                // route through the unified security pipeline.
+                // are gated by DamageControlPolicy and inbound response scanning.
                 await coordinator.makeCoworkToolExecutor()
 
                 // Skip scheduler in rescue mode.
