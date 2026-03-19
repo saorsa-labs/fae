@@ -1,47 +1,114 @@
-# Channel Gateway — Adapter Migration Progress
+# Channel Gateway — Full Project Progress
 
-## Status: MILESTONE COMPLETE
+## Status: PROJECT COMPLETE
 
-All 3 phases completed. 1247 tests, 0 failures, 0 build warnings.
+All 4 milestones completed. 1316 tests, 0 failures, 0 build warnings.
 
-## Phase 2.1 — Migrate iMessageAdapter (DONE)
-- Converted from `actor` to `final class: ChannelAdapter, @unchecked Sendable`
-- Added `AdapterState` internal class for thread-safe state without NSLock-in-async warnings
-- Added `kind: .imessage` and `onMessage` callback for ChannelGateway integration
-- Added `send(response:to:)` delegating to existing `sendReply(text:to:)` AppleScript logic
-- Poll loop produces `ChannelMessage` envelopes when `onMessage` is set (gateway path)
-- Falls back to legacy `LegacyMessageHandler` for backward compatibility with ChannelManager
-- Made `appleMessageDateToDate()` and date conversion `static` for testability
-- 8 new tests
+---
 
-## Phase 2.2 — Migrate DiscordAdapter (DONE)
-- Converted from `actor` to `final class: ChannelAdapter, @unchecked Sendable`
-- Added `AdapterState` internal class with fine-grained lock methods (markStarted, fullStop, teardownForReconnect, markReady, etc.)
-- Added `kind: .discord` and `onMessage` callback for ChannelGateway integration
-- Added `send(response:to:)` using `message.threadId` as Discord channelId
-- `handleMessageCreate` produces `ChannelMessage` envelopes with `threadId = channelId` and `senderDisplayName = username`
-- Falls back to legacy `LegacyMessageHandler` for backward compatibility with ChannelManager
-- Full WebSocket lifecycle preserved: heartbeat, resume, reconnect with exponential backoff
-- 8 new tests
+## Milestone 1 — Normalised Envelope + Session Isolation (DONE)
 
-## Phase 2.3 — Migrate WhatsAppAdapter (DONE)
-- Converted from `actor` to `final class: ChannelAdapter, @unchecked Sendable`
-- Added `ListenerState` internal class for thread-safe NWListener state
-- Added `kind: .whatsapp` and `onMessage` callback for ChannelGateway integration
-- Added `send(response:to:)` delegating to existing `sendText(to:text:)` Graph API logic
-- Parameterless `start()` uses `config.webhookPort` (added to Config struct)
-- Webhook handler produces `ChannelMessage` envelopes with message ID from WhatsApp when available
-- Falls back to legacy `LegacyMessageHandler` for backward compatibility with ChannelManager
-- HMAC-SHA256 verification and NWListener HTTP server fully preserved
-- 8 new tests
+- ChannelMessage: normalised envelope with id, channel, senderId, text, timestamp, threadId, etc.
+- ChannelKind enum (.imessage, .whatsapp, .discord)
+- ChannelSession: per-sender conversation state with LockedState for thread safety
+- ChannelSessionStore: actor managing sessions with idle cleanup
+- SessionKey: composite channel + senderId for session lookup
 
-## Gateway Registration Tests (DONE)
-- All three adapters register correctly with ChannelGateway
-- Gateway wires `onMessage` callback on registration
-- Gateway replaces adapter of same kind
-- 8 new tests
+## Milestone 2 — Adapter Migration (DONE)
 
-## ChannelManager Backward Compatibility
-- ChannelManager updated to use `try await adapter.start()` for all adapters
-- Legacy handler paths preserved for ChannelManager callers
-- No changes needed in FaeCore — ChannelManager still works as before
+### Phase 2.1 — iMessageAdapter (DONE)
+- Converted to ChannelAdapter protocol conformance
+- Added AdapterState, onMessage callback, send() delegation
+
+### Phase 2.2 — DiscordAdapter (DONE)
+- Converted to ChannelAdapter protocol conformance
+- Full WebSocket lifecycle preserved with reconnect
+
+### Phase 2.3 — WhatsAppAdapter (DONE)
+- Converted to ChannelAdapter protocol conformance
+- HMAC-SHA256 verification and NWListener preserved
+
+### Gateway Registration (DONE)
+- All three adapters register with ChannelGateway
+- Gateway wires onMessage, replaces adapter of same kind
+
+## Milestone 3 — Cross-Channel Features (DONE)
+
+### Phase 3.1 — Shared Identity (DONE)
+- ChannelIdentityResolver: maps platform IDs to canonical identities
+- Auto-linking by phone number normalisation (suffix matching, last 10 digits)
+- Auto-linking by case-insensitive display name matching
+- Manual linking API for explicit identity association
+- Gateway auto-links on every inbound message
+- 25 new tests
+
+### Phase 3.2 — Cross-Channel Context (DONE)
+- LinkedSessionSummary: formatted conversation snippets from linked sessions
+- Gateway injects crossChannelContext into ChannelMessage for LLM pipeline
+- SessionStore provides linkedSessionSummaries() with configurable message limits
+- LLM sees "This person also messaged on WhatsApp: [conversation snippet]"
+- 10 new tests
+
+### Phase 3.3 — Channel Health Monitoring + Auto-Reconnect (DONE)
+- ChannelHealthMonitor: per-adapter health status tracking
+- Status types: connected, disconnected, reconnecting(attempt), error(String)
+- Auto-reconnect with exponential backoff (base 2s, max 60s, max 5 attempts)
+- Jitter added to retry delays to avoid thundering herd
+- Gateway wires health monitor: reports start failures, send errors
+- FaeEvent.runtimeProgress for UI health status display
+- 18 new tests
+
+## Milestone 4 — Testing & Hardening (DONE)
+
+### Phase 4.1 — Integration Tests (DONE)
+- End-to-end tests for all 3 platforms (Discord, WhatsApp, iMessage)
+- Multi-channel simultaneous operation
+- Cross-channel identity linking E2E
+- Nil/empty response handling
+- Multi-turn conversation continuity
+- Health status after startup
+- Adapter send error reporting
+- 10 new tests
+
+### Phase 4.2 — Concurrency Stress Tests (DONE)
+- Concurrent senders on same channel (5 senders, 4 messages each)
+- Simultaneous messages across all 3 channels (10 per channel)
+- Session isolation under concurrent load (Alice vs Bob interleaved)
+- Concurrent session cleanup + new messages
+- Concurrent identity auto-linking
+- Rapid start/stop cycles
+- 6 new tests
+
+### Phase 4.3 — Documentation (DONE)
+- Updated CLAUDE.md Channels/ file inventory (4 → 10 files)
+- Added channel architecture ASCII diagram
+- Documented ChannelAdapter protocol, message flow, identity linking, health monitoring
+- Updated progress.md with full project history
+- STATE.json shows project complete
+
+---
+
+## Architecture Summary
+
+```
+Adapters (Discord, WhatsApp, iMessage)
+    │ ChannelMessage (normalised envelope)
+    ▼
+ChannelGateway (actor)
+    ├── ChannelIdentityResolver: cross-channel identity linking
+    ├── ChannelSessionStore: per-sender session isolation
+    ├── ChannelHealthMonitor: auto-reconnect with backoff
+    └── ResponseHandler → LLM Pipeline → adapter.send()
+```
+
+## Test Counts
+
+| Phase | Tests Added | Running Total |
+|-------|------------|---------------|
+| Milestone 1+2 | baseline | 1247 |
+| Phase 3.1 | +25 | 1272 |
+| Phase 3.2 | +10 | 1282 |
+| Phase 3.3 | +18 | 1300 |
+| Phase 4.1 | +10 | 1310 |
+| Phase 4.2 | +6 | 1316 |
+| **Total** | **+69** | **1316** |

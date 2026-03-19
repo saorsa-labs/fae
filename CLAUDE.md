@@ -283,6 +283,38 @@ Skills use **progressive disclosure**: names + descriptions in system prompt, fu
 Remote senders are **non-owner guests** — no tool escalation, text-only responses.
 Config: `[channels]` in config.toml. Credentials in macOS Keychain via `CredentialManager`.
 
+### Channel architecture
+
+```
+                        ┌──────────────────────────────────────────┐
+                        │           ChannelGateway (actor)          │
+                        │                                          │
+  DiscordAdapter ──────►│  ┌─────────────────────────────────┐     │
+  WhatsAppAdapter ─────►│  │ ChannelIdentityResolver (actor) │     │
+  iMessageAdapter ─────►│  │ phone normalisation, name match │     │
+                        │  └─────────────────────────────────┘     │
+                        │                                          │
+                        │  ┌─────────────────────────────────┐     │
+                        │  │ ChannelSessionStore (actor)      │     │──► ResponseHandler
+                        │  │ per-sender isolation, cleanup    │     │    (LLM pipeline)
+                        │  │ cross-channel LinkedSessionSummary│    │
+                        │  └─────────────────────────────────┘     │
+                        │                                          │
+                        │  ┌─────────────────────────────────┐     │
+                        │  │ ChannelHealthMonitor (actor)     │     │
+                        │  │ auto-reconnect, backoff, status  │     │
+                        │  └─────────────────────────────────┘     │
+                        └──────────────────────────────────────────┘
+```
+
+**Message flow**: Adapter receives platform message → converts to `ChannelMessage` → calls `onMessage` callback → Gateway resolves identity (auto-links by phone/name) → resolves/creates `ChannelSession` → injects cross-channel context → dispatches to ResponseHandler → sends response back via adapter.
+
+**Cross-channel identity**: `ChannelIdentityResolver` maps platform IDs to canonical identities. Auto-links by phone number suffix (last 10 digits) and case-insensitive display name. Linked sessions share conversation context via `LinkedSessionSummary`.
+
+**Health monitoring**: `ChannelHealthMonitor` tracks adapter status (connected/disconnected/reconnecting/error). Auto-reconnect with exponential backoff (base 2s, max 60s, max 5 attempts). Reports via `FaeEvent.runtimeProgress`.
+
+**ChannelAdapter protocol**: `kind`, `start()`, `stop()`, `send(response:to:)`, `onMessage` callback. All three adapters (Discord, WhatsApp, iMessage) conform. Legacy `ChannelManager` preserved for backward compatibility.
+
 ## Proactive awareness
 
 **Always-on from first launch.** Camera/screen awareness start automatically after primary user enrollment.
@@ -588,14 +620,21 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `SkillEditorSheet.swift` | Skill editing UI |
 | `SkillSecurityReview.swift` | Skill security validation |
 
-### Channels/ (4 files)
+### Channels/ (10 files)
 
 | File | Role |
 |------|------|
-| `ChannelManager.swift` | Channel lifecycle, guest security model |
-| `DiscordAdapter.swift` | WebSocket Gateway + REST, 2000-char split, rate limit retry |
-| `WhatsAppAdapter.swift` | HTTP webhook + Graph API, HMAC-SHA256 verification |
-| `iMessageAdapter.swift` | SQLite polling + AppleScript, `is_from_me = 0` echo filter |
+| `ChannelAdapter.swift` | Protocol for all channel adapters (kind, start, stop, send, onMessage) |
+| `ChannelMessage.swift` | Normalised message envelope (ChannelKind, ChannelMessage, ChannelAttachment) |
+| `ChannelSession.swift` | Per-sender conversation state (SessionKey, ChannelSession with LockedState) |
+| `ChannelSessionStore.swift` | Actor managing sessions, idle cleanup, cross-channel LinkedSessionSummary |
+| `ChannelGateway.swift` | Central routing actor: adapter lifecycle, identity resolution, health monitoring |
+| `ChannelIdentityResolver.swift` | Cross-channel identity linking: phone normalisation, display name matching |
+| `ChannelHealthMonitor.swift` | Adapter health tracking, exponential-backoff auto-reconnect (max 5 retries) |
+| `ChannelManager.swift` | Legacy channel lifecycle (backward compatibility with FaeCore) |
+| `DiscordAdapter.swift` | WebSocket Gateway + REST, ChannelAdapter conformance, 2000-char split |
+| `WhatsAppAdapter.swift` | HTTP webhook + Graph API, ChannelAdapter conformance, HMAC-SHA256 verification |
+| `iMessageAdapter.swift` | SQLite polling + AppleScript, ChannelAdapter conformance, echo filter |
 
 ### Cowork/ (12 files)
 
