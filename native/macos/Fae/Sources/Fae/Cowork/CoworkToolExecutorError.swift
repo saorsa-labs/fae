@@ -26,6 +26,9 @@ enum CoworkToolExecutorError: LocalizedError, Sendable {
     /// The request timed out.
     case timeout
 
+    /// The provider returned an empty response.
+    case emptyResponse
+
     var errorDescription: String? {
         switch self {
         case .pipelineNotReady:
@@ -42,6 +45,8 @@ enum CoworkToolExecutorError: LocalizedError, Sendable {
             return "Response filtered: \(reason)"
         case .timeout:
             return "The request timed out."
+        case .emptyResponse:
+            return "The provider returned an empty response."
         }
     }
 }
