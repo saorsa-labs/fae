@@ -7,15 +7,15 @@
     "name": "Gateway Core"
   },
   "phase": {
-    "number": "1.1",
-    "name": "ChannelMessage Envelope + ChannelSession Actor",
-    "plan": null
+    "number": "1.3",
+    "name": "Per-Sender Conversation Isolation",
+    "plan": "PLAN-phase-1.1.md"
   },
   "progress": {
-    "total_tasks": 0,
-    "completed_tasks": 0,
+    "total_tasks": 12,
+    "completed_tasks": 12,
     "current_task": null
   },
-  "status": "executing",
-  "last_updated": "2026-03-19T21:15:00Z"
+  "status": "milestone_complete",
+  "last_updated": "2026-03-19T21:26:00Z"
 }
