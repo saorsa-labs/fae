@@ -1,5 +1,64 @@
+import FaeInference
 import XCTest
 @testable import Fae
+
+// MARK: - Mock Channel Adapter
+
+/// Test double for `ChannelAdapter`. Tracks calls and delivers scripted responses.
+private final class MockChannelAdapter: ChannelAdapter, @unchecked Sendable {
+    let kind: ChannelKind
+    var onMessage: (@Sendable (ChannelMessage) async -> String?)?
+
+    private let lock = NSLock()
+    private var _sentResponses: [(response: String, message: ChannelMessage)] = []
+    private var _startCount = 0
+    private var _stopCount = 0
+
+    var sentResponses: [(response: String, message: ChannelMessage)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _sentResponses
+    }
+
+    var startCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _startCount
+    }
+
+    var stopCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _stopCount
+    }
+
+    init(kind: ChannelKind) {
+        self.kind = kind
+    }
+
+    func start() async throws {
+        lock.lock()
+        _startCount += 1
+        lock.unlock()
+    }
+
+    func stop() async {
+        lock.lock()
+        _stopCount += 1
+        lock.unlock()
+    }
+
+    func send(response: String, to message: ChannelMessage) async throws {
+        lock.lock()
+        _sentResponses.append((response: response, message: message))
+        lock.unlock()
+    }
+
+    /// Simulate an inbound message arriving at this adapter.
+    func simulateInbound(_ message: ChannelMessage) async -> String? {
+        await onMessage?(message)
+    }
+}
 
 // MARK: - ChannelMessage Tests
 
@@ -355,5 +414,234 @@ final class ChannelSessionStoreTests: XCTestCase {
 
         let session2 = await store.session(for: key, displayName: "Bob")
         XCTAssertEqual(session2.senderDisplayName, "Bob")
+    }
+}
+
+// MARK: - ChannelGateway Tests
+
+final class ChannelGatewayTests: XCTestCase {
+
+    private func makeGateway() -> (ChannelGateway, ChannelSessionStore) {
+        let sessionStore = ChannelSessionStore()
+        let gateway = ChannelGateway(eventBus: FaeEventBus(), sessionStore: sessionStore)
+        return (gateway, sessionStore)
+    }
+
+    func testGatewayRoutesMessageToHandler() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { message, session in
+            session.addUserMessage(message.text)
+            let reply = "Echo: \(message.text)"
+            session.addAssistantMessage(reply)
+            return reply
+        }
+        await gateway.start()
+
+        let msg = ChannelMessage(
+            channel: .discord,
+            senderId: "user-1",
+            text: "Hello Fae"
+        )
+
+        let response = await adapter.simulateInbound(msg)
+
+        XCTAssertEqual(response, "Echo: Hello Fae")
+    }
+
+    func testGatewayCreatesSessionPerSender() async {
+        let (gateway, sessionStore) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { message, session in
+            session.addUserMessage(message.text)
+            session.addAssistantMessage("Reply to \(message.senderId)")
+            return "Reply to \(message.senderId)"
+        }
+        await gateway.start()
+
+        let msg1 = ChannelMessage(channel: .discord, senderId: "alice", text: "Hi")
+        let msg2 = ChannelMessage(channel: .discord, senderId: "bob", text: "Hey")
+
+        _ = await adapter.simulateInbound(msg1)
+        _ = await adapter.simulateInbound(msg2)
+
+        let count = await sessionStore.activeSessionCount
+        XCTAssertEqual(count, 2)
+    }
+
+    func testGatewayRejectsEmptyText() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { _, _ in
+            XCTFail("Handler should not be called for empty text")
+            return nil
+        }
+        await gateway.start()
+
+        let msg = ChannelMessage(channel: .discord, senderId: "user-1", text: "   ")
+        let response = await adapter.simulateInbound(msg)
+
+        XCTAssertNil(response)
+    }
+
+    func testGatewayRejectsWhenNotRunning() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { _, _ in
+            XCTFail("Handler should not be called when gateway is not running")
+            return nil
+        }
+        // Deliberately NOT calling start()
+
+        let msg = ChannelMessage(channel: .discord, senderId: "user-1", text: "Hello")
+        let response = await adapter.simulateInbound(msg)
+
+        XCTAssertNil(response)
+    }
+
+    func testGatewayRejectsWithoutHandler() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        // Deliberately NOT setting responseHandler
+        await gateway.start()
+
+        let msg = ChannelMessage(channel: .discord, senderId: "user-1", text: "Hello")
+        let response = await adapter.simulateInbound(msg)
+
+        XCTAssertNil(response)
+    }
+
+    func testGatewaySendsResponseBackToAdapter() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { _, _ in
+            return "Gateway response"
+        }
+        await gateway.start()
+
+        let msg = ChannelMessage(channel: .discord, senderId: "user-1", text: "Hi")
+        _ = await adapter.simulateInbound(msg)
+
+        let sent = adapter.sentResponses
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent[0].response, "Gateway response")
+        XCTAssertEqual(sent[0].message.senderId, "user-1")
+    }
+
+    func testGatewayStartStopLifecycle() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.start()
+
+        XCTAssertEqual(adapter.startCount, 1)
+
+        await gateway.stop()
+
+        XCTAssertEqual(adapter.stopCount, 1)
+    }
+
+    func testGatewayMultipleAdapters() async {
+        let (gateway, sessionStore) = makeGateway()
+        let discordAdapter = MockChannelAdapter(kind: .discord)
+        let whatsappAdapter = MockChannelAdapter(kind: .whatsapp)
+
+        await gateway.registerAdapter(discordAdapter)
+        await gateway.registerAdapter(whatsappAdapter)
+        await gateway.setResponseHandler { message, session in
+            session.addUserMessage(message.text)
+            let reply = "\(message.channel.displayName): \(message.text)"
+            session.addAssistantMessage(reply)
+            return reply
+        }
+        await gateway.start()
+
+        let discordMsg = ChannelMessage(channel: .discord, senderId: "user-d", text: "Discord hi")
+        let whatsappMsg = ChannelMessage(channel: .whatsapp, senderId: "user-w", text: "WhatsApp hi")
+
+        let r1 = await discordAdapter.simulateInbound(discordMsg)
+        let r2 = await whatsappAdapter.simulateInbound(whatsappMsg)
+
+        XCTAssertEqual(r1, "Discord: Discord hi")
+        XCTAssertEqual(r2, "WhatsApp: WhatsApp hi")
+
+        let count = await sessionStore.activeSessionCount
+        XCTAssertEqual(count, 2)
+    }
+
+    func testGatewaySessionIsolation() async {
+        let (gateway, sessionStore) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { message, session in
+            session.addUserMessage(message.text)
+            let reply = "You said: \(message.text) (history: \(session.messages.count))"
+            session.addAssistantMessage(reply)
+            return reply
+        }
+        await gateway.start()
+
+        // Alice sends 2 messages, Bob sends 1.
+        _ = await adapter.simulateInbound(ChannelMessage(channel: .discord, senderId: "alice", text: "First"))
+        _ = await adapter.simulateInbound(ChannelMessage(channel: .discord, senderId: "alice", text: "Second"))
+        _ = await adapter.simulateInbound(ChannelMessage(channel: .discord, senderId: "bob", text: "Hello"))
+
+        // Verify session isolation: Alice has 4 messages (2 user + 2 assistant), Bob has 2.
+        let aliceKey = SessionKey(channel: .discord, senderId: "alice")
+        let bobKey = SessionKey(channel: .discord, senderId: "bob")
+
+        let aliceSession = await sessionStore.session(for: aliceKey)
+        let bobSession = await sessionStore.session(for: bobKey)
+
+        XCTAssertEqual(aliceSession.messages.count, 4)
+        XCTAssertEqual(bobSession.messages.count, 2)
+    }
+
+    func testGatewayIdleSessionCleanup() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { _, _ in "ok" }
+        await gateway.start()
+
+        _ = await adapter.simulateInbound(ChannelMessage(channel: .discord, senderId: "user-1", text: "Hi"))
+
+        let countBefore = await gateway.activeSessionCount
+        XCTAssertEqual(countBefore, 1)
+
+        // Cleanup with zero timeout removes everything.
+        let removed = await gateway.cleanupIdleSessions(olderThan: 0)
+        XCTAssertEqual(removed, 1)
+
+        let countAfter = await gateway.activeSessionCount
+        XCTAssertEqual(countAfter, 0)
+    }
+
+    func testGatewayNilResponseDoesNotSendToAdapter() async {
+        let (gateway, _) = makeGateway()
+        let adapter = MockChannelAdapter(kind: .discord)
+
+        await gateway.registerAdapter(adapter)
+        await gateway.setResponseHandler { _, _ in nil }
+        await gateway.start()
+
+        _ = await adapter.simulateInbound(ChannelMessage(channel: .discord, senderId: "user-1", text: "Hi"))
+
+        XCTAssertTrue(adapter.sentResponses.isEmpty)
     }
 }

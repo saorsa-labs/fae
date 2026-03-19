@@ -1,0 +1,176 @@
+import Foundation
+
+/// Central routing actor for all channel messages.
+///
+/// `ChannelGateway` replaces `ChannelManager` as the single entry point for
+/// external messaging. It:
+/// - Owns all `ChannelAdapter` instances
+/// - Receives normalised `ChannelMessage` from adapters
+/// - Resolves per-sender `ChannelSession` via `ChannelSessionStore`
+/// - Serialises dispatch (no concurrent `processTranscription` calls)
+/// - Routes responses back to the originating adapter
+/// - Emits `FaeEvent`s for channel activity
+///
+/// ```
+/// Adapters ──→ ChannelGateway ──→ ChannelSessionStore ──→ responseHandler ──→ Adapter.send()
+/// ```
+actor ChannelGateway {
+    /// Handler that processes a channel message and returns an optional response.
+    ///
+    /// The gateway calls this for every validated inbound message. The handler
+    /// should run the message through the LLM pipeline and return the assistant's
+    /// response text.
+    typealias ResponseHandler = @Sendable (
+        _ message: ChannelMessage,
+        _ session: ChannelSession
+    ) async -> String?
+
+    private let eventBus: FaeEventBus
+    private let sessionStore: ChannelSessionStore
+    private var adapters: [ChannelKind: any ChannelAdapter] = [:]
+    private var responseHandler: ResponseHandler?
+    private var isRunning = false
+
+    /// Create a new gateway with the given event bus.
+    ///
+    /// - Parameters:
+    ///   - eventBus: The event bus for emitting channel activity events.
+    ///   - sessionStore: The session store (injected for testability).
+    init(eventBus: FaeEventBus, sessionStore: ChannelSessionStore = ChannelSessionStore()) {
+        self.eventBus = eventBus
+        self.sessionStore = sessionStore
+    }
+
+    /// Set the handler that processes inbound messages through the LLM pipeline.
+    func setResponseHandler(_ handler: @escaping ResponseHandler) {
+        responseHandler = handler
+    }
+
+    /// Register an adapter with the gateway.
+    ///
+    /// The gateway takes ownership and wires the adapter's `onMessage` callback
+    /// to route through the gateway. If an adapter for the same `ChannelKind`
+    /// already exists, the old one is stopped first.
+    func registerAdapter(_ adapter: any ChannelAdapter) async {
+        let kind = adapter.kind
+
+        // Stop existing adapter for this channel if present.
+        if let existing = adapters[kind] {
+            await existing.stop()
+        }
+
+        // Wire the adapter's message callback to route through the gateway.
+        adapter.onMessage = { [weak self] message in
+            guard let self else { return nil }
+            return await self.handleIncomingMessage(message)
+        }
+
+        adapters[kind] = adapter
+    }
+
+    /// Start all registered adapters.
+    func start() async {
+        guard !isRunning else { return }
+        isRunning = true
+
+        for (kind, adapter) in adapters {
+            do {
+                try await adapter.start()
+                NSLog("ChannelGateway: started %@ adapter", kind.displayName)
+            } catch {
+                NSLog("ChannelGateway: failed to start %@ adapter — %@",
+                      kind.displayName, error.localizedDescription)
+            }
+        }
+
+        NSLog("ChannelGateway: running with %d adapter(s)", adapters.count)
+    }
+
+    /// Stop all adapters and clean up sessions.
+    func stop() async {
+        guard isRunning else { return }
+
+        for (kind, adapter) in adapters {
+            await adapter.stop()
+            NSLog("ChannelGateway: stopped %@ adapter", kind.displayName)
+        }
+
+        isRunning = false
+        NSLog("ChannelGateway: stopped")
+    }
+
+    /// The number of currently active sessions across all channels.
+    var activeSessionCount: Int {
+        get async {
+            await sessionStore.activeSessionCount
+        }
+    }
+
+    /// Clean up idle sessions older than the given timeout.
+    ///
+    /// - Parameter timeout: Idle duration threshold (defaults to session store default).
+    /// - Returns: Number of sessions cleaned up.
+    @discardableResult
+    func cleanupIdleSessions(olderThan timeout: TimeInterval? = nil) async -> Int {
+        await sessionStore.cleanupIdle(olderThan: timeout)
+    }
+
+    // MARK: - Message Handling
+
+    /// Handle an inbound message from any adapter.
+    ///
+    /// This method serialises all message processing through the actor, ensuring
+    /// no concurrent `processTranscription` calls. Each message gets its own
+    /// session based on channel + sender.
+    private func handleIncomingMessage(_ message: ChannelMessage) async -> String? {
+        guard isRunning else {
+            NSLog("ChannelGateway: dropped message while not running")
+            return nil
+        }
+
+        guard let handler = responseHandler else {
+            NSLog("ChannelGateway: no response handler configured")
+            return nil
+        }
+
+        let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Resolve or create per-sender session.
+        let key = SessionKey(channel: message.channel, senderId: message.senderId)
+        let session = await sessionStore.session(
+            for: key,
+            displayName: message.senderDisplayName
+        )
+
+        NSLog("ChannelGateway: inbound %@ message from %@ (session messages: %d)",
+              message.channel.displayName, message.senderId, session.messages.count)
+
+        // Dispatch through the pipeline.
+        let response = await handler(message, session)
+
+        if let response {
+            let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedResponse.isEmpty else { return nil }
+
+            NSLog("ChannelGateway: produced %@ response (%d chars)",
+                  message.channel.displayName, trimmedResponse.count)
+
+            eventBus.send(.runtimeProgress(stage: "channel.response", progress: 1.0))
+
+            // Route response back to the originating adapter.
+            if let adapter = adapters[message.channel] {
+                do {
+                    try await adapter.send(response: trimmedResponse, to: message)
+                } catch {
+                    NSLog("ChannelGateway: failed to send response via %@ — %@",
+                          message.channel.displayName, error.localizedDescription)
+                }
+            }
+
+            return trimmedResponse
+        }
+
+        return nil
+    }
+}
