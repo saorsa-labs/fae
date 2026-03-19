@@ -1343,7 +1343,7 @@ actor PipelineCoordinator {
     func makeCoworkToolExecutor() -> CoworkToolExecutor {
         if let existing = coworkToolExecutor { return existing }
         let executor = CoworkToolExecutor(
-            toolExecutor: toolExecutor,
+            damageControlPolicy: toolExecutor.damageControlPolicy,
             isReady: true,
             securityLogger: SecurityEventLogger.shared,
             eventBus: eventBus

@@ -62,13 +62,16 @@ actor CoworkToolExecutor {
 
     // MARK: - Properties
 
-    /// Reference to the shared ToolExecutor security pipeline.
-    private let toolExecutor: any ToolExecutorProtocol
+    /// DamageControlPolicy for pre-broker catastrophic operation blocking.
+    /// Called directly — NOT through ToolExecutor.execute(), which requires
+    /// a registered tool name in ToolRegistry. CoWork provider calls are
+    /// synthetic (not real tools) and must bypass the registry check.
+    private let damageControlPolicy: DamageControlPolicy
 
     /// Prompt injection patterns to detect in inbound responses.
     private let inboundScanPatterns: [String]
 
-    /// Whether PipelineCoordinator has completed startup and ToolExecutor is ready.
+    /// Whether PipelineCoordinator has completed startup.
     /// When false, submit calls fail fast with .pipelineNotReady.
     private var isReady: Bool = false
 
@@ -83,22 +86,26 @@ actor CoworkToolExecutor {
 
     // MARK: - Init
 
-    /// Create a CoworkToolExecutor with the shared security pipeline.
+    /// Create a CoworkToolExecutor with direct security layer access.
+    ///
+    /// Security is enforced by calling `DamageControlPolicy.evaluate()` directly,
+    /// NOT by routing through `ToolExecutor.execute()`. This avoids the ToolRegistry
+    /// check that would reject synthetic tool names like `"external_llm"`.
     ///
     /// - Parameters:
-    ///   - toolExecutor: The ToolExecutor instance created by PipelineCoordinator.
+    ///   - damageControlPolicy: The DamageControlPolicy for catastrophic op blocking.
     ///   - inboundScanPatterns: Patterns checked in responses to detect prompt injection.
     ///   - isReady: Whether the executor is ready to handle requests.
     ///   - securityLogger: Logger for structured security event audit trail.
     ///   - eventBus: Event bus for UI-visible security notifications.
     init(
-        toolExecutor: any ToolExecutorProtocol,
+        damageControlPolicy: DamageControlPolicy,
         inboundScanPatterns: [String]? = nil,
         isReady: Bool = true,
         securityLogger: SecurityEventLogger? = nil,
         eventBus: FaeEventBus? = nil
     ) {
-        self.toolExecutor = toolExecutor
+        self.damageControlPolicy = damageControlPolicy
         self.inboundScanPatterns = inboundScanPatterns ?? Self.defaultInboundPatterns
         self.isReady = isReady
         self.securityLogger = securityLogger
@@ -245,12 +252,18 @@ actor CoworkToolExecutor {
         }
     }
 
-    // MARK: - DRY Security Check (Task 2)
+    // MARK: - Security Check
 
-    /// Runs the ToolExecutor security check for a CoWork request.
+    /// Runs DamageControlPolicy directly for a CoWork provider request.
     ///
-    /// Builds a ToolExecutorContext with modelLocality=.nonLocal, executes through
-    /// the full security stack, and throws if blocked or damage-controlled.
+    /// Calls `DamageControlPolicy.evaluate()` with `locality: .nonLocal` to trigger
+    /// the zero-access path rules that block credential/vault access for external models.
+    ///
+    /// This does NOT route through `ToolExecutor.execute()` because:
+    /// - ToolExecutor step 1 checks `registry.isToolAllowed(name)` which returns false
+    ///   for synthetic names like "external_llm" — blocking ALL CoWork calls.
+    /// - CoWork provider calls don't need the full tool-dispatch pipeline (registry lookup,
+    ///   rate limiting, tool execution) — they only need the pre-flight security gate.
     private func performSecurityCheck(
         toolName: String,
         providerKind: String,
@@ -260,30 +273,26 @@ actor CoworkToolExecutor {
             throw CoworkToolExecutorError.pipelineNotReady
         }
 
-        let context = buildContext(for: request)
-        let call = PipelineCoordinator.ToolCall(
-            name: toolName,
+        // DamageControlPolicy evaluates zero-access paths for nonLocal models.
+        // This catches credential exfiltration, vault access, sensitive file reads.
+        let dcVerdict = await damageControlPolicy.evaluate(
+            toolName: toolName,
             arguments: [
                 "model": request.model,
                 "provider": providerKind,
                 "thinkingLevel": request.thinkingLevel.rawValue,
-            ]
+            ],
+            locality: .nonLocal
         )
 
-        let outcome = await toolExecutor.execute(call, context: context, callbacks: .noop)
+        switch dcVerdict {
+        case .allow:
+            break
 
-        if outcome.damageControlIntervened {
-            let reason = outcome.result.output
+        case .block(let reason), .disaster(let reason), .confirmManual(let reason):
             recordBlock(providerKind: providerKind, model: request.model, reason: reason)
             eventBus?.send(.coworkSecurityBlocked(provider: providerKind, reason: reason))
             throw CoworkToolExecutorError.damageControlIntervened(reason: reason)
-        }
-
-        if outcome.result.isError {
-            let reason = outcome.result.output
-            recordBlock(providerKind: providerKind, model: request.model, reason: reason)
-            eventBus?.send(.coworkSecurityBlocked(provider: providerKind, reason: reason))
-            throw CoworkToolExecutorError.securityBlocked(reason: reason)
         }
     }
 
@@ -346,16 +355,6 @@ actor CoworkToolExecutor {
                 arguments: ["provider": providerKind]
             )
         }
-    }
-
-    // MARK: - Context Building
-
-    /// Builds the ToolExecutorContext for a Cowork request using the shared factory.
-    ///
-    /// Delegates to ``ToolExecutorContext.coworkExternal()`` so that context
-    /// construction for non-local models is defined in one place.
-    private func buildContext(for request: CoworkProviderRequest) -> ToolExecutorContext {
-        .coworkExternal()
     }
 
     // MARK: - Inbound Response Scan
