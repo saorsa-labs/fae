@@ -226,6 +226,8 @@ struct FaeConfig: Codable {
         var confirmMs: Int = 350
         var assistantStartHoldoffMs: Int = 500
         var bargeInSilenceMs: Int = 600
+        /// Adaptive interruption configuration (Phase 2a).
+        var adaptive: AdaptiveInterruptionConfig = AdaptiveInterruptionConfig()
     }
 
     // MARK: - Memory

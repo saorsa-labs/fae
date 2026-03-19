@@ -1118,12 +1118,23 @@ actor PipelineCoordinator {
         var capturedAt: Date
         var speechSamples: Int = 0
         var lastRms: Float = 0
+        var peakRms: Float = 0
+        var consecutiveSpeechChunks: Int = 0
         var audioSamples: [Float] = []
     }
 
     /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
     private var bargeInDenyCooldownUntil: Date?
     private static let bargeInDenyCooldownSeconds: TimeInterval = 5.0
+
+    /// Interruption decider — strategy pattern for barge-in decisions.
+    private var interruptionDecider: any InterruptionDeciding
+
+    /// False-interruption recovery tracker.
+    private var falseInterruptionRecovery: FalseInterruptionRecovery
+
+    /// Buffer of assistant text at the point of interruption (for recovery).
+    private var lastAssistantTextBuffer: String = ""
 
     // MARK: - Pipeline Tasks
 
@@ -1330,6 +1341,28 @@ actor PipelineCoordinator {
 
         // Configure VAD from config.
         vad.applyConfiguration(config.vad)
+
+        // Initialize interruption decider based on config.
+        let adaptiveConfig = config.bargeIn.adaptive
+        if adaptiveConfig.enabled {
+            self.interruptionDecider = AdaptiveInterruptionDecider(
+                config: adaptiveConfig,
+                sampleRate: config.audio.inputSampleRate,
+                assistantStartHoldoffMs: config.bargeIn.assistantStartHoldoffMs,
+                minRms: config.bargeIn.minRms
+            )
+        } else {
+            self.interruptionDecider = LegacyThresholdInterruptionDecider(
+                confirmMs: config.bargeIn.confirmMs,
+                minRms: config.bargeIn.minRms,
+                sampleRate: config.audio.inputSampleRate,
+                assistantStartHoldoffMs: config.bargeIn.assistantStartHoldoffMs
+            )
+        }
+        self.falseInterruptionRecovery = FalseInterruptionRecovery(
+            timeoutMs: adaptiveConfig.falseInterruptionTimeoutMs,
+            enabled: adaptiveConfig.recoverFalseInterruptions
+        )
     }
 
     // MARK: - CoWork Security Executor
@@ -3320,14 +3353,45 @@ actor PipelineCoordinator {
                     bargeInSuppressed: bargeInSuppressed,
                     inDenyCooldown: inDenyCooldown
                 )
-                if vadOutput.isSpeech {
-                    // Check barge-in confirmation.
-                    let confirmSamples = (config.bargeIn.confirmMs * config.audio.inputSampleRate) / 1000
-                    if let barge = pendingBargeIn,
-                       barge.speechSamples >= confirmSamples
-                    {
+                if let barge = pendingBargeIn {
+                    // Compute overlap duration from accumulated speech samples.
+                    let overlapMs = (barge.speechSamples * 1000) / config.audio.inputSampleRate
+                    let assistantElapsedMs: Int
+                    if let start = lastAssistantStart {
+                        assistantElapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+                    } else {
+                        assistantElapsedMs = 0
+                    }
+
+                    let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
+                    let input = InterruptionInput(
+                        assistantSpeaking: assistantSpeaking,
+                        speechStarted: vadOutput.speechStarted,
+                        isSpeech: vadOutput.isSpeech,
+                        rms: vadOutput.rms,
+                        chunkSamples: chunk.samples,
+                        overlapDurationMs: overlapMs,
+                        assistantSpeechElapsedMs: assistantElapsedMs,
+                        echoSuppression: echoSuppressor.isInSuppression,
+                        bargeInSuppressed: bargeInSuppressed,
+                        inDenyCooldown: inDenyCooldown,
+                        peakRms: barge.peakRms,
+                        consecutiveSpeechChunks: barge.consecutiveSpeechChunks
+                    )
+
+                    let decision = interruptionDecider.process(input)
+                    switch decision {
+                    case .interruptNow(let reason):
                         pendingBargeIn = nil
+                        interruptionDecider.reset()
+                        NSLog("PipelineCoordinator: interruption decider → interruptNow (%@)", reason)
                         await handleBargeInWithVerification(barge: barge)
+                    case .ignore(let reason):
+                        pendingBargeIn = nil
+                        interruptionDecider.reset()
+                        debugLog(debugConsole, .command, "Interruption ignored: \(reason)")
+                    case .candidate:
+                        break  // Keep collecting.
                     }
                 }
             } else {
@@ -3364,11 +3428,26 @@ actor PipelineCoordinator {
                 }
             }
 
+            // False-interruption recovery: check timeout window.
+            if falseInterruptionRecovery.observing {
+                let result = falseInterruptionRecovery.checkTimeout()
+                if case .falseInterruption(let repair) = result {
+                    NSLog("PipelineCoordinator: false interruption detected — speaking repair")
+                    debugLog(debugConsole, .command, "False interruption recovery: \(repair)")
+                    await speakDirect(repair)
+                }
+            }
+
             // Process completed speech segment via bounded queue.
             if let segment = vadOutput.segment {
                 defer {
                     resetStreamingSpeakerGate()
                     resetStreamingWakeDetector()
+                }
+
+                // Confirm follow-up speech for false-interruption detection.
+                if falseInterruptionRecovery.observing && segment.durationSeconds > 0.5 {
+                    falseInterruptionRecovery.recordFollowUpSpeech()
                 }
 
                 // Avoid stale-segment backlog during assistant generation/speech.
@@ -6713,6 +6792,7 @@ actor PipelineCoordinator {
         guard !assistantSpeaking else { return }
         assistantSpeaking = true
         lastAssistantStart = Date()
+        lastAssistantTextBuffer = ""
         echoSuppressor.onAssistantSpeechStart()
     }
 
@@ -6722,6 +6802,7 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "Speech state → idle (\(reason), dur=\(String(format: "%.1f", speechDuration))s)")
             assistantSpeaking = false
             echoSuppressor.onAssistantSpeechEnd(speechDurationSecs: speechDuration)
+            interruptionDecider.reset()
         }
         if resetVAD {
             vad.reset()
@@ -6740,6 +6821,9 @@ actor PipelineCoordinator {
     /// Call this from inside the token generation loop. The LLM keeps producing tokens
     /// while TTS runs concurrently on the actor (re-entrant at `await` points).
     private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil, generationID: UUID? = nil) {
+        // Track assistant text for false-interruption recovery.
+        lastAssistantTextBuffer += text
+
         // Set speaking state immediately so echo suppressor and barge-in work correctly.
         markAssistantSpeechStarted()
 
@@ -6948,7 +7032,7 @@ actor PipelineCoordinator {
     ) -> PendingBargeIn? {
         var next = pending
         if speechStarted && !echoSuppression && !bargeInSuppressed && !inDenyCooldown {
-            next = PendingBargeIn(capturedAt: Date(), lastRms: rms)
+            next = PendingBargeIn(capturedAt: Date(), lastRms: rms, peakRms: rms)
         } else if speechStarted && (echoSuppression || bargeInSuppressed || inDenyCooldown) {
             return nil
         }
@@ -6956,10 +7040,16 @@ actor PipelineCoordinator {
         if isSpeech, next != nil {
             next?.speechSamples += chunkSamples.count
             next?.lastRms = rms
+            let currentPeak = next?.peakRms ?? 0
+            next?.peakRms = max(currentPeak, rms)
+            next?.consecutiveSpeechChunks += 1
             let remainingCapacity = max(0, 16_000 - (next?.audioSamples.count ?? 0))
             if remainingCapacity > 0 {
                 next?.audioSamples.append(contentsOf: chunkSamples.prefix(remainingCapacity))
             }
+        } else if !isSpeech, next != nil {
+            // Speech gap — reset consecutive counter but keep the candidate.
+            next?.consecutiveSpeechChunks = 0
         }
 
         return next
@@ -7025,6 +7115,15 @@ actor PipelineCoordinator {
         Task { await playback.stop() }
         debugLog(debugConsole, .command, "Barge-in (owner verified) rms=\(String(format: "%.4f", barge.lastRms))")
         NSLog("PipelineCoordinator: barge-in triggered (owner verified, rms=%.4f)", barge.lastRms)
+
+        // Record for false-interruption recovery.
+        let outcome = InterruptionOutcome(
+            interruptedAt: Date(),
+            generationID: activeGenerationID,
+            interruptedText: lastAssistantTextBuffer.isEmpty ? nil : lastAssistantTextBuffer,
+            spokenFraction: 0  // Approximate — exact tracking deferred.
+        )
+        falseInterruptionRecovery.recordInterruption(outcome: outcome)
     }
 
     private func markGenerationInterrupted() {
