@@ -211,7 +211,6 @@ actor CoworkToolExecutor {
         }
 
         let context = buildContext(for: request)
-        let callbacks = buildCallbacks()
         let call = PipelineCoordinator.ToolCall(
             name: toolName,
             arguments: [
@@ -221,7 +220,7 @@ actor CoworkToolExecutor {
             ]
         )
 
-        let outcome = await toolExecutor.execute(call, context: context, callbacks: callbacks)
+        let outcome = await toolExecutor.execute(call, context: context, callbacks: .noop)
 
         if outcome.damageControlIntervened {
             let reason = outcome.result.output
@@ -301,37 +300,12 @@ actor CoworkToolExecutor {
 
     // MARK: - Context Building
 
-    /// Builds the ToolExecutorContext for a Cowork request.
+    /// Builds the ToolExecutorContext for a Cowork request using the shared factory.
     ///
-    /// modelLocality is always .nonLocal for external providers — this triggers
-    /// DamageControlPolicy's nonLocalOnly zeroAccessPaths rules.
+    /// Delegates to ``ToolExecutorContext.coworkExternal()`` so that context
+    /// construction for non-local models is defined in one place.
     private func buildContext(for request: CoworkProviderRequest) -> ToolExecutorContext {
-        ToolExecutorContext(
-            toolMode: "full",
-            privacyMode: "shareable",
-            modelLocality: .nonLocal,
-            capabilityTicket: nil,
-            hasCapabilityTicketForTool: false,
-            explicitUserAuthorization: false,
-            isOwner: true,
-            livenessScore: nil,
-            actionSource: .relay,
-            proactiveContext: nil,
-            visionEnabled: false,
-            firstOwnerEnrollmentActive: false,
-            workflowTurnID: nil,
-            traceToolCallID: nil,
-            workflowRunID: nil
-        )
-    }
-
-    /// Builds no-op callbacks for CoworkToolExecutor.
-    private func buildCallbacks() -> ToolExecutorCallbacks {
-        ToolExecutorCallbacks(
-            onApprovalPending: { _, _ in },
-            onVisionAutoEnabled: { },
-            onComputerUseStep: { 0 }
-        )
+        .coworkExternal()
     }
 
     // MARK: - Inbound Response Scan

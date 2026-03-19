@@ -8590,23 +8590,7 @@ actor PipelineCoordinator {
                 // Build a fresh context snapshot from the coordinator's current state.
                 // If the coordinator is gone, return a restrictive default.
                 guard self != nil else {
-                    return ToolExecutorContext(
-                        toolMode: "off",
-                        privacyMode: "strict_local",
-                        modelLocality: .local,
-                        capabilityTicket: nil,
-                        hasCapabilityTicketForTool: false,
-                        explicitUserAuthorization: false,
-                        isOwner: false,
-                        livenessScore: nil,
-                        actionSource: .voice,
-                        proactiveContext: nil,
-                        visionEnabled: false,
-                        firstOwnerEnrollmentActive: false,
-                        workflowTurnID: nil,
-                        traceToolCallID: nil,
-                        workflowRunID: nil
-                    )
+                    return .restrictedFallback()
                 }
 
                 // NOTE: This is the @Sendable fallback — used only when run()
@@ -8615,23 +8599,7 @@ actor PipelineCoordinator {
                 // executeScriptBlock() always pass the real per-turn context.
                 // Default to restrictive so harness/test callers without
                 // explicit context can't escalate.
-                return ToolExecutorContext(
-                    toolMode: "off",
-                    privacyMode: "strict_local",
-                    modelLocality: .local,
-                    capabilityTicket: nil,
-                    hasCapabilityTicketForTool: false,
-                    explicitUserAuthorization: false,
-                    isOwner: false,
-                    livenessScore: nil,
-                    actionSource: .voice,
-                    proactiveContext: nil,
-                    visionEnabled: false,
-                    firstOwnerEnrollmentActive: false,
-                    workflowTurnID: nil,
-                    traceToolCallID: nil,
-                    workflowRunID: nil
-                )
+                return .restrictedFallback()
             },
             callbacksFactory: { [weak self] in
                 let weakSelf = self
