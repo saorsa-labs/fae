@@ -8600,17 +8600,20 @@ actor PipelineCoordinator {
                     )
                 }
 
-                // NOTE: This closure is @Sendable so we can't access actor state
-                // directly. The actual context is provided per-call via
-                // `executeScriptBlock()` which overrides contextFactory output.
+                // NOTE: This is the @Sendable fallback — used only when run()
+                // is called without an explicit context parameter (e.g. from
+                // tests or the developer harness). Production calls via
+                // executeScriptBlock() always pass the real per-turn context.
+                // Default to restrictive so harness/test callers without
+                // explicit context can't escalate.
                 return ToolExecutorContext(
-                    toolMode: "full",
-                    privacyMode: "local_preferred",
+                    toolMode: "off",
+                    privacyMode: "strict_local",
                     modelLocality: .local,
                     capabilityTicket: nil,
-                    hasCapabilityTicketForTool: true,
+                    hasCapabilityTicketForTool: false,
                     explicitUserAuthorization: false,
-                    isOwner: true,
+                    isOwner: false,
                     livenessScore: nil,
                     actionSource: .voice,
                     proactiveContext: nil,
@@ -8659,6 +8662,15 @@ actor PipelineCoordinator {
         let runtime = ensureJSCRuntime()
         let budget = block.budget ?? .default
 
+        // Enter script mode on the approval manager so first-tool-approval
+        // auto-grants batch credits for the remaining budget.
+        await approvalManager?.enterScriptMode(budgetToolCalls: budget.maxToolCalls)
+        defer {
+            // Inline Task so the actor-isolated exitScriptMode runs after await returns.
+            let mgr = approvalManager
+            Task { await mgr?.exitScriptMode() }
+        }
+
         debugLog(debugConsole, .toolCall, "Script execution started (budget: \(budget.maxToolCalls) calls, \(Int(budget.maxWallClockSeconds))s)")
         eventBus.send(.toolCall(
             id: "script-\(UUID().uuidString.prefix(8))",
@@ -8666,10 +8678,54 @@ actor PipelineCoordinator {
             inputJSON: "{\"source_length\":\(block.source.count)}"
         ))
 
+        // Build real per-turn context from coordinator state.
+        let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
+        let effectiveTicket = activeCapabilityTicket
+        let currentToolMode = effectiveToolMode()
+        let hasCapabilityTicket = currentToolMode == "full"
+            ? true
+            : (effectiveTicket?.allows(toolName: "*") ?? false)
+        let effectiveGenerationContext = currentTurnGenerationContext
+
+        let scriptContext = ToolExecutorContext(
+            toolMode: currentToolMode,
+            privacyMode: effectivePrivacyMode(),
+            modelLocality: modelLocality,
+            capabilityTicket: effectiveTicket,
+            hasCapabilityTicketForTool: hasCapabilityTicket,
+            explicitUserAuthorization: explicitUserAuthorizationForTurn,
+            isOwner: currentSpeakerIsOwner,
+            livenessScore: livenessScore,
+            actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
+            proactiveContext: proactiveContext,
+            visionEnabled: effectiveVisionEnabled(),
+            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            workflowTurnID: currentTurnID,
+            traceToolCallID: nil,
+            workflowRunID: nil
+        )
+
+        let scriptCallbacks = ToolExecutorCallbacks(
+            onApprovalPending: { [weak self] awaiting, manualOnly in
+                guard let self else { return }
+                await self.setApprovalState(awaiting: awaiting, manualOnly: manualOnly)
+            },
+            onVisionAutoEnabled: { [weak self] in
+                guard let self else { return }
+                await self.autoEnableVision()
+            },
+            onComputerUseStep: { [weak self] in
+                guard let self else { return 0 }
+                return await self.incrementComputerUseStep()
+            }
+        )
+
         let result = await runtime.run(
             script: block.source,
             budget: budget,
-            allowedTools: block.allowedTools
+            allowedTools: block.allowedTools,
+            context: scriptContext,
+            callbacks: scriptCallbacks
         )
 
         let output: String

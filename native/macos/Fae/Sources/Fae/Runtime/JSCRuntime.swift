@@ -102,7 +102,9 @@ actor JSCRuntime {
         script: String,
         budget: ScriptBudget = .default,
         executionLog: JSCExecutionLog? = nil,
-        allowedTools: Set<String>? = nil
+        allowedTools: Set<String>? = nil,
+        context: ToolExecutorContext? = nil,
+        callbacks: ToolExecutorCallbacks? = nil
     ) async -> JSCScriptResult {
         let budgetTracker = ScriptBudgetTracker(budget: budget)
         currentTracker = budgetTracker
@@ -136,8 +138,8 @@ actor JSCRuntime {
 
         let bridge = JSCToolBridge(
             executor: executor,
-            context: contextFactory(),
-            callbacks: callbacksFactory(),
+            context: context ?? contextFactory(),
+            callbacks: callbacks ?? callbacksFactory(),
             budgetTracker: budgetTracker,
             executionLog: executionLog,
             ticketManager: ticketManager,
@@ -352,8 +354,9 @@ actor JSCRuntime {
                     let resolvers = jsContext.objectForKeyedSubscript("fae")
                         .objectForKeyedSubscript("_toolResolvers")
                         .objectForKeyedSubscript(callId)
+                    let dryRunEnvelope = #"{"output":"(dry-run)","isError":false,"data":{"dryRun":true}}"#
                     resolvers?.objectForKeyedSubscript("resolve")
-                        .call(withArguments: ["(dry-run)" as NSString])
+                        .call(withArguments: [dryRunEnvelope as NSString])
                     jsContext.evaluateScript("delete fae._toolResolvers[\(callId)];")
                 }
             }

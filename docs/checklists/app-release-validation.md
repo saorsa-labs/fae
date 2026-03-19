@@ -18,6 +18,7 @@ Run this full contract when any of the following changes:
 - permissions, approval popups, key input, or security/export review
 - memory capture/recall or scheduler behavior
 - skills management or Python-runtime integration
+- JSC tool-program runtime, typed adapters, batch approval, or dry-run mode
 - Cowork routing, model switching, compare/fork, or remote-provider handling
 - legacy dual-model or concierge compatibility changes
 - settings that affect loaded models, policy, or diagnostics
@@ -276,3 +277,41 @@ For live UI validation, keep using the real app plus screenshots, the test serve
   - idle app RSS
   - peak combined app + worker RSS during at least one real tool turn
   - whether the turn completed natively, via repair fallback, or timed out
+
+## Phase 12: JSC Tool Program Runtime
+
+Validates the JavaScriptCore tool-program execution path end-to-end.
+
+### 12.1 Script execution via LLM
+- [ ] Prompt the LLM with a multi-step task (e.g. "check my calendar, find conflicts, then remind me")
+- [ ] Verify LLM emits a `<tool_program>` block (not individual tool calls)
+- [ ] Verify script executes through JSCRuntime with real per-turn context
+- [ ] Verify tool calls within the script honor the current tool mode
+- [ ] Verify the script result appears in the conversation
+
+### 12.2 Security enforcement
+- [ ] In read-only tool mode, verify script tool calls are blocked
+- [ ] Verify speaker identity is enforced (non-owner cannot trigger script tools)
+- [ ] Verify proactive context restrictions apply to script tool calls
+- [ ] Verify budget limits trigger correctly (set a low budget, confirm budgetExceeded)
+
+### 12.3 Batch approval
+- [ ] Execute a script that calls the same tool 3+ times in a loop
+- [ ] Verify first invocation shows approval popup
+- [ ] Verify subsequent invocations of the same tool are auto-approved (batch grant)
+- [ ] Verify different tool names still require their own approval
+
+### 12.4 Dry-run mode
+- [ ] Execute a `<tool_program>` with dry-run flag
+- [ ] Verify `DryRunPlan` records all intended calls without executing them
+- [ ] Verify typed adapters (`fae.calendar.list()` etc.) work in dry-run mode
+
+### 12.5 Typed adapters
+- [ ] Execute a script using `fae.calendar.list()` — verify structured data returned
+- [ ] Execute a script using `fae.web.search(query)` — verify structured results
+- [ ] Verify `fae.fs.read(path)` returns file content
+
+### 12.6 Capability tickets
+- [ ] Verify script-scoped ticket is issued at script start
+- [ ] Verify ticket is revoked after script completion
+- [ ] Verify ticket is revoked after script failure/cancellation

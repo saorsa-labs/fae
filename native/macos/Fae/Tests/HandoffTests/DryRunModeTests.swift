@@ -99,8 +99,9 @@ final class DryRunModeTests: XCTestCase {
         """)
 
         XCTAssertEqual(plan.scriptResult.status, .success)
-        XCTAssertEqual(plan.scriptResult.value, "(dry-run)")
-        XCTAssertTrue(plan.scriptResult.logs.first?.contains("(dry-run)") == true)
+        // Dry-run now returns a valid JSON envelope so typed adapters work.
+        XCTAssertTrue(plan.scriptResult.value?.contains("dry-run") == true)
+        XCTAssertTrue(plan.scriptResult.logs.first?.contains("dry-run") == true)
     }
 
     func testDryRunRecordsMultipleCallsInOrder() async {

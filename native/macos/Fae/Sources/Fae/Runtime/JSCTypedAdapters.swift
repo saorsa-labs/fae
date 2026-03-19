@@ -38,7 +38,7 @@ enum JSCTypedAdapters {
         fae._unwrap = function(raw) {
             var env;
             if (typeof raw === 'string') {
-                env = JSON.parse(raw);
+                try { env = JSON.parse(raw); } catch(e) { return raw; }
             } else {
                 env = raw;
             }
