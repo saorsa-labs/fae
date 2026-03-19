@@ -130,6 +130,8 @@ LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target).
 
 **Latency**: 3s (greetings) to 30s (multi-tool queries). Orb visual state + thinking tone provide feedback throughout.
 
+**Two-lane tool execution**: The LLM can emit either `<tool_call>` blocks (single tool calls, max 5 per turn) or `<tool_program>` blocks (JavaScript programs executed via JSCRuntime, no call cap). Script blocks run through the same governance stack (ToolExecutor, TrustedActionBroker, DamageControlPolicy) with additional budget enforcement (ScriptBudget) and optional dry-run preview (DryRunPlan).
+
 ### Post-ASR vocabulary correction
 
 Qwen3-ASR has no prompt conditioning or hot-word biasing, so all name corrections happen post-transcription via two layers:
@@ -468,6 +470,22 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `ConversationState.swift` | History management; `removeMessages(taggedWith:)` |
 | `TextProcessing.swift` | ThinkTagStripper, text cleanup utilities |
 
+### Runtime/ (11 files)
+
+| File | Role |
+|------|------|
+| `JSCRuntime.swift` | Fresh-per-run JavaScriptCore runtime for `<tool_program>` scripts |
+| `JSCToolBridge.swift` | `fae.*` API bridge (fae.tool, fae.log, fae.sleep) for JSC contexts |
+| `JSCTypedAdapters.swift` | Typed JS adapters (fae.calendar, fae.reminders, etc.) |
+| `JSCScriptResult.swift` | Script execution result type (success/failure/cancelled/budgetExceeded) |
+| `JSCExecutionLog.swift` | Structured execution log for developer harness debugging |
+| `JSCDeveloperHarness.swift` | Interactive harness for testing JS tool programs |
+| `ScriptBudget.swift` | Resource limits (max tool calls, wall-clock time, concurrency) |
+| `DryRunPlan.swift` | Dry-run plan recording: intended calls + summary formatting |
+| `DependencyInstaller.swift` | Python/uv dependency installation |
+| `UVRuntime.swift` | Python uv runtime for package-heavy skills |
+| `FaeLocalRuntimeServer.swift` | Local HTTP runtime server |
+
 ### Tools/ (34 files)
 
 | File | Role |
@@ -636,7 +654,7 @@ just test                # Run all tests
 just check               # Full validation (build + test)
 ```
 
-**Chatterbox** (voice testing): `cd /Users/davidirvine/Desktop/Devel/projects/chatterbox && ./start_service.sh`
+**Voice TTS** (voice testing): `voice -q "test phrase"` (Kokoro TTS CLI at `~/.cargo/bin/voice`)
 
 Known blockers: dependency fetch requires network; first app run blocks on model downloads (~8 GB).
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **JSC Tool-as-Code runtime**: LLM can now emit `<tool_program>` JavaScript blocks for multi-step tasks requiring 3+ dependent tool calls. Scripts execute via JavaScriptCore with full governance (budgets, capability tickets, broker policy, audit logging).
+- **Dry-run mode**: Scripts can be previewed before execution via `runDryRun()` — records all intended tool calls without side effects, producing a plan summary for user review.
+- **Script budgets**: Per-script resource limits (max tool calls, wall-clock time, concurrency) prevent runaway execution.
+- **Script-scoped capability tickets**: Time-limited, revocable tool access grants scoped to individual script runs.
+- **Batch approval UX**: Multiple tool calls in a script can be approved as a group.
+- **Structured tool results**: Core tools return typed `ToolResultData` with structured fields alongside text output.
+- **JSC typed adapters**: Script-facing typed API (fae.calendar, fae.reminders, etc.) with structured result parsing.
+
 ## [v0.8.108] - 2026-03-16
 
 ### Added
