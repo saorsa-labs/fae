@@ -40,6 +40,10 @@ actor CoworkToolExecutor {
     /// These are detected via simple substring/pattern matching — not ML.
     private let inboundScanPatterns: [String]
 
+    /// Whether PipelineCoordinator has completed startup and ToolExecutor is ready.
+    /// When false, submit calls fail fast with .pipelineNotReady.
+    private var isReady: Bool = false
+
     // MARK: - Init
 
     /// Create a CoworkToolExecutor with the shared security pipeline.
@@ -49,12 +53,22 @@ actor CoworkToolExecutor {
     ///     Must be the same instance used by the voice pipeline.
     ///   - inboundScanPatterns: Patterns checked in responses to detect prompt
     ///     injection attempts. If nil, uses the default set.
+    ///   - isReady: Whether the executor is ready to handle requests. Defaults to true.
+    ///     Tests can pass false to exercise the pipelineNotReady path.
     init(
         toolExecutor: any ToolExecutorProtocol,
-        inboundScanPatterns: [String]? = nil
+        inboundScanPatterns: [String]? = nil,
+        isReady: Bool = true
     ) {
         self.toolExecutor = toolExecutor
         self.inboundScanPatterns = inboundScanPatterns ?? Self.defaultInboundPatterns
+        self.isReady = isReady
+    }
+
+    /// Mark this executor as fully initialized and ready to handle requests.
+    /// Called by PipelineCoordinator after the voice pipeline is fully running.
+    func markReady() {
+        isReady = true
     }
 
     // MARK: - Submit (Blocking)
@@ -70,6 +84,9 @@ actor CoworkToolExecutor {
         request: CoworkProviderRequest,
         provider: some CoworkLLMProvider
     ) async throws -> CoworkProviderResponse {
+        guard isReady else {
+            throw CoworkToolExecutorError.pipelineNotReady
+        }
         // Security check through unified pipeline
         let context = buildContext(for: request)
         let callbacks = buildCallbacks()
@@ -128,6 +145,9 @@ actor CoworkToolExecutor {
         provider: some CoworkStreamingProvider,
         onPartialText: @escaping @Sendable (String) async -> Void
     ) async throws -> CoworkProviderResponse {
+        guard isReady else {
+            throw CoworkToolExecutorError.pipelineNotReady
+        }
         let context = buildContext(for: request)
         let callbacks = buildCallbacks()
 
@@ -179,7 +199,14 @@ actor CoworkToolExecutor {
             throw error
         }
 
-        return finalResponse!
+        // At this point finalResponse is guaranteed non-nil: finalError was nil and
+        // the provider returned a response. Use guard to satisfy zero-tolerance policy.
+        guard let result = finalResponse else {
+            throw CoworkToolExecutorError.networkError(
+                underlying: NSError(domain: "CoworkToolExecutor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provider returned no response and no error"])
+            )
+        }
+        return result
     }
 
     // MARK: - Submit (Web Search)
@@ -192,6 +219,9 @@ actor CoworkToolExecutor {
         request: CoworkProviderRequest,
         provider: some CoworkWebSearchProvider
     ) async throws -> CoworkProviderResponse {
+        guard isReady else {
+            throw CoworkToolExecutorError.pipelineNotReady
+        }
         let context = buildContext(for: request)
         let callbacks = buildCallbacks()
 

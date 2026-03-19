@@ -613,6 +613,38 @@ final class CoworkToolExecutorTests: XCTestCase {
 
     // MARK: - Test: Streaming routes through security stack
 
+    func testCoworkToolExecutorReturnsErrorWhenPipelineNotReady() async throws {
+        let mockExecutor = MockToolExecutor(
+            nextResult: ToolExecutorResult(
+                result: ToolResult.success("ok"),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: 5
+            )
+        )
+
+        // Create CoworkToolExecutor with isReady = false (via init parameter)
+        let executor = CoworkToolExecutor(toolExecutor: mockExecutor, isReady: false)
+        let provider = OpenAICompatibleCoworkProvider(baseURL: "https://api.openai.com", apiKey: "secret")
+
+        do {
+            _ = try await executor.submit(
+                request: CoworkProviderRequest(model: "gpt-4.1", preparedPrompt: preparedPrompt()),
+                provider: provider
+            )
+            XCTFail("Expected CoworkToolExecutorError.pipelineNotReady")
+        } catch let error as CoworkToolExecutorError {
+            guard case .pipelineNotReady = error else {
+                XCTFail("Expected .pipelineNotReady, got \(error)")
+                return
+            }
+        }
+
+        // Verify toolExecutor was never called
+        let record = await mockExecutor.lastCall
+        XCTAssertNil(record, "toolExecutor.execute() should not be called when not ready")
+    }
+
     func testCoworkToolExecutorStreamingRoutesThroughSecurityStack() async throws {
         let mockExecutor = MockToolExecutor(
             nextResult: ToolExecutorResult(
