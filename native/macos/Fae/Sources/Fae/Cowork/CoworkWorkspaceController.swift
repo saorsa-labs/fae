@@ -1481,25 +1481,45 @@ final class CoworkWorkspaceController: ObservableObject {
                 }
 
                 let response: CoworkProviderResponse
+                let securityExecutor = await self.faeCore.coworkToolExecutor
                 if let searchProvider = provider as? any CoworkWebSearchProvider {
                     // Use the web-search tool loop — non-streaming internally, enables
                     // the external model to call web_search up to 3 times before replying.
-                    response = try await searchProvider.submitWithWebSearch(request: providerRequest)
+                    if let securityExecutor {
+                        response = try await securityExecutor.submitWithWebSearch(request: providerRequest, provider: searchProvider)
+                    } else {
+                        response = try await searchProvider.submitWithWebSearch(request: providerRequest)
+                    }
                     await MainActor.run {
                         self.conversation.startStreamingReply()
                         self.conversation.updateStreaming(text: response.content)
                     }
                 } else if let streamingProvider = provider as? any CoworkStreamingProvider {
-                    response = try await streamingProvider.stream(request: providerRequest) { partialText in
-                        await MainActor.run {
-                            if !self.conversation.isStreaming {
-                                self.conversation.startStreamingReply()
+                    if let securityExecutor {
+                        response = try await securityExecutor.submitStreaming(request: providerRequest, provider: streamingProvider) { partialText in
+                            await MainActor.run {
+                                if !self.conversation.isStreaming {
+                                    self.conversation.startStreamingReply()
+                                }
+                                self.conversation.updateStreaming(text: partialText)
                             }
-                            self.conversation.updateStreaming(text: partialText)
+                        }
+                    } else {
+                        response = try await streamingProvider.stream(request: providerRequest) { partialText in
+                            await MainActor.run {
+                                if !self.conversation.isStreaming {
+                                    self.conversation.startStreamingReply()
+                                }
+                                self.conversation.updateStreaming(text: partialText)
+                            }
                         }
                     }
                 } else {
-                    response = try await provider.submit(request: providerRequest)
+                    if let securityExecutor {
+                        response = try await securityExecutor.submit(request: providerRequest, provider: provider)
+                    } else {
+                        response = try await provider.submit(request: providerRequest)
+                    }
                 }
 
                 await MainActor.run {
@@ -1585,6 +1605,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 )
             }
 
+            let securityExecutor = await self.faeCore.coworkToolExecutor
             let results = await withTaskGroup(of: WorkWithFaeConsensusResult.self, returning: [WorkWithFaeConsensusResult].self) { group in
                 for agent in participants {
                     group.addTask { [runtimeDescriptor = self.runtimeDescriptor, chatProvider = self.chatProvider, thinkingLevel] in
@@ -1599,7 +1620,11 @@ final class CoworkWorkspaceController: ObservableObject {
                                 response = try await chatProvider.submit(request: request)
                             } else {
                                 let provider = try CoworkProviderFactory.provider(for: agent, runtimeDescriptor: runtimeDescriptor)
-                                response = try await provider.submit(request: request)
+                                if let securityExecutor {
+                                    response = try await securityExecutor.submit(request: request, provider: provider)
+                                } else {
+                                    response = try await provider.submit(request: request)
+                                }
                             }
                             return WorkWithFaeConsensusResult(
                                 agentID: agent.id,
