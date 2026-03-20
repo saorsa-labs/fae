@@ -105,3 +105,34 @@
 
 **Test count**: 1553 tests, 0 failures (no change)
 **Build**: zero warnings on `swift build`
+
+### Phase 2.4: Evaluation & Regression Testing — COMPLETE
+
+- [x] Task 1: Dual-path mock simulation test (parallel feeding, independent reset)
+- [x] Task 2: StreamingSTTResult equality and defaults tests
+- [x] Task 3: KeywordBiasConfig defaults test
+- [x] Task 4: FaeConfig.StreamingASRConfig defaults, custom values, and Codable round-trip tests
+- [x] Task 5: Full build + test validation (1560 tests, 0 failures)
+
+**Files modified**:
+- `Tests/IntegrationTests/ParakeetStreamingEngineTests.swift` — 7 new dual-path regression tests
+
+**Test count**: 1553 -> 1560 (+7 new tests), 0 failures
+**Build**: zero warnings on `swift build`
+
+### Milestone 2 Summary
+
+**Total files created** (4):
+- `Sources/Fae/ML/ParakeetStreamingEngine.swift` — 230 lines
+- `Tests/IntegrationTests/ParakeetStreamingEngineTests.swift` — 19 tests
+- `.planning/PLAN-phase-2.1.md`
+- `.planning/PLAN-phase-2.2.md`
+
+**Total files modified** (4):
+- `Sources/Fae/Core/FaeConfig.swift` — StreamingASRConfig struct
+- `Sources/Fae/ML/ModelManager.swift` — parakeetEngine loading
+- `Sources/Fae/Pipeline/PipelineCoordinator.swift` — dual-path wiring, vocab correction, disagreement tracking
+- `Sources/Fae/Core/FaeCore.swift` — wire parakeetEngine into PipelineCoordinator
+
+**Test count**: 1541 -> 1560 (+19 new tests across 4 phases), 0 failures
+**Build**: zero warnings throughout all phases

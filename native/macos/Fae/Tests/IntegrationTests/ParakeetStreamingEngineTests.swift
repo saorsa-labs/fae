@@ -185,4 +185,101 @@ final class ParakeetStreamingEngineTests: XCTestCase {
         let loaded = await engine.isLoaded
         XCTAssertFalse(loaded)
     }
+
+    // MARK: - Dual-Path Architecture
+
+    func testDualPathMockSimulatesParallelFeeding() async throws {
+        // Simulates the dual-path architecture: fast-path (Parakeet) and slow-path (Qwen3-ASR)
+        // both receive the same audio but produce independent transcripts.
+        let fastPath = MockParakeetStreamingEngine()
+        let slowPath = MockParakeetStreamingEngine()
+
+        try await fastPath.load()
+        try await slowPath.load()
+
+        // Feed same audio to both paths
+        let samples = [Float](repeating: 0.3, count: 500)
+        await fastPath.feedAudio(samples)
+        await slowPath.feedAudio(samples)
+
+        // Both should produce transcripts independently
+        let fastPartial = await fastPath.getPartialTranscript()
+        let slowPartial = await slowPath.getPartialTranscript()
+        XCTAssertEqual(fastPartial, "mock transcript")
+        XCTAssertEqual(slowPartial, "mock transcript")
+
+        // Reset fast-path should not affect slow-path
+        await fastPath.reset()
+        let fastAfterReset = await fastPath.getPartialTranscript()
+        let slowAfterReset = await slowPath.getPartialTranscript()
+        XCTAssertEqual(fastAfterReset, "")
+        XCTAssertEqual(slowAfterReset, "mock transcript", "Slow path should be unaffected by fast path reset")
+    }
+
+    func testStreamingSTTResultEquality() {
+        let result1 = StreamingSTTResult(text: "hello", isFinal: false, confidence: 0.9)
+        let result2 = StreamingSTTResult(text: "hello", isFinal: false, confidence: 0.9)
+        let result3 = StreamingSTTResult(text: "hello", isFinal: true, confidence: 0.9)
+        let result4 = StreamingSTTResult(text: "world", isFinal: false, confidence: 0.9)
+
+        XCTAssertEqual(result1, result2, "Same text/isFinal/confidence should be equal")
+        XCTAssertNotEqual(result1, result3, "Different isFinal should not be equal")
+        XCTAssertNotEqual(result1, result4, "Different text should not be equal")
+    }
+
+    func testStreamingSTTResultDefaults() {
+        let result = StreamingSTTResult(text: "test", isFinal: false)
+        XCTAssertNil(result.confidence, "Default confidence should be nil")
+        XCTAssertFalse(result.isFinal)
+    }
+
+    func testKeywordBiasConfigDefaults() {
+        let config = KeywordBiasConfig.default
+        XCTAssertFalse(config.interruptPhrases.isEmpty, "Should have default interrupt phrases")
+        XCTAssertFalse(config.wakePhrases.isEmpty, "Should have default wake phrases")
+        XCTAssertTrue(config.caseInsensitive, "Should be case insensitive by default")
+        XCTAssertTrue(config.fuzzyMatching, "Should enable fuzzy matching by default")
+        XCTAssertTrue(config.interruptPhrases.contains("stop"), "Should include 'stop' as interrupt phrase")
+        XCTAssertTrue(config.wakePhrases.contains("fae"), "Should include 'fae' as wake phrase")
+    }
+
+    // MARK: - FaeConfig StreamingASR
+
+    func testStreamingASRConfigDefaults() {
+        let config = FaeConfig()
+        XCTAssertTrue(config.streamingASR.enabled, "Streaming ASR should be enabled by default")
+        XCTAssertEqual(
+            config.streamingASR.modelId,
+            "mlx-community/parakeet-tdt-0.6b-v3",
+            "Default model should be Parakeet TDT 0.6B v3"
+        )
+        XCTAssertEqual(config.streamingASR.chunkSamples, 8_000, "Default chunk size should be 500ms")
+        XCTAssertEqual(config.streamingASR.minChunkSamples, 4_000, "Default min chunk should be 250ms")
+    }
+
+    func testStreamingASRConfigCustomValues() {
+        var config = FaeConfig()
+        config.streamingASR.enabled = false
+        config.streamingASR.chunkSamples = 16_000
+        config.streamingASR.minChunkSamples = 8_000
+
+        XCTAssertFalse(config.streamingASR.enabled)
+        XCTAssertEqual(config.streamingASR.chunkSamples, 16_000)
+        XCTAssertEqual(config.streamingASR.minChunkSamples, 8_000)
+    }
+
+    func testStreamingASRConfigCodable() throws {
+        var config = FaeConfig.StreamingASRConfig()
+        config.enabled = false
+        config.modelId = "custom-model"
+        config.chunkSamples = 4_000
+
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(FaeConfig.StreamingASRConfig.self, from: data)
+
+        XCTAssertEqual(decoded.enabled, false)
+        XCTAssertEqual(decoded.modelId, "custom-model")
+        XCTAssertEqual(decoded.chunkSamples, 4_000)
+        XCTAssertEqual(decoded.minChunkSamples, 4_000, "Default should survive encode/decode")
+    }
 }
