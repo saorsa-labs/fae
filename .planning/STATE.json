@@ -3,19 +3,19 @@
   "project": "adaptive-interruption-fix",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Speaker verification resilience"
+    "number": 3,
+    "name": "Adaptive decider tuning"
   },
   "phase": {
-    "number": "2.1",
-    "name": "Graceful degradation for verification",
+    "number": "3.1",
+    "name": "Transcript-boosted fast path",
     "plan": "complete"
   },
   "progress": {
-    "total_tasks": 5,
-    "completed_tasks": 5,
+    "total_tasks": 3,
+    "completed_tasks": 3,
     "current_task": null
   },
   "status": "milestone_complete",
-  "last_updated": "2026-03-20T14:00:00Z"
+  "last_updated": "2026-03-20T14:30:00Z"
 }

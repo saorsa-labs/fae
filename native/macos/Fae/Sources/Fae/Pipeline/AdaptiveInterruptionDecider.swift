@@ -52,23 +52,17 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
             return .ignore(reason: "holdoff_window")
         }
 
-        // RMS noise floor gate — must exceed baseline.
-        guard input.rms >= minRms else {
-            return .ignore(reason: "below_rms_threshold")
-        }
+        // --- Semantic fast paths (bypass RMS gate) ---
+        // Keywords and transcript evidence are definitive proof of speech —
+        // RMS measurement is irrelevant when STT produced actual words.
 
-        // Track RMS for persistence analysis.
-        rmsHistory.append(input.rms)
-        if rmsHistory.count > Self.rmsHistoryMaxSize {
-            rmsHistory.removeFirst(rmsHistory.count - Self.rmsHistoryMaxSize)
-        }
-
-        // --- Semantic fast paths (Phase 2b) ---
-
-        // Interrupt keyword detected — fire immediately (no overlap minimum).
+        // Interrupt keyword detected — fire immediately (no overlap or RMS minimum).
         if input.hasInterruptKeyword {
             return .interruptNow(reason: "interrupt_keyword")
         }
+
+        let hasTranscriptEvidence = input.partialWordCount >= 1
+            && !BackchannelClassifier.isBackchannel(input.partialTranscript)
 
         // Backchannel suppression — if the only transcript evidence is a
         // backchannel phrase, suppress unless overlap is very long.
@@ -80,19 +74,31 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
             // Very long backchannel — user may be continuing, fall through.
         }
 
-        // --- Adaptive decision logic ---
+        // Transcript evidence at any overlap — if STT produced real words,
+        // the user is genuinely speaking. Fire immediately.
+        if hasTranscriptEvidence && input.overlapDurationMs >= 100 {
+            return .interruptNow(reason: "adaptive_transcript_boosted")
+        }
+
+        // --- Acoustic-only decision logic (requires RMS gate) ---
+
+        // RMS noise floor gate — must exceed baseline for acoustic-only decisions.
+        guard input.rms >= minRms else {
+            return .ignore(reason: "below_rms_threshold")
+        }
+
+        // Track RMS for persistence analysis.
+        rmsHistory.append(input.rms)
+        if rmsHistory.count > Self.rmsHistoryMaxSize {
+            rmsHistory.removeFirst(rmsHistory.count - Self.rmsHistoryMaxSize)
+        }
 
         let overlapMs = input.overlapDurationMs
 
-        // Too early — not enough overlap to judge.
+        // Too early for acoustic-only — not enough overlap to judge.
         if overlapMs < 150 {
             return .candidate
         }
-
-        // Transcript-boosted path: if we have real words (not just a backchannel),
-        // lower the overlap threshold — the user is genuinely speaking.
-        let hasTranscriptEvidence = input.partialWordCount >= 1
-            && !BackchannelClassifier.isBackchannel(input.partialTranscript)
 
         // Strong acoustic evidence: sustained overlap + energy persistence.
         let hasSustainedEnergy = isSustainedEnergy(floor: config.rmsSustainFloor)
@@ -104,11 +110,6 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
         // bleedthrough, not the user interrupting.
         if echoActive && !hasTranscriptEvidence && overlapMs < config.minOverlapMs * 3 {
             return .candidate
-        }
-
-        // Semantic-boosted fast path: transcript evidence lowers the bar.
-        if hasTranscriptEvidence && overlapMs >= 200 && (hasSustainedEnergy || hasStrongPeak) {
-            return .interruptNow(reason: "adaptive_transcript_boosted")
         }
 
         // Fast path: clear sustained speech with strong energy.

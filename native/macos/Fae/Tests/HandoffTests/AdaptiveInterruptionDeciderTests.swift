@@ -467,12 +467,7 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
     func testAdaptiveDeciderTranscriptBoostedInterrupt() {
         var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
 
-        // Build RMS history.
-        for _ in 0..<5 {
-            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 150))
-        }
-
-        // 200ms overlap with transcript evidence — lower than normal 300ms threshold.
+        // 200ms overlap with transcript evidence — fires immediately.
         let input = makeInput(
             rms: 0.12,
             overlapDurationMs: 200,
@@ -480,6 +475,21 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             consecutiveSpeechChunks: 3,
             partialTranscript: "actually I wanted",
             partialWordCount: 3
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "adaptive_transcript_boosted"))
+    }
+
+    func testAdaptiveDeciderTranscriptBoostedAt100ms() {
+        // Transcript evidence fires at just 100ms — no acoustic energy needed.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            rms: 0.05,  // Low RMS — doesn't matter with transcript.
+            overlapDurationMs: 100,
+            peakRms: 0.05,
+            consecutiveSpeechChunks: 1,
+            partialTranscript: "stop please",
+            partialWordCount: 2
         )
         let decision = decider.process(input)
         XCTAssertEqual(decision, .interruptNow(reason: "adaptive_transcript_boosted"))
