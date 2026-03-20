@@ -185,3 +185,44 @@ second, lighter model providing independent partials on a different decode caden
 **Nested types extracted to top level**: 9 (3 structs + 6 enums)
 **Test count**: 1560 tests, 0 failures throughout
 **Build**: zero warnings throughout
+
+### Phase 3.2: Extract BargeInState + TTSState + BargeInDecisions
+
+**Baseline**: PipelineCoordinator 9,724 lines, 1560 tests passing
+
+- [x] Extract BargeInState (11 barge-in state vars into consolidated struct) (commit: 57a620ba)
+  - Created `BargeInState.swift` (112 lines initially)
+  - Moved: pendingBargeIn, bargeInSuppressed, playbackBargeInCandidate, playbackWakeWordDetected,
+    playbackInterruptKeywordDetected, bargeInDenyCooldownUntil, denyCooldownSeconds,
+    interruptionDecider, falseInterruptionRecovery, lastAssistantTextBuffer, generationTakeoverCandidate
+  - Added convenience: resetPlaybackState(), startDenyCooldown(), recordInterruption(), clearAll()
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract TTSState (TTS task chain + TTFA telemetry) (commit: 0bd9cfc3)
+  - Created `TTSState.swift` (45 lines)
+  - Moved: pendingTTSTask, lastUserTurnEndedAt, ttfaEmittedForCurrentTurn, ttsSynthesisTimeoutSeconds
+  - Added convenience: cancelPending(), awaitPending(), resetForNewTurn()
+  - Replaced ~15 cancel+nil patterns with ttsState.cancelPending()
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract BargeInDecisions namespace (6 pure static functions) (commit: 0675d7a3)
+  - Added `BargeInDecisions` enum to BargeInState.swift (BargeInState.swift now 206 lines)
+  - Moved: shouldTrackBargeIn, shouldTrackGenerationTakeover, advancePendingBargeIn,
+    shouldAllowBargeInInterrupt, shouldStartDeferredFollowUp, coalescedDeferredProactiveTaskIDs
+  - PipelineCoordinator retains forwarding static methods for test compatibility
+  - 1560 tests pass, 0 warnings
+
+- [SKIPPED] Task 4: Extract verifyBargeInSpeaker/handleBargeInWithVerification
+  - These methods are deeply coupled to coordinator dependencies (speakerEncoder,
+    speakerProfileStore, config, echoSuppressor, debugConsole, playback — 10+ deps).
+  - Extracting would require passing all deps as parameters, increasing complexity.
+  - Better extracted as part of Phase 3.3 (LLMStage + ToolExecutionStage) or 3.4 (actor boundaries).
+
+### Phase 3.2 Evidence
+
+**PipelineCoordinator line count**: 9,724 -> 9,663 (-61 lines)
+**New files created** (2): BargeInState.swift (206 lines), TTSState.swift (45 lines) = 251 lines total
+**State variables moved out of coordinator**: ~15 (11 barge-in + 4 TTS)
+**Pure functions extracted**: 6 static decision functions to BargeInDecisions enum
+**Test count**: 1560 tests, 0 failures throughout
+**Build**: zero warnings throughout
