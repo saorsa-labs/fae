@@ -1,21 +1,29 @@
 {
   "version": 1,
-  "project": "adaptive-interruption-fix",
+  "project": "voice-pipeline-hardening",
   "active": true,
   "milestone": {
-    "number": 4,
-    "name": "Echo defense + fae_self rejection"
+    "number": 2,
+    "name": "Parakeet TDT Dual-Path Streaming ASR"
   },
   "phase": {
-    "number": "4.1",
-    "name": "Three-layer echo defense",
-    "plan": "complete"
+    "number": "2.1",
+    "name": "Parakeet TDT CoreML Integration",
+    "plan": ".planning/PLAN-phase-2.1.md",
+    "status": "complete"
   },
   "progress": {
-    "total_tasks": 4,
-    "completed_tasks": 4,
+    "total_tasks": 7,
+    "completed_tasks": 7,
     "current_task": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-20T15:00:00Z"
+  "review": {
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null,
+    "findings_count": { "critical": 0, "important": 0, "minor": 0 }
+  },
+  "status": "task_complete",
+  "last_action": "all_tasks_complete",
+  "last_updated": "2026-03-20T22:45:00Z"
 }

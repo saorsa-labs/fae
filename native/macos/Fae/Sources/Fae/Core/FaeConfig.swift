@@ -10,6 +10,7 @@ struct FaeConfig: Codable {
     var llm: LlmConfig = LlmConfig()
     var tts: TtsConfig = TtsConfig()
     var stt: SttConfig = SttConfig()
+    var streamingASR: StreamingASRConfig = StreamingASRConfig()
     var conversation: ConversationConfig = ConversationConfig()
     var bargeIn: BargeInConfig = BargeInConfig()
     var memory: MemoryConfig = MemoryConfig()
@@ -190,12 +191,40 @@ struct FaeConfig: Codable {
         /// model will generate speech matching that description (no reference audio needed).
         /// Set to nil to revert to voice cloning from fae.wav.
         var defaultVoiceInstruct: String? = "A softly spoken young Scottish woman with a warm, gently cheeky tone. She sounds friendly, playful, and grounded, with a clear Scottish accent and a touch of dry humour."
+        /// When `true`, defer all TTS until the LLM turn completes (batched mode).
+        /// When `false` (default), synthesise sentence-by-sentence as the LLM streams,
+        /// giving lower time-to-first-audio. Kokoro is stateless per call so per-sentence
+        /// synthesis does not degrade prosody.
+        var preferFinalOnly: Bool = false
     }
 
     // MARK: - STT
 
     struct SttConfig: Codable {
         var modelId: String = "mlx-community/Qwen3-ASR-1.7B-4bit"
+    }
+
+    /// Configuration for the dual-path streaming ASR fast-path.
+    ///
+    /// When enabled, Parakeet TDT runs alongside Qwen3-ASR as a lightweight
+    /// CTC-based streaming recognizer. Parakeet provides low-latency partial
+    /// transcripts during speech, while Qwen3-ASR handles final high-accuracy
+    /// transcription after speech ends.
+    struct StreamingASRConfig: Codable {
+        /// Whether the streaming ASR fast-path is enabled.
+        /// When false, the pipeline uses growing-buffer Qwen3-ASR for streaming.
+        var enabled: Bool = true
+
+        /// HuggingFace model repository for the streaming ASR model.
+        var modelId: String = "mlx-community/parakeet-tdt-0.6b-v3"
+
+        /// Audio samples to accumulate before each decode pass (16kHz mono).
+        /// Default 8000 = 500ms. Lower values reduce latency but increase GPU load.
+        var chunkSamples: Int = 8_000
+
+        /// Minimum audio samples before the very first decode pass.
+        /// Default 4000 = 250ms. Ensures enough context for meaningful output.
+        var minChunkSamples: Int = 4_000
     }
 
     // MARK: - Conversation
@@ -833,6 +862,9 @@ struct FaeConfig: Codable {
                 case "voiceIdentityLock", "voice_identity_lock":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.tts.voiceIdentityLock = v
+                case "preferFinalOnly", "prefer_final_only":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.tts.preferFinalOnly = v
                 case "emotionalProsody", "warmth":
                     break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
                 default: break
@@ -1109,6 +1141,7 @@ struct FaeConfig: Codable {
         lines.append("customVoicePath = \(encodeStringOrNil(tts.customVoicePath))")
         lines.append("customReferenceText = \(encodeStringOrNil(tts.customReferenceText))")
         lines.append("voiceIdentityLock = \(tts.voiceIdentityLock ? "true" : "false")")
+        lines.append("preferFinalOnly = \(tts.preferFinalOnly ? "true" : "false")")
         lines.append("")
 
         lines.append("[stt]")

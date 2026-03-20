@@ -61,6 +61,15 @@ actor ModelManager {
     /// Non-critical: if unavailable, endpointing falls back to rule-based heuristics.
     private(set) var turnDetector: MLXTurnDetector?
 
+    /// Parakeet TDT streaming ASR engine — fast-path for partial transcripts.
+    /// Non-critical: if unavailable, streaming falls back to growing-buffer Qwen3-ASR.
+    private(set) var parakeetEngine: ParakeetStreamingEngine?
+
+    /// Whether the Parakeet streaming ASR fast-path is available.
+    var parakeetAvailable: Bool {
+        parakeetEngine != nil
+    }
+
     /// Get a wired memory ticket for inference using measured or estimated budgets.
     func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
         guard let wiredPolicy else { return nil }
@@ -435,6 +444,13 @@ actor ModelManager {
                   MLXKeywordClassifier.defaultModelPath.path)
         }
 
+        // Parakeet streaming ASR — non-critical, degrades gracefully to growing-buffer Qwen3-ASR.
+        if config.streamingASR.enabled {
+            await loadParakeetIfAvailable(config: config)
+        } else {
+            NSLog("ModelManager: streaming ASR disabled in config")
+        }
+
         // Turn detector — non-critical, degrades gracefully to rule-based heuristics.
         if MLXTurnDetector.modelExists {
             let td = MLXTurnDetector()
@@ -465,6 +481,33 @@ actor ModelManager {
         FaeEnvironment.defaults.set(source, forKey: "fae.tts.runtime_voice_source")
         FaeEnvironment.defaults.set(lockApplied, forKey: "fae.tts.runtime_voice_lock_applied")
         FaeEnvironment.defaults.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
+    }
+
+    // MARK: - Parakeet Streaming ASR
+
+    /// Load the Parakeet TDT streaming ASR engine if available.
+    ///
+    /// Non-fatal: if loading fails, the pipeline falls back to growing-buffer
+    /// Qwen3-ASR for streaming partials. Reports progress via eventBus.
+    private func loadParakeetIfAvailable(config: FaeConfig) async {
+        let engine = ParakeetStreamingEngine(
+            chunkSamples: config.streamingASR.chunkSamples,
+            minChunkSamples: config.streamingASR.minChunkSamples
+        )
+
+        eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 0))
+        do {
+            try await engine.load(modelID: config.streamingASR.modelId)
+            self.parakeetEngine = engine
+            eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 1.0))
+            NSLog("ModelManager: Parakeet streaming ASR loaded (%@)", config.streamingASR.modelId)
+        } catch {
+            NSLog(
+                "ModelManager: Parakeet streaming ASR load failed (degraded — growing-buffer fallback): %@",
+                error.localizedDescription
+            )
+            eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 1.0))
+        }
     }
 
     // MARK: - Wired Memory Management (Phase 2)
