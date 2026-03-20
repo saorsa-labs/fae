@@ -159,6 +159,56 @@ actor DynamicVocabularyCorrector {
     /// Number of active correction entries.
     var correctionCount: Int { corrections.count }
 
+    // MARK: - Runtime Correction Learning
+
+    /// Add a correction pair from user feedback (e.g. "my name is David not Aileen").
+    ///
+    /// Generates phonetic variants of the correct name and inserts them at the
+    /// front of the correction table (highest priority). If a wrong name is provided,
+    /// it is also added as a direct pattern.
+    func addCorrectionPair(wrong: String?, correct: String) {
+        let correctTrimmed = correct.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !correctTrimmed.isEmpty, correctTrimmed.count >= 2 else { return }
+
+        var newEntries: [CorrectionEntry] = []
+
+        // Direct mapping from the wrong spelling if provided.
+        if let wrong = wrong?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !wrong.isEmpty,
+           wrong.lowercased() != correctTrimmed.lowercased()
+        {
+            newEntries.append(CorrectionEntry(
+                pattern: wrong.lowercased(),
+                replacement: correctTrimmed,
+                source: "correction"
+            ))
+        }
+
+        // Phonetic variants of the correct name.
+        for variant in Self.phoneticVariants(of: correctTrimmed) {
+            newEntries.append(CorrectionEntry(
+                pattern: variant,
+                replacement: correctTrimmed,
+                source: "correction"
+            ))
+        }
+
+        // Deduplicate against existing corrections.
+        let existingPatterns = Set(corrections.map(\.pattern))
+        let novel = newEntries.filter { !existingPatterns.contains($0.pattern) }
+
+        guard !novel.isEmpty else { return }
+
+        // Prepend (highest priority) and re-sort by length.
+        corrections = novel + corrections
+        corrections.sort { $0.pattern.count > $1.pattern.count }
+
+        NSLog(
+            "DynamicVocabularyCorrector: added %d correction entries for '%@'",
+            novel.count, correctTrimmed
+        )
+    }
+
     // MARK: - Phonetic Variant Generation
 
     /// Generate common ASR misrecognition variants for a proper name.

@@ -1,5 +1,11 @@
 import Foundation
 
+/// Errors from memory correction operations.
+enum MemoryCorrectionError: Error, Sendable {
+    /// Memory system is disabled.
+    case memoryDisabled
+}
+
 /// Orchestrates memory recall and capture for the voice pipeline.
 ///
 /// Before each LLM generation: `recall(query:)` retrieves relevant context.
@@ -792,6 +798,35 @@ actor MemoryOrchestrator {
         }
 
         return report
+    }
+
+    /// Store a user correction as a memory record.
+    ///
+    /// Name corrections are stored as `.profile` records (high confidence).
+    /// Other corrections are stored as `.episode` records for context.
+    func storeCorrection(_ record: CorrectionRecord, turnId: String) async throws -> MemoryRecord {
+        guard config.enabled else {
+            throw MemoryCorrectionError.memoryDisabled
+        }
+
+        let kind = record.memoryKind
+        let confidence: Float = (kind == .profile)
+            ? MemoryConstants.profilePreferenceConfidence
+            : MemoryConstants.episodeConfidence
+
+        let stored = try await store.insertRecord(
+            kind: kind,
+            text: record.memoryText,
+            confidence: confidence,
+            sourceTurnId: turnId,
+            tags: record.memoryTags,
+            importanceScore: (kind == .profile) ? 0.90 : 0.50,
+            staleAfterSecs: nil
+        )
+
+        NSLog("MemoryOrchestrator: stored correction record id=%@ kind=%@ type=%@",
+              stored.id, kind.rawValue, record.correction.kind.rawValue)
+        return stored
     }
 
     private static func shouldSkipEpisodeCapture(userText: String) -> Bool {

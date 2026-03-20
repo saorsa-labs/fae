@@ -4414,6 +4414,7 @@ actor PipelineCoordinator {
                 speakerId: currentSpeakerLabel,
                 utteranceTimestamp: currentUtteranceTimestamp
             )
+            await capturePendingCorrection()
         }
 
         endAssistantGeneration()
@@ -4719,6 +4720,35 @@ actor PipelineCoordinator {
         }
         let prompt = "Run a full self-diagnostic check now. Work through each section of the diagnostic checklist."
         await injectText(prompt)
+    }
+
+    /// Capture a pending correction as a memory record and feed name corrections
+    /// into the dynamic vocabulary corrector.
+    private func capturePendingCorrection() async {
+        guard let record = pendingCorrection else { return }
+        pendingCorrection = nil
+
+        // Store correction as memory record.
+        if let memory = memoryOrchestrator {
+            let turnId = newMemoryId(prefix: "correction")
+            do {
+                _ = try await memory.storeCorrection(record, turnId: turnId)
+                debugLog(debugConsole, .memory, "Stored correction record: \(record.correction.kind.rawValue)")
+            } catch {
+                debugLog(debugConsole, .memory, "Failed to store correction: \(error)")
+            }
+        }
+
+        // Feed name corrections into DynamicVocabularyCorrector.
+        if record.correction.kind == .nameError,
+           let correct = record.correction.correctedValue
+        {
+            await vocabularyCorrector.addCorrectionPair(
+                wrong: record.correction.originalValue,
+                correct: correct
+            )
+            debugLog(debugConsole, .pipeline, "Fed name correction to vocabulary corrector: \(correct)")
+        }
     }
 
     private func requestPermissionFlow(capability: String, source: String) async {
@@ -6327,6 +6357,7 @@ actor PipelineCoordinator {
                         speakerId: currentSpeakerLabel,
                         utteranceTimestamp: currentUtteranceTimestamp
                     )
+                    await capturePendingCorrection()
                 } else {
                     debugLog(
                         debugConsole,
