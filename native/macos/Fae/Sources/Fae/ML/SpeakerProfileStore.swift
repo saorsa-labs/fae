@@ -183,6 +183,14 @@ actor SpeakerProfileStore {
         profiles.contains { $0.role == .owner }
     }
 
+    /// Whether an owner profile exists with a compatible embedding dimension.
+    /// Returns false if the owner's centroid dimension doesn't match the
+    /// encoder's current output, which requires re-enrollment.
+    func hasCompatibleOwnerProfile(embeddingDim: Int) -> Bool {
+        guard let owner = profiles.first(where: { $0.role == .owner }) else { return false }
+        return owner.centroid.count == embeddingDim
+    }
+
     /// Display name for the owner profile, if enrolled.
     func ownerDisplayName() -> String? {
         profiles.first(where: { $0.role == .owner })?.displayName

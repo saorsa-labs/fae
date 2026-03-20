@@ -3999,9 +3999,10 @@ actor PipelineCoordinator {
             let melFallback = await isSpeakerEncoderMelFallback()
 
             if melFallback {
-                // Mel-spectral fallback: effective for TTS vs human (echo detection)
-                // but CANNOT discriminate between different humans. Skip human-to-human
-                // matching and rely on wake-word / direct-address gating instead.
+                // Mel-spectral fallback: enhanced 640-dim embedding (mean, std, skewness,
+                // kurtosis, delta) provides reasonable speaker discrimination for small
+                // household environments (1-3 people). Uses a relaxed threshold since
+                // mel-spectral cosine similarity is lower than neural embeddings.
                 do {
                     let embedding = try await encoder.embed(
                         audio: segment.samples,
@@ -4025,15 +4026,45 @@ actor PipelineCoordinator {
                         )
                         return
                     }
+
+                    // Speaker matching with mel-spectral embeddings.
+                    // Use a relaxed threshold (0.15 below neural threshold) since
+                    // statistical features have lower cosine similarity range.
+                    let hasCompatibleOwner = await store.hasCompatibleOwnerProfile(embeddingDim: embedding.count)
+                    let hasAnyOwner = await store.hasOwnerProfile()
+                    if !hasCompatibleOwner && hasAnyOwner {
+                        // Owner exists but with incompatible embedding dimension (e.g.,
+                        // upgraded from 256-dim to 640-dim). Profiles need re-enrollment.
+                        debugLog(debugConsole, .speaker, "Owner profile dimension mismatch (stored vs current) — re-enrollment needed")
+                        NSLog("PipelineCoordinator: speaker profile dimension mismatch — owner needs re-enrollment")
+                    }
+                    if hasCompatibleOwner {
+                        let relaxedThreshold = max(config.speaker.ownerThreshold - 0.15, 0.45)
+                        let isOwner = await store.isOwner(embedding: embedding, threshold: relaxedThreshold)
+                        if isOwner {
+                            currentSpeakerRole = .owner
+                            currentSpeakerIsOwner = true
+                            currentSpeakerIsKnownNonOwner = false
+                            currentSpeakerLabel = "owner"
+                            currentSpeakerDisplayName = await store.ownerDisplayName() ?? "Owner"
+                            debugLog(debugConsole, .speaker, "Owner verified (mel-spectral, threshold=\(String(format: "%.2f", relaxedThreshold)))")
+                        } else {
+                            // Not owner — still allow conversation but flag as unknown.
+                            let best = await store.bestMatch(embedding: embedding, excludingRoles: [.faeSelf])
+                            debugLog(debugConsole, .speaker, "Speaker not owner (mel-spectral, bestSim=\(String(format: "%.3f", best?.similarity ?? -1)))")
+                        }
+                    }
                 } catch {
-                    debugLog(debugConsole, .speaker, "Mel-fallback echo check failed: \(error.localizedDescription)")
+                    debugLog(debugConsole, .speaker, "Mel-fallback speaker check failed: \(error.localizedDescription)")
                 }
-                speakerVerificationDegraded = true
-                debugLog(
-                    debugConsole,
-                    .speaker,
-                    "Speaker verification degraded (mel-spectral fallback) — wake-word gating active"
-                )
+                if currentSpeakerRole == nil {
+                    speakerVerificationDegraded = true
+                    debugLog(
+                        debugConsole,
+                        .speaker,
+                        "Speaker verification degraded (mel-spectral fallback) — wake-word gating active"
+                    )
+                }
             } else {
                 // Neural speaker encoder available — full speaker verification.
                 do {
@@ -7250,8 +7281,21 @@ actor PipelineCoordinator {
                 audio: audio,
                 sampleRate: AudioCaptureManager.targetSampleRate
             )
+
+            // Check dimension compatibility — if owner's profile was enrolled with
+            // a different embedding dimension (e.g., old 256-dim vs new 640-dim),
+            // allow barge-in since verification is impossible until re-enrollment.
+            let compatible = await store.hasCompatibleOwnerProfile(embeddingDim: embedding.count)
+            if !compatible {
+                return true  // Can't verify — allow (will prompt re-enrollment)
+            }
+
             // Relaxed threshold compensates for shorter/noisier barge-in audio.
-            let relaxed = max(config.speaker.ownerThreshold - 0.10, 0.50)
+            // Extra relaxation for mel-spectral mode since statistical embeddings
+            // have a narrower similarity range than neural embeddings.
+            let melFallback = await encoder.usingMelFallback
+            let relaxation: Float = melFallback ? 0.20 : 0.10
+            let relaxed = max(config.speaker.ownerThreshold - relaxation, 0.40)
             return await store.isOwner(embedding: embedding, threshold: relaxed)
         } catch {
             return false  // Embed failed but owner exists — DENY

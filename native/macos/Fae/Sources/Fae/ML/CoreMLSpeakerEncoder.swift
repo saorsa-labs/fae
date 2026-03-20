@@ -174,28 +174,81 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
 
     /// Compute a speaker fingerprint from mel-spectral statistics.
     ///
-    /// For each of the 128 mel bands, computes the mean and standard deviation
-    /// across all frames → 256-dimensional L2-normalized embedding.
+    /// For each of the 128 mel bands, computes four statistics across frames:
+    /// - mean: spectral envelope (formant structure)
+    /// - standard deviation: energy variation per band
+    /// - skewness: asymmetry of energy distribution
+    /// - kurtosis: peakedness of energy distribution
     ///
-    /// Effective for distinguishing synthetic TTS voices (very consistent spectral
-    /// shape) from human speech (different formant structure, pitch variation).
+    /// Plus 128 delta features (temporal dynamics — how each band changes over time).
+    ///
+    /// Total: 128 × 5 = 640-dimensional L2-normalized embedding.
+    ///
+    /// This is sufficient for speaker discrimination in typical (1-3 person)
+    /// home/office environments, though less accurate than neural ECAPA-TDNN
+    /// for large-scale verification.
     private static func melSpectralEmbed(mel: [Float], numFrames: Int) -> [Float] {
         // mel layout: [numMels × numFrames] in row-major order.
-        var embedding = [Float](repeating: 0, count: numMels * 2)
+        // 5 stats per band: mean, std, skewness, kurtosis, delta_std
+        let statsPerBand = 5
+        var embedding = [Float](repeating: 0, count: numMels * statsPerBand)
 
         for m in 0..<numMels {
+            let baseOffset = m * numFrames
             var sum: Float = 0
             var sumSq: Float = 0
-            let baseOffset = m * numFrames
+            var sumCub: Float = 0
+            var sumQrt: Float = 0
+
             for f in 0..<numFrames {
                 let val = mel[baseOffset + f]
                 sum += val
-                sumSq += val * val
+                let sq = val * val
+                sumSq += sq
+                sumCub += sq * val
+                sumQrt += sq * sq
             }
-            let mean = sum / Float(numFrames)
-            let variance = (sumSq / Float(numFrames)) - (mean * mean)
+
+            let n = Float(numFrames)
+            let mean = sum / n
+            let variance = (sumSq / n) - (mean * mean)
+            let std = sqrtf(max(variance, 0))
+
+            // Skewness: E[(X - mean)^3] / std^3
+            var skewness: Float = 0
+            if std > 1e-8 {
+                let m3 = (sumCub / n) - 3 * mean * (sumSq / n) + 2 * mean * mean * mean
+                skewness = m3 / (std * std * std)
+            }
+
+            // Kurtosis: E[(X - mean)^4] / std^4 - 3 (excess kurtosis)
+            var kurtosis: Float = 0
+            if std > 1e-8 {
+                let m4 = (sumQrt / n) - 4 * mean * (sumCub / n) + 6 * mean * mean * (sumSq / n) - 3 * mean * mean * mean * mean
+                kurtosis = m4 / (std * std * std * std) - 3
+            }
+
+            // Delta features: std of frame-to-frame differences (temporal dynamics).
+            var deltaStd: Float = 0
+            if numFrames > 1 {
+                var deltaSum: Float = 0
+                var deltaSumSq: Float = 0
+                for f in 1..<numFrames {
+                    let delta = mel[baseOffset + f] - mel[baseOffset + f - 1]
+                    deltaSum += delta
+                    deltaSumSq += delta * delta
+                }
+                let dn = Float(numFrames - 1)
+                let deltaMean = deltaSum / dn
+                let deltaVar = (deltaSumSq / dn) - (deltaMean * deltaMean)
+                deltaStd = sqrtf(max(deltaVar, 0))
+            }
+
             embedding[m] = mean
-            embedding[numMels + m] = sqrtf(max(variance, 0))
+            embedding[numMels + m] = std
+            embedding[numMels * 2 + m] = skewness
+            embedding[numMels * 3 + m] = kurtosis
+            embedding[numMels * 4 + m] = deltaStd
         }
 
         return l2Normalize(embedding)
