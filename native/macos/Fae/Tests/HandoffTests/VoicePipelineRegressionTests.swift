@@ -455,7 +455,6 @@ final class VoicePipelineRegressionTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.12,
-            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -468,7 +467,6 @@ final class VoicePipelineRegressionTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.11,
-            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )

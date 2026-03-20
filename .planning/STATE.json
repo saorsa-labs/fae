@@ -1,24 +1,21 @@
 {
   "version": 1,
-  "project": "self-diagnostic-feedback",
-  "active": false,
+  "project": "adaptive-interruption-fix",
+  "active": true,
   "milestone": {
-    "number": 3,
-    "name": "Testing + Integration"
+    "number": 1,
+    "name": "Unblock barge-in during playback"
   },
   "phase": {
-    "number": "3.3",
-    "name": "Documentation",
+    "number": "1.1",
+    "name": "Echo suppressor as signal not gate",
     "plan": "complete"
   },
   "progress": {
-    "total_tasks": 10,
-    "completed_tasks": 10,
-    "current_task": null
+    "total_tasks": 6,
+    "completed_tasks": 0,
+    "current_task": 1
   },
-  "status": "project_complete",
-  "test_count": 1395,
-  "test_failures": 0,
-  "build_warnings": 0,
-  "last_updated": "2026-03-20T03:00:00Z"
+  "status": "executing",
+  "last_updated": "2026-03-20T12:45:00Z"
 }

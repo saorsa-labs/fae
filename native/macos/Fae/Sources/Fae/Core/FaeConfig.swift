@@ -218,13 +218,14 @@ struct FaeConfig: Codable {
     // MARK: - Barge-In
 
     struct BargeInConfig: Codable {
-        /// Minimum RMS energy for barge-in candidate. Raised from 0.05 to 0.08
-        /// to filter background noise while still accepting conversational speech.
+        /// Minimum RMS energy for barge-in candidate.
         var minRms: Float = 0.08
-        /// Continuous speech duration (ms) before barge-in fires. Raised from 150
-        /// to 350 so transient sounds and ambient noise don't trigger interruption.
-        var confirmMs: Int = 350
-        var assistantStartHoldoffMs: Int = 500
+        /// Continuous speech duration (ms) before barge-in fires (legacy decider).
+        /// Reduced from 350→200 for more responsive interruption.
+        var confirmMs: Int = 200
+        /// Holdoff after playback starts before allowing interruption (ms).
+        /// Reduced from 500→200 — keywords bypass this entirely.
+        var assistantStartHoldoffMs: Int = 200
         var bargeInSilenceMs: Int = 600
         /// Adaptive interruption configuration (Phase 2a).
         var adaptive: AdaptiveInterruptionConfig = AdaptiveInterruptionConfig()

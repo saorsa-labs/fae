@@ -13,10 +13,10 @@ struct LegacyThresholdInterruptionDecider: InterruptionDeciding {
     private let assistantStartHoldoffMs: Int
 
     init(
-        confirmMs: Int = 350,
+        confirmMs: Int = 200,
         minRms: Float = 0.08,
         sampleRate: Int = 16_000,
-        assistantStartHoldoffMs: Int = 500
+        assistantStartHoldoffMs: Int = 200
     ) {
         self.confirmMs = confirmMs
         self.minRms = minRms
@@ -25,10 +25,7 @@ struct LegacyThresholdInterruptionDecider: InterruptionDeciding {
     }
 
     mutating func process(_ input: InterruptionInput) -> InterruptionDecision {
-        // Hard gates — echo, suppressed, cooldown.
-        if input.echoSuppression {
-            return .ignore(reason: "echo_suppression")
-        }
+        // Hard gates — suppressed, cooldown (echo is now a signal, not a gate).
         if input.bargeInSuppressed {
             return .ignore(reason: "barge_in_suppressed")
         }
@@ -51,8 +48,11 @@ struct LegacyThresholdInterruptionDecider: InterruptionDeciding {
             return .ignore(reason: "below_rms_threshold")
         }
 
-        // Confirmation threshold: enough accumulated speech?
-        let confirmSamples = (confirmMs * sampleRate) / 1000
+        // Echo suppression raises the bar but doesn't hard-block.
+        // During echo, require double the normal confirmation time to
+        // filter speaker bleedthrough while allowing deliberate speech.
+        let effectiveConfirmMs = input.echoSuppression ? confirmMs * 2 : confirmMs
+        let confirmSamples = (effectiveConfirmMs * sampleRate) / 1000
         let accumulatedSamples = input.overlapDurationMs * sampleRate / 1000
         if accumulatedSamples >= confirmSamples {
             return .interruptNow(reason: "legacy_threshold_confirmed")

@@ -20,15 +20,15 @@ struct EchoSuppressor {
     // MARK: - Timing Constants
 
     /// Echo tail after assistant stops speaking.
-    /// Reduced from 3500ms → 2000ms: the old value created a perceptible
-    /// "dead zone" where the user spoke and Fae appeared unresponsive.
+    /// Reduced from 2000ms → 800ms: echo suppression now acts as a signal
+    /// (not gate) for barge-in, so this only affects STT segment acceptance.
     /// The RMS ceiling + short-utterance guard still catch actual echo.
-    var echoTailMs: Int { aecEnabled ? 1000 : 2000 }
+    var echoTailMs: Int { aecEnabled ? 500 : 800 }
     /// Short-utterance guard window after assistant stops.
-    /// Reduced from 4000ms → 2500ms to match shorter echo tail.
-    var shortUtteranceGuardMs: Int { aecEnabled ? 1500 : 2500 }
+    /// Reduced from 2500ms → 1200ms to match shorter echo tail.
+    var shortUtteranceGuardMs: Int { aecEnabled ? 800 : 1200 }
     /// Echo tail for scheduling listening tone after approval.
-    var echoTailForToneMs: Int { aecEnabled ? 1000 : 2000 }
+    var echoTailForToneMs: Int { aecEnabled ? 500 : 800 }
 
     // MARK: - Amplitude Constants
 
@@ -83,10 +83,9 @@ struct EchoSuppressor {
         assistantSpeaking = false
         let now = Date()
 
-        // Scale echo windows based on speech duration: +150ms per second of speech,
-        // capped at 1s bonus. An 8s response adds ~1s (total 3s). Previous values
-        // (200ms/s, 1.5s cap) created a 5s dead zone that felt unresponsive.
-        let durationBonusMs = Int(min(speechDurationSecs * 150, 1000))
+        // Scale echo windows based on speech duration: +100ms per second of speech,
+        // capped at 500ms bonus. An 8s response adds ~500ms (total 1.3s).
+        let durationBonusMs = Int(min(speechDurationSecs * 100, 500))
         let tailMs = echoTailMs + durationBonusMs
         let guardMs = shortUtteranceGuardMs + durationBonusMs
 

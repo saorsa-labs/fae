@@ -42,11 +42,19 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
 
     // MARK: - Legacy Decider Tests
 
-    func testLegacyDeciderIgnoresEchoSuppression() {
-        var decider: any InterruptionDeciding = LegacyThresholdInterruptionDecider()
-        let input = makeInput(echoSuppression: true)
+    func testLegacyDeciderDoublesConfirmDuringEcho() {
+        // Echo suppression is now a signal, not a hard gate.
+        // During echo, confirm time is doubled (200→400ms).
+        var decider: any InterruptionDeciding = LegacyThresholdInterruptionDecider(confirmMs: 200)
+        // 300ms overlap — enough without echo (200ms) but not with echo (400ms).
+        let input = makeInput(overlapDurationMs: 300, echoSuppression: true)
         let decision = decider.process(input)
-        XCTAssertEqual(decision, .ignore(reason: "echo_suppression"))
+        XCTAssertEqual(decision, .candidate)
+
+        // 450ms overlap — enough even with doubled threshold.
+        let input2 = makeInput(overlapDurationMs: 450, echoSuppression: true)
+        let decision2 = decider.process(input2)
+        XCTAssertEqual(decision2, .interruptNow(reason: "legacy_threshold_confirmed"))
     }
 
     func testLegacyDeciderIgnoresBargeInSuppressed() {
@@ -72,7 +80,8 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
 
     func testLegacyDeciderIgnoresHoldoffWindow() {
         var decider: any InterruptionDeciding = LegacyThresholdInterruptionDecider()
-        let input = makeInput(assistantSpeechElapsedMs: 200)
+        // Default holdoff is 200ms — 100ms is within the window.
+        let input = makeInput(assistantSpeechElapsedMs: 100)
         let decision = decider.process(input)
         XCTAssertEqual(decision, .ignore(reason: "holdoff_window"))
     }
@@ -100,16 +109,64 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
 
     // MARK: - Adaptive Decider Tests
 
-    func testAdaptiveDeciderIgnoresEchoSuppression() {
+    func testAdaptiveDeciderRaisesBarDuringEcho() {
+        // Echo suppression raises the evidence bar — requires transcript evidence
+        // or very long overlap (3x minOverlapMs = 450ms).
         var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
-        let input = makeInput(echoSuppression: true)
+
+        // Build RMS history.
+        for _ in 0..<5 {
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 200))
+        }
+
+        // 300ms acoustic-only during echo → candidate (below 3x threshold).
+        let input = makeInput(
+            overlapDurationMs: 300,
+            echoSuppression: true,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 4
+        )
         let decision = decider.process(input)
-        XCTAssertEqual(decision, .ignore(reason: "echo_suppression"))
+        XCTAssertEqual(decision, .candidate)
+    }
+
+    func testAdaptiveDeciderAllowsInterruptDuringEchoWithTranscript() {
+        // With transcript evidence, echo suppression doesn't block.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+
+        for _ in 0..<5 {
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 150))
+        }
+
+        let input = makeInput(
+            overlapDurationMs: 200,
+            echoSuppression: true,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 3,
+            partialTranscript: "actually stop",
+            partialWordCount: 2
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "adaptive_transcript_boosted"))
+    }
+
+    func testAdaptiveDeciderKeywordBypassesEcho() {
+        // Keywords always fire, even during echo suppression.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            overlapDurationMs: 150,
+            echoSuppression: true,
+            consecutiveSpeechChunks: 2,
+            hasInterruptKeyword: true
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "interrupt_keyword"))
     }
 
     func testAdaptiveDeciderIgnoresHoldoffWindow() {
         var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
-        let input = makeInput(assistantSpeechElapsedMs: 200)
+        // Default holdoff is 200ms — 100ms is within the window.
+        let input = makeInput(assistantSpeechElapsedMs: 100)
         let decision = decider.process(input)
         XCTAssertEqual(decision, .ignore(reason: "holdoff_window"))
     }
@@ -148,30 +205,33 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
         // Use a config where peakRmsRatio is high enough that sustained speech
         // path doesn't fire, but extended overlap does.
         var config = AdaptiveInterruptionConfig()
-        config.peakRmsRatio = 3.0  // Require peak 3x above floor — won't be met.
+        config.peakRmsRatio = 5.0  // Require peak 5x above floor (0.04*5=0.20) — won't be met.
         var decider: any InterruptionDeciding = AdaptiveInterruptionDecider(config: config)
 
         // Build RMS history for sustained energy.
         for _ in 0..<5 {
-            _ = decider.process(makeInput(rms: 0.10, overlapDurationMs: 300))
+            _ = decider.process(makeInput(rms: 0.10, overlapDurationMs: 200))
         }
 
         let input = makeInput(
             rms: 0.10,
-            overlapDurationMs: 500,
-            peakRms: 0.14,  // Below 3x floor (0.18), so sustained path skipped.
-            consecutiveSpeechChunks: 5
+            overlapDurationMs: 350,  // >= minOverlapMs (150) + 150 = 300
+            peakRms: 0.14,  // Below 5x floor (0.20), so sustained path skipped.
+            consecutiveSpeechChunks: 3
         )
         let decision = decider.process(input)
         XCTAssertEqual(decision, .interruptNow(reason: "adaptive_extended_overlap"))
     }
 
     func testAdaptiveDeciderInterruptsOnLongOverlap() {
-        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        // Use a config where peak ratio blocks sustained and extended paths.
+        var config = AdaptiveInterruptionConfig()
+        config.peakRmsRatio = 5.0  // Blocks sustained path.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider(config: config)
         let input = makeInput(
             rms: 0.09,
-            overlapDurationMs: 700,
-            peakRms: 0.09,
+            overlapDurationMs: 350,  // >= minOverlapMs * 2 = 300
+            peakRms: 0.09,  // Below 5x floor — blocks sustained and extended.
             consecutiveSpeechChunks: 3
         )
         let decision = decider.process(input)
@@ -183,20 +243,21 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
 
         // Build RMS history.
         for _ in 0..<5 {
-            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 200))
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 100))
         }
 
         decider.reset()
 
         // After reset, sustained energy check fails — need to rebuild history.
+        // Use overlap below the extended threshold to avoid that path.
         let input = makeInput(
             rms: 0.12,
-            overlapDurationMs: 350,
+            overlapDurationMs: 160,  // Above minOverlapMs (150) but below extended (300).
             peakRms: 0.15,
-            consecutiveSpeechChunks: 6
+            consecutiveSpeechChunks: 3
         )
         let decision = decider.process(input)
-        // Should be candidate because RMS history was reset (only 1 entry).
+        // Should be candidate because RMS history was reset (only 1 entry, need ≥3).
         XCTAssertEqual(decision, .candidate)
     }
 
@@ -218,7 +279,6 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.12,
-            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -231,7 +291,6 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.18,
-            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -248,7 +307,6 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.12,
-            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -261,7 +319,6 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: false,
             chunkSamples: chunk,
             rms: 0.01,
-            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )

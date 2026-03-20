@@ -1,156 +1,73 @@
-# Unified Channel Gateway Roadmap
+# Adaptive Interruption Fix Roadmap
 
 ## Overview
 
-Replace Fae's per-adapter channel system with a single-process multi-channel gateway. One routing layer, normalised message format, per-sender conversation isolation, shared sessions, and race-free concurrency.
+Fae has a complete adaptive interruption system (types, protocol, deciders, backchannel suppression, false interruption recovery) but it **doesn't work** because 7 cascading conservative gates prevent barge-in from ever firing. The user cannot interrupt Fae at all.
 
-**Problems solved:**
-- **Integration gap**: Channels don't share context — WhatsApp conversations invisible to Discord. No cross-channel identity.
-- **Poor experience**: Confusing setup, messages lost during reconnect, 5s iMessage polling delay.
-- **Technical debt**: 3 adapters with no shared types, race conditions in `injectChannelText`, stub Python scripts, false docs about per-sender isolation.
+**Problem:** Echo suppressor hard-blocks barge-in candidate creation during playback. Even after playback stops, 2000-3250ms echo tail + 500ms holdoff + 300ms adaptive overlap + speaker verification = 4+ seconds before any interruption is possible.
 
-**Success:** Production ready — complete, tested, documented. Per-sender isolation, shared sessions, race-free. Ship it.
-
-## Technical Decisions
-- Error Handling: Dedicated `ChannelGatewayError` enum
-- Async Model: Swift actor (matching ChannelManager pattern)
-- Testing: Unit + Integration + Concurrency stress tests
-- Approach: TDD — tests first, then implementation
-- Task Size: Smallest possible (~50 lines per task)
-- Migration: Strangler fig — new gateway wraps old adapters, migrate one at a time
-
-## Key Architecture
-
-```
-External Messages
-    │
-    ├── iMessage (SQLite poll) ──┐
-    ├── Discord (WebSocket) ─────┤── ChannelAdapter protocol
-    └── WhatsApp (HTTP webhook) ─┘
-                                 │
-                        ChannelGateway (actor)
-                           │
-                           ├── Normalise → ChannelMessage envelope
-                           ├── Route → ChannelSession (per-sender)
-                           ├── Serialise (no concurrent processTranscription)
-                           └── Dispatch → PipelineCoordinator.injectChannelText()
-                                 │
-                           Return response
-                                 │
-                        ChannelGateway routes back to adapter
-                           │
-                           └── Adapter sends response to external platform
-```
-
-## Success Criteria
-- All channel messages route through ChannelGateway (no direct adapter→pipeline path)
-- Per-sender conversation isolation (WhatsApp Alice ≠ Discord Bob)
-- Race-free: concurrent messages serialised through gateway actor
-- Cross-channel identity: same person recognised across channels
-- All 3 adapters migrated to ChannelAdapter protocol
-- Channel health monitoring with auto-reconnect
-- Full test coverage: unit + integration + concurrency stress
-- Documentation accurate (no false claims about isolation)
+**Success:** User can reliably interrupt Fae mid-speech within ~300-500ms. Keyword interrupts ("stop", "quiet") fire in <200ms. Backchannels ("yeah", "mm") don't false-trigger. False interruption recovery works naturally.
 
 ---
 
-## Milestone 1: Gateway Core
+## Milestone 1: Unblock barge-in during playback
 
-### Phase 1.1: ChannelMessage Envelope + ChannelSession Actor
-- **Focus**: Define `ChannelMessage` struct (normalised envelope with channel, sender, text, timestamp, messageId, threadId, attachments). Define `ChannelSession` actor for per-sender conversation state.
-- **Deliverables**: `ChannelMessage.swift`, `ChannelSession.swift`, `ChannelSessionStore.swift`
-- **Dependencies**: None (pure addition)
-- **Estimated Tasks**: 4-5
+The echo suppressor currently prevents ANY barge-in candidate from being created while Fae speaks. This is the absolute blocker — nothing downstream matters until this is fixed.
 
-### Phase 1.2: ChannelGateway Actor
-- **Focus**: Create `ChannelGateway` actor that receives normalised messages, resolves sessions, serialises concurrent dispatch, and routes responses back.
-- **Deliverables**: `ChannelGateway.swift`, `ChannelAdapter` protocol
-- **Dependencies**: Phase 1.1
-- **Estimated Tasks**: 4-6
+### Phase 1.1: Echo suppressor as signal, not gate
+- Change echo suppressor from hard pre-filter to a signal in InterruptionInput
+- Allow PendingBargeIn creation during playback (remove `echoSuppression` from advancePendingBargeIn gates)
+- Move echo rejection INTO the adaptive decider as a weighted signal
+- Exempt keyword interrupts from echo suppression entirely
+- Reduce echo tail from 2000ms to 800ms for owner-verified speech
+- Tests proving barge-in candidates are created during playback
 
-### Phase 1.3: Per-Sender Conversation Isolation
-- **Focus**: Replace single `ConversationState` for channels with per-sender isolated conversation histories. Gateway maintains a `[SessionKey: ConversationState]` map.
-- **Deliverables**: Changes to `PipelineCoordinator.injectChannelText()`, `ConversationState` factory
-- **Dependencies**: Phase 1.2
-- **Estimated Tasks**: 3-5
-
----
-
-## Milestone 2: Adapter Migration
-
-### Phase 2.1: Migrate iMessageAdapter
-- **Focus**: Conform `iMessageAdapter` to `ChannelAdapter` protocol. Replace direct messageHandler closure with gateway dispatch.
-- **Deliverables**: Updated `iMessageAdapter.swift`, protocol conformance
-- **Dependencies**: Phase 1.2
-- **Estimated Tasks**: 3-4
-
-### Phase 2.2: Migrate DiscordAdapter
-- **Focus**: Conform `DiscordAdapter` to `ChannelAdapter` protocol. Preserve WebSocket lifecycle, gateway-managed reconnect.
-- **Deliverables**: Updated `DiscordAdapter.swift`, protocol conformance
-- **Dependencies**: Phase 1.2
-- **Estimated Tasks**: 3-4
-
-### Phase 2.3: Migrate WhatsAppAdapter
-- **Focus**: Conform `WhatsAppAdapter` to `ChannelAdapter` protocol. Preserve HMAC verification, webhook handling.
-- **Deliverables**: Updated `WhatsAppAdapter.swift`, protocol conformance
-- **Dependencies**: Phase 1.2
-- **Estimated Tasks**: 3-4
+### Phase 1.2: Holdoff and timing fixes
+- Reduce assistantStartHoldoffMs from 500ms to 200ms
+- Exempt keyword interrupts from holdoff entirely
+- Fix lastAssistantStart to set once per response, not per TTS chunk
+- Add watchdog to force-clear assistantSpeaking if desynced from playback (60s→10s)
+- Tests for holdoff timing
 
 ---
 
-## Milestone 3: Cross-Channel Features
+## Milestone 2: Speaker verification resilience
 
-### Phase 3.1: Shared Identity
-- **Focus**: Recognise the same person across channels (e.g., phone number in WhatsApp matches iMessage handle). Link sessions.
-- **Deliverables**: `ChannelIdentityResolver.swift`, entity graph integration
-- **Dependencies**: Phase 2.3 (all adapters migrated)
-- **Estimated Tasks**: 3-4
+Speaker verification is fail-closed — short audio, encoder not loaded, or mismatch = DENY + 5s cooldown. This creates a brittle system where the owner gets locked out.
 
-### Phase 3.2: Cross-Channel Context
-- **Focus**: Continue a conversation started on WhatsApp from Discord. Shared conversation history for linked identities.
-- **Deliverables**: Session linking in `ChannelSessionStore`, history merge
-- **Dependencies**: Phase 3.1
-- **Estimated Tasks**: 3-4
-
-### Phase 3.3: Channel Health Monitoring + Auto-Reconnect
-- **Focus**: Gateway monitors adapter health, auto-reconnects on failure, reports status via FaeEvent. Replace teardown/restart with graceful reconnect.
-- **Deliverables**: Health check protocol, reconnect policy, `FaeEvent.channelHealth`
-- **Dependencies**: Phase 2.3
-- **Estimated Tasks**: 3-4
+### Phase 2.1: Graceful degradation for verification
+- If audio too short (<350ms): allow as candidate, continue collecting, verify when enough audio
+- If encoder not loaded: allow interruption (degrade to legacy RMS-only)
+- Reduce deny cooldown from 5s to 2s
+- Add progressive verification: allow interrupt, verify async, if not owner restore playback
+- Fix bargeInSuppressed stuck-true: add periodic reset watchdog
+- Tests for degraded verification paths
 
 ---
 
-## Milestone 4: Testing & Hardening
+## Milestone 3: Adaptive decider tuning
 
-### Phase 4.1: Integration Tests
-- **Focus**: End-to-end tests: message arrives at adapter → gateway → pipeline → response → adapter
-- **Deliverables**: `ChannelGatewayIntegrationTests.swift`
-- **Dependencies**: Phase 2.3
-- **Estimated Tasks**: 4-5
+The adaptive decider thresholds are too conservative for real-world use.
 
-### Phase 4.2: Concurrency Stress Tests
-- **Focus**: Simultaneous messages from multiple channels/senders. Verify no race conditions, no shared state corruption.
-- **Deliverables**: `ChannelGatewayConcurrencyTests.swift`
-- **Dependencies**: Phase 4.1
-- **Estimated Tasks**: 3-4
+### Phase 3.1: Lower thresholds for responsive interruption
+- Reduce minOverlapMs from 300ms to 150ms
+- Reduce minSustainedChunks from 4 to 2
+- Reduce rmsSustainFloor from 0.06 to 0.04
+- Add keyword fast-path that bypasses ALL acoustic thresholds (just needs VAD speech onset)
+- Tune transcript-boosted path: 100ms overlap with 1+ words should fire immediately
+- Lower peakRmsRatio from 1.5 to 1.2
+- Tests for lower thresholds
 
-### Phase 4.3: Documentation + channel-hub Skill Update
-- **Focus**: Update CLAUDE.md, channel-hub skill, channel setup docs. Remove false claims. Document the real architecture.
-- **Deliverables**: Updated docs, accurate skill content
-- **Dependencies**: Phase 4.2
-- **Estimated Tasks**: 2-3
+### Phase 3.2: End-to-end integration validation
+- Validate full pipeline: audio → VAD → (echo signal) → adaptive decider → verification → interrupt
+- Stress test: interrupt during long TTS, short TTS, multi-sentence TTS
+- Validate false interruption recovery still works
+- Validate backchannel suppression still works at lower thresholds
+- Measure actual interrupt latency end-to-end
 
 ---
 
-## Risks & Mitigations
-- **iMessage polling latency**: Consider switching to FSEvents file watcher for chat.db changes (sub-second detection vs 5s poll)
-- **WhatsApp external port**: Document ngrok/Cloudflare Tunnel setup in channel-whatsapp skill
-- **Discord rate limits**: Gateway should respect per-channel rate limits from Discord REST API
-- **Memory growth**: Per-sender sessions need cleanup policy (idle timeout, max sessions)
-- **Migration risk**: Strangler fig pattern — old adapters wrapped first, replaced incrementally
-
-## Out of Scope
-- New channel adapters (Telegram, Slack, Signal) — future work after gateway ships
-- Voice messages in channels (currently text-only)
-- File/image attachments in channel messages (ChannelMessage has the field but processing deferred)
-- BlueBubbles iMessage replacement (architecture change, separate project)
+## Milestone 4: Dynamic endpointing (DEFERRED)
+- Transcript-aware silence thresholds
+- Shorter delay after complete sentences
+- Only pursue after M1-M3 are validated in live testing

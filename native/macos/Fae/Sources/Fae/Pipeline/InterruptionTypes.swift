@@ -101,15 +101,19 @@ struct AdaptiveInterruptionConfig: Codable, Sendable {
     /// Use adaptive interruption instead of legacy threshold.
     var enabled: Bool = true
     /// Minimum overlap duration before considering interruption (ms).
-    var minOverlapMs: Int = 300
+    /// Reduced from 300→150 for more responsive barge-in.
+    var minOverlapMs: Int = 150
     /// RMS energy must be sustained above this floor during overlap.
-    var rmsSustainFloor: Float = 0.06
+    /// Reduced from 0.06→0.04 to catch softer deliberate speech.
+    var rmsSustainFloor: Float = 0.04
     /// Minimum consecutive speech chunks for strong acoustic evidence.
-    var minSustainedChunks: Int = 4
+    /// Reduced from 4→2 for faster interrupt detection.
+    var minSustainedChunks: Int = 2
     /// Timeout after interruption to detect false-interrupt (ms).
     var falseInterruptionTimeoutMs: Int = 1800
     /// Whether to attempt recovery from false interruptions.
     var recoverFalseInterruptions: Bool = true
     /// RMS ratio threshold: peak must be this much above sustain floor.
-    var peakRmsRatio: Float = 1.5
+    /// Reduced from 1.5→1.2 for more responsive detection.
+    var peakRmsRatio: Float = 1.2
 }

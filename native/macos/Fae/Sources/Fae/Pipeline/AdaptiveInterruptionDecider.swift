@@ -23,7 +23,7 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
     init(
         config: AdaptiveInterruptionConfig = AdaptiveInterruptionConfig(),
         sampleRate: Int = 16_000,
-        assistantStartHoldoffMs: Int = 500,
+        assistantStartHoldoffMs: Int = 200,
         minRms: Float = 0.08
     ) {
         self.config = config
@@ -33,10 +33,10 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
     }
 
     mutating func process(_ input: InterruptionInput) -> InterruptionDecision {
-        // Hard gates — same as legacy, these are non-negotiable.
-        if input.echoSuppression {
-            return .ignore(reason: "echo_suppression")
-        }
+        // Hard gates — bargeInSuppressed and denyCooldown are non-negotiable.
+        // Echo suppression is now a signal, not a hard gate — it raises the
+        // evidence bar but allows deliberate interruption during playback.
+        let echoActive = input.echoSuppression
         if input.bargeInSuppressed {
             return .ignore(reason: "barge_in_suppressed")
         }
@@ -98,6 +98,13 @@ struct AdaptiveInterruptionDecider: InterruptionDeciding {
         let hasSustainedEnergy = isSustainedEnergy(floor: config.rmsSustainFloor)
         let hasStrongPeak = input.peakRms >= config.rmsSustainFloor * config.peakRmsRatio
         let hasSufficientChunks = input.consecutiveSpeechChunks >= config.minSustainedChunks
+
+        // During echo suppression, require transcript evidence or very strong
+        // acoustic signal. Pure acoustic overlap during echo is likely speaker
+        // bleedthrough, not the user interrupting.
+        if echoActive && !hasTranscriptEvidence && overlapMs < config.minOverlapMs * 3 {
+            return .candidate
+        }
 
         // Semantic-boosted fast path: transcript evidence lowers the bar.
         if hasTranscriptEvidence && overlapMs >= 200 && (hasSustainedEnergy || hasStrongPeak) {

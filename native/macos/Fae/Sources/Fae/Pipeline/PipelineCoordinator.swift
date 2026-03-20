@@ -3387,7 +3387,6 @@ actor PipelineCoordinator {
                     isSpeech: vadOutput.isSpeech,
                     chunkSamples: chunk.samples,
                     rms: vadOutput.rms,
-                    echoSuppression: echoSuppressor.isInSuppression,
                     bargeInSuppressed: bargeInSuppressed,
                     inDenyCooldown: inDenyCooldown
                 )
@@ -7208,14 +7207,16 @@ actor PipelineCoordinator {
         isSpeech: Bool,
         chunkSamples: [Float],
         rms: Float,
-        echoSuppression: Bool,
         bargeInSuppressed: Bool,
         inDenyCooldown: Bool
     ) -> PendingBargeIn? {
         var next = pending
-        if speechStarted && !echoSuppression && !bargeInSuppressed && !inDenyCooldown {
+        // Echo suppression is no longer a hard gate here — it's a signal
+        // passed to the interruption decider for weighted decision-making.
+        // This allows barge-in candidates to be created during playback.
+        if speechStarted && !bargeInSuppressed && !inDenyCooldown {
             next = PendingBargeIn(capturedAt: Date(), lastRms: rms, peakRms: rms)
-        } else if speechStarted && (echoSuppression || bargeInSuppressed || inDenyCooldown) {
+        } else if speechStarted && (bargeInSuppressed || inDenyCooldown) {
             return nil
         }
 
