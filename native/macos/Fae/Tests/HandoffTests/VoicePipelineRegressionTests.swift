@@ -623,4 +623,21 @@ final class VoicePipelineRegressionTests: XCTestCase {
             ["read", "bash"]
         )
     }
+
+    // MARK: - ASR Command Corrections
+
+    func testCommandCorrectionFixesClearAllGarble() {
+        let corrected = TextProcessing.correctNameRecognition("The law reminds us.")
+        XCTAssertEqual(corrected, "clear all reminders.")
+    }
+
+    func testCommandCorrectionFixesMarkAllGarble() {
+        let corrected = TextProcessing.correctNameRecognition("Marco, my reminder is done.")
+        XCTAssertTrue(corrected.lowercased().contains("mark all my reminder"))
+    }
+
+    func testCommandCorrectionDoesNotAlterNormalSpeech() {
+        let normal = "Tell me what the reminders are."
+        XCTAssertEqual(TextProcessing.correctNameRecognition(normal), normal)
+    }
 }

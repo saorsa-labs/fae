@@ -732,6 +732,32 @@ enum TextProcessing {
         ("faith.", "Fae."),
     ]
 
+    /// Common ASR command-phrase misrecognitions. Qwen3-ASR garbles common
+    /// task management phrases into phonetically similar but nonsensical text.
+    /// These are applied after name corrections, before the LLM sees the text.
+    ///
+    /// Discovered empirically from real conversations — add new patterns as
+    /// they appear in production logs.
+    private static let commandCorrections: [(pattern: String, replacement: String)] = [
+        // "clear all" garbles — Qwen3-ASR hears "the law" / "de la" / "dealer"
+        ("the law reminds us", "clear all reminders"),
+        ("the law reminders", "clear all reminders"),
+        ("the law remind us", "clear all reminders"),
+        ("dealer reminders", "clear all reminders"),
+        ("de la reminders", "clear all reminders"),
+        ("dealer reminds", "clear all reminders"),
+        // "mark all" garbles — Qwen3-ASR hears "Marco" / "mark or"
+        ("marco, my reminder", "mark all my reminders"),
+        ("marco my reminder", "mark all my reminders"),
+        ("marco, my reminders", "mark all my reminders"),
+        ("marco my reminders", "mark all my reminders"),
+        ("marco reminders", "mark all reminders"),
+        ("marco, reminder", "mark all reminders"),
+        ("marco reminder", "mark all reminders"),
+        ("mark or my reminder", "mark all my reminders"),
+        ("mark or reminders", "mark all reminders"),
+    ]
+
     /// Returns true when a transcript strongly suggests the user has not finished
     /// their turn yet and the pipeline should briefly wait for continuation.
     ///
@@ -845,9 +871,13 @@ enum TextProcessing {
         return cues.contains(normalized)
     }
 
-    /// Correct common ASR misrecognitions of "Fae" in transcribed text.
+    /// Correct common ASR misrecognitions of "Fae" and command phrases in transcribed text.
     static func correctNameRecognition(_ text: String) -> String {
         var result = text
+
+        // Command corrections first — longer, more specific phrase patterns.
+        result = applyCommandCorrections(result)
+
         let lower = result.lowercased()
 
         for (pattern, replacement) in nameCorrections {
@@ -873,6 +903,24 @@ enum TextProcessing {
 
             // Only fix the first match per call to avoid cascading.
             break
+        }
+
+        return result
+    }
+
+    /// Apply command-phrase corrections to ASR output.
+    /// Uses case-insensitive substring matching — these are multi-word phrases
+    /// unlikely to appear as false positives in normal speech.
+    private static func applyCommandCorrections(_ text: String) -> String {
+        var result = text
+        let lower = result.lowercased()
+
+        for (pattern, replacement) in commandCorrections {
+            guard let range = lower.range(of: pattern) else { continue }
+            let originalRange = result.index(result.startIndex, offsetBy: lower.distance(from: lower.startIndex, to: range.lowerBound))
+                ..< result.index(result.startIndex, offsetBy: lower.distance(from: lower.startIndex, to: range.upperBound))
+            result.replaceSubrange(originalRange, with: replacement)
+            break  // One correction per call.
         }
 
         return result

@@ -308,12 +308,12 @@ struct CalendarTool: Tool {
 /// Requires Reminders permission (System Settings > Privacy > Reminders).
 struct RemindersTool: Tool {
     let name = "reminders"
-    let description = "Access macOS Reminders. Actions: list_incomplete, create, complete, search."
+    let description = "Access macOS Reminders. Actions: list_incomplete, create, complete, complete_all, search. Use complete with reminder_id to mark one done, or complete_all to mark all incomplete reminders as done."
     let parametersSchema = """
-        {"action": "string (required: list_incomplete|create|complete|search)", \
+        {"action": "string (required: list_incomplete|create|complete|complete_all|search)", \
         "title": "string (for create)", \
         "query": "string (for search)", \
-        "reminder_id": "string (for complete)"}
+        "reminder_id": "string (for complete — use the reminderId from list_incomplete)"}
         """
     var requiresApproval: Bool { false }
     var riskLevel: ToolRiskLevel { .low }
@@ -354,10 +354,16 @@ struct RemindersTool: Tool {
             return .error("Creating reminders requires approval. Please confirm you'd like me to create '\(title)'.")
 
         case "complete":
-            return .error("Completing reminders requires approval. Please confirm.")
+            guard let reminderId = input["reminder_id"] as? String, !reminderId.isEmpty else {
+                return .error("Missing required parameter: reminder_id. Use list_incomplete first to get reminder IDs.")
+            }
+            return await completeReminder(store: store, reminderId: reminderId)
+
+        case "complete_all":
+            return await completeAllReminders(store: store)
 
         default:
-            return .error("Unknown action: \(action). Use list_incomplete, create, complete, or search.")
+            return .error("Unknown action: \(action). Use list_incomplete, create, complete, complete_all, or search.")
         }
     }
 
@@ -468,6 +474,89 @@ struct RemindersTool: Tool {
             "reminders": structured as [any Sendable],
             "count": matches.count,
             "query": query,
+        ])
+    }
+
+    private func completeReminder(store: EKEventStore, reminderId: String) async -> ToolResult {
+        let predicate = store.predicateForIncompleteReminders(
+            withDueDateStarting: nil,
+            ending: nil,
+            calendars: nil
+        )
+        let reminders = await withCheckedContinuation { (continuation: CheckedContinuation<[EKReminder]?, Never>) in
+            store.fetchReminders(matching: predicate) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        guard let reminders else {
+            return .error("Could not fetch reminders.")
+        }
+
+        // Match by calendarItemIdentifier or by title (fuzzy).
+        let match = reminders.first { $0.calendarItemIdentifier == reminderId }
+            ?? reminders.first { ($0.title ?? "").localizedCaseInsensitiveContains(reminderId) }
+
+        guard let reminder = match else {
+            return .error("No reminder found matching '\(reminderId)'. Use list_incomplete to see available reminders.")
+        }
+
+        reminder.isCompleted = true
+        do {
+            try store.save(reminder, commit: true)
+            return .success("Marked '\(reminder.title ?? reminderId)' as complete.", structuredData: [
+                "completed": reminder.title ?? reminderId,
+                "reminderId": reminder.calendarItemIdentifier,
+            ])
+        } catch {
+            return .error("Failed to complete reminder: \(error.localizedDescription)")
+        }
+    }
+
+    private func completeAllReminders(store: EKEventStore) async -> ToolResult {
+        let predicate = store.predicateForIncompleteReminders(
+            withDueDateStarting: nil,
+            ending: nil,
+            calendars: nil
+        )
+        let reminders = await withCheckedContinuation { (continuation: CheckedContinuation<[EKReminder]?, Never>) in
+            store.fetchReminders(matching: predicate) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        guard let reminders, !reminders.isEmpty else {
+            return .success("No incomplete reminders to complete.", structuredData: [
+                "completed": 0,
+            ])
+        }
+
+        var completed = 0
+        var errors = 0
+        for reminder in reminders {
+            reminder.isCompleted = true
+            do {
+                try store.save(reminder, commit: false)
+                completed += 1
+            } catch {
+                errors += 1
+            }
+        }
+
+        do {
+            try store.commit()
+        } catch {
+            return .error("Failed to save changes: \(error.localizedDescription)")
+        }
+
+        let titles = reminders.prefix(5).compactMap(\.title)
+        let preview = titles.joined(separator: ", ")
+        let suffix = reminders.count > 5 ? " and \(reminders.count - 5) more" : ""
+
+        return .success("Marked \(completed) reminders as complete: \(preview)\(suffix).", structuredData: [
+            "completed": completed,
+            "errors": errors,
+            "total": reminders.count,
         ])
     }
 }

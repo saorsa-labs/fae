@@ -5686,6 +5686,9 @@ actor PipelineCoordinator {
 
                 if llmTokenCount == 0 {
                     debugLog(debugConsole, .pipeline, "⚠️ 0 tokens generated — possible model stall or context overflow")
+                    if llmFailureDescription == nil {
+                        llmFailureDescription = "0 tokens generated (model stall or context overflow)"
+                    }
                 } else if llmTokenCount >= 128 && decodeTps < 2.0 {
                     debugLog(debugConsole, .pipeline, "⚠️ Low decode throughput (\(String(format: "%.1f", decodeTps)) t/s) during long generation")
                 } else if llmTokenCount < 128 && firstTokenLatency > 8.0 {
@@ -5695,6 +5698,9 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .pipeline, "LLM done: \(llmTokenCount) tokens in \(String(format: "%.1f", llmElapsed))s (\(String(format: "%.1f", throughput)) t/s)")
                 if llmTokenCount == 0 {
                     debugLog(debugConsole, .pipeline, "⚠️ 0 tokens generated — possible model stall or context overflow")
+                    if llmFailureDescription == nil {
+                        llmFailureDescription = "0 tokens generated (model stall or context overflow)"
+                    }
                 }
             }
         }
