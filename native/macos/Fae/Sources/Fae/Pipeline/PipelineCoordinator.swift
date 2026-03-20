@@ -1073,47 +1073,11 @@ actor PipelineCoordinator {
     private var manualOnlyApprovalPending: Bool = false
     private var pendingGovernanceAction: PendingGovernanceAction?
 
-    // MARK: - Speaker Identity State
+    // MARK: - Speaker Identity State (consolidated in SpeakerGateState)
 
-    private var currentSpeakerLabel: String?
-    private var currentSpeakerDisplayName: String?
-    private var currentSpeakerRole: SpeakerRole?
-    private var currentSpeakerIsOwner: Bool = false
+    /// All speaker identity, enrollment, and streaming speaker gate state.
+    private var speakerGate = SpeakerGateState()
     private var wakeAliases: [String] = TextProcessing.nameVariants
-    /// True when speaker verification ran and matched a non-owner profile.
-    /// Distinguished from "not matched at all" (unknown/degraded) — only this
-    /// flag should hard-block tools when `requireOwnerForTools` is enabled.
-    private var currentSpeakerIsKnownNonOwner: Bool = false
-    /// Cached mel-fallback state of the speaker encoder. `nil` until first check.
-    /// When `true`, the encoder can only distinguish TTS from human speech — it
-    /// cannot discriminate between different humans. The pipeline skips human-to-human
-    /// matching and relies on wake-word gating instead.
-    private var speakerEncoderMelFallbackCached: Bool?
-    private var previousSpeakerLabel: String?
-    private var utterancesSinceOwnerVerified: Int = 0
-    /// Wall-clock time when the current utterance was captured by the VAD.
-    private var currentUtteranceTimestamp: Date?
-
-    private enum StreamingSpeakerGateVerdict: Equatable {
-        case allow
-        case rejectUnknown
-    }
-
-    private var streamingSpeakerSamples: [Float] = []
-    private var streamingSpeakerLastEvaluatedSamples: Int = 0
-    private var streamingSpeakerVerdict: StreamingSpeakerGateVerdict?
-    private var streamingSpeakerVerificationAvailable: Bool = false
-
-    // MARK: - Enrollment State
-
-    /// True while first-owner enrollment is actively running.
-    /// Set by FaeCore when enrollment starts, cleared on enrollment_complete.
-    /// Bypasses direct-address gating and allows barge-in from anyone (no owner yet).
-    private var firstOwnerEnrollmentActive: Bool = false
-
-    /// One-shot system prompt addition for the LLM's first response after owner enrollment.
-    /// Set by FaeCore during the voice enrollment flow; cleared after first use.
-    private var firstOwnerEnrollmentContext: String?
 
     // MARK: - Timing & Echo Detection
 
@@ -1686,11 +1650,11 @@ actor PipelineCoordinator {
         // user action that should always reach the LLM.
 
         // Text input is trusted (physically typed by the user at the device).
-        currentSpeakerLabel = "owner"
-        currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
-        currentSpeakerRole = .owner
-        currentSpeakerIsOwner = true
-        currentSpeakerIsKnownNonOwner = false
+        speakerGate.currentSpeakerLabel = "owner"
+        speakerGate.currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
+        speakerGate.currentSpeakerRole = .owner
+        speakerGate.currentSpeakerIsOwner = true
+        speakerGate.currentSpeakerIsKnownNonOwner = false
 
         if gateState == .idle {
             // When direct-address gating is off, any text wakes Fae (she should always respond).
@@ -1761,11 +1725,11 @@ actor PipelineCoordinator {
         let savedHistory = await conversationState.swapHistory(session.messages)
 
         // Remote senders are explicitly non-owner.
-        currentSpeakerLabel = "channel:\(channel):\(sender)"
-        currentSpeakerDisplayName = message.senderDisplayName ?? sender
-        currentSpeakerRole = .guest
-        currentSpeakerIsOwner = false
-        currentSpeakerIsKnownNonOwner = true
+        speakerGate.currentSpeakerLabel = "channel:\(channel):\(sender)"
+        speakerGate.currentSpeakerDisplayName = message.senderDisplayName ?? sender
+        speakerGate.currentSpeakerRole = .guest
+        speakerGate.currentSpeakerIsOwner = false
+        speakerGate.currentSpeakerIsKnownNonOwner = true
         relayReplyCaptureText = nil
         defer { relayReplyCaptureText = nil }
 
@@ -1823,11 +1787,11 @@ actor PipelineCoordinator {
         let assistantCountBefore = historyBefore.lazy.filter { $0.role == .assistant }.count
 
         // Remote senders are explicitly non-owner.
-        currentSpeakerLabel = "channel:\(channel):\(sender)"
-        currentSpeakerDisplayName = sender
-        currentSpeakerRole = .guest
-        currentSpeakerIsOwner = false
-        currentSpeakerIsKnownNonOwner = true
+        speakerGate.currentSpeakerLabel = "channel:\(channel):\(sender)"
+        speakerGate.currentSpeakerDisplayName = sender
+        speakerGate.currentSpeakerRole = .guest
+        speakerGate.currentSpeakerIsOwner = false
+        speakerGate.currentSpeakerIsKnownNonOwner = true
         relayReplyCaptureText = nil
         defer { relayReplyCaptureText = nil }
 
@@ -1896,11 +1860,11 @@ actor PipelineCoordinator {
             return
         }
 
-        currentSpeakerLabel = "owner"
-        currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
-        currentSpeakerRole = .owner
-        currentSpeakerIsOwner = true
-        currentSpeakerIsKnownNonOwner = false
+        speakerGate.currentSpeakerLabel = "owner"
+        speakerGate.currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
+        speakerGate.currentSpeakerRole = .owner
+        speakerGate.currentSpeakerIsOwner = true
+        speakerGate.currentSpeakerIsKnownNonOwner = false
 
         await processTranscription(
             text: trimmed,
@@ -1935,7 +1899,7 @@ actor PipelineCoordinator {
 
     /// Set/clear the first-owner enrollment active flag.
     func setFirstOwnerEnrollmentActive(_ active: Bool) {
-        firstOwnerEnrollmentActive = active
+        speakerGate.firstOwnerEnrollmentActive = active
         // Clear any deny cooldown from pre-enrollment barge-in attempts.
         bargeInDenyCooldownUntil = nil
         vad.reset()
@@ -2008,11 +1972,11 @@ actor PipelineCoordinator {
         )
 
         // Scheduler acts on behalf of the consented owner.
-        currentSpeakerLabel = "owner"
-        currentSpeakerDisplayName = "Owner"
-        currentSpeakerRole = .owner
-        currentSpeakerIsOwner = true
-        currentSpeakerIsKnownNonOwner = false
+        speakerGate.currentSpeakerLabel = "owner"
+        speakerGate.currentSpeakerDisplayName = "Owner"
+        speakerGate.currentSpeakerRole = .owner
+        speakerGate.currentSpeakerIsOwner = true
+        speakerGate.currentSpeakerIsKnownNonOwner = false
 
         var fullPrompt = request.prompt
         if request.silent {
@@ -2090,7 +2054,7 @@ actor PipelineCoordinator {
     /// Used by the voice enrollment flow to prime Fae's first response to a new owner.
     /// Cleared automatically after the first use.
     func setFirstOwnerEnrollmentContext(_ context: String) {
-        firstOwnerEnrollmentContext = context
+        speakerGate.firstOwnerEnrollmentContext = context
     }
 
     /// Inject remote PCM audio into the speech pipeline (e.g. companion handoff).
@@ -2230,7 +2194,7 @@ actor PipelineCoordinator {
             "stage": stage,
             "decision": decision,
             "reason": reason,
-            "speaker_role": currentSpeakerRole?.rawValue ?? "unknown",
+            "speaker_role": speakerGate.currentSpeakerRole?.rawValue ?? "unknown",
             "gate_state": gateState == .active ? "active" : "idle",
             "require_direct_address": effectiveRequireDirectAddress(),
             "followup_active": engagedUntil.map { Date() < $0 } ?? false,
@@ -2511,7 +2475,7 @@ actor PipelineCoordinator {
         store: SpeakerProfileStore,
         hasOwner: Bool
     ) async -> PreviewSpeakerVerificationDecision {
-        guard hasOwner, !firstOwnerEnrollmentActive else {
+        guard hasOwner, !speakerGate.firstOwnerEnrollmentActive else {
             return .fallBackToFullSegment
         }
 
@@ -2574,10 +2538,7 @@ actor PipelineCoordinator {
     }
 
     private func resetStreamingSpeakerGate() {
-        streamingSpeakerSamples.removeAll(keepingCapacity: true)
-        streamingSpeakerLastEvaluatedSamples = 0
-        streamingSpeakerVerdict = nil
-        streamingSpeakerVerificationAvailable = false
+        speakerGate.resetStreamingSpeakerGate()
     }
 
     private func resetStreamingWakeDetector() {
@@ -2590,7 +2551,7 @@ actor PipelineCoordinator {
         }
 
         guard effectiveAcousticWakeEnabled(),
-              !firstOwnerEnrollmentActive,
+              !speakerGate.firstOwnerEnrollmentActive,
               let wakeStore = wakeWordProfileStore
         else {
             return nil
@@ -2637,7 +2598,7 @@ actor PipelineCoordinator {
         // Outside playback, require assistant not speaking/generating.
         let duringPlayback = assistantSpeaking
         guard effectiveAcousticWakeEnabled(),
-              !firstOwnerEnrollmentActive,
+              !speakerGate.firstOwnerEnrollmentActive,
               vadOutput.isSpeech,
               (duringPlayback || (!assistantSpeaking && !assistantGenerating)),
               let wakeStore = wakeWordProfileStore
@@ -2727,7 +2688,7 @@ actor PipelineCoordinator {
         guard vadOutput.isSpeech,
               !assistantSpeaking,
               !assistantGenerating,
-              streamingSpeakerVerdict != .rejectUnknown,
+              speakerGate.streamingSpeakerVerdict != .rejectUnknown,
               let encoder = speakerEncoder,
               await encoder.isLoaded,
               let store = speakerProfileStore
@@ -2736,10 +2697,10 @@ actor PipelineCoordinator {
         }
 
         let hasOwner = await store.hasOwnerProfile()
-        guard hasOwner, !firstOwnerEnrollmentActive else { return }
+        guard hasOwner, !speakerGate.firstOwnerEnrollmentActive else { return }
 
-        streamingSpeakerVerificationAvailable = true
-        if streamingSpeakerVerdict == .allow {
+        speakerGate.streamingSpeakerVerificationAvailable = true
+        if speakerGate.streamingSpeakerVerdict == .allow {
             return
         }
 
@@ -2747,23 +2708,23 @@ actor PipelineCoordinator {
         let stepSamples = max((Self.streamingSpeakerStepMs * chunk.sampleRate) / 1000, chunk.samples.count)
         let minSamples = (Self.previewSpeakerMinWindowMs * chunk.sampleRate) / 1000
 
-        if streamingSpeakerSamples.count < maxSamples {
-            let remaining = maxSamples - streamingSpeakerSamples.count
-            streamingSpeakerSamples.append(contentsOf: chunk.samples.prefix(remaining))
+        if speakerGate.streamingSpeakerSamples.count < maxSamples {
+            let remaining = maxSamples - speakerGate.streamingSpeakerSamples.count
+            speakerGate.streamingSpeakerSamples.append(contentsOf: chunk.samples.prefix(remaining))
         }
 
-        guard streamingSpeakerSamples.count >= minSamples else { return }
-        guard streamingSpeakerSamples.count - streamingSpeakerLastEvaluatedSamples >= stepSamples
-                || streamingSpeakerSamples.count == maxSamples
+        guard speakerGate.streamingSpeakerSamples.count >= minSamples else { return }
+        guard speakerGate.streamingSpeakerSamples.count - speakerGate.streamingSpeakerLastEvaluatedSamples >= stepSamples
+                || speakerGate.streamingSpeakerSamples.count == maxSamples
         else {
             return
         }
 
-        streamingSpeakerLastEvaluatedSamples = streamingSpeakerSamples.count
+        speakerGate.streamingSpeakerLastEvaluatedSamples = speakerGate.streamingSpeakerSamples.count
 
         do {
             let embedding = try await encoder.embed(
-                audio: streamingSpeakerSamples,
+                audio: speakerGate.streamingSpeakerSamples,
                 sampleRate: chunk.sampleRate
             )
             let previewThreshold = max(
@@ -2785,26 +2746,26 @@ actor PipelineCoordinator {
                 rejectThreshold: rejectThreshold
             ) {
             case .allow:
-                streamingSpeakerVerdict = .allow
+                speakerGate.streamingSpeakerVerdict = .allow
                 debugLog(debugConsole, .speaker, "Streaming gate allowed speaker before segment close")
             case .reject:
                 if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: previewThreshold),
                    echoSuppressor.isInSuppression {
-                    currentSpeakerRole = .faeSelf
+                    speakerGate.currentSpeakerRole = .faeSelf
                     debugLog(
                         debugConsole,
                         .pipeline,
                         "Streaming gate echo-rejected sim=\(String(format: "%.3f", faeSelfSim)) before segment close"
                     )
                 } else {
-                    currentSpeakerRole = nil
+                    speakerGate.currentSpeakerRole = nil
                     debugLog(debugConsole, .speaker, "Streaming gate rejected unknown speaker before segment close")
                 }
-                currentSpeakerLabel = nil
-                currentSpeakerDisplayName = nil
-                currentSpeakerIsOwner = false
-                currentSpeakerIsKnownNonOwner = false
-                streamingSpeakerVerdict = .rejectUnknown
+                speakerGate.currentSpeakerLabel = nil
+                speakerGate.currentSpeakerDisplayName = nil
+                speakerGate.currentSpeakerIsOwner = false
+                speakerGate.currentSpeakerIsKnownNonOwner = false
+                speakerGate.streamingSpeakerVerdict = .rejectUnknown
             case .undecided:
                 break
             }
@@ -2814,7 +2775,7 @@ actor PipelineCoordinator {
     }
 
     private func shouldDropSegmentFromStreamingSpeakerGate() -> Bool {
-        streamingSpeakerVerificationAvailable && streamingSpeakerVerdict == .rejectUnknown
+        speakerGate.streamingSpeakerVerificationAvailable && speakerGate.streamingSpeakerVerdict == .rejectUnknown
     }
 
     private func evaluateSpeakerEmbedding(
@@ -2831,11 +2792,11 @@ actor PipelineCoordinator {
             threshold: threshold,
             excludingRoles: [.faeSelf]
         ) {
-            currentSpeakerLabel = match.label
-            currentSpeakerDisplayName = match.displayName
-            currentSpeakerRole = match.role
-            currentSpeakerIsOwner = match.role == .owner
-            currentSpeakerIsKnownNonOwner = match.role != .owner
+            speakerGate.currentSpeakerLabel = match.label
+            speakerGate.currentSpeakerDisplayName = match.displayName
+            speakerGate.currentSpeakerRole = match.role
+            speakerGate.currentSpeakerIsOwner = match.role == .owner
+            speakerGate.currentSpeakerIsKnownNonOwner = match.role != .owner
 
             if progressiveEnrollment && config.speaker.progressiveEnrollment {
                 await store.enrollIfBelowMax(
@@ -2855,7 +2816,7 @@ actor PipelineCoordinator {
             debugLog(
                 debugConsole,
                 .speaker,
-                "Matched [\(source)]: \(match.displayName) (\(match.label)) sim=\(String(format: "%.3f", match.similarity)) owner=\(currentSpeakerIsOwner)"
+                "Matched [\(source)]: \(match.displayName) (\(match.label)) sim=\(String(format: "%.3f", match.similarity)) owner=\(speakerGate.currentSpeakerIsOwner)"
             )
             return true
         }
@@ -3068,7 +3029,7 @@ actor PipelineCoordinator {
     }
 
     private func learnWakeAliasIfNeeded(rawText: String) async {
-        guard currentSpeakerIsOwner,
+        guard speakerGate.currentSpeakerIsOwner,
               let wakeStore = wakeWordProfileStore,
               let alias = TextProcessing.extractWakeAliasCandidate(from: rawText)
         else {
@@ -3088,13 +3049,13 @@ actor PipelineCoordinator {
     /// fallback mode, meaning it can distinguish TTS from human speech but CANNOT
     /// discriminate between different humans.
     private func isSpeakerEncoderMelFallback() async -> Bool {
-        if let cached = speakerEncoderMelFallbackCached { return cached }
+        if let cached = speakerGate.speakerEncoderMelFallbackCached { return cached }
         guard let encoder = speakerEncoder, await encoder.isLoaded else {
-            speakerEncoderMelFallbackCached = false
+            speakerGate.speakerEncoderMelFallbackCached = false
             return false
         }
         let result = await encoder.usingMelFallback
-        speakerEncoderMelFallbackCached = result
+        speakerGate.speakerEncoderMelFallbackCached = result
         if result {
             NSLog("PipelineCoordinator: speaker encoder using mel-spectral fallback — human speaker discrimination unavailable")
         }
@@ -3176,7 +3137,7 @@ actor PipelineCoordinator {
         do {
             let session = try await sessionStore.openSession(
                 kind: .main,
-                speakerId: currentSpeakerLabel,
+                speakerId: speakerGate.currentSpeakerLabel,
                 startedAt: startedAt
             )
             activeConversationSessionID = session.id
@@ -3192,7 +3153,7 @@ actor PipelineCoordinator {
         guard let sessionStore, let turnID = currentTurnID else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let createdAt = currentUtteranceTimestamp ?? Date()
+        let createdAt = speakerGate.currentUtteranceTimestamp ?? Date()
         guard let sessionID = await ensureConversationSessionIfNeeded(startedAt: createdAt) else { return }
         do {
             _ = try await sessionStore.appendMessage(
@@ -3200,7 +3161,7 @@ actor PipelineCoordinator {
                 turnId: turnID,
                 role: .user,
                 content: trimmed,
-                speakerId: currentSpeakerLabel,
+                speakerId: speakerGate.currentSpeakerLabel,
                 createdAt: createdAt
             )
         } catch {
@@ -4056,7 +4017,7 @@ actor PipelineCoordinator {
             debugLog(
                 debugConsole,
                 .speaker,
-                "Ignoring approval/governance reply from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                "Ignoring approval/governance reply from non-conversational speaker role=\(speakerGate.currentSpeakerRole?.rawValue ?? "unknown")"
             )
             return
         }
@@ -4184,15 +4145,15 @@ actor PipelineCoordinator {
         }()
         if !VoiceConversationPolicy.shouldHonorWakeMatch(
             ownerProfileExists: ownerProfileExists,
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-            speakerRole: currentSpeakerRole,
+            firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+            speakerRole: speakerGate.currentSpeakerRole,
             wakeStrength: wakeStrength
         ) {
-            if (wakeMatch != nil || effectiveAcousticWakeDetection != nil), ownerProfileExists, !firstOwnerEnrollmentActive {
+            if (wakeMatch != nil || effectiveAcousticWakeDetection != nil), ownerProfileExists, !speakerGate.firstOwnerEnrollmentActive {
                 debugLog(
                     debugConsole,
                     .speaker,
-                    "Ignoring wake match from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                    "Ignoring wake match from non-conversational speaker role=\(speakerGate.currentSpeakerRole?.rawValue ?? "unknown")"
                 )
             }
             wakeMatch = nil
@@ -4221,7 +4182,7 @@ actor PipelineCoordinator {
                 inFollowup: inFollowup,
                 awaitingApproval: awaitingApproval,
                 hasPendingGovernanceAction: pendingGovernanceAction != nil,
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive
            )
             || shouldHoldShortFollowupFragment
         {
@@ -4263,7 +4224,7 @@ actor PipelineCoordinator {
             addressedToFae: addressedToFae,
             inFollowup: inFollowup,
             awaitingApproval: awaitingApproval,
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             speakerAllowsConversation: speakerAllowsConversation,
             wordCount: wordCount
         )
@@ -4284,8 +4245,8 @@ actor PipelineCoordinator {
                wordCount >= 4,
                VoiceConversationPolicy.shouldOfferSleepHint(
                    ownerProfileExists: ownerProfileExists,
-                   firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                   speakerRole: currentSpeakerRole
+                   firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+                   speakerRole: speakerGate.currentSpeakerRole
                ),
                (lastSleepHintAt == nil || Date().timeIntervalSince(lastSleepHintAt!) > 20)
             {
@@ -4336,7 +4297,7 @@ actor PipelineCoordinator {
             debugLog(
                 debugConsole,
                 .speaker,
-                "Ignored speech from non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                "Ignored speech from non-conversational speaker role=\(speakerGate.currentSpeakerRole?.rawValue ?? "unknown")"
             )
             publishVoiceAttention(
                 stage: "attention",
@@ -4486,7 +4447,7 @@ actor PipelineCoordinator {
         defer { lastProcessedSegment = nil }
 
         // Capture wall-clock time from VAD onset for memory timestamps.
-        currentUtteranceTimestamp = segment.capturedAt
+        speakerGate.currentUtteranceTimestamp = segment.capturedAt
 
         // Echo suppression check — pass segment onset time so the echo tail is
         // checked against when the speech STARTED, not when it finished processing.
@@ -4520,11 +4481,11 @@ actor PipelineCoordinator {
         }
 
         // Speaker identification (best-effort, non-blocking).
-        currentSpeakerLabel = nil
-        currentSpeakerDisplayName = nil
-        currentSpeakerRole = nil
-        currentSpeakerIsOwner = false
-        currentSpeakerIsKnownNonOwner = false
+        speakerGate.currentSpeakerLabel = nil
+        speakerGate.currentSpeakerDisplayName = nil
+        speakerGate.currentSpeakerRole = nil
+        speakerGate.currentSpeakerIsOwner = false
+        speakerGate.currentSpeakerIsKnownNonOwner = false
         var speakerVerificationCompleted = false
         var speakerVerificationDegraded = false
         // Speaker recognition is always on — no config gate.
@@ -4577,11 +4538,11 @@ actor PipelineCoordinator {
                         let relaxedThreshold = max(config.speaker.ownerThreshold - 0.15, 0.45)
                         let isOwner = await store.isOwner(embedding: embedding, threshold: relaxedThreshold)
                         if isOwner {
-                            currentSpeakerRole = .owner
-                            currentSpeakerIsOwner = true
-                            currentSpeakerIsKnownNonOwner = false
-                            currentSpeakerLabel = "owner"
-                            currentSpeakerDisplayName = await store.ownerDisplayName() ?? "Owner"
+                            speakerGate.currentSpeakerRole = .owner
+                            speakerGate.currentSpeakerIsOwner = true
+                            speakerGate.currentSpeakerIsKnownNonOwner = false
+                            speakerGate.currentSpeakerLabel = "owner"
+                            speakerGate.currentSpeakerDisplayName = await store.ownerDisplayName() ?? "Owner"
                             debugLog(debugConsole, .speaker, "Owner verified (mel-spectral, threshold=\(String(format: "%.2f", relaxedThreshold)))")
                         } else {
                             // Not owner — still allow conversation but flag as unknown.
@@ -4592,7 +4553,7 @@ actor PipelineCoordinator {
                 } catch {
                     debugLog(debugConsole, .speaker, "Mel-fallback speaker check failed: \(error.localizedDescription)")
                 }
-                if currentSpeakerRole == nil {
+                if speakerGate.currentSpeakerRole == nil {
                     speakerVerificationDegraded = true
                     debugLog(
                         debugConsole,
@@ -4687,8 +4648,8 @@ actor PipelineCoordinator {
                   liveness.score, config.speaker.livenessThreshold)
             if VoiceConversationPolicy.shouldOfferSleepHint(
                 ownerProfileExists: ownerProfileExistsForLiveness,
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                speakerRole: currentSpeakerRole
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+                speakerRole: speakerGate.currentSpeakerRole
             ) {
                 await speakDirect("I'm not sure that's a live voice. Could you speak directly to me?")
             } else {
@@ -4702,39 +4663,39 @@ actor PipelineCoordinator {
         if speakerVerificationDegraded {
             // Mel-spectral fallback cannot distinguish humans — allow conversation
             // but rely on requireDirectAddress / wake-word gating for access control.
-            // Tools remain blocked (currentSpeakerIsOwner = false).
+            // Tools remain blocked (speakerGate.currentSpeakerIsOwner = false).
             speakerAllowsConversation = true
         } else {
             speakerAllowsConversation = VoiceConversationPolicy.allowsConversation(
                 ownerProfileExists: ownerProfileExists,
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                speakerRole: currentSpeakerRole
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+                speakerRole: speakerGate.currentSpeakerRole
             )
         }
 
         if Self.shouldSkipSTTAfterSpeakerVerification(
             ownerProfileExists: ownerProfileExists,
             speakerVerificationCompleted: speakerVerificationCompleted,
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-            speakerRole: currentSpeakerRole
+            firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+            speakerRole: speakerGate.currentSpeakerRole
         ) {
             debugLog(
                 debugConsole,
                 .speaker,
-                "Skipped STT for non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                "Skipped STT for non-conversational speaker role=\(speakerGate.currentSpeakerRole?.rawValue ?? "unknown")"
             )
             return
         }
 
         // Speaker change detection.
-        if let prevLabel = previousSpeakerLabel,
-           let currLabel = currentSpeakerLabel,
+        if let prevLabel = speakerGate.previousSpeakerLabel,
+           let currLabel = speakerGate.currentSpeakerLabel,
            prevLabel != currLabel
         {
             NSLog("PipelineCoordinator: speaker change detected: %@ → %@", prevLabel, currLabel)
         }
-        previousSpeakerLabel = currentSpeakerLabel
-        utterancesSinceOwnerVerified = currentSpeakerIsOwner ? 0 : utterancesSinceOwnerVerified + 1
+        speakerGate.previousSpeakerLabel = speakerGate.currentSpeakerLabel
+        speakerGate.utterancesSinceOwnerVerified = speakerGate.currentSpeakerIsOwner ? 0 : speakerGate.utterancesSinceOwnerVerified + 1
 
         await refreshDegradedModeIfNeeded(context: "before_stt")
 
@@ -4927,8 +4888,8 @@ actor PipelineCoordinator {
         eventBus.send(.assistantGenerating(true))
         await conversationState.addUserMessage(
             queryText,
-            speakerDisplayName: currentSpeakerDisplayName,
-            speakerId: currentSpeakerLabel,
+            speakerDisplayName: speakerGate.currentSpeakerDisplayName,
+            speakerId: speakerGate.currentSpeakerLabel,
             tag: tag
         )
         await persistAcceptedUserTurnIfNeeded(queryText)
@@ -4945,16 +4906,16 @@ actor PipelineCoordinator {
         let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
         if VoiceConversationPolicy.shouldPersistSpeechMemory(
             ownerProfileExists: ownerProfileExists,
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-            speakerRole: currentSpeakerRole
+            firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+            speakerRole: speakerGate.currentSpeakerRole
         ) {
             let turnId = newMemoryId(prefix: "turn")
             _ = await memoryOrchestrator?.capture(
                 turnId: turnId,
                 userText: originalUserText,
                 assistantText: responseText,
-                speakerId: currentSpeakerLabel,
-                utteranceTimestamp: currentUtteranceTimestamp
+                speakerId: speakerGate.currentSpeakerLabel,
+                utteranceTimestamp: speakerGate.currentUtteranceTimestamp
             )
             await capturePendingCorrection()
         }
@@ -4971,7 +4932,7 @@ actor PipelineCoordinator {
             return sessionDeclaredUserName
         }
 
-        if let displayName = currentSpeakerDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if let displayName = speakerGate.currentSpeakerDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !displayName.isEmpty,
            displayName.caseInsensitiveCompare("Owner") != .orderedSame
         {
@@ -5327,9 +5288,9 @@ actor PipelineCoordinator {
         let approvalSnapshot = await ApprovedToolsStore.shared.approvalSnapshot()
 
         let speakerState: String = {
-            if currentSpeakerIsOwner { return "Owner verified" }
-            if currentSpeakerIsKnownNonOwner { return "Known non-owner speaker" }
-            if currentSpeakerLabel != nil { return "Recognized speaker" }
+            if speakerGate.currentSpeakerIsOwner { return "Owner verified" }
+            if speakerGate.currentSpeakerIsKnownNonOwner { return "Known non-owner speaker" }
+            if speakerGate.currentSpeakerLabel != nil { return "Recognized speaker" }
             return "Speaker unknown"
         }()
 
@@ -5569,8 +5530,8 @@ actor PipelineCoordinator {
             // Add user message to history.
             await conversationState.addUserMessage(
                 userText,
-                speakerDisplayName: currentSpeakerDisplayName,
-                speakerId: currentSpeakerLabel,
+                speakerDisplayName: speakerGate.currentSpeakerDisplayName,
+                speakerId: speakerGate.currentSpeakerLabel,
                 tag: proactiveContext?.conversationTag
             )
             if proactiveContext == nil {
@@ -5657,7 +5618,7 @@ actor PipelineCoordinator {
             // Memory recall — inject context before generation.
             let memoryContext: String?
             if Self.shouldRecallMemoryForTurn(
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
                 userText: userText,
                 availableToolNames: registry.toolNames
             ) {
@@ -5686,7 +5647,7 @@ actor PipelineCoordinator {
                 Date().timeIntervalSince($0) <= continuationWindowSeconds
             } ?? false
             let visibleToolNames = Self.visibleToolNamesForTurn(
-                firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
                 userText: userText,
                 availableToolNames: registry.toolNames,
                 proactiveAllowedTools: proactiveContext?.allowedTools,
@@ -5702,7 +5663,7 @@ actor PipelineCoordinator {
             // Guests (voiceprinted but not promoted to trusted) can converse
             // but do not see tools. The owner can grant tool access by saying
             // "Fae, let Alice use tools" which promotes guest → trusted.
-            let guestToolBlock = currentSpeakerRole == .guest
+            let guestToolBlock = speakerGate.currentSpeakerRole == .guest
             let toolsAvailableForTurn = toolMode != "off"
                 && !ownerEnrollmentRequired
                 && !guestToolBlock
@@ -5741,14 +5702,14 @@ actor PipelineCoordinator {
                 }
             } else {
                 let ownerDetail: String
-                if currentSpeakerIsOwner {
+                if speakerGate.currentSpeakerIsOwner {
                     ownerDetail = "ownerVerified=true"
-                } else if currentSpeakerIsKnownNonOwner {
-                    ownerDetail = "speakerNonOwner=\(currentSpeakerLabel ?? "?")"
-                } else if currentSpeakerLabel == nil {
+                } else if speakerGate.currentSpeakerIsKnownNonOwner {
+                    ownerDetail = "speakerNonOwner=\(speakerGate.currentSpeakerLabel ?? "?")"
+                } else if speakerGate.currentSpeakerLabel == nil {
                     ownerDetail = "speakerUnknown"
                 } else {
-                    ownerDetail = "speaker=\(currentSpeakerLabel ?? "?")"
+                    ownerDetail = "speaker=\(speakerGate.currentSpeakerLabel ?? "?")"
                 }
                 debugLog(debugConsole, .pipeline, "Tools enabled (mode=\(toolMode), \(ownerDetail))")
             }
@@ -5816,8 +5777,8 @@ actor PipelineCoordinator {
                 voiceOptimized: true,
                 visionCapable: effectiveVisionEnabled(),
                 userName: config.userName,
-                speakerDisplayName: currentSpeakerDisplayName,
-                speakerRole: currentSpeakerRole,
+                speakerDisplayName: speakerGate.currentSpeakerDisplayName,
+                speakerRole: speakerGate.currentSpeakerRole,
                 soulContract: soul,
                 heartbeatContract: heartbeat,
                 directiveOverride: isRescueMode ? "" : nil,
@@ -5834,16 +5795,16 @@ actor PipelineCoordinator {
             }
 
             var turnContextExtras: [String] = []
-            if let enrollCtx = firstOwnerEnrollmentContext {
+            if let enrollCtx = speakerGate.firstOwnerEnrollmentContext {
                 turnContextExtras.append(enrollCtx)
-                firstOwnerEnrollmentContext = nil
+                speakerGate.firstOwnerEnrollmentContext = nil
             }
             if let memoryTurnGuidance = Self.memoryTurnGuidance(for: userText) {
                 turnContextExtras.append(memoryTurnGuidance)
             }
             let turnContextPrefix = PersonalityManager.assembleEphemeralTurnContext(
-                speakerDisplayName: currentSpeakerDisplayName,
-                speakerRole: currentSpeakerRole,
+                speakerDisplayName: speakerGate.currentSpeakerDisplayName,
+                speakerRole: speakerGate.currentSpeakerRole,
                 memoryContext: memoryContext,
                 extraSections: turnContextExtras
             )
@@ -6722,7 +6683,7 @@ actor PipelineCoordinator {
                visibleResponse.isEmpty,
                let llmFailureDescription,
                let fallback = Self.llmFailureFallbackMessage(
-                    firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+                    firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
                     proactiveContextPresent: proactiveContext != nil
                )
             {
@@ -6933,23 +6894,23 @@ actor PipelineCoordinator {
                 let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
                 if VoiceConversationPolicy.shouldPersistSpeechMemory(
                     ownerProfileExists: ownerProfileExists,
-                    firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-                    speakerRole: currentSpeakerRole
+                    firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+                    speakerRole: speakerGate.currentSpeakerRole
                 ) {
                     let turnId = newMemoryId(prefix: "turn")
                     _ = await memoryOrchestrator?.capture(
                         turnId: turnId,
                         userText: userText,
                         assistantText: assistantTextForStorage,
-                        speakerId: currentSpeakerLabel,
-                        utteranceTimestamp: currentUtteranceTimestamp
+                        speakerId: speakerGate.currentSpeakerLabel,
+                        utteranceTimestamp: speakerGate.currentUtteranceTimestamp
                     )
                     await capturePendingCorrection()
                 } else {
                     debugLog(
                         debugConsole,
                         .memory,
-                        "Skipped speech memory capture for non-conversational speaker role=\(currentSpeakerRole?.rawValue ?? "unknown")"
+                        "Skipped speech memory capture for non-conversational speaker role=\(speakerGate.currentSpeakerRole?.rawValue ?? "unknown")"
                     )
                 }
 
@@ -6966,7 +6927,7 @@ actor PipelineCoordinator {
                     taskId: proactiveContext.taskId,
                     prompt: userText,
                     responseText: visibleResponse,
-                    speakerId: currentSpeakerLabel
+                    speakerId: speakerGate.currentSpeakerLabel
                 )
                 await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: visibleResponse, success: true)
                 debugLog(debugConsole, .memory, "Captured silent proactive memory for task \(proactiveContext.taskId)")
@@ -7518,8 +7479,8 @@ actor PipelineCoordinator {
             }
             await conversationState.addUserMessage(
                 nudge,
-                speakerDisplayName: currentSpeakerDisplayName,
-                speakerId: currentSpeakerLabel,
+                speakerDisplayName: speakerGate.currentSpeakerDisplayName,
+                speakerId: speakerGate.currentSpeakerLabel,
                 tag: proactiveContext?.conversationTag
             )
             debugLog(debugConsole, .pipeline, "Injected follow-up nudge after tool execution (\(executedToolNames.sorted().joined(separator: ", ")))")
@@ -9741,12 +9702,12 @@ actor PipelineCoordinator {
             capabilityTicket: effectiveTicket,
             hasCapabilityTicketForTool: hasCapabilityTicket,
             explicitUserAuthorization: explicitAuthorization,
-            isOwner: currentSpeakerIsOwner,
+            isOwner: speakerGate.currentSpeakerIsOwner,
             livenessScore: livenessScore,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
             visionEnabled: effectiveVisionEnabled(),
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             workflowTurnID: workflowTurnID,
             traceToolCallID: traceToolCallID,
             workflowRunID: nil // Workflow trace is managed by PipelineCoordinator
@@ -9910,12 +9871,12 @@ actor PipelineCoordinator {
             capabilityTicket: effectiveTicket,
             hasCapabilityTicketForTool: hasCapabilityTicket,
             explicitUserAuthorization: explicitUserAuthorizationForTurn,
-            isOwner: currentSpeakerIsOwner,
+            isOwner: speakerGate.currentSpeakerIsOwner,
             livenessScore: livenessScore,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
             visionEnabled: effectiveVisionEnabled(),
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
+            firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
             workflowTurnID: currentTurnID,
             traceToolCallID: nil,
             workflowRunID: nil
