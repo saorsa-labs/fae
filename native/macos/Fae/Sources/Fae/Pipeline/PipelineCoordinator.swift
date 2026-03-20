@@ -1423,15 +1423,16 @@ actor PipelineCoordinator {
         postVoiceAttentionEvent(payload)
     }
 
+    // Gate/speaker decision helpers (idle rearm, silence threshold, speaker verification,
+    // voice attention, semantic turn deferral) moved to GateHelpers.swift.
+    // Forwarding methods below preserve Self.xxx call sites and test API.
+
     static func idleRearmSeconds(
         requireDirectAddress: Bool,
         idleTimeoutS: Int,
         directAddressFollowupS: Int
     ) -> Int {
-        if requireDirectAddress {
-            return max(max(directAddressFollowupS, idleTimeoutS), 5)
-        }
-        return max(idleTimeoutS, 0)
+        GateHelpers.idleRearmSeconds(requireDirectAddress: requireDirectAddress, idleTimeoutS: idleTimeoutS, directAddressFollowupS: directAddressFollowupS)
     }
 
     static func silenceThresholdMs(
@@ -1445,71 +1446,7 @@ actor PipelineCoordinator {
         emaSuggestedMs: Int? = nil,
         eouProbability: Float? = nil
     ) -> Int {
-        if assistantSpeaking {
-            return bargeInSilenceMs
-        }
-
-        let conversationalTurnActive = gateState == .active && (inFollowup || hasPendingSemanticTurn)
-
-        // Neural turn detector signal: when the EOU probability is available,
-        // it overrides rule-based heuristics for more nuanced detection.
-        // Low probability = user likely not done → extend silence window.
-        // High probability = user likely done → use minimum silence.
-        let eouThreshold: Float = 0.0049  // English threshold from LiveKit research.
-        if let eou = eouProbability, !assistantSpeaking {
-            if eou < eouThreshold {
-                // Below threshold: user probably not done speaking.
-                return max(configMinSilenceMs, 2200)
-            } else if eou > eouThreshold * 4 {
-                // Well above threshold: user clearly done.
-                if let ema = emaSuggestedMs {
-                    return min(ema, configMinSilenceMs)
-                }
-                return configMinSilenceMs
-            }
-            // In between: fall through to rule-based heuristics.
-        }
-
-        // Transcript-aware endpointing (Milestone 4):
-        // If we have a partial transcript, adjust silence threshold based on
-        // whether the utterance appears complete or incomplete.
-        if let transcript = lastPartialTranscript, !transcript.isEmpty {
-            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Continuation cue ("hold on", "wait", "let me think"):
-            // Very patient — the user explicitly asked for time.
-            // Checked first because these are more specific than incomplete-turn heuristics.
-            if TextProcessing.isLikelyContinuationCue(trimmed) {
-                let continuationFloorMs = 3000
-                return max(configMinSilenceMs, continuationFloorMs)
-            }
-
-            // Likely incomplete (trailing conjunction, preposition, hesitation):
-            // Be extra patient — the user is mid-thought.
-            if TextProcessing.isLikelyIncompleteTurn(trimmed) {
-                let incompleteFloorMs = 2200
-                return max(configMinSilenceMs, incompleteFloorMs)
-            }
-
-            // Clearly complete utterance — use EMA-adapted minimum if available,
-            // otherwise fall back to static config. EMA tracks the user's natural
-            // pause rhythm and adapts the threshold per-session.
-            if let ema = emaSuggestedMs {
-                return min(ema, configMinSilenceMs)
-            }
-            return configMinSilenceMs
-        }
-
-        if conversationalTurnActive {
-            return max(configMinSilenceMs, Self.conversationalSilenceFloorMs)
-        }
-
-        // Use EMA suggestion when available (adapts to user's speaking rhythm).
-        if let ema = emaSuggestedMs {
-            return max(ema, configMinSilenceMs)
-        }
-
-        return configMinSilenceMs
+        GateHelpers.silenceThresholdMs(assistantSpeaking: assistantSpeaking, gateState: gateState, inFollowup: inFollowup, hasPendingSemanticTurn: hasPendingSemanticTurn, configMinSilenceMs: configMinSilenceMs, bargeInSilenceMs: bargeInSilenceMs, lastPartialTranscript: lastPartialTranscript, emaSuggestedMs: emaSuggestedMs, eouProbability: eouProbability, conversationalSilenceFloorMs: Self.conversationalSilenceFloorMs)
     }
 
     static func shouldSkipSTTAfterSpeakerVerification(
@@ -1518,14 +1455,7 @@ actor PipelineCoordinator {
         firstOwnerEnrollmentActive: Bool,
         speakerRole: SpeakerRole?
     ) -> Bool {
-        guard ownerProfileExists, speakerVerificationCompleted else {
-            return false
-        }
-        return !VoiceConversationPolicy.allowsConversation(
-            ownerProfileExists: ownerProfileExists,
-            firstOwnerEnrollmentActive: firstOwnerEnrollmentActive,
-            speakerRole: speakerRole
-        )
+        GateHelpers.shouldSkipSTTAfterSpeakerVerification(ownerProfileExists: ownerProfileExists, speakerVerificationCompleted: speakerVerificationCompleted, firstOwnerEnrollmentActive: firstOwnerEnrollmentActive, speakerRole: speakerRole)
     }
 
     static func streamingSpeakerSimilarityDecision(
@@ -1533,16 +1463,7 @@ actor PipelineCoordinator {
         acceptThreshold: Float,
         rejectThreshold: Float
     ) -> StreamingSpeakerSimilarityDecision {
-        guard let bestHumanSimilarity else {
-            return .reject
-        }
-        if bestHumanSimilarity >= acceptThreshold {
-            return .allow
-        }
-        if bestHumanSimilarity <= rejectThreshold {
-            return .reject
-        }
-        return .undecided
+        GateHelpers.streamingSpeakerSimilarityDecision(bestHumanSimilarity: bestHumanSimilarity, acceptThreshold: acceptThreshold, rejectThreshold: rejectThreshold)
     }
 
     static func fusedVoiceAttentionDecision(
@@ -1556,56 +1477,7 @@ actor PipelineCoordinator {
         speakerAllowsConversation: Bool,
         wordCount: Int
     ) -> VoiceAttentionDecision {
-        if firstOwnerEnrollmentActive {
-            if !speakerAllowsConversation {
-                return .dropSpeaker
-            }
-            if !awaitingApproval,
-               !addressedToFae,
-               wordCount <= 2
-            {
-                return .dropShortIdle
-            }
-            if gateState != .active {
-                return .wakeAndContinue
-            }
-        }
-
-        if gateState != .active {
-            if addressedToFae {
-                return .wakeAndContinue
-            }
-            if explicitWakeRequired {
-                return .ignoreWhileSleeping
-            }
-            if speakerAllowsConversation && wordCount >= 4 {
-                return .wakeAndContinue
-            }
-            return .ignoreWhileSleeping
-        }
-
-        if requireDirectAddress,
-           !addressedToFae,
-           !inFollowup,
-           !awaitingApproval,
-           !firstOwnerEnrollmentActive
-        {
-            return .dropDirectAddress
-        }
-
-        if !awaitingApproval,
-           !inFollowup,
-           !addressedToFae,
-           wordCount <= 2
-        {
-            return .dropShortIdle
-        }
-
-        if !speakerAllowsConversation {
-            return .dropSpeaker
-        }
-
-        return .allow
+        GateHelpers.fusedVoiceAttentionDecision(gateState: gateState, explicitWakeRequired: explicitWakeRequired, requireDirectAddress: requireDirectAddress, addressedToFae: addressedToFae, inFollowup: inFollowup, awaitingApproval: awaitingApproval, firstOwnerEnrollmentActive: firstOwnerEnrollmentActive, speakerAllowsConversation: speakerAllowsConversation, wordCount: wordCount)
     }
 
     static func shouldDeferSemanticTurn(
@@ -1616,25 +1488,7 @@ actor PipelineCoordinator {
         hasPendingGovernanceAction: Bool,
         firstOwnerEnrollmentActive: Bool
     ) -> Bool {
-        guard !awaitingApproval,
-              !hasPendingGovernanceAction,
-              !firstOwnerEnrollmentActive
-        else {
-            return false
-        }
-
-        // Do not hold a bare wake phrase — wake promptly.
-        let wordCount = text.split(whereSeparator: { $0.isWhitespace }).count
-        if addressedToFae && wordCount <= 2 {
-            return false
-        }
-
-        // Strongest value is in active/follow-up conversational turns.
-        guard inFollowup || addressedToFae || wordCount >= 3 else {
-            return false
-        }
-
-        return TextProcessing.isLikelyIncompleteTurn(text)
+        GateHelpers.shouldDeferSemanticTurn(text: text, addressedToFae: addressedToFae, inFollowup: inFollowup, awaitingApproval: awaitingApproval, hasPendingGovernanceAction: hasPendingGovernanceAction, firstOwnerEnrollmentActive: firstOwnerEnrollmentActive)
     }
 
     private enum PreviewSpeakerVerificationDecision {
@@ -1655,9 +1509,6 @@ actor PipelineCoordinator {
     private static let streamingSpeakerStepMs: Int = 240
 
     /// Unified cosine similarity threshold for fae_self echo rejection.
-    /// Used by both `handleBargeInWithVerification` and `evaluatePlaybackBargeIn`.
-    /// Relaxed from speaker.threshold (0.70) because mel-spectral fallback
-    /// has a narrower similarity range than neural embeddings.
     private static let faeSelfEchoThreshold: Float = 0.55
 
     private func previewSpeakerVerification(
