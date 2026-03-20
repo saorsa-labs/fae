@@ -75,7 +75,13 @@
 - Used MLX Parakeet from vendored mlx-audio-swift (not CoreML conversion) — model already available
 - Parakeet `decode(mel:)` is internal; used public `generate()` API instead
 - Non-fatal loading: Parakeet failure falls back to existing growing-buffer Qwen3-ASR
-- CTC decode path is frame-independent — true chunk-based streaming without re-transcription
+
+**Honest limitation**: Current `runDecode()` still decodes the entire accumulated audio buffer
+on each pass (growing-buffer periodic decode with a lighter model). `decodedSampleCount` only
+gates cadence, not incremental slice advancement. True incremental CTC decode (skip
+already-processed frames) requires exposing the encoder's internal state or using
+`decode(mel:)` directly — deferred as future optimization. The primary benefit today is a
+second, lighter model providing independent partials on a different decode cadence.
 
 ### Phase 2.2: Fast-Path Wiring — COMPLETE
 
@@ -136,3 +142,46 @@
 
 **Test count**: 1541 -> 1560 (+19 new tests across 4 phases), 0 failures
 **Build**: zero warnings throughout all phases
+
+---
+
+## Milestone 3: PipelineCoordinator Decomposition
+
+### Phase 3.1: Extract SpeechInputStage + SpeakerGate
+
+**Baseline**: PipelineCoordinator 10,080 lines, 1560 tests passing
+
+- [x] Extract SpeechInputStage (speech segment queue, streaming epoch, wake detection state) (commit: a83c554a)
+  - Created `SpeechInputStage.swift` (150 lines)
+  - Moved ~15 state vars
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract SpeakerGateState (speaker identity + enrollment + streaming speaker gate) (commit: c56aaf14)
+  - Created `SpeakerGateState.swift` (99 lines)
+  - Moved ~20 state vars into consolidated struct
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract BargeInTypes (PendingBargeIn, PlaybackBargeInCandidate, GenerationTakeoverCandidate) (commit: 9dea0e66)
+  - Created `BargeInTypes.swift` (75 lines)
+  - 3 nested structs promoted to top-level types
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract ToolCallParsing (ToolCall, ScriptBlock, parsing methods) (commit: d35b2112)
+  - Created `ToolCallParsing.swift` (221 lines)
+  - ~190 lines of parsing logic extracted (forwarding methods preserved API)
+  - Updated 7 files referencing PipelineCoordinator.ToolCall/ScriptBlock
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract PipelineTypes (PipelineMode, PipelineDegradedMode, GateState, etc.) (commit: 566e0a05)
+  - Created `PipelineTypes.swift` (84 lines)
+  - 6 nested enums promoted to top-level types
+  - 1560 tests pass, 0 warnings
+
+### Phase 3.1 Evidence
+
+**PipelineCoordinator line count**: 10,080 -> 9,724 (-356 lines)
+**New files created** (5): SpeechInputStage.swift, SpeakerGateState.swift, BargeInTypes.swift, ToolCallParsing.swift, PipelineTypes.swift (629 lines total)
+**State variables moved out of coordinator**: ~35 (speech input, speaker gate, streaming wake)
+**Nested types extracted to top level**: 9 (3 structs + 6 enums)
+**Test count**: 1560 tests, 0 failures throughout
+**Build**: zero warnings throughout
