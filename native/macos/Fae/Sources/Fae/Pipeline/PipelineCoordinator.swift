@@ -1204,13 +1204,7 @@ actor PipelineCoordinator {
     /// Buffer of assistant text at the point of interruption (for recovery).
     private var lastAssistantTextBuffer: String = ""
 
-    /// Last partial transcript seen from streaming STT, used for transcript-aware endpointing.
-    private var lastStreamingPartialTranscript: String?
-
-    /// Epoch counter for streaming ASR sessions.  Incremented on every reset
-    /// so that in-flight `runStreamingTranscription()` results from a previous
-    /// session are silently dropped instead of emitting stale partials.
-    private var streamingEpoch: UInt64 = 0
+    // lastStreamingPartialTranscript and streamingEpoch moved to speechInputStage.
 
     // MARK: - Silent Generation Buffer (Phase 1)
 
@@ -1248,12 +1242,9 @@ actor PipelineCoordinator {
     private var pipelineTask: Task<Void, Never>?
     private var captureStream: AsyncStream<AudioChunk>?
 
-    /// Speech-segment processing runs on a dedicated bounded queue so capture/VAD
-    /// stay responsive even while STT/LLM/TTS are busy.
-    private var speechSegmentTask: Task<Void, Never>?
-    private var speechSegmentContinuation: AsyncStream<SpeechSegment>.Continuation?
-    private static let speechSegmentQueueDepth = 6
-    private var speechSegmentsDroppedForBackpressure: Int = 0
+    /// Encapsulates the bounded speech segment queue, streaming STT epoch,
+    /// and streaming wake detection state.
+    private let speechInputStage = SpeechInputStage()
 
     /// Chained TTS task — each sentence enqueues onto this so TTS runs in order
     /// without blocking the LLM token stream.
@@ -1294,10 +1285,8 @@ actor PipelineCoordinator {
     private static let semanticTurnHoldMs: Int = 1200
     private static let conversationalSilenceFloorMs: Int = 1800
 
-    private var streamingWakeSamples: [Float] = []
-    private var streamingWakeLastEvaluatedSamples: Int = 0
-    private var streamingWakeDetection: WakeWordAcousticDetector.Detection?
-    private static let acousticWakeEvalStrideSamples = 4_800
+    // streamingWakeSamples, speechInputStage.streamingWakeLastEvaluatedSamples, streamingWakeDetection,
+    // and acousticWakeEvalStrideSamples moved to speechInputStage.
 
     /// Stashed segment from `handleSpeechSegment` for acoustic wake template learning.
     private var lastProcessedSegment: SpeechSegment?
@@ -1556,7 +1545,7 @@ actor PipelineCoordinator {
         generationTakeoverCandidate = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
-        streamingEpoch &+= 1
+        speechInputStage.incrementStreamingEpoch()
         await sttEngine.resetStreaming()
         await streamingSTTEngine?.reset()
 
@@ -1590,8 +1579,8 @@ actor PipelineCoordinator {
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
         generationTakeoverCandidate = nil
-        streamingEpoch &+= 1
-        lastStreamingPartialTranscript = nil
+        speechInputStage.incrementStreamingEpoch()
+        speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
         lastEOUProbability = nil
 
@@ -1625,8 +1614,8 @@ actor PipelineCoordinator {
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
         generationTakeoverCandidate = nil
-        streamingEpoch &+= 1
-        lastStreamingPartialTranscript = nil
+        speechInputStage.incrementStreamingEpoch()
+        speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
         lastEOUProbability = nil
         speculativePrefillTask?.cancel()
@@ -2592,13 +2581,11 @@ actor PipelineCoordinator {
     }
 
     private func resetStreamingWakeDetector() {
-        streamingWakeSamples.removeAll(keepingCapacity: true)
-        streamingWakeLastEvaluatedSamples = 0
-        streamingWakeDetection = nil
+        speechInputStage.resetStreamingWakeDetector()
     }
 
     private func acousticWakeDetectionForSegment(_ segment: SpeechSegment) async -> WakeWordAcousticDetector.Detection? {
-        if let detection = streamingWakeDetection {
+        if let detection = speechInputStage.streamingWakeDetection {
             return detection
         }
 
@@ -2642,7 +2629,7 @@ actor PipelineCoordinator {
             resetStreamingWakeDetector()
         }
 
-        if vadOutput.segment != nil || streamingWakeDetection != nil {
+        if vadOutput.segment != nil || speechInputStage.streamingWakeDetection != nil {
             return
         }
 
@@ -2658,19 +2645,19 @@ actor PipelineCoordinator {
             return
         }
 
-        streamingWakeSamples.append(contentsOf: chunk.samples)
+        speechInputStage.streamingWakeSamples.append(contentsOf: chunk.samples)
         let maxPrefixSamples = Int(Float(AudioCaptureManager.targetSampleRate) * WakeWordAcousticDetector.maxDurationSeconds)
-        if streamingWakeSamples.count > maxPrefixSamples {
-            streamingWakeSamples = Array(streamingWakeSamples.prefix(maxPrefixSamples))
+        if speechInputStage.streamingWakeSamples.count > maxPrefixSamples {
+            speechInputStage.streamingWakeSamples = Array(speechInputStage.streamingWakeSamples.prefix(maxPrefixSamples))
         }
 
         let minSamples = Int(Float(AudioCaptureManager.targetSampleRate) * WakeWordAcousticDetector.minDurationSeconds)
-        guard streamingWakeSamples.count >= minSamples else { return }
+        guard speechInputStage.streamingWakeSamples.count >= minSamples else { return }
 
-        if streamingWakeSamples.count - streamingWakeLastEvaluatedSamples < Self.acousticWakeEvalStrideSamples {
+        if speechInputStage.streamingWakeSamples.count - speechInputStage.streamingWakeLastEvaluatedSamples < SpeechInputStage.acousticWakeEvalStrideSamples {
             return
         }
-        streamingWakeLastEvaluatedSamples = streamingWakeSamples.count
+        speechInputStage.streamingWakeLastEvaluatedSamples = speechInputStage.streamingWakeSamples.count
 
         // Raise threshold during playback to compensate for echo contamination.
         let baseThreshold = effectiveAcousticWakeThreshold()
@@ -2678,7 +2665,7 @@ actor PipelineCoordinator {
 
         let templates = await wakeStore.acousticTemplates()
         guard let detection = WakeWordAcousticDetector.bestDetection(
-            samples: streamingWakeSamples,
+            samples: speechInputStage.streamingWakeSamples,
             sampleRate: AudioCaptureManager.targetSampleRate,
             templates: templates,
             threshold: threshold
@@ -2706,7 +2693,7 @@ actor PipelineCoordinator {
             return
         }
 
-        streamingWakeDetection = detection
+        speechInputStage.streamingWakeDetection = detection
         debugLog(
             debugConsole,
             .command,
@@ -3150,12 +3137,12 @@ actor PipelineCoordinator {
         currentTurnGenerationContext = nil
         engagedUntil = nil
         lastAssistantResponseText = ""
-        lastStreamingPartialTranscript = nil
+        speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
         lastEOUProbability = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
-        streamingEpoch &+= 1
+        speechInputStage.incrementStreamingEpoch()
         silentGenerationBuffer.removeAll()
         generationTakeoverCandidate = nil
         falseInterruptionRecovery.cancel()
@@ -3506,58 +3493,28 @@ actor PipelineCoordinator {
         return normalized.joined(separator: " -> ")
     }
 
-    // MARK: - Speech Segment Queue
+    // MARK: - Speech Segment Queue (delegated to speechInputStage)
 
     private func startSpeechSegmentProcessingLoop() {
-        guard speechSegmentTask == nil else { return }
-
-        NSLog("PipelineCoordinator: speech segment queue started (depth=%d)", Self.speechSegmentQueueDepth)
-
-        let stream = AsyncStream<SpeechSegment>(bufferingPolicy: .bufferingNewest(Self.speechSegmentQueueDepth)) {
-            continuation in
-            self.speechSegmentContinuation = continuation
-        }
-
-        speechSegmentTask = Task { [weak self] in
+        speechInputStage.startSpeechSegmentProcessingLoop { [weak self] segment in
             guard let self else { return }
-            for await segment in stream {
-                guard !Task.isCancelled else { break }
-                await self.handleSpeechSegment(segment)
-            }
+            await self.handleSpeechSegment(segment)
         }
     }
 
     private func stopSpeechSegmentProcessingLoop() async {
-        speechSegmentContinuation?.finish()
-        speechSegmentContinuation = nil
-        speechSegmentTask?.cancel()
-        await speechSegmentTask?.value
-        speechSegmentTask = nil
-        NSLog("PipelineCoordinator: speech segment queue stopped")
+        await speechInputStage.stopSpeechSegmentProcessingLoop()
     }
 
     private func enqueueSpeechSegment(_ segment: SpeechSegment) {
-        guard let continuation = speechSegmentContinuation else {
-            // Queue not initialized — process synchronously as a safe fallback.
-            Task { await self.handleSpeechSegment(segment) }
-            return
-        }
-
-        let result = continuation.yield(segment)
-        switch result {
-        case .enqueued:
-            debugLog(debugConsole, .pipeline, "Speech segment enqueued dur=\(String(format: "%.2f", segment.durationSeconds))s")
-        case .dropped:
-            speechSegmentsDroppedForBackpressure += 1
-            NSLog("PipelineCoordinator: dropped speech segment due to backpressure (count=%d)", speechSegmentsDroppedForBackpressure)
-            NSLog("phase1.audio_backpressure_drop_count=%d", speechSegmentsDroppedForBackpressure)
-            debugLog(debugConsole, .pipeline, "⚠️ Speech segment dropped (backpressure) count=\(speechSegmentsDroppedForBackpressure)")
-        case .terminated:
-            NSLog("PipelineCoordinator: speech segment queue terminated — processing synchronously")
-            Task { await self.handleSpeechSegment(segment) }
-        @unknown default:
-            Task { await self.handleSpeechSegment(segment) }
-        }
+        speechInputStage.enqueueSpeechSegment(
+            segment,
+            fallbackHandler: { [weak self] segment in
+                guard let self else { return }
+                await self.handleSpeechSegment(segment)
+            },
+            debugConsole: debugConsole
+        )
     }
 
     // MARK: - Main Pipeline Loop
@@ -3591,7 +3548,7 @@ actor PipelineCoordinator {
                 && !echoSuppressor.isInSuppression
                 && snrOk
             if streamingAudioSafe {
-                let epoch = streamingEpoch
+                let epoch = speechInputStage.streamingEpoch
 
                 // Fast-path: feed Parakeet TDT (CTC-based, frame-independent).
                 // Runs a decode pass when enough audio accumulates, providing
@@ -3815,7 +3772,7 @@ actor PipelineCoordinator {
                 hasPendingSemanticTurn: pendingSemanticTurn != nil,
                 configMinSilenceMs: config.vad.minSilenceDurationMs,
                 bargeInSilenceMs: config.bargeIn.bargeInSilenceMs,
-                lastPartialTranscript: lastStreamingPartialTranscript,
+                lastPartialTranscript: speechInputStage.lastStreamingPartialTranscript,
                 emaSuggestedMs: vad.emaSuggestedSilenceMs,
                 eouProbability: lastEOUProbability
             )
@@ -3943,7 +3900,7 @@ actor PipelineCoordinator {
                     resetStreamingWakeDetector()
                     // Increment epoch synchronously so any in-flight streaming
                     // transcription result is invalidated immediately.
-                    streamingEpoch &+= 1
+                    speechInputStage.incrementStreamingEpoch()
                     Task { [weak self] in
                         await self?.sttEngine.resetStreaming()
                         await self?.streamingSTTEngine?.reset()
@@ -4408,7 +4365,7 @@ actor PipelineCoordinator {
         eventBus.send(.transcription(text: effectiveText, isFinal: true))
 
         // Update partial transcript for transcript-aware endpointing (Milestone 4).
-        lastStreamingPartialTranscript = effectiveText
+        speechInputStage.lastStreamingPartialTranscript = effectiveText
 
         // Keyword spotter: check for interrupt phrases (replaces hardcoded stop triggers).
         if let match = await keywordSpotter.check(partialTranscript: effectiveText) {
@@ -4465,8 +4422,8 @@ actor PipelineCoordinator {
         epoch: UInt64,
         source: StreamingPartialSource = .qwen3ASR
     ) async {
-        guard epoch == streamingEpoch else {
-            debugLog(debugConsole, .pipeline, "Dropped stale streaming partial (epoch \(epoch) != \(streamingEpoch))")
+        guard epoch == speechInputStage.streamingEpoch else {
+            debugLog(debugConsole, .pipeline, "Dropped stale streaming partial (epoch \(epoch) != \(speechInputStage.streamingEpoch))")
             return
         }
 
@@ -4492,7 +4449,7 @@ actor PipelineCoordinator {
             }
         }
 
-        lastStreamingPartialTranscript = correctedText
+        speechInputStage.lastStreamingPartialTranscript = correctedText
         eventBus.send(.transcription(text: correctedText, isFinal: false))
 
         // Early interrupt detection via keyword spotter on partial text.
@@ -4540,7 +4497,7 @@ actor PipelineCoordinator {
         // utterance guard — the acoustic template match is strong evidence this is
         // real speech, not speaker bleedthrough. We still reject if Fae is actively
         // speaking (layer 1) since that's definitely echo overlap.
-        let hasStreamingWake = streamingWakeDetection != nil
+        let hasStreamingWake = speechInputStage.streamingWakeDetection != nil
         guard echoSuppressor.shouldAccept(
             durationSecs: durationSecs,
             rms: rms,

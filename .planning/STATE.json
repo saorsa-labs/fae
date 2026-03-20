@@ -3,27 +3,19 @@
   "project": "voice-pipeline-hardening",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Parakeet TDT Dual-Path Streaming ASR"
+    "number": 3,
+    "name": "PipelineCoordinator Decomposition"
   },
   "phase": {
-    "number": "2.4",
-    "name": "Evaluation & Regression Testing",
-    "plan": null,
-    "status": "complete"
+    "number": "3.1",
+    "name": "Extract SpeechInputStage + SpeakerGate",
+    "plan": "PLAN-phase-3.1.md"
   },
   "progress": {
-    "total_tasks": 5,
-    "completed_tasks": 5,
-    "current_task": null
+    "total_tasks": 6,
+    "completed_tasks": 0,
+    "current_task": 1
   },
-  "review": {
-    "status": "passed",
-    "iteration": 0,
-    "last_verdict": null,
-    "findings_count": { "critical": 0, "important": 0, "minor": 0 }
-  },
-  "status": "milestone_complete",
-  "last_action": "milestone_2_complete",
-  "last_updated": "2026-03-20T23:05:00Z"
+  "status": "executing",
+  "last_updated": "2026-03-20T23:45:00Z"
 }
