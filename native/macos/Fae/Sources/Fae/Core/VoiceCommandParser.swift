@@ -28,6 +28,7 @@ enum VoiceCommandParser {
         case setVision(Bool)
         case setVoiceIdentityLock(Bool)
         case requestPermission(String)
+        case runDiagnostics
         case switchModel(String)
         case approvalResponse(Bool)
         case none
@@ -154,6 +155,18 @@ enum VoiceCommandParser {
                 return .setVoiceIdentityLock(true)
             }
         }
+
+        // Diagnostic / health check commands.
+        let diagnosticPhrases = [
+            "run diagnostics", "run diagnostic", "diagnose yourself",
+            "health check", "how are you doing", "are you working",
+            "self diagnostic", "system check", "check yourself",
+        ]
+        for phrase in diagnosticPhrases {
+            if lower.contains(phrase) { return .runDiagnostics }
+        }
+        // Bare "diagnose" — must not be part of a longer sentence about something else.
+        if lower.contains("diagnose") && lower.count < 40 { return .runDiagnostics }
 
         return .none
     }

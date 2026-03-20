@@ -7,15 +7,15 @@
     "name": "Diagnostic Skill + Anomaly Monitor"
   },
   "phase": {
-    "number": "1.1",
-    "name": "self-diagnostic SKILL.md",
+    "number": "1.2",
+    "name": "Voice command trigger",
     "plan": "complete"
   },
   "progress": {
-    "total_tasks": 1,
-    "completed_tasks": 1,
+    "total_tasks": 2,
+    "completed_tasks": 2,
     "current_task": null
   },
   "status": "phase_complete",
-  "last_updated": "2026-03-20T01:00:00Z"
+  "last_updated": "2026-03-20T01:15:00Z"
 }

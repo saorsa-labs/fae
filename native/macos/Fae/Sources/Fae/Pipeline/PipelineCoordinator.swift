@@ -4626,6 +4626,12 @@ actor PipelineCoordinator {
             await requestPermissionFlow(capability: capability, source: "voice")
             return true
 
+        case .runDiagnostics:
+            eventBus.send(.voiceCommandRecognized("run_diagnostics"))
+            debugLog(debugConsole, .command, "Activating self-diagnostic skill via voice command")
+            await activateDiagnosticSkill()
+            return true
+
         case .switchModel, .approvalResponse, .none:
             return false
         }
@@ -4685,6 +4691,15 @@ actor PipelineCoordinator {
         )
         await speakDirect(onApplied)
         return true
+    }
+
+    /// Activate the self-diagnostic skill and inject a diagnostic prompt.
+    private func activateDiagnosticSkill() async {
+        if let sm = skillManager {
+            _ = await sm.activate(skillName: "self-diagnostic")
+        }
+        let prompt = "Run a full self-diagnostic check now. Work through each section of the diagnostic checklist."
+        await injectText(prompt)
     }
 
     private func requestPermissionFlow(capability: String, source: String) async {
