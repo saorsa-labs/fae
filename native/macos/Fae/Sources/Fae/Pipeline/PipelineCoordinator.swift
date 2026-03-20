@@ -11,37 +11,8 @@ import MLXLMCommon
 ///
 /// Replaces: `src/pipeline/coordinator.rs` (5,192 lines)
 actor PipelineCoordinator {
-    enum DeterministicEasyTurnAction: Equatable {
-        case arithmetic(reply: String)
-        case rememberUserName(name: String, reply: String)
-        case recallUserName(reply: String)
-    }
-
-    // MARK: - Pipeline Mode
-
-    enum PipelineMode: String, Sendable {
-        case conversation     // Full pipeline
-        case transcribeOnly   // Capture → VAD → STT → print
-        case textOnly         // Text injection → LLM → TTS → playback
-        case llmOnly          // Capture → VAD → STT → LLM (no TTS)
-    }
-
-    // MARK: - Degraded Mode
-
-    enum PipelineDegradedMode: String, Sendable {
-        case full
-        case noSTT
-        case noLLM
-        case noTTS
-        case unavailable
-    }
-
-    // MARK: - Gate State
-
-    enum GateState: Sendable {
-        case idle     // Discard all transcriptions
-        case active   // Forward to LLM
-    }
+    // DeterministicEasyTurnAction, PipelineMode, PipelineDegradedMode, and
+    // GateState enums moved to PipelineTypes.swift.
 
     // MARK: - Dependencies
 
@@ -2396,20 +2367,8 @@ actor PipelineCoordinator {
         case fallBackToFullSegment
     }
 
-    enum StreamingSpeakerSimilarityDecision: Equatable {
-        case allow
-        case reject
-        case undecided
-    }
-
-    enum VoiceAttentionDecision: Equatable {
-        case ignoreWhileSleeping
-        case wakeAndContinue
-        case dropDirectAddress
-        case dropShortIdle
-        case dropSpeaker
-        case allow
-    }
+    // StreamingSpeakerSimilarityDecision and VoiceAttentionDecision enums
+    // moved to PipelineTypes.swift.
 
     private static let previewSpeakerWindowMs: Int = 1200
     private static let previewSpeakerMinWindowMs: Int = 700
