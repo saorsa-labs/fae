@@ -225,6 +225,9 @@ actor FaeScheduler {
         scheduleRepeating("skill_health_check", interval: 300) { [weak self] in
             await self?.runSkillHealthCheck()
         }
+        scheduleRepeating("self_diagnostic", interval: 6 * 3600) { [weak self] in
+            await self?.runSelfDiagnostic()
+        }
 
         // Daily tasks (check every 60s, run if past due)
         scheduleRepeating("scheduler_tick", interval: 60) { [weak self] in
@@ -1071,6 +1074,96 @@ actor FaeScheduler {
         }
     }
 
+    // MARK: - Self-Diagnostic
+
+    /// Proactive anomaly watcher — checks for degraded state and queues a message.
+    private func runSelfDiagnostic() async {
+        NSLog("FaeScheduler: self_diagnostic — running")
+
+        var anomalies: [String] = []
+
+        // Check memory health.
+        if let store = memoryStore {
+            do {
+                let recentRecords = try await store.recentRecords(limit: 5)
+                if recentRecords.isEmpty {
+                    anomalies.append("No recent memory records found — memory capture may be stalled.")
+                }
+            } catch {
+                anomalies.append("Memory store read failed: \(error.localizedDescription)")
+            }
+        } else {
+            anomalies.append("Memory store is unavailable.")
+        }
+
+        // Check skill health.
+        let skillMgr = SkillManager()
+        let healthResults = await skillMgr.healthCheckAll()
+        let brokenSkills = healthResults.filter { _, status in
+            if case .broken = status { return true }
+            return false
+        }
+        if !brokenSkills.isEmpty {
+            let names = brokenSkills.map(\.key).sorted().joined(separator: ", ")
+            anomalies.append("Broken skills detected: \(names)")
+        }
+
+        // Check disk space via process.
+        do {
+            let dfOutput = try runShellCommand("df -h / | tail -1")
+            // Parse available space — column 4 in `df -h` output.
+            let columns = dfOutput.split(whereSeparator: { $0.isWhitespace })
+            if columns.count >= 4 {
+                let available = String(columns[3])
+                // Flag if the available size ends with "M" or "K" (less than 1 GB).
+                if available.hasSuffix("M") || available.hasSuffix("K") || available.hasSuffix("Mi") || available.hasSuffix("Ki") {
+                    anomalies.append("Low disk space: only \(available) free.")
+                }
+            }
+        } catch {
+            // Non-critical — skip disk check silently.
+        }
+
+        if anomalies.isEmpty {
+            NSLog("FaeScheduler: self_diagnostic — all clear")
+            return
+        }
+
+        NSLog("FaeScheduler: self_diagnostic — found %d anomalies", anomalies.count)
+
+        // Queue a proactive message for next interaction.
+        let summary = anomalies.joined(separator: " ")
+        let prompt = """
+            I noticed some potential issues during my routine self-check: \(summary) \
+            Would you like me to run a full diagnostic? Just say 'run diagnostics' any time.
+            """
+        if let handler = proactiveQueryHandler {
+            await handler(
+                prompt,
+                false, // not silent — speak it
+                "self_diagnostic",
+                ["bash", "read", "scheduler_list", "voice_identity"], // allowed tools
+                true // consent granted (internal task)
+            )
+        } else if let speak = speakHandler {
+            await speak(prompt)
+        }
+    }
+
+    /// Run a simple shell command and return its stdout.
+    private func runShellCommand(_ command: String) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     // MARK: - Awareness Tasks
 
     /// Start awareness-specific repeating tasks.
@@ -1683,6 +1776,7 @@ actor FaeScheduler {
         case "skill_distill":     await runSkillDistill()
         case "stale_relationships": await runStaleRelationships()
         case "skill_health_check": await runSkillHealthCheck()
+        case "self_diagnostic": await runSelfDiagnostic()
         case "embedding_reindex": await runEmbeddingReindex()
         case "vault_backup":     await runVaultBackup()
         case "camera_presence_check":  await runCameraPresenceCheck()
