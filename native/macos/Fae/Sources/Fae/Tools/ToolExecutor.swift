@@ -23,7 +23,7 @@ import Foundation
 /// `MockToolExecutor` actor used in CoworkToolExecutor tests.
 protocol ToolExecutorProtocol: Actor {
     func execute(
-        _ call: PipelineCoordinator.ToolCall,
+        _ call: ToolCall,
         context: ToolExecutorContext,
         callbacks: ToolExecutorCallbacks
     ) async -> ToolExecutorResult
@@ -101,7 +101,7 @@ actor ToolExecutor: ToolExecutorProtocol {
     ///   - callbacks: Closures to push side effects back to the caller.
     /// - Returns: The tool result plus execution metadata.
     func execute(
-        _ call: PipelineCoordinator.ToolCall,
+        _ call: ToolCall,
         context: ToolExecutorContext,
         callbacks: ToolExecutorCallbacks
     ) async -> ToolExecutorResult {
@@ -129,7 +129,7 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Inner execution — all security layers, approval, and tool invocation.
     /// Trace recording is handled by the caller (`execute`).
     private func executeInner(
-        _ call: PipelineCoordinator.ToolCall,
+        _ call: ToolCall,
         context: ToolExecutorContext,
         callbacks: ToolExecutorCallbacks
     ) async -> ToolExecutorResult {
@@ -646,7 +646,7 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     /// Record a `tool_call` step in the workflow trace.
     private func traceToolCall(
-        call: PipelineCoordinator.ToolCall,
+        call: ToolCall,
         context: ToolExecutorContext
     ) async {
         guard let store = workflowTraceStore,
@@ -671,7 +671,7 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     /// Record a `tool_result` step in the workflow trace.
     private func traceToolResult(
-        call: PipelineCoordinator.ToolCall,
+        call: ToolCall,
         context: ToolExecutorContext,
         result: ToolResult,
         approved: Bool?,

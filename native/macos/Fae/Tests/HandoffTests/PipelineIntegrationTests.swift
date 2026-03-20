@@ -168,19 +168,19 @@ final class ScriptBlockParsingTests: XCTestCase {
     // MARK: - ScriptBlock Equatable
 
     func testScriptBlockEquality() {
-        let a = PipelineCoordinator.ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil, dryRun: false)
-        let b = PipelineCoordinator.ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil, dryRun: false)
-        let c = PipelineCoordinator.ScriptBlock(source: "return 2;", allowedTools: nil, budget: nil, dryRun: false)
+        let a = ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil, dryRun: false)
+        let b = ScriptBlock(source: "return 1;", allowedTools: nil, budget: nil, dryRun: false)
+        let c = ScriptBlock(source: "return 2;", allowedTools: nil, budget: nil, dryRun: false)
         XCTAssertEqual(a, b)
         XCTAssertNotEqual(a, c)
 
-        let d = PipelineCoordinator.ScriptBlock(
+        let d = ScriptBlock(
             source: "return 1;",
             allowedTools: Set(["read"]),
             budget: ScriptBudget(maxToolCalls: 5, maxWallClockSeconds: 30, maxConcurrentToolCalls: 2),
             dryRun: false
         )
-        let e = PipelineCoordinator.ScriptBlock(
+        let e = ScriptBlock(
             source: "return 1;",
             allowedTools: Set(["read"]),
             budget: ScriptBudget(maxToolCalls: 5, maxWallClockSeconds: 30, maxConcurrentToolCalls: 2),
@@ -330,7 +330,7 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let echo = EchoTool(name: "read")
         let runtime = makeRuntime(tools: [echo])
 
-        let block = PipelineCoordinator.ScriptBlock(
+        let block = ScriptBlock(
             source: """
             var r = await fae.tool('read', '{"path":"/tmp/test"}');
             return 'done: ' + r;
@@ -355,7 +355,7 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let echo = EchoTool(name: "read")
         let runtime = makeRuntime(tools: [echo])
 
-        let block = PipelineCoordinator.ScriptBlock(
+        let block = ScriptBlock(
             source: """
             await fae.tool('read', '{"n":1}');
             await fae.tool('read', '{"n":2}');
@@ -381,7 +381,7 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let echo = EchoTool(name: "read")
         let runtime = makeRuntime(tools: [echo], ticketManager: ScriptScopedTicketManager())
 
-        let block = PipelineCoordinator.ScriptBlock(
+        let block = ScriptBlock(
             source: """
             var r = await fae.tool('read', '{"path":"test"}');
             return 'got: ' + r;
@@ -403,7 +403,7 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
     func testScriptBlockFailureReturnsError() async {
         let runtime = makeRuntime()
 
-        let block = PipelineCoordinator.ScriptBlock(
+        let block = ScriptBlock(
             source: "throw new Error('intentional test error');",
             allowedTools: nil,
             budget: nil,
@@ -424,9 +424,9 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let runtime = makeRuntime()
 
         let blocks = [
-            PipelineCoordinator.ScriptBlock(source: "return 'first';", allowedTools: nil, budget: nil, dryRun: false),
-            PipelineCoordinator.ScriptBlock(source: "return 'second';", allowedTools: nil, budget: nil, dryRun: false),
-            PipelineCoordinator.ScriptBlock(source: "return 'third';", allowedTools: nil, budget: nil, dryRun: false),
+            ScriptBlock(source: "return 'first';", allowedTools: nil, budget: nil, dryRun: false),
+            ScriptBlock(source: "return 'second';", allowedTools: nil, budget: nil, dryRun: false),
+            ScriptBlock(source: "return 'third';", allowedTools: nil, budget: nil, dryRun: false),
         ]
 
         var results: [String] = []
@@ -453,7 +453,7 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         let echo = EchoTool(name: "read")
         let runtime = makeRuntime(tools: [echo], broker: denyBroker)
 
-        let block = PipelineCoordinator.ScriptBlock(
+        let block = ScriptBlock(
             source: """
             try {
                 await fae.tool('read', '{"path":"test"}');

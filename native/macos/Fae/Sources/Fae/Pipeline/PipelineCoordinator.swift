@@ -8181,194 +8181,15 @@ actor PipelineCoordinator {
 
     // MARK: - Tool Call Parsing
 
-    struct ToolCall: @unchecked Sendable {
-        let name: String
-        let arguments: [String: Any]
-    }
+    // ToolCall, ScriptBlock types and parsing moved to ToolCallParsing.swift.
+    // Forwarding methods preserve the PipelineCoordinator.parseToolCalls() call sites.
 
-    /// Parse tool calls from response text.
-    /// Supports two formats:
-    /// - JSON (Qwen3): `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
-    /// - XML (Qwen3.5): `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
     static func parseToolCalls(from text: String) -> [ToolCall] {
-        var calls: [ToolCall] = []
-        var searchStart = text.startIndex
-
-        while let openRange = text.range(of: "<tool_call>", range: searchStart..<text.endIndex) {
-            let closeRange = text.range(of: "</tool_call>", range: openRange.upperBound..<text.endIndex)
-            let contentEnd = closeRange?.lowerBound ?? text.endIndex
-            let content = text[openRange.upperBound..<contentEnd]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Try JSON format first (Qwen3): {"name":"...","arguments":{...}}
-            if let call = parseJSONToolCall(content) {
-                calls.append(call)
-            }
-            // Fall back to XML parameter format (Qwen3.5): <function=name><parameter=key>value</parameter></function>
-            else if let call = parseXMLToolCall(content) {
-                calls.append(call)
-            }
-
-            searchStart = closeRange?.upperBound ?? text.endIndex
-        }
-
-        return calls
+        ToolCallParser.parseToolCalls(from: text)
     }
 
-    private static func parseJSONToolCall(_ content: String) -> ToolCall? {
-        guard let data = content.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let name = json["name"] as? String
-        else { return nil }
-        let args = json["arguments"] as? [String: Any] ?? [:]
-        return ToolCall(name: name, arguments: args)
-    }
-
-    /// Parse Qwen3.5 XML parameter format: `<function=name><parameter=key>value</parameter></function>`
-    private static func parseXMLToolCall(_ content: String) -> ToolCall? {
-        guard let funcMatch = content.range(of: "<function="),
-              let funcEnd = content.range(of: ">", range: funcMatch.upperBound..<content.endIndex)
-        else { return nil }
-        let name = String(content[funcMatch.upperBound..<funcEnd.lowerBound])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return nil }
-
-        var args: [String: Any] = [:]
-        var paramSearchStart = funcEnd.upperBound
-        while let paramOpen = content.range(of: "<parameter=", range: paramSearchStart..<content.endIndex),
-              let paramNameEnd = content.range(of: ">", range: paramOpen.upperBound..<content.endIndex)
-        {
-            let key = String(content[paramOpen.upperBound..<paramNameEnd.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else {
-                paramSearchStart = paramNameEnd.upperBound
-                continue
-            }
-
-            let nextBoundary = nextXMLParameterBoundary(in: content, from: paramNameEnd.upperBound)
-            let paramClose = content.range(of: "</parameter>", range: paramNameEnd.upperBound..<nextBoundary)
-            let valueEnd = paramClose?.lowerBound ?? nextBoundary
-            let value = String(content[paramNameEnd.upperBound..<valueEnd])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Try to parse value as JSON for nested objects/arrays/numbers/booleans
-            if let data = value.data(using: .utf8),
-               let parsed = try? JSONSerialization.jsonObject(with: data)
-            {
-                args[key] = parsed
-            } else {
-                args[key] = value
-            }
-
-            paramSearchStart = paramClose?.upperBound ?? valueEnd
-        }
-
-        return ToolCall(name: name, arguments: args)
-    }
-
-    private static func nextXMLParameterBoundary(in content: String, from start: String.Index) -> String.Index {
-        let parameterOpen = content.range(of: "<parameter=", range: start..<content.endIndex)?.lowerBound
-        let functionClose = content.range(of: "</function", range: start..<content.endIndex)?.lowerBound
-
-        return [parameterOpen, functionClose, content.endIndex]
-            .compactMap { $0 }
-            .min() ?? content.endIndex
-    }
-
-    // MARK: - Tool Program (Script) Parsing
-
-    /// A parsed `<tool_program>` block from the LLM response.
-    ///
-    /// The LLM may emit one or more script blocks alongside (or instead of)
-    /// `<tool_call>` blocks. Each block contains JavaScript source that is
-    /// executed via ``JSCRuntime``.
-    struct ScriptBlock: Sendable, Equatable {
-        /// The JavaScript source code to execute.
-        let source: String
-
-        /// Optional set of tools this script is allowed to call.
-        /// When `nil`, the script inherits the current turn's tool access.
-        let allowedTools: Set<String>?
-
-        /// Optional budget override. When `nil`, ``ScriptBudget/default`` is used.
-        let budget: ScriptBudget?
-
-        /// When `true`, run in dry-run mode: record intended tool calls
-        /// without executing them, then return the plan for user review.
-        let dryRun: Bool
-    }
-
-    /// Parse `<tool_program>` blocks from response text.
-    ///
-    /// Format:
-    /// ```
-    /// <tool_program>
-    /// // JavaScript source
-    /// </tool_program>
-    /// ```
-    ///
-    /// Optional attributes (JSON) can be provided in a `<tool_program_meta>` block
-    /// immediately before the `<tool_program>`:
-    /// ```
-    /// <tool_program_meta>{"allowed_tools":["read","write"],"max_tool_calls":10}</tool_program_meta>
-    /// <tool_program>
-    /// // JS source
-    /// </tool_program>
-    /// ```
     static func parseScriptBlocks(from text: String) -> [ScriptBlock] {
-        var blocks: [ScriptBlock] = []
-        var searchStart = text.startIndex
-
-        while let openRange = text.range(of: "<tool_program>", range: searchStart..<text.endIndex) {
-            let closeRange = text.range(of: "</tool_program>", range: openRange.upperBound..<text.endIndex)
-            let contentEnd = closeRange?.lowerBound ?? text.endIndex
-            let source = String(text[openRange.upperBound..<contentEnd])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard !source.isEmpty else {
-                searchStart = closeRange?.upperBound ?? text.endIndex
-                continue
-            }
-
-            // Look for a preceding <tool_program_meta> block.
-            var allowedTools: Set<String>?
-            var budget: ScriptBudget?
-            var dryRun = false
-            if let metaEnd = text.range(of: "</tool_program_meta>", range: searchStart..<openRange.lowerBound),
-               let metaStart = text.range(of: "<tool_program_meta>", range: searchStart..<metaEnd.lowerBound)
-            {
-                let metaContent = String(text[metaStart.upperBound..<metaEnd.lowerBound])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if let data = metaContent.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                {
-                    if let tools = json["allowed_tools"] as? [String] {
-                        allowedTools = Set(tools)
-                    }
-                    if let maxCalls = json["max_tool_calls"] as? Int {
-                        budget = ScriptBudget(
-                            maxToolCalls: maxCalls,
-                            maxWallClockSeconds: (json["max_wall_clock_seconds"] as? TimeInterval) ?? ScriptBudget.default.maxWallClockSeconds,
-                            maxConcurrentToolCalls: (json["max_concurrent_tool_calls"] as? Int) ?? ScriptBudget.default.maxConcurrentToolCalls
-                        )
-                    }
-                    if let dr = json["dry_run"] as? Bool {
-                        dryRun = dr
-                    }
-                }
-            }
-
-            blocks.append(ScriptBlock(
-                source: source,
-                allowedTools: allowedTools,
-                budget: budget,
-                dryRun: dryRun
-            ))
-
-            searchStart = closeRange?.upperBound ?? text.endIndex
-        }
-
-        return blocks
+        ToolCallParser.parseScriptBlocks(from: text)
     }
 
     private static func toolCallAcknowledgement(for calls: [ToolCall]) -> String {
@@ -8393,16 +8214,7 @@ actor PipelineCoordinator {
 
     /// Strip tool call markup from response text, leaving only human-readable content.
     static func stripToolCallMarkup(_ text: String) -> String {
-        var result = text
-        while let open = result.range(of: "<tool_call>") {
-            if let close = result.range(of: "</tool_call>", range: open.upperBound..<result.endIndex) {
-                result.removeSubrange(open.lowerBound..<close.upperBound)
-            } else {
-                result.removeSubrange(open.lowerBound..<result.endIndex)
-                break
-            }
-        }
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        ToolCallParser.stripToolCallMarkup(text)
     }
 
     /// Strip `<voice character="...">...</voice>` tags, keeping inner text.

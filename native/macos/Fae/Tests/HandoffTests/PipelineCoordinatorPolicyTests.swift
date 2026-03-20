@@ -533,7 +533,7 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
 
     func testRepairedToolCallRespectsToolModePreflight() {
         let registry = ToolRegistry.buildDefault()
-        let call = PipelineCoordinator.ToolCall(
+        let call = ToolCall(
             name: "write",
             arguments: ["path": "/tmp/test.txt", "content": "test"]
         )
@@ -550,7 +550,7 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
 
     func testPreflightToolDenialBlocksSystemPathWriteBeforeFiller() {
         let denial = PipelineCoordinator.preflightToolDenial(
-            for: [PipelineCoordinator.ToolCall(name: "write", arguments: ["path": "/etc/test-fae", "content": "test"])],
+            for: [ToolCall(name: "write", arguments: ["path": "/etc/test-fae", "content": "test"])],
             registry: ToolRegistry.buildDefault(),
             toolMode: "full_no_approval",
             privacyMode: "local_preferred"
@@ -577,7 +577,7 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
     }
 
     func testDirectToolReplyTextUsesGroundedCalendarOutputVerbatim() {
-        let call = PipelineCoordinator.ToolCall(
+        let call = ToolCall(
             name: "calendar",
             arguments: ["action": "list_today"]
         )
@@ -600,7 +600,7 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
     }
 
     func testDirectToolReplyTextStripsScreenshotEnvelope() {
-        let call = PipelineCoordinator.ToolCall(name: "screenshot", arguments: [:])
+        let call = ToolCall(name: "screenshot", arguments: [:])
         let result = ToolResult.success("Screenshot (1920x1080):\nFAE Vision Test 7321")
 
         XCTAssertEqual(
@@ -610,14 +610,14 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
     }
 
     func testDirectToolReplyTextLeavesReadScreenForFollowUpReasoning() {
-        let call = PipelineCoordinator.ToolCall(name: "read_screen", arguments: [:])
+        let call = ToolCall(name: "read_screen", arguments: [:])
         let result = ToolResult.success("Interactive elements:\n[0] AXButton: OK")
 
         XCTAssertNil(PipelineCoordinator.directToolReplyText(for: call, result: result))
     }
 
     func testShouldPreferInlineToolExecutionForCalendarLookup() {
-        let call = PipelineCoordinator.ToolCall(name: "calendar", arguments: ["action": "list_today"])
+        let call = ToolCall(name: "calendar", arguments: ["action": "list_today"])
 
         XCTAssertTrue(
             PipelineCoordinator.shouldPreferInlineToolExecution(
@@ -665,7 +665,7 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
     }
 
     func testShouldPreferInlineToolExecutionKeepsWebSearchDeferredEligible() {
-        let call = PipelineCoordinator.ToolCall(name: "web_search", arguments: ["query": "swift news"])
+        let call = ToolCall(name: "web_search", arguments: ["query": "swift news"])
 
         XCTAssertFalse(
             PipelineCoordinator.shouldPreferInlineToolExecution(

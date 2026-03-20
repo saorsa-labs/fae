@@ -356,7 +356,7 @@ final class JSCToolBridge: @unchecked Sendable {
     }
 
     private func executeTool(name: String, arguments: [String: Any]) async -> ToolCallResult {
-        let call = PipelineCoordinator.ToolCall(name: name, arguments: arguments)
+        let call = ToolCall(name: name, arguments: arguments)
         let result = await executor.execute(call, context: executorContext, callbacks: executorCallbacks)
 
         if result.result.isError {

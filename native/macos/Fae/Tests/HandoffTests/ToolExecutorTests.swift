@@ -108,8 +108,8 @@ private let noopCallbacks = ToolExecutorCallbacks(
     onComputerUseStep: { 1 }
 )
 
-private func makeCall(name: String, arguments: [String: Any] = [:]) -> PipelineCoordinator.ToolCall {
-    PipelineCoordinator.ToolCall(name: name, arguments: arguments)
+private func makeCall(name: String, arguments: [String: Any] = [:]) -> ToolCall {
+    ToolCall(name: name, arguments: arguments)
 }
 
 // MARK: - Tests
