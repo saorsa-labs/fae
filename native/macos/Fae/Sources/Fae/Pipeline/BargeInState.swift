@@ -109,3 +109,98 @@ struct BargeInState {
         lastAssistantTextBuffer = ""
     }
 }
+
+// MARK: - Pure Decision Functions
+
+/// Namespace for pure (static) barge-in decision functions.
+///
+/// These functions have no side effects and depend only on their parameters.
+/// Extracted from PipelineCoordinator to reduce coordinator complexity.
+/// PipelineCoordinator retains forwarding static methods for API compatibility.
+enum BargeInDecisions {
+
+    /// Whether barge-in tracking should be active (only during audible speech).
+    static func shouldTrackBargeIn(assistantSpeaking: Bool) -> Bool {
+        assistantSpeaking
+    }
+
+    /// Whether PATH C (generation takeover) should be active.
+    /// True only when the LLM is generating silently (no TTS playing).
+    static func shouldTrackGenerationTakeover(
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool
+    ) -> Bool {
+        assistantGenerating && !assistantSpeaking
+    }
+
+    /// Advance the pending barge-in candidate with the latest audio chunk.
+    ///
+    /// Echo suppression gates candidate **creation** — prevents Fae from hearing
+    /// her own TTS output as a barge-in attempt. Once playback stops and the
+    /// echo tail expires, candidates are created normally.
+    static func advancePendingBargeIn(
+        pending: PendingBargeIn?,
+        speechStarted: Bool,
+        isSpeech: Bool,
+        chunkSamples: [Float],
+        rms: Float,
+        echoSuppression: Bool,
+        bargeInSuppressed: Bool,
+        inDenyCooldown: Bool
+    ) -> PendingBargeIn? {
+        var next = pending
+        if speechStarted && !echoSuppression && !bargeInSuppressed && !inDenyCooldown {
+            next = PendingBargeIn(capturedAt: Date(), lastRms: rms, peakRms: rms)
+        } else if speechStarted && (echoSuppression || bargeInSuppressed || inDenyCooldown) {
+            return nil
+        }
+
+        if isSpeech, next != nil {
+            next?.speechSamples += chunkSamples.count
+            next?.lastRms = rms
+            let currentPeak = next?.peakRms ?? 0
+            next?.peakRms = max(currentPeak, rms)
+            next?.consecutiveSpeechChunks += 1
+            let remainingCapacity = max(0, 16_000 - (next?.audioSamples.count ?? 0))
+            if remainingCapacity > 0 {
+                next?.audioSamples.append(contentsOf: chunkSamples.prefix(remainingCapacity))
+            }
+        } else if !isSpeech, next != nil {
+            next?.consecutiveSpeechChunks = 0
+        }
+
+        return next
+    }
+
+    /// Whether barge-in interruption should be allowed.
+    /// Only allows interruption during audible speech — not during silent generation.
+    static func shouldAllowBargeInInterrupt(
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool
+    ) -> Bool {
+        assistantSpeaking
+    }
+
+    /// Whether a deferred follow-up should start.
+    /// Blocked while assistant is speaking or generating. Checks turn ID match.
+    static func shouldStartDeferredFollowUp(
+        originTurnID: String?,
+        currentTurnID: String?,
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool
+    ) -> Bool {
+        guard !assistantSpeaking, !assistantGenerating else { return false }
+        guard let originTurnID else { return true }
+        return originTurnID == currentTurnID
+    }
+
+    /// Coalesce deferred proactive task IDs, deduplicating the incoming task.
+    static func coalescedDeferredProactiveTaskIDs(
+        existing: [String],
+        incomingTaskID: String
+    ) -> [String] {
+        var next = existing.filter { $0 != incomingTaskID }
+        next.append(incomingTaskID)
+        return next
+    }
+}

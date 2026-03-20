@@ -7650,19 +7650,23 @@ actor PipelineCoordinator {
         }
     }
 
-    // MARK: - Barge-In
+    // MARK: - Barge-In Decision Forwarding
+    //
+    // Pure decision functions moved to BargeInDecisions enum.
+    // Forwarding methods preserve PipelineCoordinator.xxx() call sites and test compatibility.
 
     static func shouldTrackBargeIn(assistantSpeaking: Bool) -> Bool {
-        assistantSpeaking
+        BargeInDecisions.shouldTrackBargeIn(assistantSpeaking: assistantSpeaking)
     }
 
-    /// Whether PATH C (generation takeover) should be active.
-    /// True only when the LLM is generating silently (no TTS playing).
     static func shouldTrackGenerationTakeover(
         assistantSpeaking: Bool,
         assistantGenerating: Bool
     ) -> Bool {
-        assistantGenerating && !assistantSpeaking
+        BargeInDecisions.shouldTrackGenerationTakeover(
+            assistantSpeaking: assistantSpeaking,
+            assistantGenerating: assistantGenerating
+        )
     }
 
     static func advancePendingBargeIn(
@@ -7675,39 +7679,26 @@ actor PipelineCoordinator {
         bargeInSuppressed: Bool,
         inDenyCooldown: Bool
     ) -> PendingBargeIn? {
-        var next = pending
-        // Echo suppression gates candidate CREATION — prevents Fae from hearing
-        // her own TTS output as a barge-in attempt. Once playback stops and the
-        // echo tail expires, candidates are created normally.
-        if speechStarted && !echoSuppression && !bargeInSuppressed && !inDenyCooldown {
-            next = PendingBargeIn(capturedAt: Date(), lastRms: rms, peakRms: rms)
-        } else if speechStarted && (echoSuppression || bargeInSuppressed || inDenyCooldown) {
-            return nil
-        }
-
-        if isSpeech, next != nil {
-            next?.speechSamples += chunkSamples.count
-            next?.lastRms = rms
-            let currentPeak = next?.peakRms ?? 0
-            next?.peakRms = max(currentPeak, rms)
-            next?.consecutiveSpeechChunks += 1
-            let remainingCapacity = max(0, 16_000 - (next?.audioSamples.count ?? 0))
-            if remainingCapacity > 0 {
-                next?.audioSamples.append(contentsOf: chunkSamples.prefix(remainingCapacity))
-            }
-        } else if !isSpeech, next != nil {
-            // Speech gap — reset consecutive counter but keep the candidate.
-            next?.consecutiveSpeechChunks = 0
-        }
-
-        return next
+        BargeInDecisions.advancePendingBargeIn(
+            pending: pending,
+            speechStarted: speechStarted,
+            isSpeech: isSpeech,
+            chunkSamples: chunkSamples,
+            rms: rms,
+            echoSuppression: echoSuppression,
+            bargeInSuppressed: bargeInSuppressed,
+            inDenyCooldown: inDenyCooldown
+        )
     }
 
-    static func shouldAllowBargeInInterrupt(assistantSpeaking: Bool, assistantGenerating: Bool) -> Bool {
-        // Intentional: barge-in is an audible interruption affordance.
-        // If the model is generating silently, we should not interrupt due to
-        // ambient noise or speaker bleed while no speech is active.
-        assistantSpeaking
+    static func shouldAllowBargeInInterrupt(
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool
+    ) -> Bool {
+        BargeInDecisions.shouldAllowBargeInInterrupt(
+            assistantSpeaking: assistantSpeaking,
+            assistantGenerating: assistantGenerating
+        )
     }
 
     static func shouldStartDeferredFollowUp(
@@ -7716,18 +7707,22 @@ actor PipelineCoordinator {
         assistantSpeaking: Bool,
         assistantGenerating: Bool
     ) -> Bool {
-        guard !assistantSpeaking, !assistantGenerating else { return false }
-        guard let originTurnID else { return true }
-        return originTurnID == currentTurnID
+        BargeInDecisions.shouldStartDeferredFollowUp(
+            originTurnID: originTurnID,
+            currentTurnID: currentTurnID,
+            assistantSpeaking: assistantSpeaking,
+            assistantGenerating: assistantGenerating
+        )
     }
 
     static func coalescedDeferredProactiveTaskIDs(
         existing: [String],
         incomingTaskID: String
     ) -> [String] {
-        var next = existing.filter { $0 != incomingTaskID }
-        next.append(incomingTaskID)
-        return next
+        BargeInDecisions.coalescedDeferredProactiveTaskIDs(
+            existing: existing,
+            incomingTaskID: incomingTaskID
+        )
     }
 
     /// Owner-verified barge-in: only the owner's voice can interrupt Fae mid-speech.
