@@ -3389,6 +3389,7 @@ actor PipelineCoordinator {
                     isSpeech: vadOutput.isSpeech,
                     chunkSamples: chunk.samples,
                     rms: vadOutput.rms,
+                    echoSuppression: echoSuppressor.isInSuppression,
                     bargeInSuppressed: bargeInSuppressed,
                     inDenyCooldown: inDenyCooldown
                 )
@@ -7209,16 +7210,17 @@ actor PipelineCoordinator {
         isSpeech: Bool,
         chunkSamples: [Float],
         rms: Float,
+        echoSuppression: Bool,
         bargeInSuppressed: Bool,
         inDenyCooldown: Bool
     ) -> PendingBargeIn? {
         var next = pending
-        // Echo suppression is no longer a hard gate here — it's a signal
-        // passed to the interruption decider for weighted decision-making.
-        // This allows barge-in candidates to be created during playback.
-        if speechStarted && !bargeInSuppressed && !inDenyCooldown {
+        // Echo suppression gates candidate CREATION — prevents Fae from hearing
+        // her own TTS output as a barge-in attempt. Once playback stops and the
+        // echo tail expires, candidates are created normally.
+        if speechStarted && !echoSuppression && !bargeInSuppressed && !inDenyCooldown {
             next = PendingBargeIn(capturedAt: Date(), lastRms: rms, peakRms: rms)
-        } else if speechStarted && (bargeInSuppressed || inDenyCooldown) {
+        } else if speechStarted && (echoSuppression || bargeInSuppressed || inDenyCooldown) {
             return nil
         }
 
@@ -7285,7 +7287,26 @@ actor PipelineCoordinator {
             }
         }
 
-        // Speaker verification (fail-closed when owner exists).
+        // Echo rejection — if audio matches Fae's own voice profile, it's
+        // speaker bleedthrough that survived the echo suppressor timing window.
+        if barge.audioSamples.count >= 5600,
+           let encoder = speakerEncoder, await encoder.isLoaded,
+           let store = speakerProfileStore {
+            if let embedding = try? await encoder.embed(
+                audio: barge.audioSamples,
+                sampleRate: AudioCaptureManager.targetSampleRate
+            ) {
+                // Use a relaxed threshold — mel-spectral fallback has lower similarity range.
+                let faeSelfThreshold: Float = 0.55
+                if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: faeSelfThreshold) {
+                    debugLog(debugConsole, .command, "Barge-in blocked (fae_self echo)")
+                    NSLog("PipelineCoordinator: barge-in rejected — audio matches fae_self (echo)")
+                    return
+                }
+            }
+        }
+
+        // Speaker verification — owner check with graceful degradation.
         let isOwner = await verifyBargeInSpeaker(audio: barge.audioSamples)
         guard isOwner else {
             debugLog(debugConsole, .command, "Barge-in blocked (not owner)")

@@ -279,6 +279,7 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.12,
+            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -291,11 +292,29 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.18,
+            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
         XCTAssertEqual(pending?.consecutiveSpeechChunks, 2)
         XCTAssertEqual(Double(pending?.peakRms ?? 0), 0.18, accuracy: 0.001)
+    }
+
+    func testPendingBargeInBlockedDuringEchoSuppression() {
+        let chunk = [Float](repeating: 0.12, count: 512)
+
+        // Echo suppression active → candidate creation blocked.
+        let pending = PipelineCoordinator.advancePendingBargeIn(
+            pending: nil,
+            speechStarted: true,
+            isSpeech: true,
+            chunkSamples: chunk,
+            rms: 0.12,
+            echoSuppression: true,
+            bargeInSuppressed: false,
+            inDenyCooldown: false
+        )
+        XCTAssertNil(pending, "Barge-in candidate should not be created during echo suppression")
     }
 
     func testPendingBargeInResetsConsecutiveOnSpeechGap() {
@@ -307,6 +326,7 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: true,
             chunkSamples: chunk,
             rms: 0.12,
+            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -319,6 +339,7 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
             isSpeech: false,
             chunkSamples: chunk,
             rms: 0.01,
+            echoSuppression: false,
             bargeInSuppressed: false,
             inDenyCooldown: false
         )
@@ -525,6 +546,21 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
         XCTAssertTrue(BackchannelClassifier.isBackchannel("right"))
         XCTAssertTrue(BackchannelClassifier.isBackchannel("Wow"))
         XCTAssertTrue(BackchannelClassifier.isBackchannel("  Yeah  "))
+    }
+
+    func testBackchannelClassifierDetectsFillersAndSounds() {
+        // Fillers
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("um"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("uh"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("er"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("like"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("well"))
+        // Non-speech sounds
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("oh"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("ooh"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("ugh"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("oops"))
+        XCTAssertTrue(BackchannelClassifier.isBackchannel("whoa"))
     }
 
     func testBackchannelClassifierRejectsRealSpeech() {

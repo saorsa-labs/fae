@@ -77,11 +77,19 @@ struct InterruptionOutcome: Sendable {
 /// Backchannel detection — short acknowledgment phrases that should not
 /// trigger a hard interrupt unless the user continues speaking.
 enum BackchannelClassifier {
-    /// Phrases that are pure backchannels when spoken in isolation.
+    /// Phrases that are pure backchannels, fillers, or non-speech sounds
+    /// when spoken in isolation. These should not trigger a hard interrupt.
     static let phrases: Set<String> = [
+        // Backchannels
         "mm", "mhm", "uh-huh", "uh huh", "yeah", "yep", "yup",
         "right", "okay", "ok", "sure", "wow", "huh", "ah",
         "hmm", "gotcha", "nice", "cool", "great", "interesting",
+        // Fillers and hesitations
+        "um", "uh", "er", "erm", "eh", "like", "so", "well",
+        "you know", "i mean", "let me",
+        // Non-speech sounds that STT may transcribe
+        "oh", "ooh", "aah", "ha", "hm", "ugh", "phew", "whoa",
+        "oops", "whoops", "heh", "huh huh",
     ]
 
     /// Returns true if the transcript is purely a backchannel phrase.
