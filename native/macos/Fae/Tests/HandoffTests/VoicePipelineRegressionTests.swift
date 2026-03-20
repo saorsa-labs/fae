@@ -640,4 +640,36 @@ final class VoicePipelineRegressionTests: XCTestCase {
         let normal = "Tell me what the reminders are."
         XCTAssertEqual(TextProcessing.correctNameRecognition(normal), normal)
     }
+
+    // MARK: - Context Budget
+
+    func testRecommendedMaxHistoryAccountsForLargeSystemPrompt() {
+        // 32K context with 4096 maxTokens:
+        // available = 32768 - 18000 - 4096 = 10672 tokens → 26 messages
+        let maxHistory = FaeConfig.recommendedMaxHistory(contextSize: 32_768, maxTokens: 4_096)
+        XCTAssertLessThanOrEqual(maxHistory, 30, "maxHistory should be conservative on 32K context")
+        XCTAssertGreaterThanOrEqual(maxHistory, 6, "maxHistory should be at least 6")
+    }
+
+    func testRecommendedMaxHistoryHandlesSmallContext() {
+        // 8K context: available = 8192 - 18000 - 2048 = negative → 6 (minimum)
+        let maxHistory = FaeConfig.recommendedMaxHistory(contextSize: 8_192, maxTokens: 2_048)
+        XCTAssertEqual(maxHistory, 6, "Small context should clamp to minimum 6")
+    }
+
+    func testConversationStateTrimHistoryRespectsReservedTokens() async {
+        let state = ConversationStateTracker()
+        await state.setContextBudget(contextSize: 32_768, reservedTokens: 28_000)
+
+        // Add many messages — should be trimmed aggressively.
+        for i in 0..<20 {
+            await state.addUserMessage("Message \(i) with some reasonable length content here.")
+            await state.addAssistantMessage("Response \(i) with some reasonable length content too.")
+        }
+
+        let history = await state.history
+        // With 28K reserved out of 32K, only ~4768 tokens for history.
+        // Each message ≈ 20 tokens. Should be heavily trimmed.
+        XCTAssertLessThan(history.count, 20, "History should be trimmed when reserved tokens are large")
+    }
 }

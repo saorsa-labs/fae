@@ -345,9 +345,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     contextSize: contextSize, maxTokens: effectiveMaxTokens
                 )
                 await conversationState.setMaxHistory(maxHistory)
+                // Reserve tokens for system prompt (~12K base + skills + tools ≈ 18K)
+                // plus generation budget. This is a conservative initial estimate;
+                // PipelineCoordinator.generateWithTools() recalculates dynamically
+                // each turn based on the actual assembled prompt.
+                let initialReservedTokens = 18_000 + effectiveMaxTokens
                 await conversationState.setContextBudget(
                     contextSize: contextSize,
-                    reservedTokens: 5000 + effectiveMaxTokens
+                    reservedTokens: initialReservedTokens
                 )
                 NSLog(
                     "FaeCore: context=%d (recommended=%d configured=%d) maxHistory=%d maxTokens=%d",

@@ -5263,19 +5263,48 @@ actor PipelineCoordinator {
             return directive
         }()
         let localMaxTokens = min(config.llm.maxTokens + effectiveThinkingLevel.additionalLocalMaxTokens, 8_192)
-        let dynamicReservedTokens = max(
-            1024,
-            Self.estimateTokenCount(for: systemPrompt)
-                + Self.estimateTokenCount(for: effectiveTurnContextPrefix ?? baseTurnContextPrefix)
-                + localMaxTokens
-        )
-        await conversationState.setReservedTokens(dynamicReservedTokens)
+
         // On tool follow-up turns, pass tools=nil to disable the streaming tool
         // call parser. The parser intercepts <-prefixed tokens looking for <tool_call>,
         // which can interfere with think blocks and cause 0-token generation on some
         // models. Tool calls in follow-up responses are still detected by the text-based
         // parseToolCalls() fallback on fullResponse after generation completes.
         let effectiveTools = isToolFollowUp ? nil : generationContext.nativeTools
+
+        // Estimate tool schema tokens — each tool spec adds ~100-200 tokens.
+        // Without this, the context budget calculation ignores tool schemas,
+        // which can cause overflow when many tools are visible (36 tools ≈ 5K tokens).
+        let toolSchemaTokens: Int = {
+            guard let tools = effectiveTools else { return 0 }
+            // Approximate: each tool spec ≈ 140 tokens average.
+            return tools.count * 140
+        }()
+
+        let dynamicReservedTokens = max(
+            1024,
+            Self.estimateTokenCount(for: systemPrompt)
+                + Self.estimateTokenCount(for: effectiveTurnContextPrefix ?? baseTurnContextPrefix)
+                + toolSchemaTokens
+                + localMaxTokens
+        )
+        await conversationState.setReservedTokens(dynamicReservedTokens)
+
+        // Pre-generation overflow guard: verify estimated total fits in context.
+        // If history is still too large after trimHistory(), aggressively reduce
+        // to prevent 0-token stalls from context overflow.
+        if contextLimitTokens > 0 {
+            let historyTokens = await conversationState.history.reduce(0) {
+                $0 + Self.estimateTokenCount(for: $1.content) + 4  // +4 for role/framing
+            }
+            let estimatedTotal = dynamicReservedTokens + historyTokens
+            if estimatedTotal > contextLimitTokens {
+                let overflow = estimatedTotal - contextLimitTokens
+                NSLog("PipelineCoordinator: context overflow guard — estimated=%d limit=%d overflow=%d, trimming history", estimatedTotal, contextLimitTokens, overflow)
+                debugLog(debugConsole, .pipeline, "⚠️ Context overflow guard: \(estimatedTotal) > \(contextLimitTokens) (overflow=\(overflow) tokens) — aggressive trim")
+                // Trim history aggressively: keep only last 4 messages (2 turns).
+                await conversationState.truncateHistory(keep: 4)
+            }
+        }
         let options = GenerationOptions(
             temperature: config.llm.temperature,
             topP: config.llm.topP,
