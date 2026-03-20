@@ -688,12 +688,12 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
     // MARK: - PlaybackBargeInCandidate
 
     func testPlaybackBargeInCandidateConstants() {
-        XCTAssertEqual(PipelineCoordinator.PlaybackBargeInCandidate.maxAudioSamples, 16_000)
-        XCTAssertEqual(PipelineCoordinator.PlaybackBargeInCandidate.minSamplesForIdentity, 5_600)
+        XCTAssertEqual(PlaybackBargeInCandidate.maxAudioSamples, 16_000)
+        XCTAssertEqual(PlaybackBargeInCandidate.minSamplesForIdentity, 5_600)
     }
 
     func testPlaybackBargeInCandidateAccumulation() {
-        var candidate = PipelineCoordinator.PlaybackBargeInCandidate(
+        var candidate = PlaybackBargeInCandidate(
             capturedAt: Date(),
             lastRms: 0.10,
             peakRms: 0.10
@@ -712,14 +712,14 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
     }
 
     func testPlaybackBargeInCandidateAudioCap() {
-        var candidate = PipelineCoordinator.PlaybackBargeInCandidate(
+        var candidate = PlaybackBargeInCandidate(
             capturedAt: Date(),
             lastRms: 0.10,
             peakRms: 0.10
         )
         // Add more than maxAudioSamples.
         let bigChunk = [Float](repeating: 0.1, count: 20_000)
-        let remaining = max(0, PipelineCoordinator.PlaybackBargeInCandidate.maxAudioSamples - candidate.audioSamples.count)
+        let remaining = max(0, PlaybackBargeInCandidate.maxAudioSamples - candidate.audioSamples.count)
         candidate.audioSamples.append(contentsOf: bigChunk.prefix(remaining))
         XCTAssertEqual(candidate.audioSamples.count, 16_000, "Should cap at maxAudioSamples")
     }

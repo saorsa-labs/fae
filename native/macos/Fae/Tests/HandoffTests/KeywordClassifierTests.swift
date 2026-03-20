@@ -156,7 +156,7 @@ final class KeywordClassifierTests: XCTestCase {
     // MARK: - PendingBargeIn Keyword Fields
 
     func testPendingBargeInKeywordFieldsDefaultToNil() {
-        let barge = PipelineCoordinator.PendingBargeIn(
+        let barge = PendingBargeIn(
             capturedAt: Date(),
             lastRms: 0.1,
             peakRms: 0.1
@@ -166,7 +166,7 @@ final class KeywordClassifierTests: XCTestCase {
     }
 
     func testPendingBargeInKeywordFieldsMutable() {
-        var barge = PipelineCoordinator.PendingBargeIn(
+        var barge = PendingBargeIn(
             capturedAt: Date(),
             lastRms: 0.1,
             peakRms: 0.1

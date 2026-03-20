@@ -1111,24 +1111,11 @@ actor PipelineCoordinator {
     private var firstAudioLatencyEmitted: Bool = false
     private let instrumentation = PipelineInstrumentation()
 
-    struct PendingBargeIn {
-        var capturedAt: Date
-        var speechSamples: Int = 0
-        var lastRms: Float = 0
-        var peakRms: Float = 0
-        var consecutiveSpeechChunks: Int = 0
-        var audioSamples: [Float] = []
-        /// Partial transcript from keyword spotter check (Phase 2b).
-        var partialTranscript: String?
-        /// Whether an interrupt keyword was detected during accumulation.
-        var hasInterruptKeyword: Bool = false
-    }
+    // PendingBargeIn and PlaybackBargeInCandidate types moved to BargeInTypes.swift.
 
     // MARK: - Playback Barge-In (Path A)
 
-    /// Candidate for barge-in during active playback — separate from `pendingBargeIn`
-    /// which is echo-gated. This path uses speaker identity + energy spikes to detect
-    /// user speech over Fae's own TTS output.
+    /// Candidate for barge-in during active playback.
     private var playbackBargeInCandidate: PlaybackBargeInCandidate?
 
     /// Whether a wake word was detected during current playback session.
@@ -1137,23 +1124,6 @@ actor PipelineCoordinator {
     /// Whether an interrupt keyword (for example "stop") was detected during
     /// the current playback session.
     private var playbackInterruptKeywordDetected: Bool = false
-
-    /// Candidate for barge-in during active assistant playback.
-    /// Unlike `PendingBargeIn` (which is echo-gated and used post-playback),
-    /// this accumulates audio during playback for identity-based interruption.
-    struct PlaybackBargeInCandidate {
-        var capturedAt: Date
-        var speechSamples: Int = 0
-        var lastRms: Float = 0
-        var peakRms: Float = 0
-        var consecutiveSpeechChunks: Int = 0
-        var audioSamples: [Float] = []
-
-        /// Maximum audio samples to accumulate (1 second at 16kHz).
-        static let maxAudioSamples = 16_000
-        /// Minimum samples needed for speaker identity check (~350ms at 16kHz).
-        static let minSamplesForIdentity = 5_600
-    }
 
     /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
     private var bargeInDenyCooldownUntil: Date?
@@ -1184,22 +1154,7 @@ actor PipelineCoordinator {
     /// generation is cancelled and the segment flows through normally.
     private var generationTakeoverCandidate: GenerationTakeoverCandidate?
 
-    struct GenerationTakeoverCandidate {
-        var audioSamples: [Float] = []
-        var speechSamples: Int = 0
-        var consecutiveSpeechChunks: Int = 0
-        var peakRms: Float = 0
-        var hasInterruptKeyword: Bool = false
-
-        /// 500ms at 16 kHz — minimum audio for keyword classifier.
-        static let minSamplesForKeyword = 8_000
-        /// 1.5s at 16 kHz — stop accumulating after this.
-        static let maxAudioSamples = 24_000
-        /// ~800ms at 36ms/chunk — sustained speech threshold.
-        static let minConsecutiveChunksForTakeover = 22
-        /// Minimum RMS for takeover without keyword.
-        static let minRmsForTakeover: Float = 0.06
-    }
+    // GenerationTakeoverCandidate type moved to BargeInTypes.swift.
 
     // MARK: - Pipeline Tasks
 
