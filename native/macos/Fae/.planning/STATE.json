@@ -1,20 +1,21 @@
 {
-  "project": "Channel Gateway — Cross-Channel Features + Testing",
-  "status": "project_complete",
-  "milestone": "All milestones complete",
-  "phases_completed": [
-    "2.1 — Migrate iMessageAdapter to ChannelAdapter protocol",
-    "2.2 — Migrate DiscordAdapter to ChannelAdapter protocol",
-    "2.3 — Migrate WhatsAppAdapter to ChannelAdapter protocol",
-    "3.1 — Shared Identity (ChannelIdentityResolver)",
-    "3.2 — Cross-Channel Context (LinkedSessionSummary, gateway enrichment)",
-    "3.3 — Channel Health Monitoring + Auto-Reconnect",
-    "4.1 — Integration Tests",
-    "4.2 — Concurrency Stress Tests",
-    "4.3 — Documentation + channel architecture update"
-  ],
-  "test_count": 1316,
-  "test_failures": 0,
-  "build_warnings": 0,
-  "completed_at": "2026-03-19T22:30:00Z"
+  "version": 1,
+  "project": "voice-pipeline-hardening",
+  "active": true,
+  "milestone": {
+    "number": 3,
+    "name": "PipelineCoordinator Decomposition"
+  },
+  "phase": {
+    "number": "3.2",
+    "name": "Extract BargeInDecider + TTSStage",
+    "plan": "PLAN-phase-3.2.md"
+  },
+  "progress": {
+    "total_tasks": 5,
+    "completed_tasks": 0,
+    "current_task": 1
+  },
+  "status": "executing",
+  "last_updated": "2026-03-20T12:00:00Z"
 }

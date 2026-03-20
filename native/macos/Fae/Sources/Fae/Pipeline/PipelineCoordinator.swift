@@ -1067,47 +1067,18 @@ actor PipelineCoordinator {
     /// Final reply text captured for the active remote relay turn, when present.
     private var relayReplyCaptureText: String?
 
-    // MARK: - Barge-In
+    // MARK: - Barge-In (consolidated in BargeInState)
 
-    private var pendingBargeIn: PendingBargeIn?
-
-    /// When true, barge-in is suppressed. Set during short non-interruptible
-    /// utterances (speakDirect) to prevent background noise from interrupting
-    /// command acknowledgments and approval responses.
-    private var bargeInSuppressed: Bool = false
+    /// All barge-in state: pending candidates, suppression, playback barge-in,
+    /// deny cooldown, interruption decider, false-interruption recovery,
+    /// and generation takeover candidate.
+    private var bargeInState: BargeInState
 
     // MARK: - Phase 1 Observability
 
     private var pipelineStartedAt: Date?
     private var firstAudioLatencyEmitted: Bool = false
     private let instrumentation = PipelineInstrumentation()
-
-    // PendingBargeIn and PlaybackBargeInCandidate types moved to BargeInTypes.swift.
-
-    // MARK: - Playback Barge-In (Path A)
-
-    /// Candidate for barge-in during active playback.
-    private var playbackBargeInCandidate: PlaybackBargeInCandidate?
-
-    /// Whether a wake word was detected during current playback session.
-    private var playbackWakeWordDetected: Bool = false
-
-    /// Whether an interrupt keyword (for example "stop") was detected during
-    /// the current playback session.
-    private var playbackInterruptKeywordDetected: Bool = false
-
-    /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
-    private var bargeInDenyCooldownUntil: Date?
-    private static let bargeInDenyCooldownSeconds: TimeInterval = 2.0
-
-    /// Interruption decider — strategy pattern for barge-in decisions.
-    private var interruptionDecider: any InterruptionDeciding
-
-    /// False-interruption recovery tracker.
-    private var falseInterruptionRecovery: FalseInterruptionRecovery
-
-    /// Buffer of assistant text at the point of interruption (for recovery).
-    private var lastAssistantTextBuffer: String = ""
 
     // lastStreamingPartialTranscript and streamingEpoch moved to speechInputStage.
 
@@ -1118,14 +1089,8 @@ actor PipelineCoordinator {
     private var silentGenerationBuffer: [SpeechSegment] = []
     static let maxSilentGenerationBufferSize = 4
 
-    // MARK: - Generation Takeover (Phase 2 — PATH C)
-
-    /// Tracks user speech energy during silent generation.  When the user speaks
-    /// strongly enough (sustained energy or interrupt keyword), the current
-    /// generation is cancelled and the segment flows through normally.
-    private var generationTakeoverCandidate: GenerationTakeoverCandidate?
-
-    // GenerationTakeoverCandidate type moved to BargeInTypes.swift.
+    // Generation takeover candidate (Path C) moved to bargeInState.
+    // GenerationTakeoverCandidate type in BargeInTypes.swift.
 
     // MARK: - Pipeline Tasks
 
@@ -1330,26 +1295,30 @@ actor PipelineCoordinator {
         // Configure VAD from config.
         vad.applyConfiguration(config.vad)
 
-        // Initialize interruption decider based on config.
+        // Initialize barge-in state with interruption decider and recovery tracker.
         let adaptiveConfig = config.bargeIn.adaptive
+        let decider: any InterruptionDeciding
         if adaptiveConfig.enabled {
-            self.interruptionDecider = AdaptiveInterruptionDecider(
+            decider = AdaptiveInterruptionDecider(
                 config: adaptiveConfig,
                 sampleRate: config.audio.inputSampleRate,
                 assistantStartHoldoffMs: config.bargeIn.assistantStartHoldoffMs,
                 minRms: config.bargeIn.minRms
             )
         } else {
-            self.interruptionDecider = LegacyThresholdInterruptionDecider(
+            decider = LegacyThresholdInterruptionDecider(
                 confirmMs: config.bargeIn.confirmMs,
                 minRms: config.bargeIn.minRms,
                 sampleRate: config.audio.inputSampleRate,
                 assistantStartHoldoffMs: config.bargeIn.assistantStartHoldoffMs
             )
         }
-        self.falseInterruptionRecovery = FalseInterruptionRecovery(
-            timeoutMs: adaptiveConfig.falseInterruptionTimeoutMs,
-            enabled: adaptiveConfig.recoverFalseInterruptions
+        self.bargeInState = BargeInState(
+            interruptionDecider: decider,
+            falseInterruptionRecovery: FalseInterruptionRecovery(
+                timeoutMs: adaptiveConfig.falseInterruptionTimeoutMs,
+                enabled: adaptiveConfig.recoverFalseInterruptions
+            )
         )
 
         // Keyword classifier is loaded by ModelManager — wired up in start().
@@ -1432,7 +1401,7 @@ actor PipelineCoordinator {
         manualOnlyApprovalPending = false
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
-        generationTakeoverCandidate = nil
+        bargeInState.generationTakeoverCandidate = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
         speechInputStage.incrementStreamingEpoch()
@@ -1468,7 +1437,7 @@ actor PipelineCoordinator {
         pendingGovernanceAction = nil
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
-        generationTakeoverCandidate = nil
+        bargeInState.generationTakeoverCandidate = nil
         speechInputStage.incrementStreamingEpoch()
         speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
@@ -1503,7 +1472,7 @@ actor PipelineCoordinator {
         manualOnlyApprovalPending = false
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
-        generationTakeoverCandidate = nil
+        bargeInState.generationTakeoverCandidate = nil
         speechInputStage.incrementStreamingEpoch()
         speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
@@ -1809,8 +1778,8 @@ actor PipelineCoordinator {
     /// is suppressed for the duration to prevent background noise from cutting
     /// off short utterances.
     func speakDirect(_ text: String) async {
-        bargeInSuppressed = true
-        defer { bargeInSuppressed = false }
+        bargeInState.isSuppressed = true
+        defer { bargeInState.isSuppressed = false }
         await speakText(text, isFinal: true)
     }
 
@@ -1818,8 +1787,8 @@ actor PipelineCoordinator {
     ///
     /// Used for voice preview in roleplay and settings. Non-interruptible.
     func speakWithVoice(_ text: String, voiceInstruct: String) async {
-        bargeInSuppressed = true
-        defer { bargeInSuppressed = false }
+        bargeInState.isSuppressed = true
+        defer { bargeInState.isSuppressed = false }
         await speakText(text, isFinal: true, voiceInstruct: voiceInstruct)
     }
 
@@ -1827,7 +1796,7 @@ actor PipelineCoordinator {
     func setFirstOwnerEnrollmentActive(_ active: Bool) {
         speakerGate.firstOwnerEnrollmentActive = active
         // Clear any deny cooldown from pre-enrollment barge-in attempts.
-        bargeInDenyCooldownUntil = nil
+        bargeInState.denyCooldownUntil = nil
         vad.reset()
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
@@ -2551,7 +2520,7 @@ actor PipelineCoordinator {
         // During playback, set the wake word flag for the playback barge-in path
         // instead of the normal streaming wake detection.
         if duringPlayback {
-            playbackWakeWordDetected = true
+            bargeInState.playbackWakeWordDetected = true
             debugLog(
                 debugConsole,
                 .command,
@@ -3019,8 +2988,8 @@ actor PipelineCoordinator {
         speculativePrefillTask = nil
         speechInputStage.incrementStreamingEpoch()
         silentGenerationBuffer.removeAll()
-        generationTakeoverCandidate = nil
-        falseInterruptionRecovery.cancel()
+        bargeInState.generationTakeoverCandidate = nil
+        bargeInState.falseInterruptionRecovery.cancel()
         activeCapabilityTicket = nil
         awaitingApproval = false
         manualOnlyApprovalPending = false
@@ -3481,14 +3450,14 @@ actor PipelineCoordinator {
                 // Accumulate audio into playback barge-in candidate when speech
                 // is detected above the playback baseline.
                 if vadOutput.isSpeech && echoSuppressor.userSpeechLikelyAbovePlayback(rms: vadOutput.rms) {
-                    if vadOutput.speechStarted || playbackBargeInCandidate == nil {
-                        playbackBargeInCandidate = PlaybackBargeInCandidate(
+                    if vadOutput.speechStarted || bargeInState.playbackCandidate == nil {
+                        bargeInState.playbackCandidate = PlaybackBargeInCandidate(
                             capturedAt: Date(),
                             lastRms: vadOutput.rms,
                             peakRms: vadOutput.rms
                         )
                     }
-                    if var candidate = playbackBargeInCandidate {
+                    if var candidate = bargeInState.playbackCandidate {
                         candidate.speechSamples += chunk.samples.count
                         candidate.lastRms = vadOutput.rms
                         candidate.peakRms = max(candidate.peakRms, vadOutput.rms)
@@ -3497,11 +3466,11 @@ actor PipelineCoordinator {
                         if remaining > 0 {
                             candidate.audioSamples.append(contentsOf: chunk.samples.prefix(remaining))
                         }
-                        playbackBargeInCandidate = candidate
+                        bargeInState.playbackCandidate = candidate
 
                         // Run keyword classifier on playback candidate (Path A).
                         if candidate.audioSamples.count >= Self.keywordClassifierMinSamples,
-                           (!playbackWakeWordDetected || !playbackInterruptKeywordDetected),
+                           (!bargeInState.playbackWakeWordDetected || !bargeInState.playbackInterruptKeywordDetected),
                            let classifier = keywordClassifier,
                            await classifier.isLoaded
                         {
@@ -3510,11 +3479,11 @@ actor PipelineCoordinator {
                                 sampleRate: config.audio.inputSampleRate
                             ) {
                                 if classification.label == .interrupt && classification.confidence > 0.85 {
-                                    playbackInterruptKeywordDetected = true
+                                    bargeInState.playbackInterruptKeywordDetected = true
                                     debugLog(debugConsole, .command,
                                              "Keyword classifier (Path A): interrupt (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
                                 } else if classification.label == .wake && classification.confidence > 0.85 {
-                                    playbackWakeWordDetected = true
+                                    bargeInState.playbackWakeWordDetected = true
                                     debugLog(debugConsole, .command,
                                              "Keyword classifier (Path A): wake (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
                                 }
@@ -3530,29 +3499,29 @@ actor PipelineCoordinator {
                             }
                         }
                     }
-                } else if !vadOutput.isSpeech, playbackBargeInCandidate != nil {
+                } else if !vadOutput.isSpeech, bargeInState.playbackCandidate != nil {
                     // Speech gap — reset consecutive counter but keep candidate.
-                    playbackBargeInCandidate?.consecutiveSpeechChunks = 0
+                    bargeInState.playbackCandidate?.consecutiveSpeechChunks = 0
                 }
 
                 // PATH B: Echo-gated barge-in (existing behavior, handles post-playback).
                 // Check deny cooldown — skip creating new barge-in candidates during cooldown.
-                let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
+                let inDenyCooldown = bargeInState.isInDenyCooldown
 
                 // Skip when echo suppressor is active or barge-in is suppressed
                 // (non-interruptible speakDirect) to prevent false triggers.
-                pendingBargeIn = Self.advancePendingBargeIn(
-                    pending: pendingBargeIn,
+                bargeInState.pendingBargeIn = Self.advancePendingBargeIn(
+                    pending: bargeInState.pendingBargeIn,
                     speechStarted: vadOutput.speechStarted,
                     isSpeech: vadOutput.isSpeech,
                     chunkSamples: chunk.samples,
                     rms: vadOutput.rms,
                     echoSuppression: echoSuppressor.isInSuppression,
-                    bargeInSuppressed: bargeInSuppressed,
+                    bargeInSuppressed: bargeInState.isSuppressed,
                     inDenyCooldown: inDenyCooldown
                 )
                 // Run keyword classifier on accumulated audio (Path B).
-                if var barge = pendingBargeIn,
+                if var barge = bargeInState.pendingBargeIn,
                    !barge.hasInterruptKeyword,
                    barge.audioSamples.count >= Self.keywordClassifierMinSamples,
                    let classifier = keywordClassifier,
@@ -3571,17 +3540,17 @@ actor PipelineCoordinator {
                         case .wake where classification.confidence > 0.85:
                             barge.hasInterruptKeyword = true
                             barge.partialTranscript = classification.keyword
-                            playbackWakeWordDetected = true
+                            bargeInState.playbackWakeWordDetected = true
                             debugLog(debugConsole, .command,
                                      "Keyword classifier: wake (conf=\(String(format: "%.2f", classification.confidence)))")
                         case .speech, .silence, .noise, .interrupt, .wake:
                             break
                         }
-                        pendingBargeIn = barge
+                        bargeInState.pendingBargeIn = barge
                     }
                 }
 
-                if let barge = pendingBargeIn {
+                if let barge = bargeInState.pendingBargeIn {
                     // Compute overlap duration from accumulated speech samples.
                     let overlapMs = (barge.speechSamples * 1000) / config.audio.inputSampleRate
                     let assistantElapsedMs: Int
@@ -3591,7 +3560,7 @@ actor PipelineCoordinator {
                         assistantElapsedMs = 0
                     }
 
-                    let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
+                    let inDenyCooldown = bargeInState.isInDenyCooldown
 
                     // Semantic signals from partial transcript (populated by keyword classifier or StreamingSTT).
                     let transcript = barge.partialTranscript
@@ -3609,7 +3578,7 @@ actor PipelineCoordinator {
                         overlapDurationMs: overlapMs,
                         assistantSpeechElapsedMs: assistantElapsedMs,
                         echoSuppression: echoSuppressor.isInSuppression,
-                        bargeInSuppressed: bargeInSuppressed,
+                        bargeInSuppressed: bargeInState.isSuppressed,
                         inDenyCooldown: inDenyCooldown,
                         peakRms: barge.peakRms,
                         consecutiveSpeechChunks: barge.consecutiveSpeechChunks,
@@ -3618,23 +3587,23 @@ actor PipelineCoordinator {
                         hasInterruptKeyword: barge.hasInterruptKeyword
                     )
 
-                    let decision = interruptionDecider.process(input)
+                    let decision = bargeInState.interruptionDecider.process(input)
                     switch decision {
                     case .interruptNow(let reason):
-                        pendingBargeIn = nil
-                        interruptionDecider.reset()
+                        bargeInState.pendingBargeIn = nil
+                        bargeInState.interruptionDecider.reset()
                         NSLog("PipelineCoordinator: interruption decider → interruptNow (%@)", reason)
                         await handleBargeInWithVerification(barge: barge)
                     case .ignore(let reason):
-                        pendingBargeIn = nil
-                        interruptionDecider.reset()
+                        bargeInState.pendingBargeIn = nil
+                        bargeInState.interruptionDecider.reset()
                         debugLog(debugConsole, .command, "Interruption ignored: \(reason)")
                     case .candidate:
                         break  // Keep collecting.
                     }
                 }
             } else {
-                pendingBargeIn = nil
+                bargeInState.pendingBargeIn = nil
             }
 
             // Be more patient during an active conversation so short hesitations
@@ -3678,11 +3647,11 @@ actor PipelineCoordinator {
                 assistantGenerating: assistantGenerating
             ) {
                 if vadOutput.isSpeech {
-                    if generationTakeoverCandidate == nil {
-                        generationTakeoverCandidate = GenerationTakeoverCandidate()
+                    if bargeInState.generationTakeoverCandidate == nil {
+                        bargeInState.generationTakeoverCandidate = GenerationTakeoverCandidate()
                     }
 
-                    if var candidate = generationTakeoverCandidate {
+                    if var candidate = bargeInState.generationTakeoverCandidate {
                         candidate.speechSamples += chunk.samples.count
                         candidate.consecutiveSpeechChunks += 1
                         candidate.peakRms = max(candidate.peakRms, vadOutput.rms)
@@ -3707,7 +3676,7 @@ actor PipelineCoordinator {
                             }
                         }
 
-                        generationTakeoverCandidate = candidate
+                        bargeInState.generationTakeoverCandidate = candidate
 
                         // Decide whether to take over generation.
                         let shouldTakeover = candidate.hasInterruptKeyword
@@ -3727,15 +3696,15 @@ actor PipelineCoordinator {
                     }
                 } else {
                     // Speech gap — reset consecutive counter but keep the candidate.
-                    generationTakeoverCandidate?.consecutiveSpeechChunks = 0
+                    bargeInState.generationTakeoverCandidate?.consecutiveSpeechChunks = 0
                 }
             } else {
-                generationTakeoverCandidate = nil
+                bargeInState.generationTakeoverCandidate = nil
             }
 
             // False-interruption recovery: check timeout window.
-            if falseInterruptionRecovery.observing {
-                let result = falseInterruptionRecovery.checkTimeout()
+            if bargeInState.falseInterruptionRecovery.observing {
+                let result = bargeInState.falseInterruptionRecovery.checkTimeout()
                 switch result {
                 case .resumePlayback:
                     // Seamlessly resume paused audio from exact interruption point.
@@ -3753,7 +3722,7 @@ actor PipelineCoordinator {
                         // Buffers expired or player not paused — fall back to repair utterance.
                         NSLog("PipelineCoordinator: pause/resume failed — falling back to repair utterance")
                         let repair = FalseInterruptionRecovery.buildRepairUtterance(
-                            interruptedText: falseInterruptionRecovery.lastInterruption?.interruptedText
+                            interruptedText: bargeInState.falseInterruptionRecovery.lastInterruption?.interruptedText
                         )
                         NSLog("PipelineCoordinator: false interruption → resume failed, speaking repair")
                         debugLog(debugConsole, .command, "False interruption recovery (fallback): \(repair)")
@@ -3783,8 +3752,8 @@ actor PipelineCoordinator {
                 }
 
                 // Confirm follow-up speech for false-interruption detection.
-                if falseInterruptionRecovery.observing && segment.durationSeconds > 0.5 {
-                    falseInterruptionRecovery.recordFollowUpSpeech()
+                if bargeInState.falseInterruptionRecovery.observing && segment.durationSeconds > 0.5 {
+                    bargeInState.falseInterruptionRecovery.recordFollowUpSpeech()
                 }
 
                 // During active TTS playback, discard completed segments — barge-in
@@ -7427,7 +7396,7 @@ actor PipelineCoordinator {
             return
         }
         assistantGenerating = false
-        generationTakeoverCandidate = nil
+        bargeInState.generationTakeoverCandidate = nil
         eventBus.send(.assistantGenerating(false))
         drainSilentGenerationBuffer()
         scheduleDeferredProactiveDrain()
@@ -7464,12 +7433,10 @@ actor PipelineCoordinator {
         guard !assistantSpeaking else { return }
         assistantSpeaking = true
         lastAssistantStart = Date()
-        lastAssistantTextBuffer = ""
+        bargeInState.lastAssistantTextBuffer = ""
         echoSuppressor.onAssistantSpeechStart()
         // Reset playback barge-in state for the new playback session.
-        playbackBargeInCandidate = nil
-        playbackWakeWordDetected = false
-        playbackInterruptKeywordDetected = false
+        bargeInState.resetPlaybackState()
     }
 
     private func markAssistantSpeechEnded(reason: String, resetVAD: Bool = false) {
@@ -7479,11 +7446,9 @@ actor PipelineCoordinator {
             assistantSpeaking = false
             echoSuppressor.onAssistantSpeechEnd(speechDurationSecs: speechDuration)
             echoSuppressor.resetPlaybackBaseline()
-            interruptionDecider.reset()
+            bargeInState.interruptionDecider.reset()
             // Clear playback barge-in state.
-            playbackBargeInCandidate = nil
-            playbackWakeWordDetected = false
-            playbackInterruptKeywordDetected = false
+            bargeInState.resetPlaybackState()
         }
         if resetVAD {
             vad.reset()
@@ -7503,7 +7468,7 @@ actor PipelineCoordinator {
     /// while TTS runs concurrently on the actor (re-entrant at `await` points).
     private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil, generationID: UUID? = nil) {
         // Track assistant text for false-interruption recovery.
-        lastAssistantTextBuffer += text
+        bargeInState.lastAssistantTextBuffer += text
 
         // Record TTS text for text-overlap echo rejection.
         echoSuppressor.recordAssistantText(text)
@@ -7785,7 +7750,7 @@ actor PipelineCoordinator {
     /// Owner-verified barge-in: only the owner's voice can interrupt Fae mid-speech.
     /// Fail-closed after enrollment: if owner exists but verification fails, barge-in is DENIED.
     private func handleBargeInWithVerification(barge: PendingBargeIn) async {
-        guard !bargeInSuppressed else { return }
+        guard !bargeInState.isSuppressed else { return }
         guard Self.shouldAllowBargeInInterrupt(
             assistantSpeaking: assistantSpeaking,
             assistantGenerating: assistantGenerating
@@ -7824,7 +7789,7 @@ actor PipelineCoordinator {
         let isOwner = await verifyBargeInSpeaker(audio: barge.audioSamples)
         guard isOwner else {
             debugLog(debugConsole, .command, "Barge-in blocked (not owner)")
-            bargeInDenyCooldownUntil = Date().addingTimeInterval(Self.bargeInDenyCooldownSeconds)
+            bargeInState.startDenyCooldown()
             return
         }
 
@@ -7847,10 +7812,10 @@ actor PipelineCoordinator {
         let outcome = InterruptionOutcome(
             interruptedAt: Date(),
             generationID: activeGenerationID,
-            interruptedText: lastAssistantTextBuffer.isEmpty ? nil : lastAssistantTextBuffer,
+            interruptedText: bargeInState.lastAssistantTextBuffer.isEmpty ? nil : bargeInState.lastAssistantTextBuffer,
             spokenFraction: 0  // Approximate — exact tracking deferred.
         )
-        falseInterruptionRecovery.recordInterruption(outcome: outcome, paused: true)
+        bargeInState.recordInterruption(outcome: outcome, paused: true)
     }
 
     private func markGenerationInterrupted() {
@@ -7868,7 +7833,7 @@ actor PipelineCoordinator {
     /// - Mel fallback + fae_self rejected + extreme energy (4x baseline, 500ms, 6 chunks) → interrupt
     /// - Otherwise → keep collecting
     private func evaluatePlaybackBargeIn(candidate: PlaybackBargeInCandidate) async -> Bool {
-        guard !bargeInSuppressed else { return false }
+        guard !bargeInState.isSuppressed else { return false }
         guard assistantSpeaking else { return false }
 
         // Holdoff — don't interrupt immediately after playback starts.
@@ -7880,7 +7845,7 @@ actor PipelineCoordinator {
         }
 
         // Deny cooldown check.
-        if let cooldownUntil = bargeInDenyCooldownUntil, Date() < cooldownUntil {
+        if bargeInState.isInDenyCooldown {
             return false
         }
 
@@ -7914,7 +7879,7 @@ actor PipelineCoordinator {
 
         // Layer 1: explicit semantic interrupt intent + not fae_self + owner verified → interrupt.
         // Owner check prevents bystanders from interrupting Fae on shared Macs.
-        if playbackInterruptKeywordDetected {
+        if bargeInState.playbackInterruptKeywordDetected {
             if !melFallback {
                 let compatible = await store.hasCompatibleOwnerProfile(embeddingDim: embedding.count)
                 if compatible {
@@ -7936,7 +7901,7 @@ actor PipelineCoordinator {
 
         // Layer 1b: Wake word detected + not fae_self → interrupt immediately.
         // Wake words are less likely from bystanders (they know the wake word).
-        if playbackWakeWordDetected {
+        if bargeInState.playbackWakeWordDetected {
             debugLog(debugConsole, .command, "Playback barge-in: wake word + not-fae → interrupt")
             NSLog("PipelineCoordinator: playback barge-in triggered (wake_word + identity)")
             return true
@@ -7992,15 +7957,13 @@ actor PipelineCoordinator {
         let outcome = InterruptionOutcome(
             interruptedAt: Date(),
             generationID: activeGenerationID,
-            interruptedText: lastAssistantTextBuffer.isEmpty ? nil : lastAssistantTextBuffer,
+            interruptedText: bargeInState.lastAssistantTextBuffer.isEmpty ? nil : bargeInState.lastAssistantTextBuffer,
             spokenFraction: 0
         )
-        falseInterruptionRecovery.recordInterruption(outcome: outcome, paused: true)
+        bargeInState.recordInterruption(outcome: outcome, paused: true)
 
         // Clear playback barge-in state.
-        playbackBargeInCandidate = nil
-        playbackWakeWordDetected = false
-        playbackInterruptKeywordDetected = false
+        bargeInState.resetPlaybackState()
     }
 
     private func isGenerationInterrupted(_ generationID: UUID?) -> Bool {
