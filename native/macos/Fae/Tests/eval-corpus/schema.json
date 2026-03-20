@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fae Audio Eval Corpus Entry",
+  "description": "Annotation for a single audio clip in the eval corpus.",
+  "type": "object",
+  "required": ["file", "class", "transcript"],
+  "properties": {
+    "file": {
+      "type": "string",
+      "description": "Filename of the WAV file (16kHz mono Float32)."
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "clean_speech",
+        "speech_plus_tv",
+        "speech_plus_conversation",
+        "speech_plus_kitchen",
+        "speech_plus_hvac",
+        "tts_plus_user_speech",
+        "tts_only",
+        "ambient_silence"
+      ],
+      "description": "Signal class for the recording environment."
+    },
+    "noise_type": {
+      "type": "string",
+      "description": "Specific noise source (e.g., running_water, tv_drama, fan)."
+    },
+    "transcript": {
+      "type": "string",
+      "description": "Ground-truth transcript of the user speech (empty for silence/tts-only)."
+    },
+    "speech_onset_ms": {
+      "type": "integer",
+      "description": "Millisecond offset where user speech begins."
+    },
+    "speech_offset_ms": {
+      "type": "integer",
+      "description": "Millisecond offset where user speech ends."
+    },
+    "expected_keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Keywords the keyword classifier should detect."
+    },
+    "is_interrupt": {
+      "type": "boolean",
+      "description": "Whether this clip represents an interrupt attempt."
+    },
+    "snr_estimate_db": {
+      "type": "number",
+      "description": "Estimated SNR in dB (measured or computed post-hoc)."
+    },
+    "duration_seconds": {
+      "type": "number",
+      "description": "Total clip duration in seconds."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free-text notes about recording conditions."
+    }
+  }
+}

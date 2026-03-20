@@ -712,10 +712,11 @@ enum TextProcessing {
         ("i fay", "Hi Fae"),
         ("i faye", "Hi Fae"),
         // Single-word garbles at word boundaries.
+        // NOTE: "faith", "ivy", and "fee" removed — common English words
+        // that cause false corrections in normal conversation.
         ("ife", "Fae"),
         ("ifae", "Fae"),
         ("ifay", "Fae"),
-        ("faith", "Fae"),
         ("phase", "Fae"),
         ("faye", "Fae"),
         ("fay", "Fae"),
@@ -725,11 +726,9 @@ enum TextProcessing {
         ("feh", "Fae"),
         ("fei", "Fae"),
         ("fae's", "Fae's"),
-        ("ivy", "Fae"),
         ("ivie", "Fae"),
         ("fay.", "Fae."),
         ("fey.", "Fae."),
-        ("faith.", "Fae."),
     ]
 
     /// Common ASR command-phrase misrecognitions. Qwen3-ASR garbles common
@@ -841,6 +840,21 @@ enum TextProcessing {
             }
         }
 
+        // Unclosed subordinate clause: a leading subordinating conjunction
+        // with no terminal punctuation suggests the user opened a clause
+        // they haven't closed yet.  E.g., "if it rains" (no main clause).
+        // Only fires when the first token is the subordinator — avoids false
+        // positives like "since yesterday morning" (temporal, not conditional).
+        let clauseOpeners: Set<String> = [
+            "if", "unless", "although", "though", "because", "whereas",
+        ]
+        if let first = tokens.first,
+           clauseOpeners.contains(first),
+           tokens.count >= 3
+        {
+            return true
+        }
+
         return false
     }
 
@@ -930,7 +944,7 @@ enum TextProcessing {
 
     /// Name variants for wake-word / direct-address detection.
     /// Ordered longest-first for greedy matching.
-    static let nameVariants = ["faye", "fae", "faith", "phase", "fea", "fee", "fay", "fey", "fah", "feh", "fei"]
+    static let nameVariants = ["faye", "fae", "phase", "fea", "fay", "fey", "fah", "feh", "fei"]
 
     struct WakeAddressMatch {
         enum MatchKind: String {

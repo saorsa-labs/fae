@@ -4,9 +4,9 @@ import SwiftUI
 /// Pure SwiftUI + Metal view rendering the nebula orb animation.
 ///
 /// Uses `TimelineView(.animation(minimumInterval:paused:))` with adaptive frame
-/// rate based on orb mode. Idle breathing at ~4fps saves 90%+ CPU compared to
-/// full 120fps rendering, while active states (listening, thinking, speaking)
-/// render at ~30fps for smooth animation.
+/// rate based on orb mode. Idle breathing at ~1fps saves 90%+ CPU compared to
+/// full 120fps rendering, while active states scale up as needed for smooth
+/// interaction and animation.
 ///
 /// ## Architecture
 ///
@@ -22,8 +22,8 @@ import SwiftUI
 ///
 /// | Mode      | FPS  | Interval | Rationale                              |
 /// |-----------|------|----------|----------------------------------------|
-/// | Idle      | ~4   | 0.25s    | Breathing is 37s cycle — 4fps smooth   |
-/// | Listening | ~15  | 0.066s   | Responsive to audio level changes      |
+/// | Idle      | ~1   | 1.0s     | Breathing is a 37s cycle — 1fps is enough |
+/// | Listening | ~10  | 0.1s     | Responsive to audio level changes      |
 /// | Thinking  | ~30  | 0.033s   | Smooth morphing/shimmer animation      |
 /// | Speaking  | ~30  | 0.033s   | Audio-reactive with wisp movement      |
 /// | Collapsed | pause| —        | Zero CPU when orb not visible          |
@@ -56,8 +56,8 @@ struct NativeOrbView: View {
     @State private var isHovering = false
 
     /// Adaptive frame interval based on orb mode.
-    /// Idle: 0.25s (~4fps) — breathing is so slow that 4fps is visually identical to 60fps.
-    /// Listening: 0.066s (~15fps) — responsive to audio but not wasteful.
+    /// Idle: 1.0s (~1fps) — breathing is so slow that higher cadence is wasted.
+    /// Listening: 0.1s (~10fps) — responsive to audio but not wasteful.
     /// Thinking/Speaking: 0.033s (~30fps) — smooth animation.
     private var adaptiveInterval: Double {
         switch orbAnimation.lastMode {

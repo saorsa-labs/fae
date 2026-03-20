@@ -201,6 +201,30 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         )
     }
 
+    func testShouldTrackGenerationTakeover() {
+        // Active during silent generation only.
+        XCTAssertTrue(
+            PipelineCoordinator.shouldTrackGenerationTakeover(
+                assistantSpeaking: false,
+                assistantGenerating: true
+            )
+        )
+        // Not active when speaking (barge-in handles that).
+        XCTAssertFalse(
+            PipelineCoordinator.shouldTrackGenerationTakeover(
+                assistantSpeaking: true,
+                assistantGenerating: true
+            )
+        )
+        // Not active when idle.
+        XCTAssertFalse(
+            PipelineCoordinator.shouldTrackGenerationTakeover(
+                assistantSpeaking: false,
+                assistantGenerating: false
+            )
+        )
+    }
+
     func testSelfConfigGetSettingsBypassesApproval() {
         XCTAssertFalse(
             PipelineCoordinator.toolRequiresApproval(

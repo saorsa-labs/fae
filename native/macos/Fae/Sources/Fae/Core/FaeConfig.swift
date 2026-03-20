@@ -72,7 +72,7 @@ struct FaeConfig: Codable {
         /// Sustain ratio applied while already in speech.
         /// 0.8333 ~= 0.25 / 0.30, a common Silero start/stop pairing.
         var hysteresisRatio: Float = 0.8333333
-        var minSilenceDurationMs: Int = 1500
+        var minSilenceDurationMs: Int = 800
         var speechPadMs: Int = 30
         var minSpeechDurationMs: Int = 250
         var maxSpeechDurationMs: Int = 15_000

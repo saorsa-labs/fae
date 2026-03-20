@@ -400,6 +400,42 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertFalse(TextProcessing.isLikelyContinuationCue("what time is it"))
     }
 
+    func testShortCompleteQuestionsAreNotDeferred() {
+        // Regression: short valid questions without "?" must NOT be deferred.
+        // ASR (Qwen3-ASR) frequently drops trailing "?" from transcripts.
+        // These are complete utterances that should be processed immediately.
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("what time is it"))
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("who are you"))
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("where am i"))
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("is it raining"))
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("can you hear me"))
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("how are you"))
+        // NOTE: "do you know" intentionally omitted — matches trailing bigram
+        // "you know" (continuation cue).  The heuristic errs on patience there.
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("whats the weather"))
+
+        // But partials that end with function words/determiners ARE still caught:
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("what's the"))  // "the" is a determiner
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("I want to"))   // "to" is a function word
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("can you set a timer for the"))  // "the"
+    }
+
+    func testIncompleteTurnUnclosedSubordinateClause() {
+        // Leading clause opener without a main clause.
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("if it rains"))
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("because the server"))
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("unless you want"))
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("although i agree"))
+
+        // Subordinator NOT in leading position — should not fire.
+        // "since" was removed from clause openers to avoid temporal false positives.
+        XCTAssertFalse(TextProcessing.isLikelyIncompleteTurn("since yesterday morning"))
+
+        // Short phrases (< 3 tokens) — clause opener heuristic doesn't fire,
+        // but "so" is in trailingFunctionWords so "if so" is still caught.
+        XCTAssertTrue(TextProcessing.isLikelyIncompleteTurn("if so"))  // "so" in trailing function words
+    }
+
     func testSemanticTurnDoesNotDeferDuringOnboarding() {
         XCTAssertFalse(
             PipelineCoordinator.shouldDeferSemanticTurn(

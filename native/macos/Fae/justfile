@@ -270,6 +270,67 @@ benchmark-compare model1 model2:
         print(f'{label:<18} {v1:>12.1f}T/s {v2:>12.1f}T/s {ratio:>8}')
     PYEOF
 
+# ─── Audio Eval ────────────────────────────────────────────────────────────
+
+# Record a WAV clip for the eval corpus (16kHz mono, 5s default)
+# Usage: just record-eval clean_speech "what's the weather" [duration_seconds]
+record-eval class transcript duration="5":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CORPUS_DIR="Tests/eval-corpus"
+    mkdir -p "$CORPUS_DIR"
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    SLUG=$(echo "{{class}}" | tr ' ' '_')
+    WAV_FILE="${SLUG}_${TIMESTAMP}.wav"
+    JSON_FILE="${SLUG}_${TIMESTAMP}.json"
+    echo "Recording {{duration}}s of audio → $CORPUS_DIR/$WAV_FILE"
+    echo "Class: {{class}}"
+    echo "Transcript: {{transcript}}"
+    echo ""
+    echo "Press Enter to start recording..."
+    read -r
+    # Use sox (install via: zb install sox) to record 16kHz mono Float32 WAV.
+    rec -q -r 16000 -c 1 -e floating-point -b 32 "$CORPUS_DIR/$WAV_FILE" trim 0 {{duration}}
+    echo ""
+    echo "Saved: $CORPUS_DIR/$WAV_FILE"
+    # Compute duration from file.
+    ACTUAL_DUR=$(soxi -D "$CORPUS_DIR/$WAV_FILE" 2>/dev/null || echo "{{duration}}")
+    # Write annotation sidecar.
+    cat > "$CORPUS_DIR/$JSON_FILE" <<JSONEOF
+    {
+      "file": "$WAV_FILE",
+      "class": "{{class}}",
+      "transcript": "{{transcript}}",
+      "duration_seconds": $ACTUAL_DUR,
+      "is_interrupt": false,
+      "notes": "Recorded $(date +%Y-%m-%d) via just record-eval"
+    }
+    JSONEOF
+    echo "Annotation: $CORPUS_DIR/$JSON_FILE"
+
+# Run audio eval harness against the corpus
+eval-audio:
+    swift test --filter AudioEvalHarnessTests
+
+# List eval corpus contents
+eval-list:
+    #!/usr/bin/env bash
+    CORPUS_DIR="Tests/eval-corpus"
+    echo "=== Eval Corpus ==="
+    WAV_COUNT=$(find "$CORPUS_DIR" -name "*.wav" 2>/dev/null | wc -l | tr -d ' ')
+    JSON_COUNT=$(find "$CORPUS_DIR" -name "*.json" ! -name "schema.json" 2>/dev/null | wc -l | tr -d ' ')
+    echo "WAV files:  $WAV_COUNT"
+    echo "Annotations: $JSON_COUNT"
+    if [ "$JSON_COUNT" -gt 0 ]; then
+        echo ""
+        for f in "$CORPUS_DIR"/*.json; do
+            [ "$(basename "$f")" = "schema.json" ] && continue
+            CLASS=$(python3 -c "import json; print(json.load(open('$f'))['class'])" 2>/dev/null || echo "?")
+            TRANSCRIPT=$(python3 -c "import json; print(json.load(open('$f')).get('transcript','')[:50])" 2>/dev/null || echo "?")
+            echo "  $(basename "$f"): [$CLASS] \"$TRANSCRIPT\""
+        done
+    fi
+
 # ─── Validation ─────────────────────────────────────────────────────────────
 
 # Full validation (build + test)

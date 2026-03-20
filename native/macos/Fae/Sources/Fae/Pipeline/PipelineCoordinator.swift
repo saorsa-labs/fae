@@ -1006,6 +1006,14 @@ actor PipelineCoordinator {
     private var voiceTagStripper = VoiceTagStripper()
     private let keywordSpotter: KeywordSpotter
 
+    /// Micro keyword classifier for audio-based interrupt detection.
+    /// When available, classifies accumulated barge-in audio to populate
+    /// `PendingBargeIn.hasInterruptKeyword` and `partialTranscript`.
+    private var keywordClassifier: MLXKeywordClassifier?
+
+    /// Minimum audio samples before running keyword classification (500ms at 16kHz).
+    private static let keywordClassifierMinSamples = 8_000
+
     // MARK: - Atomic-like Flags
 
     private struct PendingGovernanceAction: Sendable {
@@ -1129,6 +1137,37 @@ actor PipelineCoordinator {
         var hasInterruptKeyword: Bool = false
     }
 
+    // MARK: - Playback Barge-In (Path A)
+
+    /// Candidate for barge-in during active playback — separate from `pendingBargeIn`
+    /// which is echo-gated. This path uses speaker identity + energy spikes to detect
+    /// user speech over Fae's own TTS output.
+    private var playbackBargeInCandidate: PlaybackBargeInCandidate?
+
+    /// Whether a wake word was detected during current playback session.
+    private var playbackWakeWordDetected: Bool = false
+
+    /// Whether an interrupt keyword (for example "stop") was detected during
+    /// the current playback session.
+    private var playbackInterruptKeywordDetected: Bool = false
+
+    /// Candidate for barge-in during active assistant playback.
+    /// Unlike `PendingBargeIn` (which is echo-gated and used post-playback),
+    /// this accumulates audio during playback for identity-based interruption.
+    struct PlaybackBargeInCandidate {
+        var capturedAt: Date
+        var speechSamples: Int = 0
+        var lastRms: Float = 0
+        var peakRms: Float = 0
+        var consecutiveSpeechChunks: Int = 0
+        var audioSamples: [Float] = []
+
+        /// Maximum audio samples to accumulate (1 second at 16kHz).
+        static let maxAudioSamples = 16_000
+        /// Minimum samples needed for speaker identity check (~350ms at 16kHz).
+        static let minSamplesForIdentity = 5_600
+    }
+
     /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
     private var bargeInDenyCooldownUntil: Date?
     private static let bargeInDenyCooldownSeconds: TimeInterval = 2.0
@@ -1144,6 +1183,42 @@ actor PipelineCoordinator {
 
     /// Last partial transcript seen from streaming STT, used for transcript-aware endpointing.
     private var lastStreamingPartialTranscript: String?
+
+    /// Epoch counter for streaming ASR sessions.  Incremented on every reset
+    /// so that in-flight `runStreamingTranscription()` results from a previous
+    /// session are silently dropped instead of emitting stale partials.
+    private var streamingEpoch: UInt64 = 0
+
+    // MARK: - Silent Generation Buffer (Phase 1)
+
+    /// Segments captured while the LLM is generating but not yet speaking.
+    /// Drained when generation ends so the user's speech isn't lost.
+    private var silentGenerationBuffer: [SpeechSegment] = []
+    static let maxSilentGenerationBufferSize = 4
+
+    // MARK: - Generation Takeover (Phase 2 — PATH C)
+
+    /// Tracks user speech energy during silent generation.  When the user speaks
+    /// strongly enough (sustained energy or interrupt keyword), the current
+    /// generation is cancelled and the segment flows through normally.
+    private var generationTakeoverCandidate: GenerationTakeoverCandidate?
+
+    struct GenerationTakeoverCandidate {
+        var audioSamples: [Float] = []
+        var speechSamples: Int = 0
+        var consecutiveSpeechChunks: Int = 0
+        var peakRms: Float = 0
+        var hasInterruptKeyword: Bool = false
+
+        /// 500ms at 16 kHz — minimum audio for keyword classifier.
+        static let minSamplesForKeyword = 8_000
+        /// 1.5s at 16 kHz — stop accumulating after this.
+        static let maxAudioSamples = 24_000
+        /// ~800ms at 36ms/chunk — sustained speech threshold.
+        static let minConsecutiveChunksForTakeover = 22
+        /// Minimum RMS for takeover without keyword.
+        static let minRmsForTakeover: Float = 0.06
+    }
 
     // MARK: - Pipeline Tasks
 
@@ -1372,6 +1447,8 @@ actor PipelineCoordinator {
             timeoutMs: adaptiveConfig.falseInterruptionTimeoutMs,
             enabled: adaptiveConfig.recoverFalseInterruptions
         )
+
+        // Keyword classifier is loaded by ModelManager — wired up in start().
     }
 
     // MARK: - CoWork Security Executor
@@ -1417,6 +1494,11 @@ actor PipelineCoordinator {
         // Build dynamic vocabulary corrections from known names.
         await rebuildVocabularyCorrections()
 
+        // Wire keyword classifier from ModelManager (non-critical).
+        if let mm = modelManager {
+            self.keywordClassifier = await mm.keywordClassifier
+        }
+
         startSpeechSegmentProcessingLoop()
 
         // Start audio capture.
@@ -1444,6 +1526,10 @@ actor PipelineCoordinator {
         awaitingApproval = false
         manualOnlyApprovalPending = false
         computerUseStepCount = 0
+        silentGenerationBuffer.removeAll()
+        generationTakeoverCandidate = nil
+        streamingEpoch &+= 1
+        await sttEngine.resetStreaming()
 
         // Ensure any in-flight TTS synthesis task fully exits before teardown.
         let activeTTSTask = pendingTTSTask
@@ -1473,6 +1559,10 @@ actor PipelineCoordinator {
         markGenerationInterrupted()
         pendingGovernanceAction = nil
         computerUseStepCount = 0
+        silentGenerationBuffer.removeAll()
+        generationTakeoverCandidate = nil
+        streamingEpoch &+= 1
+        lastStreamingPartialTranscript = nil
 
         let activeTTSTask = pendingTTSTask
         pendingTTSTask = nil
@@ -1481,7 +1571,14 @@ actor PipelineCoordinator {
             Task { await activeTTSTask.value }
         }
 
-        Task { await playback.stop() }
+        Task { [weak self] in
+            await self?.sttEngine.resetStreaming()
+            await self?.playback.stop()
+        }
+        // Clear generation flag immediately so the pipeline accepts new segments.
+        // Without this, a cancel during multi-tool recursion could leave
+        // assistantGenerating=true permanently (liveness lock).
+        endAssistantGeneration()
         NSLog("PipelineCoordinator: cancelled by user")
     }
 
@@ -1492,6 +1589,11 @@ actor PipelineCoordinator {
         awaitingApproval = false
         manualOnlyApprovalPending = false
         computerUseStepCount = 0
+        silentGenerationBuffer.removeAll()
+        generationTakeoverCandidate = nil
+        streamingEpoch &+= 1
+        lastStreamingPartialTranscript = nil
+        await sttEngine.resetStreaming()
 
         let activeTTSTask = pendingTTSTask
         pendingTTSTask = nil
@@ -1625,15 +1727,10 @@ actor PipelineCoordinator {
         guard !trimmed.isEmpty else { return nil }
 
         // Swap in the session's history so the LLM sees per-sender context.
+        // NOTE: History is restored at the end of this method, not via defer,
+        // because defer cannot be async and the fire-and-forget Task pattern
+        // races with concurrent channel messages.
         let savedHistory = await conversationState.swapHistory(session.messages)
-        defer {
-            // Restore shared conversation state after this turn completes.
-            // We must use a Task here because defer cannot be async.
-            let restored = savedHistory
-            Task { [conversationState] in
-                await conversationState.swapHistory(restored)
-            }
-        }
 
         // Remote senders are explicitly non-owner.
         currentSpeakerLabel = "channel:\(channel):\(sender)"
@@ -1658,6 +1755,10 @@ actor PipelineCoordinator {
         // Capture new messages generated during this turn back into the session.
         let historyAfter = await conversationState.history
         let assistantCountAfter = historyAfter.lazy.filter { $0.role == .assistant }.count
+
+        // Restore shared conversation state synchronously (not via defer/Task)
+        // to prevent race conditions with concurrent channel messages.
+        await conversationState.swapHistory(savedHistory)
 
         // Sync session with whatever the LLM turn produced.
         session.addUserMessage(trimmed)
@@ -2145,7 +2246,8 @@ actor PipelineCoordinator {
         hasPendingSemanticTurn: Bool,
         configMinSilenceMs: Int,
         bargeInSilenceMs: Int,
-        lastPartialTranscript: String? = nil
+        lastPartialTranscript: String? = nil,
+        emaSuggestedMs: Int? = nil
     ) -> Int {
         if assistantSpeaking {
             return bargeInSilenceMs
@@ -2174,12 +2276,22 @@ actor PipelineCoordinator {
                 return max(configMinSilenceMs, incompleteFloorMs)
             }
 
-            // Clearly complete utterance — use the config minimum (faster response).
+            // Clearly complete utterance — use EMA-adapted minimum if available,
+            // otherwise fall back to static config. EMA tracks the user's natural
+            // pause rhythm and adapts the threshold per-session.
+            if let ema = emaSuggestedMs {
+                return min(ema, configMinSilenceMs)
+            }
             return configMinSilenceMs
         }
 
         if conversationalTurnActive {
             return max(configMinSilenceMs, Self.conversationalSilenceFloorMs)
+        }
+
+        // Use EMA suggestion when available (adapts to user's speaking rhythm).
+        if let ema = emaSuggestedMs {
+            return max(ema, configMinSilenceMs)
         }
 
         return configMinSilenceMs
@@ -2339,6 +2451,12 @@ actor PipelineCoordinator {
     private static let streamingSpeakerWindowMs: Int = 1400
     private static let streamingSpeakerStepMs: Int = 240
 
+    /// Unified cosine similarity threshold for fae_self echo rejection.
+    /// Used by both `handleBargeInWithVerification` and `evaluatePlaybackBargeIn`.
+    /// Relaxed from speaker.threshold (0.70) because mel-spectral fallback
+    /// has a narrower similarity range than neural embeddings.
+    private static let faeSelfEchoThreshold: Float = 0.55
+
     private func previewSpeakerVerification(
         segment: SpeechSegment,
         encoder: CoreMLSpeakerEncoder,
@@ -2469,11 +2587,13 @@ actor PipelineCoordinator {
             return
         }
 
+        // During playback, allow wake word detection with a raised threshold.
+        // Outside playback, require assistant not speaking/generating.
+        let duringPlayback = assistantSpeaking
         guard effectiveAcousticWakeEnabled(),
               !firstOwnerEnrollmentActive,
               vadOutput.isSpeech,
-              !assistantSpeaking,
-              !assistantGenerating,
+              (duringPlayback || (!assistantSpeaking && !assistantGenerating)),
               let wakeStore = wakeWordProfileStore
         else {
             return
@@ -2493,13 +2613,37 @@ actor PipelineCoordinator {
         }
         streamingWakeLastEvaluatedSamples = streamingWakeSamples.count
 
+        // Raise threshold during playback to compensate for echo contamination.
+        let baseThreshold = effectiveAcousticWakeThreshold()
+        let threshold = duringPlayback ? baseThreshold + 0.03 : baseThreshold
+
         let templates = await wakeStore.acousticTemplates()
         guard let detection = WakeWordAcousticDetector.bestDetection(
             samples: streamingWakeSamples,
             sampleRate: AudioCaptureManager.targetSampleRate,
             templates: templates,
-            threshold: effectiveAcousticWakeThreshold()
+            threshold: threshold
         ) else {
+            return
+        }
+
+        // During playback, set the wake word flag for the playback barge-in path
+        // instead of the normal streaming wake detection.
+        if duringPlayback {
+            playbackWakeWordDetected = true
+            debugLog(
+                debugConsole,
+                .command,
+                "Playback wake word detected sim=\(String(format: "%.3f", detection.similarity)) consensus=\(String(format: "%.3f", detection.consensusSimilarity))"
+            )
+            publishVoiceAttention(
+                stage: "wake",
+                decision: "detected",
+                reason: "playback_wake_word",
+                wakeSource: "acoustic",
+                wakeScore: detection.consensusSimilarity,
+                rms: vadOutput.rms
+            )
             return
         }
 
@@ -2948,6 +3092,9 @@ actor PipelineCoordinator {
         engagedUntil = nil
         lastAssistantResponseText = ""
         lastStreamingPartialTranscript = nil
+        streamingEpoch &+= 1
+        silentGenerationBuffer.removeAll()
+        generationTakeoverCandidate = nil
         falseInterruptionRecovery.cancel()
         activeCapabilityTicket = nil
         awaitingApproval = false
@@ -3365,6 +3512,36 @@ actor PipelineCoordinator {
             await updateStreamingSpeakerGate(chunk: chunk, vadOutput: vadOutput)
             await updateStreamingWakeDetector(chunk: chunk, vadOutput: vadOutput)
 
+            // Feed audio to streaming STT during active speech for real-time
+            // partial transcripts (Phase 3).
+            //
+            // Three gates prevent feeding garbage audio:
+            // 1. Echo gate: during playback, only feed audio above the playback
+            //    baseline (user speech, not Fae's TTS bleeding through the mic).
+            // 2. Echo suppression: blocked while echo tail is active.
+            // 3. SNR gate: skip low-SNR chunks that would produce bad partials.
+            let snrOk = vad.estimatedSNRdB(chunkRms: vadOutput.rms)
+                >= VoiceActivityDetector.minStreamingSNRdB
+            let streamingAudioSafe = vadOutput.isSpeech
+                && (!assistantSpeaking
+                    || echoSuppressor.userSpeechLikelyAbovePlayback(rms: vadOutput.rms))
+                && !echoSuppressor.isInSuppression
+                && snrOk
+            if streamingAudioSafe {
+                let epoch = streamingEpoch
+                await sttEngine.feedStreamingAudio(chunk.samples)
+                if await sttEngine.shouldRunStreamingTranscription() {
+                    // Detached task so the 36ms audio loop is not blocked.
+                    Task { [weak self] in
+                        guard let self else { return }
+                        if let partial = await self.sttEngine.runStreamingTranscription() {
+                            // Drop stale partials from a previous streaming session.
+                            await self.handleStreamingPartialTranscript(partial, epoch: epoch)
+                        }
+                    }
+                }
+            }
+
             if !firstAudioLatencyEmitted,
                let startedAt = pipelineStartedAt,
                (vadOutput.isSpeech || vadOutput.speechStarted || vadOutput.segment != nil)
@@ -3378,6 +3555,68 @@ actor PipelineCoordinator {
             // This avoids false interruptions during long LLM decode gaps where
             // assistantGenerating may be true but no speech is playing.
             if Self.shouldTrackBargeIn(assistantSpeaking: assistantSpeaking) {
+                // PATH A: Playback barge-in — identity-based detection during active TTS.
+                // Update playback baseline RMS (how loud Fae sounds through the mic).
+                echoSuppressor.updatePlaybackBaseline(rms: vadOutput.rms)
+
+                // Accumulate audio into playback barge-in candidate when speech
+                // is detected above the playback baseline.
+                if vadOutput.isSpeech && echoSuppressor.userSpeechLikelyAbovePlayback(rms: vadOutput.rms) {
+                    if vadOutput.speechStarted || playbackBargeInCandidate == nil {
+                        playbackBargeInCandidate = PlaybackBargeInCandidate(
+                            capturedAt: Date(),
+                            lastRms: vadOutput.rms,
+                            peakRms: vadOutput.rms
+                        )
+                    }
+                    if var candidate = playbackBargeInCandidate {
+                        candidate.speechSamples += chunk.samples.count
+                        candidate.lastRms = vadOutput.rms
+                        candidate.peakRms = max(candidate.peakRms, vadOutput.rms)
+                        candidate.consecutiveSpeechChunks += 1
+                        let remaining = max(0, PlaybackBargeInCandidate.maxAudioSamples - candidate.audioSamples.count)
+                        if remaining > 0 {
+                            candidate.audioSamples.append(contentsOf: chunk.samples.prefix(remaining))
+                        }
+                        playbackBargeInCandidate = candidate
+
+                        // Run keyword classifier on playback candidate (Path A).
+                        if candidate.audioSamples.count >= Self.keywordClassifierMinSamples,
+                           (!playbackWakeWordDetected || !playbackInterruptKeywordDetected),
+                           let classifier = keywordClassifier,
+                           await classifier.isLoaded
+                        {
+                            if let classification = try? await classifier.classify(
+                                audio: candidate.audioSamples,
+                                sampleRate: config.audio.inputSampleRate
+                            ) {
+                                if classification.label == .interrupt && classification.confidence > 0.85 {
+                                    playbackInterruptKeywordDetected = true
+                                    debugLog(debugConsole, .command,
+                                             "Keyword classifier (Path A): interrupt (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
+                                } else if classification.label == .wake && classification.confidence > 0.85 {
+                                    playbackWakeWordDetected = true
+                                    debugLog(debugConsole, .command,
+                                             "Keyword classifier (Path A): wake (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
+                                }
+                            }
+                        }
+
+                        // Evaluate once enough audio is collected for identity check.
+                        if candidate.audioSamples.count >= PlaybackBargeInCandidate.minSamplesForIdentity {
+                            if await evaluatePlaybackBargeIn(candidate: candidate) {
+                                await executePlaybackBargeIn(candidate: candidate)
+                                // Skip the rest of barge-in processing for this chunk.
+                                continue
+                            }
+                        }
+                    }
+                } else if !vadOutput.isSpeech, playbackBargeInCandidate != nil {
+                    // Speech gap — reset consecutive counter but keep candidate.
+                    playbackBargeInCandidate?.consecutiveSpeechChunks = 0
+                }
+
+                // PATH B: Echo-gated barge-in (existing behavior, handles post-playback).
                 // Check deny cooldown — skip creating new barge-in candidates during cooldown.
                 let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
 
@@ -3393,6 +3632,36 @@ actor PipelineCoordinator {
                     bargeInSuppressed: bargeInSuppressed,
                     inDenyCooldown: inDenyCooldown
                 )
+                // Run keyword classifier on accumulated audio (Path B).
+                if var barge = pendingBargeIn,
+                   !barge.hasInterruptKeyword,
+                   barge.audioSamples.count >= Self.keywordClassifierMinSamples,
+                   let classifier = keywordClassifier,
+                   await classifier.isLoaded
+                {
+                    if let classification = try? await classifier.classify(
+                        audio: barge.audioSamples,
+                        sampleRate: config.audio.inputSampleRate
+                    ) {
+                        switch classification.label {
+                        case .interrupt where classification.confidence > 0.85:
+                            barge.hasInterruptKeyword = true
+                            barge.partialTranscript = classification.keyword
+                            debugLog(debugConsole, .command,
+                                     "Keyword classifier: interrupt (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
+                        case .wake where classification.confidence > 0.85:
+                            barge.hasInterruptKeyword = true
+                            barge.partialTranscript = classification.keyword
+                            playbackWakeWordDetected = true
+                            debugLog(debugConsole, .command,
+                                     "Keyword classifier: wake (conf=\(String(format: "%.2f", classification.confidence)))")
+                        case .speech, .silence, .noise, .interrupt, .wake:
+                            break
+                        }
+                        pendingBargeIn = barge
+                    }
+                }
+
                 if let barge = pendingBargeIn {
                     // Compute overlap duration from accumulated speech samples.
                     let overlapMs = (barge.speechSamples * 1000) / config.audio.inputSampleRate
@@ -3405,7 +3674,7 @@ actor PipelineCoordinator {
 
                     let inDenyCooldown = bargeInDenyCooldownUntil.map { Date() < $0 } ?? false
 
-                    // Semantic signals from partial transcript (populated by StreamingSTT when available).
+                    // Semantic signals from partial transcript (populated by keyword classifier or StreamingSTT).
                     let transcript = barge.partialTranscript
                     let wordCount = transcript?
                         .split(separator: " ")
@@ -3459,7 +3728,8 @@ actor PipelineCoordinator {
                 hasPendingSemanticTurn: pendingSemanticTurn != nil,
                 configMinSilenceMs: config.vad.minSilenceDurationMs,
                 bargeInSilenceMs: config.bargeIn.bargeInSilenceMs,
-                lastPartialTranscript: lastStreamingPartialTranscript
+                lastPartialTranscript: lastStreamingPartialTranscript,
+                emaSuggestedMs: vad.emaSuggestedSilenceMs
             )
             vad.setSilenceThresholdMs(silenceThresholdMs)
             if assistantSpeaking {
@@ -3480,13 +3750,101 @@ actor PipelineCoordinator {
                 }
             }
 
+            // PATH C: Generation takeover — detect user speech during silent
+            // generation (LLM thinking / tool execution) and cancel generation
+            // when the signal is strong enough (sustained speech or keyword).
+            if Self.shouldTrackGenerationTakeover(
+                assistantSpeaking: assistantSpeaking,
+                assistantGenerating: assistantGenerating
+            ) {
+                if vadOutput.isSpeech {
+                    if generationTakeoverCandidate == nil {
+                        generationTakeoverCandidate = GenerationTakeoverCandidate()
+                    }
+
+                    if var candidate = generationTakeoverCandidate {
+                        candidate.speechSamples += chunk.samples.count
+                        candidate.consecutiveSpeechChunks += 1
+                        candidate.peakRms = max(candidate.peakRms, vadOutput.rms)
+                        let remaining = max(0, GenerationTakeoverCandidate.maxAudioSamples - candidate.audioSamples.count)
+                        if remaining > 0 {
+                            candidate.audioSamples.append(contentsOf: chunk.samples.prefix(remaining))
+                        }
+
+                        // Run keyword classifier once we have enough audio.
+                        if !candidate.hasInterruptKeyword,
+                           candidate.audioSamples.count >= GenerationTakeoverCandidate.minSamplesForKeyword,
+                           let classifier = keywordClassifier,
+                           await classifier.isLoaded
+                        {
+                            if let classification = try? await classifier.classify(
+                                audio: candidate.audioSamples,
+                                sampleRate: config.audio.inputSampleRate
+                            ), classification.label == .interrupt && classification.confidence > 0.85 {
+                                candidate.hasInterruptKeyword = true
+                                debugLog(debugConsole, .command,
+                                         "PATH C keyword: interrupt (conf=\(String(format: "%.2f", classification.confidence)))")
+                            }
+                        }
+
+                        generationTakeoverCandidate = candidate
+
+                        // Decide whether to take over generation.
+                        let shouldTakeover = candidate.hasInterruptKeyword
+                            || (candidate.consecutiveSpeechChunks >= GenerationTakeoverCandidate.minConsecutiveChunksForTakeover
+                                && candidate.peakRms >= GenerationTakeoverCandidate.minRmsForTakeover)
+                        if shouldTakeover {
+                            NSLog("PipelineCoordinator: PATH C generation takeover — keyword=%d chunks=%d peakRms=%.3f",
+                                  candidate.hasInterruptKeyword ? 1 : 0,
+                                  candidate.consecutiveSpeechChunks,
+                                  candidate.peakRms)
+                            debugLog(debugConsole, .command,
+                                     "Generation takeover: keyword=\(candidate.hasInterruptKeyword) chunks=\(candidate.consecutiveSpeechChunks) peakRms=\(String(format: "%.3f", candidate.peakRms))")
+                            markGenerationInterrupted()
+                            endAssistantGeneration()
+                            // Buffer is drained by endAssistantGeneration → drainSilentGenerationBuffer.
+                        }
+                    }
+                } else {
+                    // Speech gap — reset consecutive counter but keep the candidate.
+                    generationTakeoverCandidate?.consecutiveSpeechChunks = 0
+                }
+            } else {
+                generationTakeoverCandidate = nil
+            }
+
             // False-interruption recovery: check timeout window.
             if falseInterruptionRecovery.observing {
                 let result = falseInterruptionRecovery.checkTimeout()
-                if case .falseInterruption(let repair) = result {
+                switch result {
+                case .resumePlayback:
+                    // Seamlessly resume paused audio from exact interruption point.
+                    let resumed = await playback.resume()
+                    if resumed {
+                        // Use markAssistantSpeechStarted() instead of setting the flag
+                        // directly — this syncs the echo suppressor, resets playback
+                        // barge-in state, and updates lastAssistantStart. Without this,
+                        // the echo suppressor thinks Fae is silent during resumed playback,
+                        // allowing echo audio to leak through to STT.
+                        markAssistantSpeechStarted()
+                        NSLog("PipelineCoordinator: false interruption → resumed playback")
+                        debugLog(debugConsole, .command, "False interruption recovery: resumed playback")
+                    } else {
+                        // Buffers expired or player not paused — fall back to repair utterance.
+                        NSLog("PipelineCoordinator: pause/resume failed — falling back to repair utterance")
+                        let repair = FalseInterruptionRecovery.buildRepairUtterance(
+                            interruptedText: falseInterruptionRecovery.lastInterruption?.interruptedText
+                        )
+                        NSLog("PipelineCoordinator: false interruption → resume failed, speaking repair")
+                        debugLog(debugConsole, .command, "False interruption recovery (fallback): \(repair)")
+                        await speakDirect(repair)
+                    }
+                case .falseInterruption(let repair):
                     NSLog("PipelineCoordinator: false interruption detected — speaking repair")
                     debugLog(debugConsole, .command, "False interruption recovery: \(repair)")
                     await speakDirect(repair)
+                case .noAction, .stillObserving:
+                    break
                 }
             }
 
@@ -3495,6 +3853,12 @@ actor PipelineCoordinator {
                 defer {
                     resetStreamingSpeakerGate()
                     resetStreamingWakeDetector()
+                    // Increment epoch synchronously so any in-flight streaming
+                    // transcription result is invalidated immediately.
+                    streamingEpoch &+= 1
+                    Task { [weak self] in
+                        await self?.sttEngine.resetStreaming()
+                    }
                 }
 
                 // Confirm follow-up speech for false-interruption detection.
@@ -3502,10 +3866,23 @@ actor PipelineCoordinator {
                     falseInterruptionRecovery.recordFollowUpSpeech()
                 }
 
-                // Avoid stale-segment backlog during assistant generation/speech.
-                // Barge-in is already handled in-chunk before segment completion.
-                if assistantGenerating || assistantSpeaking {
-                    debugLog(debugConsole, .pipeline, "Discarded segment while assistant busy dur=\(String(format: "%.2f", segment.durationSeconds))s")
+                // During active TTS playback, discard completed segments — barge-in
+                // is handled in-chunk (PATH A/B) before segment completion.
+                if assistantSpeaking {
+                    debugLog(debugConsole, .pipeline, "Discarded segment while assistant speaking dur=\(String(format: "%.2f", segment.durationSeconds))s")
+                    continue
+                }
+
+                // During silent generation (LLM thinking / tool execution),
+                // buffer segments so user speech isn't lost.  The buffer is
+                // drained when generation finishes (see drainSilentGenerationBuffer).
+                if assistantGenerating {
+                    if silentGenerationBuffer.count < Self.maxSilentGenerationBufferSize {
+                        silentGenerationBuffer.append(segment)
+                        debugLog(debugConsole, .pipeline, "Buffered segment during silent generation dur=\(String(format: "%.2f", segment.durationSeconds))s (buffer=\(silentGenerationBuffer.count))")
+                    } else {
+                        debugLog(debugConsole, .pipeline, "Silent generation buffer full — dropped segment dur=\(String(format: "%.2f", segment.durationSeconds))s")
+                    }
                     continue
                 }
                 if shouldDropSegmentFromStreamingSpeakerGate() {
@@ -3946,9 +4323,42 @@ actor PipelineCoordinator {
         )
     }
 
+    /// Process a streaming partial transcript from the growing-buffer STT.
+    /// Updates `lastStreamingPartialTranscript`, runs keyword spotter for early
+    /// interrupt detection, and emits a non-final transcription event.
+    ///
+    /// The `epoch` parameter guards against stale partials: if the streaming
+    /// session was reset between transcription start and result delivery, the
+    /// epoch will have advanced and the partial is silently dropped.
+    private func handleStreamingPartialTranscript(_ text: String, epoch: UInt64) async {
+        guard epoch == streamingEpoch else {
+            debugLog(debugConsole, .pipeline, "Dropped stale streaming partial (epoch \(epoch) != \(streamingEpoch))")
+            return
+        }
+        lastStreamingPartialTranscript = text
+        eventBus.send(.transcription(text: text, isFinal: false))
+
+        // Early interrupt detection via keyword spotter on partial text.
+        if let match = await keywordSpotter.check(partialTranscript: text),
+           match.category == .interrupt
+        {
+            debugLog(debugConsole, .command, "Streaming partial interrupt: \"\(match.configuredKeyword)\" in \"\(text.prefix(60))\"")
+            await resetConversationSession(trigger: text, source: "voice")
+        }
+    }
+
     private func handleSpeechSegment(_ segment: SpeechSegment) async {
         let rms = VoiceActivityDetector.computeRMS(segment.samples)
         let durationSecs = Float(segment.samples.count) / Float(segment.sampleRate)
+
+        // EMA dynamic endpointing: measure silence gap from last user turn end.
+        // This adapts the silence threshold to the user's natural speaking rhythm.
+        if let lastEnd = lastUserTurnEndedAt, !assistantSpeaking {
+            let gapMs = Float(segment.capturedAt.timeIntervalSince(lastEnd) * 1000)
+            if gapMs > 0 && gapMs < 10_000 {  // Ignore very long gaps (separate sessions).
+                vad.recordObservedSilenceMs(gapMs)
+            }
+        }
 
         // Stash segment for acoustic wake template auto-enrollment.
         lastProcessedSegment = segment
@@ -4233,6 +4643,15 @@ actor PipelineCoordinator {
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
+
+            // Text-overlap echo rejection: if the transcribed text closely matches
+            // what Fae recently said, it's almost certainly speaker bleedthrough that
+            // survived timing-based and voice-identity echo checks.
+            if echoSuppressor.isLikelyEchoText(text) {
+                NSLog("PipelineCoordinator: dropping STT text — matches recent assistant speech (text-overlap echo)")
+                debugLog(debugConsole, .pipeline, "Text-overlap echo rejected: \"\(text)\"")
+                return
+            }
 
             let acousticWakeDetection = await acousticWakeDetectionForSegment(segment)
 
@@ -4985,6 +5404,7 @@ actor PipelineCoordinator {
             // If this recursion belongs to an old turn, drop it immediately.
             if activeGenerationID != generationID {
                 debugLog(debugConsole, .pipeline, "Drop stale generation recursion id=\(generationID.uuidString.prefix(8))")
+                endAssistantGeneration(for: generationID)
                 return
             }
         } else {
@@ -5048,7 +5468,7 @@ actor PipelineCoordinator {
                     tag: proactiveContext?.conversationTag
                 )
                 await persistFinalAssistantTurnIfNeeded(forgetReply)
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END deterministic_forget ===")
@@ -5067,7 +5487,7 @@ actor PipelineCoordinator {
                     tag: proactiveContext?.conversationTag
                 )
                 await persistFinalAssistantTurnIfNeeded(directRecallReply)
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END deterministic_personal_recall ===")
@@ -5107,7 +5527,7 @@ actor PipelineCoordinator {
                     tag: proactiveContext?.conversationTag
                 )
                 await persistFinalAssistantTurnIfNeeded(msg)
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END blocked_before_generation tool=\(inferredToolCall.name) ===")
                 return
@@ -5778,6 +6198,10 @@ actor PipelineCoordinator {
         }
 
         if staleGenerationDetected {
+            // A newer generation has taken over. Clean up this generation's state
+            // using the ID-scoped variant so we don't accidentally clear the new
+            // generation's assistantGenerating flag.
+            endAssistantGeneration(for: generationID)
             return
         }
 
@@ -5936,7 +6360,7 @@ actor PipelineCoordinator {
                     originTurnID: currentTurnID
                 )
 
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END repaired_deferred_tools count=1 ===")
@@ -5975,7 +6399,7 @@ actor PipelineCoordinator {
                     )
                     await synchronizeLLMSession()
                     await persistFinalAssistantTurnIfNeeded(directReply)
-                    endAssistantGeneration()
+                    endAssistantGeneration(for: generationID)
                     engage()
                     activeCapabilityTicket = nil
                     debugLog(debugConsole, .qa, "=== TURN END repaired_direct_tool_reply name=\(repairCall.name) ===")
@@ -6151,7 +6575,7 @@ actor PipelineCoordinator {
                 await conversationState.addAssistantMessage(fallback, tag: proactiveContext?.conversationTag)
                 await synchronizeLLMSession()
                 await persistFinalAssistantTurnIfNeeded(fallback)
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 engage()
                 activeCapabilityTicket = nil
                 debugLog(debugConsole, .qa, "=== TURN END fallback reason=llm_error ===")
@@ -6328,7 +6752,7 @@ actor PipelineCoordinator {
                     enqueueTTS(fallback, isFinal: true, generationID: generationID)
                 }
                 await awaitPendingTTS()
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: fallback, success: false)
                 engage()
                 activeCapabilityTicket = nil
@@ -6465,7 +6889,7 @@ actor PipelineCoordinator {
                 return
             }
 
-            endAssistantGeneration()
+            endAssistantGeneration(for: generationID)
 
             // Refresh follow-up window.
             engage()
@@ -6603,7 +7027,7 @@ actor PipelineCoordinator {
                 originTurnID: currentTurnID
             )
 
-            endAssistantGeneration()
+            endAssistantGeneration(for: generationID)
             engage()
             activeCapabilityTicket = nil
             debugLog(debugConsole, .qa, "=== TURN END deferred_tools count=\(toolCalls.count) ===")
@@ -6618,7 +7042,7 @@ actor PipelineCoordinator {
             if generationContext.allowsAudibleOutput {
                 await speakText(msg, isFinal: true)
             }
-            endAssistantGeneration()
+            endAssistantGeneration(for: generationID)
             await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
             activeCapabilityTicket = nil
             return
@@ -6834,7 +7258,7 @@ actor PipelineCoordinator {
                 if generationContext.allowsAudibleOutput {
                     await speakText(msg, isFinal: true)
                 }
-                endAssistantGeneration()
+                endAssistantGeneration(for: generationID)
                 await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
                 activeCapabilityTicket = nil
                 return
@@ -6858,7 +7282,7 @@ actor PipelineCoordinator {
             )
             await synchronizeLLMSession()
             await persistFinalAssistantTurnIfNeeded(directToolReply)
-            endAssistantGeneration()
+            endAssistantGeneration(for: generationID)
             engage()
             activeCapabilityTicket = nil
             debugLog(debugConsole, .qa, "=== TURN END direct_tool_reply name=\(toolCalls[0].name) ===")
@@ -6957,10 +7381,38 @@ actor PipelineCoordinator {
 
     // MARK: - Speech State
 
-    private func endAssistantGeneration() {
+    /// Clear the generation-in-progress flag.
+    ///
+    /// When called with a `generationID`, only clears if that generation is still
+    /// the active one. This prevents an interrupted/stale generation from clearing
+    /// state that belongs to a newer generation (race after barge-in).
+    private func endAssistantGeneration(for generationID: UUID? = nil) {
+        if let generationID, activeGenerationID != generationID {
+            return
+        }
         assistantGenerating = false
+        generationTakeoverCandidate = nil
         eventBus.send(.assistantGenerating(false))
+        drainSilentGenerationBuffer()
         scheduleDeferredProactiveDrain()
+    }
+
+    /// Re-enqueue segments that were buffered while the LLM was generating
+    /// silently.  Stale segments (>30s old) are dropped.
+    private func drainSilentGenerationBuffer() {
+        guard !silentGenerationBuffer.isEmpty else { return }
+        let buffered = silentGenerationBuffer
+        silentGenerationBuffer.removeAll()
+        let now = Date()
+        for segment in buffered {
+            let age = now.timeIntervalSince(segment.capturedAt)
+            if age > 30 {
+                debugLog(debugConsole, .pipeline, "Dropped stale buffered segment age=\(String(format: "%.1f", age))s")
+                continue
+            }
+            debugLog(debugConsole, .pipeline, "Draining buffered segment dur=\(String(format: "%.2f", segment.durationSeconds))s age=\(String(format: "%.1f", age))s")
+            enqueueSpeechSegment(segment)
+        }
     }
 
     static func shouldShowToolModeUpgradePopup(reasonCode: String) -> Bool {
@@ -6978,6 +7430,10 @@ actor PipelineCoordinator {
         lastAssistantStart = Date()
         lastAssistantTextBuffer = ""
         echoSuppressor.onAssistantSpeechStart()
+        // Reset playback barge-in state for the new playback session.
+        playbackBargeInCandidate = nil
+        playbackWakeWordDetected = false
+        playbackInterruptKeywordDetected = false
     }
 
     private func markAssistantSpeechEnded(reason: String, resetVAD: Bool = false) {
@@ -6986,7 +7442,12 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "Speech state → idle (\(reason), dur=\(String(format: "%.1f", speechDuration))s)")
             assistantSpeaking = false
             echoSuppressor.onAssistantSpeechEnd(speechDurationSecs: speechDuration)
+            echoSuppressor.resetPlaybackBaseline()
             interruptionDecider.reset()
+            // Clear playback barge-in state.
+            playbackBargeInCandidate = nil
+            playbackWakeWordDetected = false
+            playbackInterruptKeywordDetected = false
         }
         if resetVAD {
             vad.reset()
@@ -7007,6 +7468,9 @@ actor PipelineCoordinator {
     private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil, generationID: UUID? = nil) {
         // Track assistant text for false-interruption recovery.
         lastAssistantTextBuffer += text
+
+        // Record TTS text for text-overlap echo rejection.
+        echoSuppressor.recordAssistantText(text)
 
         // Set speaking state immediately so echo suppressor and barge-in work correctly.
         markAssistantSpeechStarted()
@@ -7204,6 +7668,15 @@ actor PipelineCoordinator {
         assistantSpeaking
     }
 
+    /// Whether PATH C (generation takeover) should be active.
+    /// True only when the LLM is generating silently (no TTS playing).
+    static func shouldTrackGenerationTakeover(
+        assistantSpeaking: Bool,
+        assistantGenerating: Bool
+    ) -> Bool {
+        assistantGenerating && !assistantSpeaking
+    }
+
     static func advancePendingBargeIn(
         pending: PendingBargeIn?,
         speechStarted: Bool,
@@ -7277,7 +7750,10 @@ actor PipelineCoordinator {
             assistantSpeaking: assistantSpeaking,
             assistantGenerating: assistantGenerating
         ) else { return }
-        guard barge.lastRms >= config.bargeIn.minRms else { return }
+        // Use peakRms (max over the accumulation window) instead of lastRms
+        // (most recent chunk). A user who trails off at the end of "stop..."
+        // would fail a lastRms check even though their peak was clearly audible.
+        guard barge.peakRms >= config.bargeIn.minRms else { return }
 
         // Check holdoff — don't interrupt immediately after playback starts.
         if let start = lastAssistantStart {
@@ -7296,9 +7772,7 @@ actor PipelineCoordinator {
                 audio: barge.audioSamples,
                 sampleRate: AudioCaptureManager.targetSampleRate
             ) {
-                // Use a relaxed threshold — mel-spectral fallback has lower similarity range.
-                let faeSelfThreshold: Float = 0.55
-                if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: faeSelfThreshold) {
+                    if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: Self.faeSelfEchoThreshold) {
                     debugLog(debugConsole, .command, "Barge-in blocked (fae_self echo)")
                     NSLog("PipelineCoordinator: barge-in rejected — audio matches fae_self (echo)")
                     return
@@ -7318,7 +7792,14 @@ actor PipelineCoordinator {
         interruptedGenerationID = activeGenerationID
         pendingTTSTask?.cancel()
         pendingTTSTask = nil
-        Task { await playback.stop() }
+        // Clear generation flag so the pipeline accepts the user's follow-up speech.
+        // The generation-ID-scoped endAssistantGeneration prevents the interrupted
+        // async generation from accidentally clearing a future generation's flag.
+        endAssistantGeneration()
+
+        // Pause playback (preserves buffer queue for potential resume on false-interrupt).
+        // If resume isn't triggered within the recovery window, buffers drain naturally.
+        Task { await playback.pause() }
         debugLog(debugConsole, .command, "Barge-in (owner verified) rms=\(String(format: "%.4f", barge.lastRms))")
         NSLog("PipelineCoordinator: barge-in triggered (owner verified, rms=%.4f)", barge.lastRms)
 
@@ -7329,12 +7810,157 @@ actor PipelineCoordinator {
             interruptedText: lastAssistantTextBuffer.isEmpty ? nil : lastAssistantTextBuffer,
             spokenFraction: 0  // Approximate — exact tracking deferred.
         )
-        falseInterruptionRecovery.recordInterruption(outcome: outcome)
+        falseInterruptionRecovery.recordInterruption(outcome: outcome, paused: true)
     }
 
     private func markGenerationInterrupted() {
         interrupted = true
         interruptedGenerationID = activeGenerationID
+    }
+
+    /// Evaluate a playback barge-in candidate using speaker identity.
+    /// This is Path A — runs DURING active playback to detect user speech
+    /// over Fae's TTS output using identity checks rather than echo timing.
+    ///
+    /// Decision matrix:
+    /// - Wake word + fae_self rejected → interrupt (fastest path, ~350ms)
+    /// - Owner verified + sustained energy above baseline → interrupt (~400ms)
+    /// - Mel fallback + fae_self rejected + extreme energy (4x baseline, 500ms, 6 chunks) → interrupt
+    /// - Otherwise → keep collecting
+    private func evaluatePlaybackBargeIn(candidate: PlaybackBargeInCandidate) async -> Bool {
+        guard !bargeInSuppressed else { return false }
+        guard assistantSpeaking else { return false }
+
+        // Holdoff — don't interrupt immediately after playback starts.
+        if let start = lastAssistantStart {
+            let elapsed = Date().timeIntervalSince(start) * 1000
+            if elapsed < Double(config.bargeIn.assistantStartHoldoffMs) {
+                return false
+            }
+        }
+
+        // Deny cooldown check.
+        if let cooldownUntil = bargeInDenyCooldownUntil, Date() < cooldownUntil {
+            return false
+        }
+
+        // Mandatory fae_self check — hard gate. Audio matching Fae's voice
+        // is speaker bleedthrough, not the user.
+        guard let encoder = speakerEncoder, await encoder.isLoaded,
+              let store = speakerProfileStore else {
+            // No encoder available — cannot verify identity, do not interrupt
+            // during playback (too risky for self-interruption).
+            return false
+        }
+
+        guard candidate.audioSamples.count >= PlaybackBargeInCandidate.minSamplesForIdentity else {
+            return false
+        }
+
+        guard let embedding = try? await encoder.embed(
+            audio: candidate.audioSamples,
+            sampleRate: AudioCaptureManager.targetSampleRate
+        ) else {
+            return false
+        }
+
+        // fae_self rejection — if audio matches Fae's TTS voice, it's echo.
+        if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: Self.faeSelfEchoThreshold) {
+            debugLog(debugConsole, .command, "Playback barge-in: fae_self match — echo, ignoring")
+            return false
+        }
+
+        let melFallback = await encoder.usingMelFallback
+
+        // Layer 1: explicit semantic interrupt intent + not fae_self + owner verified → interrupt.
+        // Owner check prevents bystanders from interrupting Fae on shared Macs.
+        if playbackInterruptKeywordDetected {
+            if !melFallback {
+                let compatible = await store.hasCompatibleOwnerProfile(embeddingDim: embedding.count)
+                if compatible {
+                    let relaxed = max(config.speaker.ownerThreshold - 0.10, 0.40)
+                    let isOwner = await store.isOwner(embedding: embedding, threshold: relaxed)
+                    if isOwner {
+                        debugLog(debugConsole, .command, "Playback barge-in: interrupt keyword + owner → interrupt")
+                        NSLog("PipelineCoordinator: playback barge-in triggered (interrupt_keyword + owner)")
+                        return true
+                    }
+                }
+            } else {
+                // Mel fallback: can't verify owner, but keyword + not-fae_self is strong evidence.
+                debugLog(debugConsole, .command, "Playback barge-in: interrupt keyword + not-fae (mel fallback) → interrupt")
+                NSLog("PipelineCoordinator: playback barge-in triggered (interrupt_keyword + mel_fallback)")
+                return true
+            }
+        }
+
+        // Layer 1b: Wake word detected + not fae_self → interrupt immediately.
+        // Wake words are less likely from bystanders (they know the wake word).
+        if playbackWakeWordDetected {
+            debugLog(debugConsole, .command, "Playback barge-in: wake word + not-fae → interrupt")
+            NSLog("PipelineCoordinator: playback barge-in triggered (wake_word + identity)")
+            return true
+        }
+
+        // Layer 2: Owner verification + sustained energy above playback baseline.
+        if !melFallback {
+            let compatible = await store.hasCompatibleOwnerProfile(embeddingDim: embedding.count)
+            if compatible {
+                let relaxation: Float = 0.10
+                let relaxed = max(config.speaker.ownerThreshold - relaxation, 0.40)
+                let isOwner = await store.isOwner(embedding: embedding, threshold: relaxed)
+                if isOwner && echoSuppressor.userSpeechLikelyAbovePlayback(rms: candidate.peakRms) {
+                    debugLog(debugConsole, .command, "Playback barge-in: owner + energy spike → interrupt")
+                    NSLog("PipelineCoordinator: playback barge-in triggered (owner + energy rms=%.4f baseline=%.4f)", candidate.peakRms, echoSuppressor.playbackBaselineRms)
+                    return true
+                }
+            }
+        }
+
+        // Layer 2b: Mel fallback — can't verify owner, but can reject fae_self.
+        // Require extreme energy (4x baseline), 500ms of speech, and 6+ consecutive chunks.
+        if melFallback {
+            let extremeMultiplier: Float = 4.0
+            let minDurationSamples = 8_000  // 500ms at 16kHz
+            let minConsecutiveChunks = 6
+            let extremeEnergy = echoSuppressor.playbackBaselineRms > 0
+                && candidate.peakRms > echoSuppressor.playbackBaselineRms * extremeMultiplier
+            if extremeEnergy
+                && candidate.speechSamples >= minDurationSamples
+                && candidate.consecutiveSpeechChunks >= minConsecutiveChunks
+            {
+                debugLog(debugConsole, .command, "Playback barge-in: mel fallback + extreme energy → interrupt")
+                NSLog("PipelineCoordinator: playback barge-in triggered (mel_fallback rms=%.4f baseline=%.4f)", candidate.peakRms, echoSuppressor.playbackBaselineRms)
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Execute the playback barge-in — pause playback and mark as interrupted.
+    private func executePlaybackBargeIn(candidate: PlaybackBargeInCandidate) async {
+        interrupted = true
+        interruptedGenerationID = activeGenerationID
+        pendingTTSTask?.cancel()
+        pendingTTSTask = nil
+        endAssistantGeneration()
+        Task { await playback.pause() }
+        debugLog(debugConsole, .command, "Playback barge-in executed rms=\(String(format: "%.4f", candidate.lastRms))")
+        NSLog("PipelineCoordinator: playback barge-in executed (rms=%.4f peak=%.4f)", candidate.lastRms, candidate.peakRms)
+
+        let outcome = InterruptionOutcome(
+            interruptedAt: Date(),
+            generationID: activeGenerationID,
+            interruptedText: lastAssistantTextBuffer.isEmpty ? nil : lastAssistantTextBuffer,
+            spokenFraction: 0
+        )
+        falseInterruptionRecovery.recordInterruption(outcome: outcome, paused: true)
+
+        // Clear playback barge-in state.
+        playbackBargeInCandidate = nil
+        playbackWakeWordDetected = false
+        playbackInterruptKeywordDetected = false
     }
 
     private func isGenerationInterrupted(_ generationID: UUID?) -> Bool {

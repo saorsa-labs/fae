@@ -1,0 +1,8 @@
+# Audio files are too large for git — store locally only.
+*.wav
+*.raw
+*.pcm
+
+# Keep metadata and annotations.
+!*.json
+!schema.json

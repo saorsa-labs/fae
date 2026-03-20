@@ -53,6 +53,10 @@ actor ModelManager {
     /// On-demand VLM engine — loaded only when vision tools are invoked.
     private var vlmEngine: MLXVLMEngine?
 
+    /// Keyword classifier for barge-in interrupt detection.
+    /// Non-critical: if unavailable, barge-in falls back to acoustic-only decisions.
+    private(set) var keywordClassifier: MLXKeywordClassifier?
+
     /// Get a wired memory ticket for inference using measured or estimated budgets.
     func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
         guard let wiredPolicy else { return nil }
@@ -409,6 +413,22 @@ actor ModelManager {
                       error.localizedDescription)
                 failedEngines.append("Speaker")
             }
+        }
+
+        // Keyword classifier — non-critical, degrades gracefully to acoustic-only barge-in.
+        if MLXKeywordClassifier.modelExists {
+            let classifier = MLXKeywordClassifier()
+            do {
+                try await classifier.load(modelPath: MLXKeywordClassifier.defaultModelPath)
+                self.keywordClassifier = classifier
+                NSLog("ModelManager: keyword classifier loaded")
+            } catch {
+                NSLog("ModelManager: keyword classifier load failed (degraded — acoustic-only barge-in): %@",
+                      error.localizedDescription)
+            }
+        } else {
+            NSLog("ModelManager: keyword classifier not found at %@ — acoustic-only barge-in",
+                  MLXKeywordClassifier.defaultModelPath.path)
         }
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))

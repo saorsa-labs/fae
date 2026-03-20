@@ -7,8 +7,10 @@ import Foundation
 /// Detection: after interruption fires, if no meaningful continued speech appears
 /// within the timeout window, it's classified as a false interrupt.
 ///
-/// Recovery: rather than resuming partial TTS audio (fragile), Fae produces a
-/// short repair utterance referencing what she was saying.
+/// Recovery strategy (ordered by preference):
+/// 1. **Resume** — if playback was paused (not stopped), resume from exact position.
+/// 2. **Repair utterance** — speak a short contextual message referencing what Fae
+///    was saying. Used when pause/resume is not available (e.g., TTS was cancelled).
 struct FalseInterruptionRecovery: Sendable {
     private let timeoutMs: Int
     private let enabled: Bool
@@ -25,18 +27,28 @@ struct FalseInterruptionRecovery: Sendable {
     /// Whether meaningful follow-up speech was detected during observation.
     private var followUpDetected: Bool = false
 
+    /// Whether playback was paused (not stopped) at interruption —
+    /// indicates resume is possible instead of repair utterance.
+    private(set) var playbackWasPaused: Bool = false
+
     init(timeoutMs: Int = 1800, enabled: Bool = true) {
         self.timeoutMs = timeoutMs
         self.enabled = enabled
     }
 
     /// Record that an interruption just fired.
-    mutating func recordInterruption(outcome: InterruptionOutcome) {
+    ///
+    /// - Parameters:
+    ///   - outcome: The interruption outcome with context about what was interrupted.
+    ///   - paused: Whether playback was paused (true) or stopped (false). When paused,
+    ///     recovery will attempt resume instead of speaking a repair utterance.
+    mutating func recordInterruption(outcome: InterruptionOutcome, paused: Bool = false) {
         guard enabled else { return }
         lastInterruption = outcome
         observing = true
         observationStartedAt = Date()
         followUpDetected = false
+        playbackWasPaused = paused
     }
 
     /// Called when meaningful speech is detected after the interruption.
@@ -45,10 +57,11 @@ struct FalseInterruptionRecovery: Sendable {
         followUpDetected = true
         observing = false
         observationStartedAt = nil
+        playbackWasPaused = false
     }
 
     /// Check whether the observation window has expired without follow-up.
-    /// Returns a repair utterance if this was a false interruption.
+    /// Returns a recovery action if this was a false interruption.
     mutating func checkTimeout(now: Date = Date()) -> FalseInterruptionResult {
         guard enabled, observing else { return .noAction }
         guard let startedAt = observationStartedAt else {
@@ -66,12 +79,22 @@ struct FalseInterruptionRecovery: Sendable {
         observationStartedAt = nil
 
         if followUpDetected {
+            playbackWasPaused = false
             return .noAction
         }
 
-        // False interruption detected — produce repair.
-        guard let interrupted = lastInterruption else { return .noAction }
+        // False interruption detected — choose recovery strategy.
+        if playbackWasPaused {
+            playbackWasPaused = false
+            return .resumePlayback
+        }
+
+        guard let interrupted = lastInterruption else {
+            playbackWasPaused = false
+            return .noAction
+        }
         let repair = Self.buildRepairUtterance(interruptedText: interrupted.interruptedText)
+        playbackWasPaused = false
         return .falseInterruption(repair: repair)
     }
 
@@ -80,6 +103,7 @@ struct FalseInterruptionRecovery: Sendable {
         observing = false
         observationStartedAt = nil
         followUpDetected = false
+        playbackWasPaused = false
     }
 
     // MARK: - Repair Utterance
@@ -110,6 +134,8 @@ enum FalseInterruptionResult: Sendable, Equatable {
     case noAction
     /// Still within the observation window.
     case stillObserving
-    /// False interruption detected — speak the repair utterance.
+    /// False interruption detected — resume paused playback from exact position.
+    case resumePlayback
+    /// False interruption detected — speak the repair utterance (pause unavailable).
     case falseInterruption(repair: String)
 }

@@ -118,7 +118,7 @@ struct AdaptiveInterruptionConfig: Codable, Sendable {
     /// Reduced from 4→2 for faster interrupt detection.
     var minSustainedChunks: Int = 2
     /// Timeout after interruption to detect false-interrupt (ms).
-    var falseInterruptionTimeoutMs: Int = 1800
+    var falseInterruptionTimeoutMs: Int = 1200
     /// Whether to attempt recovery from false interruptions.
     var recoverFalseInterruptions: Bool = true
     /// RMS ratio threshold: peak must be this much above sustain floor.

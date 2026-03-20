@@ -39,6 +39,51 @@ struct VoiceActivityDetector {
     private var currentOnsetAt: Date?
     /// Most recent Silero speech probability.
     private var lastSpeechProbability: Float = 0
+
+    // MARK: - EMA Dynamic Endpointing
+
+    /// EMA of observed inter-utterance silence durations (ms).
+    /// Adapts to the user's natural speaking rhythm over a conversation session.
+    private(set) var emaSilenceDurationMs: Float = 0
+
+    /// Whether the EMA has been seeded with at least one observation.
+    private var emaSilenceSeeded: Bool = false
+
+    /// EMA smoothing factor for silence duration (higher = faster adaptation).
+    private static let emaSilenceAlpha: Float = 0.25
+
+    /// Minimum EMA value to prevent overly aggressive endpointing.
+    private static let emaSilenceFloorMs: Float = 400
+
+    /// Maximum EMA value to prevent overly patient endpointing.
+    /// Capped at 2000ms — longer waits feel sluggish in conversation.
+    private static let emaSilenceCeilingMs: Float = 2000
+
+    /// Record an observed silence duration to update the EMA.
+    /// Call this when a pause between utterances is measured (e.g., between
+    /// successive VAD segments within a conversation turn).
+    mutating func recordObservedSilenceMs(_ silenceMs: Float) {
+        guard silenceMs > 0 else { return }
+        let clamped = min(max(silenceMs, Self.emaSilenceFloorMs), Self.emaSilenceCeilingMs)
+        if emaSilenceSeeded {
+            emaSilenceDurationMs = emaSilenceDurationMs * (1 - Self.emaSilenceAlpha)
+                + clamped * Self.emaSilenceAlpha
+        } else {
+            emaSilenceDurationMs = clamped
+            emaSilenceSeeded = true
+        }
+    }
+
+    /// Suggested silence threshold based on EMA observation.
+    /// Returns nil if no observations have been recorded (use static config).
+    var emaSuggestedSilenceMs: Int? {
+        guard emaSilenceSeeded else { return nil }
+        // Use 1.3x the observed average as the threshold — slightly longer than
+        // the user's typical pause to avoid cutting them off mid-thought.
+        let suggested = emaSilenceDurationMs * 1.3
+        let clamped = min(max(suggested, Self.emaSilenceFloorMs), Self.emaSilenceCeilingMs)
+        return Int(clamped)
+    }
     /// Neural VAD backend when available. If loading fails, we transparently fall
     /// back to the old RMS detector so Fae still works.
     private var silero: SileroVADEngine?
@@ -127,6 +172,14 @@ struct VoiceActivityDetector {
         let isSpeech = speechScore > effectiveThreshold
         output.isSpeech = isSpeech
 
+        // Track ambient noise floor during non-speech frames for SNR estimation.
+        if !isSpeech, !inSpeech {
+            let noiseProb = isUsingSilero ? speechScore : 0
+            if noiseProb < Self.noiseFloorSpeechProbThreshold {
+                updateNoiseFloor(rms: rms)
+            }
+        }
+
         preRoll.append(contentsOf: chunk.samples)
         if preRoll.count > preRollMax {
             preRoll.removeFirst(preRoll.count - preRollMax)
@@ -174,6 +227,10 @@ struct VoiceActivityDetector {
             }
             speechBuffer.removeAll(keepingCapacity: true)
             currentOnsetAt = nil
+            // Reset Silero LSTM state after force-flush to prevent stale
+            // hidden state from causing immediate re-onset or delayed
+            // detection on continuation speech.
+            silero?.reset()
         }
 
         return output
@@ -204,6 +261,49 @@ struct VoiceActivityDetector {
     ) {
         (preRollMax, silenceSamplesThreshold, minSpeechSamples, maxSpeechSamples)
     }
+
+    // MARK: - Adaptive Noise Floor
+
+    /// EMA of RMS during non-speech frames.  Tracks ambient noise level for
+    /// per-chunk SNR estimation used by streaming STT gating.
+    private(set) var noiseFloorRms: Float = 0.008
+
+    /// Whether the noise floor has been seeded with at least one observation.
+    private var noiseFloorSeeded: Bool = false
+
+    /// EMA smoothing factor for noise floor (lower = slower adaptation).
+    private static let noiseFloorAlpha: Float = 0.05
+
+    /// Floor clamp — never estimate noise below this (quantisation noise).
+    private static let noiseFloorMin: Float = 0.0005
+
+    /// Ceiling clamp — a "noise floor" above this is implausible.
+    private static let noiseFloorMax: Float = 0.05
+
+    /// Silero speech probability below which a frame is considered noise-only.
+    private static let noiseFloorSpeechProbThreshold: Float = 0.1
+
+    /// Update the noise floor EMA with the RMS of a non-speech chunk.
+    private mutating func updateNoiseFloor(rms: Float) {
+        let clamped = min(max(rms, Self.noiseFloorMin), Self.noiseFloorMax)
+        if noiseFloorSeeded {
+            noiseFloorRms = noiseFloorRms * (1 - Self.noiseFloorAlpha) + clamped * Self.noiseFloorAlpha
+        } else {
+            noiseFloorRms = clamped
+            noiseFloorSeeded = true
+        }
+    }
+
+    /// Estimated SNR in dB for a chunk with the given RMS.
+    /// Returns 0 if noise floor is not yet seeded.
+    func estimatedSNRdB(chunkRms: Float) -> Float {
+        guard noiseFloorSeeded, noiseFloorRms > 0 else { return 0 }
+        let ratio = max(chunkRms, Self.noiseFloorMin) / noiseFloorRms
+        return 20 * log10(ratio)
+    }
+
+    /// Minimum SNR (dB) to consider a chunk worth feeding to streaming STT.
+    static let minStreamingSNRdB: Float = 6.0
 
     // MARK: - Private
 

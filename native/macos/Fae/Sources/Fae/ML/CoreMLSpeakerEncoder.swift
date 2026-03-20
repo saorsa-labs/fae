@@ -36,7 +36,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     private static let nFFT = 1024
     private static let hopLength = 256
     private static let numMels = 128
-    private static let fMin: Float = 0
+    private static let fMin: Float = 20
     private static let fMax: Float = 12_000
 
     // MARK: - Precomputed Assets

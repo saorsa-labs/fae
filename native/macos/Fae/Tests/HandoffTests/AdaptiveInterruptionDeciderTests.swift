@@ -648,4 +648,150 @@ final class AdaptiveInterruptionDeciderTests: XCTestCase {
         // No transcript → conversational floor (1800).
         XCTAssertEqual(result, 1800)
     }
+
+    // MARK: - Playback Baseline RMS Tracker
+
+    func testPlaybackBaselineUpdatesWithEMA() {
+        var suppressor = EchoSuppressor()
+        XCTAssertFalse(suppressor.userSpeechLikelyAbovePlayback(rms: 0.05), "Should return false before any baseline seeded")
+
+        // Seed baseline with consistent RMS.
+        for _ in 0..<20 {
+            suppressor.updatePlaybackBaseline(rms: 0.04)
+        }
+        // Baseline should be close to 0.04 after many samples.
+        XCTAssertEqual(Double(suppressor.playbackBaselineRms), 0.04, accuracy: 0.005)
+
+        // RMS at 2x baseline — not enough (threshold is 2.5x).
+        XCTAssertFalse(suppressor.userSpeechLikelyAbovePlayback(rms: 0.08))
+        // RMS at 3x baseline — should be above.
+        XCTAssertTrue(suppressor.userSpeechLikelyAbovePlayback(rms: 0.12))
+    }
+
+    func testPlaybackBaselineResets() {
+        var suppressor = EchoSuppressor()
+        suppressor.updatePlaybackBaseline(rms: 0.05)
+        XCTAssertTrue(suppressor.playbackBaselineRms > 0)
+
+        suppressor.resetPlaybackBaseline()
+        XCTAssertEqual(suppressor.playbackBaselineRms, 0)
+        XCTAssertFalse(suppressor.userSpeechLikelyAbovePlayback(rms: 0.15))
+    }
+
+    func testPlaybackBaselineFirstSampleSeeds() {
+        var suppressor = EchoSuppressor()
+        suppressor.updatePlaybackBaseline(rms: 0.06)
+        // First sample should seed directly (no smoothing).
+        XCTAssertEqual(suppressor.playbackBaselineRms, 0.06)
+    }
+
+    // MARK: - PlaybackBargeInCandidate
+
+    func testPlaybackBargeInCandidateConstants() {
+        XCTAssertEqual(PipelineCoordinator.PlaybackBargeInCandidate.maxAudioSamples, 16_000)
+        XCTAssertEqual(PipelineCoordinator.PlaybackBargeInCandidate.minSamplesForIdentity, 5_600)
+    }
+
+    func testPlaybackBargeInCandidateAccumulation() {
+        var candidate = PipelineCoordinator.PlaybackBargeInCandidate(
+            capturedAt: Date(),
+            lastRms: 0.10,
+            peakRms: 0.10
+        )
+        let chunk = [Float](repeating: 0.1, count: 512)
+        candidate.speechSamples += chunk.count
+        candidate.lastRms = 0.12
+        candidate.peakRms = max(candidate.peakRms, 0.15)
+        candidate.consecutiveSpeechChunks += 1
+        candidate.audioSamples.append(contentsOf: chunk)
+
+        XCTAssertEqual(candidate.speechSamples, 512)
+        XCTAssertEqual(candidate.audioSamples.count, 512)
+        XCTAssertEqual(Double(candidate.peakRms), 0.15, accuracy: 0.001)
+        XCTAssertEqual(candidate.consecutiveSpeechChunks, 1)
+    }
+
+    func testPlaybackBargeInCandidateAudioCap() {
+        var candidate = PipelineCoordinator.PlaybackBargeInCandidate(
+            capturedAt: Date(),
+            lastRms: 0.10,
+            peakRms: 0.10
+        )
+        // Add more than maxAudioSamples.
+        let bigChunk = [Float](repeating: 0.1, count: 20_000)
+        let remaining = max(0, PipelineCoordinator.PlaybackBargeInCandidate.maxAudioSamples - candidate.audioSamples.count)
+        candidate.audioSamples.append(contentsOf: bigChunk.prefix(remaining))
+        XCTAssertEqual(candidate.audioSamples.count, 16_000, "Should cap at maxAudioSamples")
+    }
+
+    // MARK: - Keyword Classifier Integration (Milestone 5)
+
+    func testKeywordDetectionTriggersInterruptDecision() {
+        // When hasInterruptKeyword is true (populated by keyword classifier),
+        // the adaptive decider should fire immediately regardless of other signals.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            rms: 0.06,  // Below normal RMS threshold.
+            overlapDurationMs: 50,  // Very short overlap.
+            peakRms: 0.06,
+            consecutiveSpeechChunks: 1,
+            hasInterruptKeyword: true
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "interrupt_keyword"),
+                       "Keyword detection should bypass RMS and overlap thresholds")
+    }
+
+    func testLowConfidenceClassificationDoesNotTrigger() {
+        // Without hasInterruptKeyword, low energy + short overlap should not trigger.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            rms: 0.06,
+            overlapDurationMs: 50,
+            peakRms: 0.06,
+            consecutiveSpeechChunks: 1,
+            hasInterruptKeyword: false  // Classifier confidence was below threshold.
+        )
+        let decision = decider.process(input)
+        XCTAssertNotEqual(decision, .interruptNow(reason: "interrupt_keyword"),
+                          "Without keyword flag, should not trigger keyword fast-path")
+    }
+
+    func testKeywordDetectionDuringEchoBypassesEchoGate() {
+        // Keywords should bypass echo suppression (they are definitive proof of speech).
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+        let input = makeInput(
+            rms: 0.04,  // Very low RMS.
+            overlapDurationMs: 80,  // Short overlap.
+            echoSuppression: true,  // Echo active.
+            peakRms: 0.04,
+            consecutiveSpeechChunks: 1,
+            hasInterruptKeyword: true
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "interrupt_keyword"),
+                       "Keyword should fire even during echo suppression")
+    }
+
+    func testTranscriptFromClassifierTriggersBoostPath() {
+        // When classifier sets partialTranscript, the transcript-boosted path should fire.
+        var decider: any InterruptionDeciding = AdaptiveInterruptionDecider()
+
+        // Build RMS history.
+        for _ in 0..<5 {
+            _ = decider.process(makeInput(rms: 0.12, overlapDurationMs: 150))
+        }
+
+        let input = makeInput(
+            overlapDurationMs: 120,
+            peakRms: 0.15,
+            consecutiveSpeechChunks: 3,
+            partialTranscript: "stop",  // Set by keyword classifier.
+            partialWordCount: 1,
+            hasInterruptKeyword: false  // Not flagged as keyword — just transcript.
+        )
+        let decision = decider.process(input)
+        XCTAssertEqual(decision, .interruptNow(reason: "adaptive_transcript_boosted"),
+                       "Classifier transcript should trigger transcript-boosted path")
+    }
 }

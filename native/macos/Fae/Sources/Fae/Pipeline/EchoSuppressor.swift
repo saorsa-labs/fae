@@ -20,13 +20,13 @@ struct EchoSuppressor {
     // MARK: - Timing Constants
 
     /// Echo tail after assistant stops speaking.
-    /// Reduced from 2000ms → 800ms: echo suppression now acts as a signal
-    /// (not gate) for barge-in, so this only affects STT segment acceptance.
-    /// The RMS ceiling + short-utterance guard still catch actual echo.
-    var echoTailMs: Int { aecEnabled ? 500 : 800 }
+    /// Reduced from 800ms → 500ms: typical room echo decays within 200-400ms;
+    /// text-overlap + voice identity echo rejection now catch late-arriving echo
+    /// that slips past the timing window.
+    var echoTailMs: Int { aecEnabled ? 300 : 500 }
     /// Short-utterance guard window after assistant stops.
-    /// Reduced from 2500ms → 1200ms to match shorter echo tail.
-    var shortUtteranceGuardMs: Int { aecEnabled ? 800 : 1200 }
+    /// Reduced from 1200ms → 800ms to match shorter echo tail.
+    var shortUtteranceGuardMs: Int { aecEnabled ? 500 : 800 }
     /// Echo tail for scheduling listening tone after approval.
     var echoTailForToneMs: Int { aecEnabled ? 500 : 800 }
 
@@ -44,6 +44,149 @@ struct EchoSuppressor {
     static let echoRmsCeiling: Float = 0.12
     /// Minimum segment for approval responses (seconds).
     static let minApprovalSegmentSecs: Float = 0.15
+
+    // MARK: - Playback Baseline Tracking
+
+    /// Exponential moving average of mic RMS while the assistant is speaking.
+    /// Represents how loud Fae's TTS sounds through the microphone — user speech
+    /// during playback must be significantly louder than this to be distinguished.
+    private(set) var playbackBaselineRms: Float = 0
+
+    /// Whether the baseline has been seeded with at least one sample.
+    private var playbackBaselineSeeded: Bool = false
+
+    /// EMA smoothing factor for playback baseline (lower = smoother).
+    /// Adaptive: 0.12 when RMS is rising (room getting louder), 0.03 when falling.
+    /// This allows fast adaptation to volume increases while resisting sudden drops.
+    private static let playbackBaselineAlphaRising: Float = 0.12
+    private static let playbackBaselineAlphaFalling: Float = 0.03
+
+    /// User speech must exceed this multiple of the playback baseline to be
+    /// considered likely human speech rather than echo.
+    private static let playbackSpikeMultiplier: Float = 2.5
+
+    /// Update the playback baseline with a new RMS sample during assistant speech.
+    /// Uses adaptive EMA: fast rising (tracks volume increases quickly),
+    /// slow falling (resists sudden drops that could cause false user-speech detection).
+    mutating func updatePlaybackBaseline(rms: Float) {
+        if playbackBaselineSeeded {
+            let alpha = rms > playbackBaselineRms
+                ? Self.playbackBaselineAlphaRising
+                : Self.playbackBaselineAlphaFalling
+            playbackBaselineRms = playbackBaselineRms * (1 - alpha) + rms * alpha
+        } else {
+            playbackBaselineRms = rms
+            playbackBaselineSeeded = true
+        }
+    }
+
+    /// Whether the given RMS is significantly above the playback baseline,
+    /// suggesting user speech rather than echo.
+    func userSpeechLikelyAbovePlayback(rms: Float) -> Bool {
+        guard playbackBaselineSeeded, playbackBaselineRms > 0 else { return false }
+        return rms > playbackBaselineRms * Self.playbackSpikeMultiplier
+    }
+
+    /// Reset the playback baseline when assistant speech ends.
+    mutating func resetPlaybackBaseline() {
+        playbackBaselineRms = 0
+        playbackBaselineSeeded = false
+    }
+
+    // MARK: - Text-Overlap Echo Rejection
+
+    /// Ring buffer of recent assistant TTS text for text-overlap echo detection.
+    /// When STT transcribes audio that closely matches what Fae just said, it's
+    /// almost certainly speaker bleedthrough — not the user speaking.
+    private var recentAssistantText: [String] = []
+
+    /// Maximum number of recent assistant text chunks to retain.
+    private static let maxRecentTextChunks = 8
+
+    /// Word overlap threshold above which a transcript is considered echo.
+    /// 0.75 = at least 75% of the transcript's words must match recent assistant text.
+    /// Set high to avoid rejecting legitimate user speech that references Fae's words
+    /// (e.g., user says "check my calendar for Tuesday" after Fae said "check your calendar").
+    private static let textOverlapThreshold: Float = 0.75
+
+    /// Minimum consecutive matching words required as a secondary echo signal.
+    /// Requires at least 4 consecutive words to appear in the same order as assistant text.
+    /// This catches partial echo more reliably than bag-of-words overlap alone.
+    private static let textOverlapMinConsecutiveWords = 4
+
+    /// Minimum word count for text overlap checking (very short utterances
+    /// like "yes" or "stop" should not be rejected as echo).
+    private static let textOverlapMinWords = 4
+
+    /// Record text that the assistant is about to speak (call before TTS).
+    /// This builds the reference corpus for text-overlap echo detection.
+    mutating func recordAssistantText(_ text: String) {
+        let normalized = Self.normalizeForOverlap(text)
+        guard !normalized.isEmpty else { return }
+        recentAssistantText.append(normalized)
+        if recentAssistantText.count > Self.maxRecentTextChunks {
+            recentAssistantText.removeFirst(recentAssistantText.count - Self.maxRecentTextChunks)
+        }
+    }
+
+    /// Check whether a transcribed text is likely echo of Fae's own speech.
+    ///
+    /// Uses two complementary signals:
+    /// 1. **Bag-of-words overlap**: 75%+ of transcript words appear in recent assistant text.
+    /// 2. **Consecutive-word match**: 4+ consecutive words from the transcript appear in order
+    ///    in the assistant text (catches partial echo more reliably).
+    ///
+    /// Either signal alone is sufficient — echo text typically shows both, but partial
+    /// echo (mic catches the end of a sentence) may only show the consecutive signal.
+    ///
+    /// Short utterances (< 4 words) are exempt — "stop", "no thanks", "yes please" should
+    /// never be rejected as echo even if Fae recently said those words.
+    func isLikelyEchoText(_ transcript: String) -> Bool {
+        let normalized = Self.normalizeForOverlap(transcript)
+        let words = normalized.split(separator: " ")
+        guard words.count >= Self.textOverlapMinWords else { return false }
+
+        let assistantText = recentAssistantText.joined(separator: " ")
+        let assistantWords = Set(assistantText.split(separator: " "))
+        guard !assistantWords.isEmpty else { return false }
+
+        // Signal 1: Bag-of-words overlap (75%+ threshold).
+        let matchCount = words.filter { assistantWords.contains($0) }.count
+        let overlap = Float(matchCount) / Float(words.count)
+        if overlap >= Self.textOverlapThreshold {
+            return true
+        }
+
+        // Signal 2: Consecutive-word substring match.
+        // Check if any run of N+ consecutive transcript words appears in assistant text.
+        if words.count >= Self.textOverlapMinConsecutiveWords {
+            let assistantNormalized = assistantText
+            for startIdx in 0...(words.count - Self.textOverlapMinConsecutiveWords) {
+                let phrase = words[startIdx..<(startIdx + Self.textOverlapMinConsecutiveWords)]
+                    .joined(separator: " ")
+                if assistantNormalized.contains(phrase) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    /// Clear text history (call on pipeline reset or conversation change).
+    mutating func clearTextHistory() {
+        recentAssistantText.removeAll()
+    }
+
+    /// Normalize text for overlap comparison: lowercase, strip punctuation, collapse whitespace.
+    private static func normalizeForOverlap(_ text: String) -> String {
+        text.lowercased()
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
+            .map { String($0) }
+            .joined()
+            .split(separator: " ")
+            .joined(separator: " ")
+    }
 
     // MARK: - State
 
@@ -83,9 +226,10 @@ struct EchoSuppressor {
         assistantSpeaking = false
         let now = Date()
 
-        // Scale echo windows based on speech duration: +100ms per second of speech,
-        // capped at 500ms bonus. An 8s response adds ~500ms (total 1.3s).
-        let durationBonusMs = Int(min(speechDurationSecs * 100, 500))
+        // Scale echo windows based on speech duration: +50ms per second of speech,
+        // capped at 300ms bonus. An 8s response adds ~300ms (total ~800ms).
+        // Reduced from +100ms/500ms cap — text-overlap + voice identity now handle late echo.
+        let durationBonusMs = Int(min(speechDurationSecs * 50, 300))
         let tailMs = echoTailMs + durationBonusMs
         let guardMs = shortUtteranceGuardMs + durationBonusMs
 
@@ -97,6 +241,7 @@ struct EchoSuppressor {
         assistantSpeaking = false
         suppressUntil = nil
         shortUtteranceGuardUntil = nil
+        clearTextHistory()
     }
 
     /// Evaluate whether a completed speech segment should be accepted or dropped.

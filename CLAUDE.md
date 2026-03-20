@@ -108,6 +108,8 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | VLM | 35B-A3B (shared) or Qwen3-VL-4B | MLXVLM 4-bit | Vision — shared on 32+ GB; separate on 16 GB |
 | Embedding | Hash-384 | MLX | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML fp16 | Voice identity (1024-dim x-vectors) |
+| Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
+| Turn Detector | Causal LM (Qwen2.5-0.5B based) | MLX 4-bit | Semantic end-of-utterance prediction for adaptive endpointing (when model available) |
 
 **Auto model selection** (single LLM, via `voiceModelPreset: "auto"`):
 
@@ -126,7 +128,7 @@ LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target).
 
 ### Unified pipeline
 
-1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD + keyword spotter) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Qwen3.5, native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
+1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD + keyword spotter) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 4b. **Keyword classifier** (1D-CNN, populates interrupt keywords for barge-in) → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Qwen3.5, native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
 
 **Latency**: 3s (greetings) to 30s (multi-tool queries). Orb visual state + thinking tone provide feedback throughout.
 
@@ -491,7 +493,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `SettingsCapabilityManifest.swift` | Settings capability definitions |
 | `ToolToggleStore.swift` | Per-tool enable/disable persistence |
 
-### ML/ (14 files)
+### ML/ (16 files)
 
 | File | Role |
 |------|------|
@@ -504,6 +506,8 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `MLXEmbeddingEngine.swift` | Hash-384 embedding engine |
 | `NeuralEmbeddingEngine.swift` | Tiered Qwen3-Embedding (8B/4B/0.6B/hash by RAM) |
 | `CoreMLSpeakerEncoder.swift` | ECAPA-TDNN Core ML inference + mel spectrogram |
+| `MLXKeywordClassifier.swift` | Micro 1D-CNN keyword classifier for barge-in interrupt detection (~200K params) |
+| `MLXTurnDetector.swift` | Semantic end-of-utterance detector for adaptive endpointing (LiveKit-compatible) |
 | `SpeakerProfileStore.swift` | Speaker profile enrollment, matching, persistence |
 | `StreamingSTTEngine.swift` | Streaming STT support |
 | `CharacterVoiceLibrary.swift` | Character voice definitions for roleplay |

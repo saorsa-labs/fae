@@ -164,10 +164,38 @@ actor SpeakerProfileStore {
 
     /// Check whether the embedding matches the fae_self profile above `threshold`.
     /// Used for echo detection — separate from general speaker matching.
+    ///
+    /// Returns nil if the fae_self profile is absent or has a degenerate centroid
+    /// (very low variance across embeddings, which causes false matches on all audio).
     func matchesFaeSelf(embedding: [Float], threshold: Float) -> Float? {
         guard let faeSelf = profiles.first(where: { $0.role == .faeSelf }) else { return nil }
+        // Health check: a degenerate fae_self centroid (StdDev < 0.06 across
+        // embedding dimensions) matches nearly everything, permanently blocking
+        // all user speech via echo rejection. Skip the match if pathological.
+        if Self.isCentroidDegenerate(faeSelf.centroid) {
+            NSLog("SpeakerProfileStore: fae_self centroid is degenerate (low variance) — skipping echo match")
+            return nil
+        }
         let sim = Self.cosineSimilarity(embedding, faeSelf.centroid)
         return sim >= threshold ? sim : nil
+    }
+
+    /// Detect a degenerate centroid: very low standard deviation across dimensions
+    /// indicates the embedding has collapsed to near-constant values.
+    private static func isCentroidDegenerate(_ centroid: [Float], threshold: Float = 0.06) -> Bool {
+        // Only check real embeddings (≥32 dims). Short embeddings in tests are fine.
+        guard centroid.count >= 32 else { return false }
+        var mean: Float = 0
+        vDSP_meanv(centroid, 1, &mean, vDSP_Length(centroid.count))
+        var variance: Float = 0
+        // Compute mean of squared differences.
+        var diff = [Float](repeating: 0, count: centroid.count)
+        var negMean = -mean
+        vDSP_vsadd(centroid, 1, &negMean, &diff, 1, vDSP_Length(centroid.count))
+        vDSP_dotpr(diff, 1, diff, 1, &variance, vDSP_Length(centroid.count))
+        variance /= Float(centroid.count)
+        let stddev = sqrtf(variance)
+        return stddev < threshold
     }
 
     /// Check whether the embedding matches the owner profile above `threshold`.

@@ -135,12 +135,52 @@ actor AudioPlaybackManager {
     }
 
     /// Immediately stop playback and discard queued audio.
+    /// Sets volume to zero before stopping to reduce click artifacts at the cut point.
     func stop() {
+        // Zero volume before stop to minimise the audible pop from an abrupt cut.
+        // This is an instant mute (not a true ramp), but it prevents the worst
+        // click artifacts from mid-sample buffer truncation.
+        playerNode.volume = 0
         playerNode.stop()
+        playerNode.volume = 1  // Restore for next playback session.
         pendingFinal = false
         pendingBufferCompletions = 0
         isPlaying = false
+        isPaused = false
         onEvent?(.stopped)
+    }
+
+    // MARK: - Pause / Resume
+
+    /// Whether playback is currently paused (buffers preserved).
+    private(set) var isPaused = false
+
+    /// Pause playback without discarding scheduled buffers.
+    /// `AVAudioPlayerNode.pause()` suspends the node — calling `resume()`
+    /// continues from the exact sample position.
+    func pause() {
+        guard isPlaying, !isPaused else { return }
+        playerNode.pause()
+        isPaused = true
+        NSLog("AudioPlaybackManager: paused (pending=%d)", pendingBufferCompletions)
+    }
+
+    /// Resume playback from the paused position.
+    /// Returns `true` if playback was successfully resumed, `false` if there was
+    /// nothing to resume (not paused, or no pending buffers).
+    @discardableResult
+    func resume() -> Bool {
+        guard isPaused else { return false }
+        guard pendingBufferCompletions > 0 else {
+            // Nothing left to play — treat as finished.
+            isPaused = false
+            isPlaying = false
+            return false
+        }
+        playerNode.play()
+        isPaused = false
+        NSLog("AudioPlaybackManager: resumed (pending=%d)", pendingBufferCompletions)
+        return true
     }
 
     // MARK: - Tone Generation
@@ -166,15 +206,17 @@ actor AudioPlaybackManager {
     // MARK: - File Playback
 
     /// Play a WAV file from disk (for skill audio output).
+    /// Reads the sample rate from the WAV header instead of assuming 24 kHz.
     func playFile(url: URL) async {
         do {
             let data = try Data(contentsOf: url)
+            let sampleRate = MLXTTSEngine.parseWAVSampleRate(data) ?? 24_000
             let samples = MLXTTSEngine.parseWAVToFloat32(data)
             guard !samples.isEmpty else {
                 NSLog("AudioPlaybackManager: empty or unsupported WAV at %@", url.lastPathComponent)
                 return
             }
-            enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
+            enqueue(samples: samples, sampleRate: sampleRate, isFinal: true)
         } catch {
             NSLog("AudioPlaybackManager: failed to play %@: %@", url.lastPathComponent, error.localizedDescription)
         }

@@ -3,19 +3,19 @@
   "project": "adaptive-interruption-fix",
   "active": true,
   "milestone": {
-    "number": 3,
-    "name": "Adaptive decider tuning"
+    "number": 4,
+    "name": "Echo defense + fae_self rejection"
   },
   "phase": {
-    "number": "3.1",
-    "name": "Transcript-boosted fast path",
+    "number": "4.1",
+    "name": "Three-layer echo defense",
     "plan": "complete"
   },
   "progress": {
-    "total_tasks": 3,
-    "completed_tasks": 3,
+    "total_tasks": 4,
+    "completed_tasks": 4,
     "current_task": null
   },
   "status": "milestone_complete",
-  "last_updated": "2026-03-20T14:30:00Z"
+  "last_updated": "2026-03-20T15:00:00Z"
 }

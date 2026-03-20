@@ -412,6 +412,29 @@ actor MLXTTSEngine: TTSEngine {
         Int16(bitPattern: readU16(data, at: offset))
     }
 
+    /// Extract the sample rate from a WAV file header.
+    /// Returns nil if the header is invalid or too short.
+    static func parseWAVSampleRate(_ data: Data) -> Int? {
+        guard data.count >= 44 else { return nil }
+        let riff = String(data: data[0..<4], encoding: .ascii)
+        let wave = String(data: data[8..<12], encoding: .ascii)
+        guard riff == "RIFF", wave == "WAVE" else { return nil }
+
+        var offset = 12
+        while offset + 8 < data.count {
+            let chunkID = String(data: data[offset..<(offset + 4)], encoding: .ascii)
+            let chunkSize = readU32(data, at: offset + 4)
+            if chunkID == "fmt " {
+                guard Int(chunkSize) >= 16, offset + 8 + 16 <= data.count else { return nil }
+                let sampleRate = readU32(data, at: offset + 12)
+                return Int(sampleRate)
+            }
+            offset += 8 + Int(chunkSize)
+            if chunkSize % 2 != 0 { offset += 1 }
+        }
+        return nil
+    }
+
     /// Parse a WAV file's raw bytes into Float32 samples normalized to [-1, 1].
     ///
     /// Expects PCM 16-bit mono WAV format. Returns an empty array if the format
