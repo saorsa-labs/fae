@@ -7,14 +7,14 @@
     "name": "Parakeet TDT Dual-Path Streaming ASR"
   },
   "phase": {
-    "number": "2.2",
-    "name": "Fast-Path Wiring",
-    "plan": ".planning/PLAN-phase-2.2.md",
+    "number": "2.3",
+    "name": "Dual-Path Orchestration",
+    "plan": null,
     "status": "complete"
   },
   "progress": {
-    "total_tasks": 4,
-    "completed_tasks": 4,
+    "total_tasks": 6,
+    "completed_tasks": 6,
     "current_task": null
   },
   "review": {
@@ -24,6 +24,6 @@
     "findings_count": { "critical": 0, "important": 0, "minor": 0 }
   },
   "status": "task_complete",
-  "last_action": "phase_2.2_complete",
-  "last_updated": "2026-03-20T22:55:00Z"
+  "last_action": "phase_2.3_complete",
+  "last_updated": "2026-03-20T23:00:00Z"
 }

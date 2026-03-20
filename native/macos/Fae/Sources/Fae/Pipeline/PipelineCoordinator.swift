@@ -1592,6 +1592,7 @@ actor PipelineCoordinator {
         generationTakeoverCandidate = nil
         streamingEpoch &+= 1
         lastStreamingPartialTranscript = nil
+        lastFastPathPartial = nil
         lastEOUProbability = nil
 
         let activeTTSTask = pendingTTSTask
@@ -1626,6 +1627,7 @@ actor PipelineCoordinator {
         generationTakeoverCandidate = nil
         streamingEpoch &+= 1
         lastStreamingPartialTranscript = nil
+        lastFastPathPartial = nil
         lastEOUProbability = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
@@ -3149,6 +3151,7 @@ actor PipelineCoordinator {
         engagedUntil = nil
         lastAssistantResponseText = ""
         lastStreamingPartialTranscript = nil
+        lastFastPathPartial = nil
         lastEOUProbability = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
@@ -3599,7 +3602,9 @@ actor PipelineCoordinator {
                         await fastPath.feedAudio(chunk.samples)
                         let partial = await fastPath.getPartialTranscript()
                         if !partial.isEmpty {
-                            await self.handleStreamingPartialTranscript(partial, epoch: epoch)
+                            await self.handleStreamingPartialTranscript(
+                                partial, epoch: epoch, source: .parakeet
+                            )
                         }
                     }
                 }
@@ -3616,7 +3621,9 @@ actor PipelineCoordinator {
                             // Drop stale partials from a previous streaming session.
                             // When fast-path is active, slow-path partials supplement
                             // with higher accuracy as more audio accumulates.
-                            await self.handleStreamingPartialTranscript(partial, epoch: epoch)
+                            await self.handleStreamingPartialTranscript(
+                                partial, epoch: epoch, source: .qwen3ASR
+                            )
                         }
                     }
                 }
@@ -4442,26 +4449,64 @@ actor PipelineCoordinator {
     /// The `epoch` parameter guards against stale partials: if the streaming
     /// session was reset between transcription start and result delivery, the
     /// epoch will have advanced and the partial is silently dropped.
-    private func handleStreamingPartialTranscript(_ text: String, epoch: UInt64) async {
+    /// Source of a streaming partial transcript for diagnostics and disagreement tracking.
+    private enum StreamingPartialSource: String {
+        /// Parakeet TDT CTC fast-path (low-latency, lower accuracy).
+        case parakeet
+        /// Qwen3-ASR growing-buffer slow-path (higher latency, higher accuracy).
+        case qwen3ASR = "qwen3_asr"
+    }
+
+    /// Last fast-path partial for disagreement detection against slow-path.
+    private var lastFastPathPartial: String?
+
+    private func handleStreamingPartialTranscript(
+        _ text: String,
+        epoch: UInt64,
+        source: StreamingPartialSource = .qwen3ASR
+    ) async {
         guard epoch == streamingEpoch else {
             debugLog(debugConsole, .pipeline, "Dropped stale streaming partial (epoch \(epoch) != \(streamingEpoch))")
             return
         }
-        lastStreamingPartialTranscript = text
-        eventBus.send(.transcription(text: text, isFinal: false))
+
+        // Apply vocabulary correction to partials for better keyword matching.
+        var correctedText = TextProcessing.correctNameRecognition(text)
+        correctedText = await vocabularyCorrector.correct(correctedText)
+
+        // Track fast-path vs. slow-path for disagreement logging.
+        if source == .parakeet {
+            lastFastPathPartial = correctedText
+        } else if let fastPartial = lastFastPathPartial, !fastPartial.isEmpty {
+            // Log significant disagreements between fast and slow path for analysis.
+            let normalizedFast = fastPartial.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            let normalizedSlow = correctedText.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            if !normalizedSlow.isEmpty, !normalizedFast.isEmpty,
+               !normalizedSlow.hasPrefix(normalizedFast),
+               !normalizedFast.hasPrefix(normalizedSlow)
+            {
+                debugLog(
+                    debugConsole, .stt,
+                    "ASR disagreement — fast: \"\(fastPartial.prefix(60))\" slow: \"\(correctedText.prefix(60))\""
+                )
+            }
+        }
+
+        lastStreamingPartialTranscript = correctedText
+        eventBus.send(.transcription(text: correctedText, isFinal: false))
 
         // Early interrupt detection via keyword spotter on partial text.
-        if let match = await keywordSpotter.check(partialTranscript: text),
+        if let match = await keywordSpotter.check(partialTranscript: correctedText),
            match.category == .interrupt
         {
-            debugLog(debugConsole, .command, "Streaming partial interrupt: \"\(match.configuredKeyword)\" in \"\(text.prefix(60))\"")
-            await resetConversationSession(trigger: text, source: "voice")
+            debugLog(debugConsole, .command, "Streaming partial interrupt: \"\(match.configuredKeyword)\" in \"\(correctedText.prefix(60))\"")
+            await resetConversationSession(trigger: correctedText, source: "voice")
             return
         }
 
         // Run turn detector on streaming partial for adaptive endpointing.
         if let td = turnDetector {
-            let prediction = await td.predictEndOfTurn(lastUserText: text)
+            let prediction = await td.predictEndOfTurn(lastUserText: correctedText)
             lastEOUProbability = prediction.probability
         }
     }

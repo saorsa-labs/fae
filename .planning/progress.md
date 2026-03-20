@@ -90,3 +90,18 @@
 
 **Test count**: 1553 tests, 0 failures (no change)
 **Build**: zero warnings on `swift build`
+
+### Phase 2.3: Dual-Path Orchestration — COMPLETE
+
+- [x] Task 1: Apply vocabulary correction to streaming partials (correctNameRecognition + DynamicVocabularyCorrector)
+- [x] Task 2: Track fast-path vs. slow-path partials with StreamingPartialSource enum
+- [x] Task 3: Disagreement detection: log when Parakeet and Qwen3-ASR diverge significantly
+- [x] Task 4: Clear lastFastPathPartial at all 3 streaming reset points
+- [x] Task 5: Adaptive fallback already handled (nil-safe streamingSTTEngine throughout)
+- [x] Task 6: Build (zero warnings) + test validation (1553 tests, 0 failures)
+
+**Files modified**:
+- `Sources/Fae/Pipeline/PipelineCoordinator.swift` — vocabulary correction on partials, source tracking, disagreement logging
+
+**Test count**: 1553 tests, 0 failures (no change)
+**Build**: zero warnings on `swift build`
