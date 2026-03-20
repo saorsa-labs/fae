@@ -1101,14 +1101,8 @@ actor PipelineCoordinator {
     /// and streaming wake detection state.
     private let speechInputStage = SpeechInputStage()
 
-    /// Chained TTS task — each sentence enqueues onto this so TTS runs in order
-    /// without blocking the LLM token stream.
-    private var pendingTTSTask: Task<Void, Never>?
-
-    /// Timestamp captured when the user turn ended (post-VAD segment close).
-    /// Used for TTFA (time-to-first-audio) telemetry.
-    private var lastUserTurnEndedAt: Date?
-    private var ttfaEmittedForCurrentTurn: Bool = false
+    /// TTS task chain and TTFA telemetry state.
+    private let ttsState = TTSState()
     private var currentTurnID: String?
     private var activeConversationSessionID: String?
 
@@ -1409,8 +1403,8 @@ actor PipelineCoordinator {
         await streamingSTTEngine?.reset()
 
         // Ensure any in-flight TTS synthesis task fully exits before teardown.
-        let activeTTSTask = pendingTTSTask
-        pendingTTSTask = nil
+        let activeTTSTask = ttsState.pendingTask
+        ttsState.pendingTask = nil
         activeTTSTask?.cancel()
         await activeTTSTask?.value
 
@@ -1443,8 +1437,8 @@ actor PipelineCoordinator {
         lastFastPathPartial = nil
         lastEOUProbability = nil
 
-        let activeTTSTask = pendingTTSTask
-        pendingTTSTask = nil
+        let activeTTSTask = ttsState.pendingTask
+        ttsState.pendingTask = nil
         activeTTSTask?.cancel()
         if let activeTTSTask {
             Task { await activeTTSTask.value }
@@ -1482,8 +1476,8 @@ actor PipelineCoordinator {
         await sttEngine.resetStreaming()
         await streamingSTTEngine?.reset()
 
-        let activeTTSTask = pendingTTSTask
-        pendingTTSTask = nil
+        let activeTTSTask = ttsState.pendingTask
+        ttsState.pendingTask = nil
         activeTTSTask?.cancel()
         await activeTTSTask?.value
 
@@ -1976,8 +1970,7 @@ actor PipelineCoordinator {
         manualOnlyApprovalPending = false
         pendingGovernanceAction = nil
         computerUseStepCount = 0
-        pendingTTSTask?.cancel()
-        pendingTTSTask = nil
+        ttsState.cancelPending()
         cancelDeferredToolJobs()
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
@@ -2995,8 +2988,7 @@ actor PipelineCoordinator {
         manualOnlyApprovalPending = false
         pendingGovernanceAction = nil
         computerUseStepCount = 0
-        pendingTTSTask?.cancel()
-        pendingTTSTask = nil
+        ttsState.cancelPending()
         cancelDeferredToolJobs()
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
@@ -3632,8 +3624,7 @@ actor PipelineCoordinator {
                 {
                     NSLog("PipelineCoordinator: assistantSpeaking watchdog — stuck for >60s, force-clearing")
                     debugLog(debugConsole, .pipeline, "⚠️ assistantSpeaking watchdog fired (>60s) — force-clearing")
-                    pendingTTSTask?.cancel()
-                    pendingTTSTask = nil
+                    ttsState.cancelPending()
                     markAssistantSpeechEnded(reason: "watchdog_timeout")
                     await playback.stop()
                 }
@@ -3789,7 +3780,7 @@ actor PipelineCoordinator {
                     )
                     continue
                 }
-                lastUserTurnEndedAt = Date()
+                ttsState.lastUserTurnEndedAt = Date()
 
                 // Speculative prefill: warm the LLM KV cache with the cached
                 // system prompt + conversation history while the segment flows
@@ -4318,7 +4309,7 @@ actor PipelineCoordinator {
 
         // EMA dynamic endpointing: measure silence gap from last user turn end.
         // This adapts the silence threshold to the user's natural speaking rhythm.
-        if let lastEnd = lastUserTurnEndedAt, !assistantSpeaking {
+        if let lastEnd = ttsState.lastUserTurnEndedAt, !assistantSpeaking {
             let gapMs = Float(segment.capturedAt.timeIntervalSince(lastEnd) * 1000)
             if gapMs > 0 && gapMs < 10_000 {  // Ignore very long gaps (separate sessions).
                 vad.recordObservedSilenceMs(gapMs)
@@ -4649,12 +4640,12 @@ actor PipelineCoordinator {
         allowsAudibleOutput: Bool = true
     ) async {
         currentTurnID = UUID().uuidString
-        ttfaEmittedForCurrentTurn = false
+        ttsState.resetForNewTurn()
         if proactiveContext != nil {
-            lastUserTurnEndedAt = nil
-        } else if lastUserTurnEndedAt == nil {
+            ttsState.lastUserTurnEndedAt = nil
+        } else if ttsState.lastUserTurnEndedAt == nil {
             // Text injection path has no VAD segment-close marker.
-            lastUserTurnEndedAt = Date()
+            ttsState.lastUserTurnEndedAt = Date()
         }
 
         debugLog(debugConsole, .qa, "Process transcription [turn=\(currentTurnID?.prefix(8) ?? "none")]: \(text)")
@@ -4699,8 +4690,7 @@ actor PipelineCoordinator {
         // Barge-in: if assistant is still active, interrupt and process the new input.
         if assistantSpeaking || assistantGenerating {
             markGenerationInterrupted()
-            pendingTTSTask?.cancel()
-            pendingTTSTask = nil
+            ttsState.cancelPending()
             await playback.stop()
         }
 
@@ -5399,8 +5389,7 @@ actor PipelineCoordinator {
             interrupted = false
             interruptedGenerationID = nil
             // Ensure no stale TTS tasks from a previous turn can block this one.
-            pendingTTSTask?.cancel()
-            pendingTTSTask = nil
+            ttsState.cancelPending()
             lastAssistantResponseText = ""
             assistantGenerating = true
             eventBus.send(.assistantGenerating(true))
@@ -6927,7 +6916,7 @@ actor PipelineCoordinator {
             }
 
             // Wait for any queued speech to finish before starting script execution.
-            if assistantSpeaking || pendingTTSTask != nil {
+            if assistantSpeaking || ttsState.pendingTask != nil {
                 await awaitPendingTTS()
                 await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_script_execution")
             }
@@ -7101,7 +7090,7 @@ actor PipelineCoordinator {
 
         // Prevent synthesis/playback jitter: avoid starting tool execution while
         // filler/pre-tool speech is still active.
-        if didEnqueueToolFiller || assistantSpeaking || pendingTTSTask != nil {
+        if didEnqueueToolFiller || assistantSpeaking || ttsState.pendingTask != nil {
             debugLog(debugConsole, .pipeline, "Delaying tool execution until speech drains")
             await awaitPendingTTS()
             await awaitSpeechDrain(timeoutMs: 8_000, reason: "before_tool_execution")
@@ -7461,7 +7450,7 @@ actor PipelineCoordinator {
 
     // MARK: - TTS
 
-    /// Non-blocking TTS enqueue — chains onto `pendingTTSTask` so sentences synthesize
+    /// Non-blocking TTS enqueue — chains onto `ttsState.pendingTask` so sentences synthesize
     /// in order without blocking the LLM token stream.
     ///
     /// Call this from inside the token generation loop. The LLM keeps producing tokens
@@ -7476,8 +7465,8 @@ actor PipelineCoordinator {
         // Set speaking state immediately so echo suppressor and barge-in work correctly.
         markAssistantSpeechStarted()
 
-        let previous = pendingTTSTask
-        pendingTTSTask = Task {
+        let previous = ttsState.pendingTask
+        ttsState.pendingTask = Task {
             await previous?.value  // Ensure sentence ordering
             guard !isGenerationInterrupted(generationID) else {
                 // If this was the final chunk and we're interrupted, ensure speaking
@@ -7500,8 +7489,7 @@ actor PipelineCoordinator {
 
     /// Wait for all pending TTS work to complete. Call after the token loop ends.
     private func awaitPendingTTS() async {
-        await pendingTTSTask?.value
-        pendingTTSTask = nil
+        await ttsState.awaitPending()
     }
 
     /// Wait until playback state reports idle (assistantSpeaking=false), or timeout.
@@ -7521,8 +7509,7 @@ actor PipelineCoordinator {
             // Cancel any queued TTS work to prevent re-triggering assistantSpeaking
             // after we clear it. Without this, a queued sentence could start playing
             // immediately after stop(), re-setting the flag.
-            pendingTTSTask?.cancel()
-            pendingTTSTask = nil
+            ttsState.cancelPending()
             markGenerationInterrupted()
             await playback.stop()
             markAssistantSpeechEnded(reason: "speech_drain_timeout")
@@ -7560,11 +7547,7 @@ actor PipelineCoordinator {
         }
     }
 
-    /// Maximum time a single TTS synthesis call can take before we force-cancel.
-    /// Prevents `assistantSpeaking` from getting stuck if the TTS model hangs.
-    /// This covers both the "stream never yields" and "stream yields slowly" cases
-    /// because we wrap the entire stream consumption in a cancellable task group.
-    private static let ttsSynthesisTimeoutSeconds: UInt64 = 30
+    // ttsSynthesisTimeoutSeconds moved to TTSState.synthesisTimeoutSeconds.
 
     /// Core TTS synthesis — shared by both `enqueueTTS` and `speakText`.
     ///
@@ -7629,7 +7612,7 @@ actor PipelineCoordinator {
 
                 // Child 2: timeout watchdog — cancels the group if TTS hangs.
                 group.addTask {
-                    try await Task.sleep(nanoseconds: Self.ttsSynthesisTimeoutSeconds * 1_000_000_000)
+                    try await Task.sleep(nanoseconds: TTSState.synthesisTimeoutSeconds * 1_000_000_000)
                     // If we reach here, the timeout expired before the stream finished.
                     return false
                 }
@@ -7795,8 +7778,7 @@ actor PipelineCoordinator {
 
         interrupted = true
         interruptedGenerationID = activeGenerationID
-        pendingTTSTask?.cancel()
-        pendingTTSTask = nil
+        ttsState.cancelPending()
         // Clear generation flag so the pipeline accepts the user's follow-up speech.
         // The generation-ID-scoped endAssistantGeneration prevents the interrupted
         // async generation from accidentally clearing a future generation's flag.
@@ -7947,8 +7929,7 @@ actor PipelineCoordinator {
     private func executePlaybackBargeIn(candidate: PlaybackBargeInCandidate) async {
         interrupted = true
         interruptedGenerationID = activeGenerationID
-        pendingTTSTask?.cancel()
-        pendingTTSTask = nil
+        ttsState.cancelPending()
         endAssistantGeneration()
         Task { await playback.pause() }
         debugLog(debugConsole, .command, "Playback barge-in executed rms=\(String(format: "%.4f", candidate.lastRms))")
@@ -8054,12 +8035,12 @@ actor PipelineCoordinator {
 
         case .level(let rms):
             if assistantSpeaking,
-               !ttfaEmittedForCurrentTurn,
+               !ttsState.ttfaEmittedForCurrentTurn,
                rms > 0.0005,
-               let turnEndedAt = lastUserTurnEndedAt
+               let turnEndedAt = ttsState.lastUserTurnEndedAt
             {
                 let ttfaMs = Date().timeIntervalSince(turnEndedAt) * 1000
-                ttfaEmittedForCurrentTurn = true
+                ttsState.ttfaEmittedForCurrentTurn = true
                 NSLog("phase1.ttfa_ms=%.2f turn_id=%@", ttfaMs, currentTurnID ?? "none")
                 debugLog(debugConsole, .pipeline, "TTFA=\(String(format: "%.1f", ttfaMs))ms turn=\(currentTurnID?.prefix(8) ?? "none")")
             }
