@@ -76,3 +76,17 @@
 - Parakeet `decode(mel:)` is internal; used public `generate()` API instead
 - Non-fatal loading: Parakeet failure falls back to existing growing-buffer Qwen3-ASR
 - CTC decode path is frame-independent — true chunk-based streaming without re-transcription
+
+### Phase 2.2: Fast-Path Wiring — COMPLETE
+
+- [x] Task 1: Add `streamingSTTEngine` property to PipelineCoordinator + init parameter
+- [x] Task 2: Feed audio to Parakeet in capture loop alongside Qwen3-ASR
+- [x] Task 3: Reset Parakeet at all 4 streaming epoch reset points
+- [x] Task 4: Build (zero warnings) + test validation (1553 tests, 0 failures)
+
+**Files modified**:
+- `Sources/Fae/Pipeline/PipelineCoordinator.swift` — streaming fast-path feed + resets
+- `Sources/Fae/Core/FaeCore.swift` — wire `parakeetEngine` from ModelManager into PipelineCoordinator
+
+**Test count**: 1553 tests, 0 failures (no change)
+**Build**: zero warnings on `swift build`

@@ -383,11 +383,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     wakeWordProfileStore: wakeWordProfileStore
                 )
                 let toolAnalytics = try? Self.createToolAnalyticsStore()
+                let parakeetEngine = await modelManager.parakeetEngine
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,
                     capture: captureManager,
                     playback: playbackManager,
                     sttEngine: sttEngine,
+                    streamingSTTEngine: parakeetEngine,
                     llmEngine: llmEngine,
                     ttsEngine: ttsEngine,
                     config: pipelineConfig,

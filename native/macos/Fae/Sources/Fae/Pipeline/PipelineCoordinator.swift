@@ -49,6 +49,10 @@ actor PipelineCoordinator {
     private let capture: AudioCaptureManager
     private let playback: AudioPlaybackManager
     private let sttEngine: MLXSTTEngine
+    /// Parakeet TDT streaming ASR fast-path engine (optional).
+    /// When available, provides low-latency CTC-based partial transcripts
+    /// alongside the growing-buffer Qwen3-ASR slow path.
+    private var streamingSTTEngine: (any StreamingSTTEngine)?
     private let llmEngine: any LLMEngine
     private let ttsEngine: any TTSEngine
     private var config: FaeConfig
@@ -1379,6 +1383,7 @@ actor PipelineCoordinator {
         capture: AudioCaptureManager,
         playback: AudioPlaybackManager,
         sttEngine: MLXSTTEngine,
+        streamingSTTEngine: (any StreamingSTTEngine)? = nil,
         llmEngine: any LLMEngine,
         ttsEngine: any TTSEngine,
         config: FaeConfig,
@@ -1400,6 +1405,7 @@ actor PipelineCoordinator {
         self.capture = capture
         self.playback = playback
         self.sttEngine = sttEngine
+        self.streamingSTTEngine = streamingSTTEngine
         self.llmEngine = llmEngine
         self.ttsEngine = ttsEngine
         self.config = config
@@ -1552,6 +1558,7 @@ actor PipelineCoordinator {
         speculativePrefillTask = nil
         streamingEpoch &+= 1
         await sttEngine.resetStreaming()
+        await streamingSTTEngine?.reset()
 
         // Ensure any in-flight TTS synthesis task fully exits before teardown.
         let activeTTSTask = pendingTTSTask
@@ -1598,6 +1605,7 @@ actor PipelineCoordinator {
         speculativePrefillTask = nil
         Task { [weak self] in
             await self?.sttEngine.resetStreaming()
+            await self?.streamingSTTEngine?.reset()
             await self?.playback.stop()
         }
         // Clear generation flag immediately so the pipeline accepts new segments.
@@ -1622,6 +1630,7 @@ actor PipelineCoordinator {
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
         await sttEngine.resetStreaming()
+        await streamingSTTEngine?.reset()
 
         let activeTTSTask = pendingTTSTask
         pendingTTSTask = nil
@@ -3580,6 +3589,24 @@ actor PipelineCoordinator {
                 && snrOk
             if streamingAudioSafe {
                 let epoch = streamingEpoch
+
+                // Fast-path: feed Parakeet TDT (CTC-based, frame-independent).
+                // Runs a decode pass when enough audio accumulates, providing
+                // low-latency partials without growing-buffer re-transcription.
+                if let fastPath = streamingSTTEngine {
+                    Task { [weak self] in
+                        guard let self else { return }
+                        await fastPath.feedAudio(chunk.samples)
+                        let partial = await fastPath.getPartialTranscript()
+                        if !partial.isEmpty {
+                            await self.handleStreamingPartialTranscript(partial, epoch: epoch)
+                        }
+                    }
+                }
+
+                // Slow-path: growing-buffer Qwen3-ASR (higher accuracy, higher latency).
+                // When Parakeet is available, this still accumulates audio for the
+                // final high-accuracy transcription after speech ends.
                 await sttEngine.feedStreamingAudio(chunk.samples)
                 if await sttEngine.shouldRunStreamingTranscription() {
                     // Detached task so the 36ms audio loop is not blocked.
@@ -3587,6 +3614,8 @@ actor PipelineCoordinator {
                         guard let self else { return }
                         if let partial = await self.sttEngine.runStreamingTranscription() {
                             // Drop stale partials from a previous streaming session.
+                            // When fast-path is active, slow-path partials supplement
+                            // with higher accuracy as more audio accumulates.
                             await self.handleStreamingPartialTranscript(partial, epoch: epoch)
                         }
                     }
@@ -3910,6 +3939,7 @@ actor PipelineCoordinator {
                     streamingEpoch &+= 1
                     Task { [weak self] in
                         await self?.sttEngine.resetStreaming()
+                        await self?.streamingSTTEngine?.reset()
                     }
                 }
 
@@ -5956,6 +5986,7 @@ actor PipelineCoordinator {
             eventBus.send(.thinkingText(text: "", isActive: true))
         }
         var firstTtsSent = false
+        var firstTtsEnqueuedAt: Date?
         let suppressProvisionalOutputForLikelyToolTurn = !isToolFollowUp && (
             Self.isToolBackedLookupRequest(userText)
                 || Self.isScreenIntentRequest(userText)
@@ -5967,13 +5998,12 @@ actor PipelineCoordinator {
         var firstTokenAt: Date?
         var spokenTextThisTurn = ""
         var visibleTextThisTurn = ""
-        // Stability-first speech mode: keep live text streaming, but defer TTS
-        // until the turn completes. KokoroMLXTTSEngine produces a single-pass
-        // synthesis (non-streaming), so deferring lets it see complete sentence
-        // spans and produce better prosody than synthesising mid-stream fragments.
-        // The sentence queue below then synthesises sentence-by-sentence so
-        // time-to-first-audio scales with sentence length, not full response length.
-        let preferFinalOnlySpeech = true
+        // TTS streaming mode: when `false` (default), synthesise sentence-by-sentence
+        // as the LLM streams tokens — first audio plays while generation continues.
+        // When `true` (batched fallback), defer all TTS until the turn completes.
+        // Kokoro is stateless per call, so per-sentence synthesis preserves prosody.
+        let preferFinalOnlySpeech = config.tts.preferFinalOnly
+        debugLog(debugConsole, .pipeline, "TTS: \(preferFinalOnlySpeech ? "batched (final-only)" : "sentence-streaming") mode active")
         var deferredSentenceQueue: [String] = []
         var streamedToolCalls: [ToolCall] = []
         var completionInfo: GenerateCompletionInfo?
@@ -6011,11 +6041,12 @@ actor PipelineCoordinator {
 
         // Streaming chunk smoothing: prioritize sentence-sized chunks, and only use
         // clause fallback when enough text has accumulated and cadence allows it.
-        let minSentenceChunkChars = 28
+        let minSentenceChunkChars = 40
         let minSentenceFlushIntervalSec: TimeInterval = 0.24
         let minClauseChunkChars = 55
         let minClauseFlushIntervalSec: TimeInterval = 0.55
         let maxCharsBeforeClauseFlush = 280
+        let maxSilenceBeforeClauseFallbackSec: TimeInterval = 3.0
         var lastStreamingFlushAt: Date?
         var streamingChunkCount = 0
         var streamingChunkCharsTotal = 0
@@ -6070,6 +6101,11 @@ actor PipelineCoordinator {
             recordVisibleText(cleaned)
             sendAssistantText(cleaned, isFinal: false)
             if generationContext.allowsAudibleOutput {
+                if firstTtsEnqueuedAt == nil {
+                    firstTtsEnqueuedAt = Date()
+                    let ttfa = firstTtsEnqueuedAt!.timeIntervalSince(llmStartedAt)
+                    debugLog(debugConsole, .pipeline, String(format: "TTS: time-to-first-audio=%.2fs (sentence chars=%d)", ttfa, cleaned.count))
+                }
                 recordSpokenText(cleaned)
                 enqueueTTS(cleaned, isFinal: false, generationID: generationID)
             }
@@ -6252,8 +6288,13 @@ actor PipelineCoordinator {
                         if !cleaned.isEmpty && !isMetaCommentary {
                             let now = Date()
                             let interval = lastStreamingFlushAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
-                            let shouldHoldForCoalesce = cleaned.count < minSentenceChunkChars
-                                && (interval < minSentenceFlushIntervalSec || !firstTtsSent)
+                            // Flush the first sentence immediately for instant acknowledgment,
+                            // regardless of size. Subsequent sentences respect the minimum
+                            // to maintain prosody quality.
+                            let isFirstSentence = !firstTtsSent
+                            let shouldHoldForCoalesce = !isFirstSentence
+                                && cleaned.count < minSentenceChunkChars
+                                && interval < minSentenceFlushIntervalSec
 
                             if shouldHoldForCoalesce {
                                 // Keep buffering until we have a bigger chunk or enough cadence spacing.
@@ -6267,7 +6308,9 @@ actor PipelineCoordinator {
                             }
                             sentenceBuffer = String(sentenceBuffer[boundary...])
                         }
-                    } else if sentenceBuffer.count >= maxCharsBeforeClauseFlush {
+                    } else if sentenceBuffer.count >= maxCharsBeforeClauseFlush
+                              || (sentenceBuffer.count >= minClauseChunkChars
+                                  && (lastStreamingFlushAt.map { Date().timeIntervalSince($0) } ?? .greatestFiniteMagnitude) >= maxSilenceBeforeClauseFallbackSec) {
                         if let clause = TextProcessing.findClauseBoundary(in: sentenceBuffer) {
                             let text = String(sentenceBuffer[..<clause])
                             let stripped = TextProcessing.stripNonSpeechChars(text)
@@ -6594,6 +6637,9 @@ actor PipelineCoordinator {
                 let finalText = TextProcessing.stripReasoningPreface(
                     TextProcessing.stripNonSpeechChars(sentenceBuffer)
                 )
+                // In streaming mode (preferFinalOnlySpeech=false), sentences were already
+                // sent to TTS during generation. Only the buffer remainder needs synthesis.
+                // In batched mode, deferredSentenceQueue holds all deferred sentences.
                 var sentences = deferredSentenceQueue
                 if !finalText.isEmpty, !suppressProvisionalOutputForLikelyToolTurn {
                     sentences.append(finalText)
@@ -6602,6 +6648,21 @@ actor PipelineCoordinator {
                     !$0.isEmpty && !TextProcessing.looksLikeNonProse($0)
                 }
                 let shouldSpeak = generationContext.allowsAudibleOutput && !filteredSentences.isEmpty
+                if !preferFinalOnlySpeech {
+                    let llmElapsed = Date().timeIntervalSince(llmStartedAt)
+                    let ttfaStr: String
+                    if let ttfaDate = firstTtsEnqueuedAt {
+                        ttfaStr = String(format: "%.2fs", ttfaDate.timeIntervalSince(llmStartedAt))
+                    } else {
+                        ttfaStr = "n/a"
+                    }
+                    debugLog(
+                        debugConsole,
+                        .pipeline,
+                        String(format: "TTS streaming summary: TTFA=%@, LLM=%.2fs, sentences=%d (%d chars), remainder=%d chars",
+                               ttfaStr, llmElapsed, streamingChunkCount, streamingChunkCharsTotal, finalText.count)
+                    )
+                }
                 if !finalText.isEmpty {
                     if suppressProvisionalOutputForLikelyToolTurn {
                         debugLog(
@@ -6636,7 +6697,9 @@ actor PipelineCoordinator {
                 await awaitPendingTTS()
                 if !shouldSpeak && assistantSpeaking {
                     // No TTS was enqueued for the final chunk (empty or non-prose).
-                    // Mark playback end first, then force-clear only if speaking remains stuck.
+                    // In streaming mode this is expected when the response ended at a
+                    // sentence boundary — all audio was already enqueued with isFinal=false.
+                    // Signal playback end so the finished event fires.
                     await playback.markEnd()
                     try? await Task.sleep(nanoseconds: 150_000_000)
                     if assistantSpeaking,
@@ -7586,6 +7649,10 @@ actor PipelineCoordinator {
                 return
             }
             await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
+            // Yield after synthesis to reduce GPU contention with the LLM token loop.
+            // Both Kokoro TTS and the LLM share the MLX Metal command queue; yielding
+            // gives the LLM token generation priority between TTS sentences.
+            await Task.yield()
         }
     }
 

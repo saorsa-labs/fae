@@ -7,14 +7,14 @@
     "name": "Parakeet TDT Dual-Path Streaming ASR"
   },
   "phase": {
-    "number": "2.1",
-    "name": "Parakeet TDT CoreML Integration",
-    "plan": ".planning/PLAN-phase-2.1.md",
+    "number": "2.2",
+    "name": "Fast-Path Wiring",
+    "plan": ".planning/PLAN-phase-2.2.md",
     "status": "complete"
   },
   "progress": {
-    "total_tasks": 7,
-    "completed_tasks": 7,
+    "total_tasks": 4,
+    "completed_tasks": 4,
     "current_task": null
   },
   "review": {
@@ -24,6 +24,6 @@
     "findings_count": { "critical": 0, "important": 0, "minor": 0 }
   },
   "status": "task_complete",
-  "last_action": "all_tasks_complete",
-  "last_updated": "2026-03-20T22:45:00Z"
+  "last_action": "phase_2.2_complete",
+  "last_updated": "2026-03-20T22:55:00Z"
 }
