@@ -275,6 +275,14 @@ public protocol LLMEngine: Actor {
     func synchronizeSession(history: [LLMMessage]) async
     /// Clear any retained prompt/session cache state.
     func resetSession() async
+    /// Warm the KV cache by processing the system prompt and message history
+    /// without generating any tokens.  The next `generate()` call with a
+    /// matching prompt/history prefix will reuse the cache automatically.
+    func prefillSession(
+        messages: [LLMMessage],
+        systemPrompt: String,
+        options: GenerationOptions
+    ) async throws
     /// Tear down any engine-owned subprocesses, pipes, or transport state.
     func shutdown() async
     var isLoaded: Bool { get }
@@ -287,6 +295,12 @@ public extension LLMEngine {
     func synchronizeSession(history: [LLMMessage]) async {}
 
     func resetSession() async {}
+
+    func prefillSession(
+        messages: [LLMMessage],
+        systemPrompt: String,
+        options: GenerationOptions
+    ) async throws {}
 
     func shutdown() async {}
 }

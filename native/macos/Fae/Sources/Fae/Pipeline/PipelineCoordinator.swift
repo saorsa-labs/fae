@@ -1011,8 +1011,27 @@ actor PipelineCoordinator {
     /// `PendingBargeIn.hasInterruptKeyword` and `partialTranscript`.
     private var keywordClassifier: MLXKeywordClassifier?
 
+    /// Semantic turn detector for adaptive endpointing.
+    /// Predicts end-of-utterance probability from streaming partial transcripts.
+    private var turnDetector: MLXTurnDetector?
+
+    /// Most recent EOU probability from the turn detector (0-1).
+    /// Fed into `silenceThresholdMs()` for adaptive endpointing.
+    private var lastEOUProbability: Float?
+
     /// Minimum audio samples before running keyword classification (500ms at 16kHz).
     private static let keywordClassifierMinSamples = 8_000
+
+    // MARK: - Speculative Prefill
+
+    /// Task running the speculative KV cache prefill.
+    private var speculativePrefillTask: Task<Void, Never>?
+
+    /// System prompt from the last successful generation — used for speculative prefill.
+    private var cachedGenerationSystemPrompt: String?
+
+    /// Generation options from the last successful generation.
+    private var cachedGenerationOptions: GenerationOptions?
 
     // MARK: - Atomic-like Flags
 
@@ -1494,9 +1513,10 @@ actor PipelineCoordinator {
         // Build dynamic vocabulary corrections from known names.
         await rebuildVocabularyCorrections()
 
-        // Wire keyword classifier from ModelManager (non-critical).
+        // Wire keyword classifier and turn detector from ModelManager (non-critical).
         if let mm = modelManager {
             self.keywordClassifier = await mm.keywordClassifier
+            self.turnDetector = await mm.turnDetector
         }
 
         startSpeechSegmentProcessingLoop()
@@ -1528,6 +1548,8 @@ actor PipelineCoordinator {
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
         generationTakeoverCandidate = nil
+        speculativePrefillTask?.cancel()
+        speculativePrefillTask = nil
         streamingEpoch &+= 1
         await sttEngine.resetStreaming()
 
@@ -1563,6 +1585,7 @@ actor PipelineCoordinator {
         generationTakeoverCandidate = nil
         streamingEpoch &+= 1
         lastStreamingPartialTranscript = nil
+        lastEOUProbability = nil
 
         let activeTTSTask = pendingTTSTask
         pendingTTSTask = nil
@@ -1571,6 +1594,8 @@ actor PipelineCoordinator {
             Task { await activeTTSTask.value }
         }
 
+        speculativePrefillTask?.cancel()
+        speculativePrefillTask = nil
         Task { [weak self] in
             await self?.sttEngine.resetStreaming()
             await self?.playback.stop()
@@ -1593,6 +1618,9 @@ actor PipelineCoordinator {
         generationTakeoverCandidate = nil
         streamingEpoch &+= 1
         lastStreamingPartialTranscript = nil
+        lastEOUProbability = nil
+        speculativePrefillTask?.cancel()
+        speculativePrefillTask = nil
         await sttEngine.resetStreaming()
 
         let activeTTSTask = pendingTTSTask
@@ -2247,13 +2275,33 @@ actor PipelineCoordinator {
         configMinSilenceMs: Int,
         bargeInSilenceMs: Int,
         lastPartialTranscript: String? = nil,
-        emaSuggestedMs: Int? = nil
+        emaSuggestedMs: Int? = nil,
+        eouProbability: Float? = nil
     ) -> Int {
         if assistantSpeaking {
             return bargeInSilenceMs
         }
 
         let conversationalTurnActive = gateState == .active && (inFollowup || hasPendingSemanticTurn)
+
+        // Neural turn detector signal: when the EOU probability is available,
+        // it overrides rule-based heuristics for more nuanced detection.
+        // Low probability = user likely not done → extend silence window.
+        // High probability = user likely done → use minimum silence.
+        let eouThreshold: Float = 0.0049  // English threshold from LiveKit research.
+        if let eou = eouProbability, !assistantSpeaking {
+            if eou < eouThreshold {
+                // Below threshold: user probably not done speaking.
+                return max(configMinSilenceMs, 2200)
+            } else if eou > eouThreshold * 4 {
+                // Well above threshold: user clearly done.
+                if let ema = emaSuggestedMs {
+                    return min(ema, configMinSilenceMs)
+                }
+                return configMinSilenceMs
+            }
+            // In between: fall through to rule-based heuristics.
+        }
 
         // Transcript-aware endpointing (Milestone 4):
         // If we have a partial transcript, adjust silence threshold based on
@@ -3092,6 +3140,9 @@ actor PipelineCoordinator {
         engagedUntil = nil
         lastAssistantResponseText = ""
         lastStreamingPartialTranscript = nil
+        lastEOUProbability = nil
+        speculativePrefillTask?.cancel()
+        speculativePrefillTask = nil
         streamingEpoch &+= 1
         silentGenerationBuffer.removeAll()
         generationTakeoverCandidate = nil
@@ -3729,7 +3780,8 @@ actor PipelineCoordinator {
                 configMinSilenceMs: config.vad.minSilenceDurationMs,
                 bargeInSilenceMs: config.bargeIn.bargeInSilenceMs,
                 lastPartialTranscript: lastStreamingPartialTranscript,
-                emaSuggestedMs: vad.emaSuggestedSilenceMs
+                emaSuggestedMs: vad.emaSuggestedSilenceMs,
+                eouProbability: lastEOUProbability
             )
             vad.setSilenceThresholdMs(silenceThresholdMs)
             if assistantSpeaking {
@@ -3900,6 +3952,36 @@ actor PipelineCoordinator {
                     continue
                 }
                 lastUserTurnEndedAt = Date()
+
+                // Speculative prefill: warm the LLM KV cache with the cached
+                // system prompt + conversation history while the segment flows
+                // through STT.  The prefill runs in parallel with final STT
+                // (different models, brief GPU overlap).
+                if let cachedPrompt = cachedGenerationSystemPrompt,
+                   !assistantGenerating,
+                   !assistantSpeaking,
+                   await llmEngine.isLoaded
+                {
+                    speculativePrefillTask?.cancel()
+                    let history = await conversationState.history
+                    let options = cachedGenerationOptions ?? GenerationOptions()
+                    speculativePrefillTask = Task { [weak self] in
+                        guard let self else { return }
+                        do {
+                            try await self.llmEngine.prefillSession(
+                                messages: history,
+                                systemPrompt: cachedPrompt,
+                                options: options
+                            )
+                            NSLog("PipelineCoordinator: speculative prefill complete (history=%d)", history.count)
+                        } catch {
+                            if !Task.isCancelled {
+                                NSLog("PipelineCoordinator: speculative prefill failed: %@", error.localizedDescription)
+                            }
+                        }
+                    }
+                }
+
                 enqueueSpeechSegment(segment)
             }
         }
@@ -4344,6 +4426,13 @@ actor PipelineCoordinator {
         {
             debugLog(debugConsole, .command, "Streaming partial interrupt: \"\(match.configuredKeyword)\" in \"\(text.prefix(60))\"")
             await resetConversationSession(trigger: text, source: "voice")
+            return
+        }
+
+        // Run turn detector on streaming partial for adaptive endpointing.
+        if let td = turnDetector {
+            let prediction = await td.predictEndOfTurn(lastUserText: text)
+            lastEOUProbability = prediction.probability
         }
     }
 
@@ -5736,6 +5825,8 @@ actor PipelineCoordinator {
                 allowsAudibleOutput: allowsAudibleOutput
             )
             currentTurnGenerationContext = generationContext
+            // Cache for speculative prefill on next turn.
+            cachedGenerationSystemPrompt = systemPrompt
         } else if let providedGenerationContext {
             generationContext = providedGenerationContext
         } else if let currentTurnGenerationContext {
@@ -5839,6 +5930,11 @@ actor PipelineCoordinator {
             repetitionContextSize: config.llm.repetitionContextSize,
             prefillStepSize: prefillStep
         )
+
+        // Cache options for speculative prefill on next turn.
+        if !isToolFollowUp {
+            cachedGenerationOptions = options
+        }
 
         // Stream tokens.
         thinkTagStripper = TextProcessing.ThinkTagStripper()

@@ -2,6 +2,11 @@
 *.wav
 *.raw
 *.pcm
+*.flac
+*.mp3
+
+# Downloaded corpora.
+datasets/
 
 # Keep metadata and annotations.
 !*.json

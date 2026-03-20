@@ -189,6 +189,49 @@ public actor MLXLLMEngine: LLMEngine {
         }
     }
 
+    /// Warm the KV cache by running a minimal generation (1 token) with the
+    /// given system prompt and history.  The resulting session state is stored
+    /// so that the next `generate()` call with a matching prefix reuses the
+    /// cache via `canReuseSession()`, skipping the expensive prompt prefill.
+    ///
+    /// Called speculatively at speech-end to overlap LLM prefill with final STT.
+    public func prefillSession(
+        messages: [LLMMessage],
+        systemPrompt: String,
+        options: GenerationOptions
+    ) async throws {
+        guard container != nil else { return }
+        // Check if the session is already warm for this prompt/history.
+        if let session = sessionState,
+           session.systemPrompt == systemPrompt,
+           session.history.count <= messages.count,
+           session.history == Array(messages.prefix(session.history.count)),
+           session.reusable
+        {
+            return  // Already warm — nothing to do.
+        }
+
+        // Run a 1-token generation to fill the KV cache.
+        // The session state is persisted by generate()'s internal storePreparedSession().
+        var prefillOptions = options
+        prefillOptions.maxTokens = 1
+        prefillOptions.suppressThinking = true
+        let stream = generate(
+            messages: messages,
+            systemPrompt: systemPrompt,
+            options: prefillOptions
+        )
+        // Drain the stream — we don't care about the output.
+        do {
+            for try await _ in stream {
+                break  // One token is enough to warm the cache.
+            }
+        } catch {
+            // Non-fatal — the cache may still be partially warm.
+            NSLog("MLXLLMEngine: prefillSession error (non-fatal): %@", error.localizedDescription)
+        }
+    }
+
     public func generate(
         messages: [LLMMessage],
         systemPrompt: String,

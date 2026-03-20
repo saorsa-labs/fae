@@ -57,6 +57,10 @@ actor ModelManager {
     /// Non-critical: if unavailable, barge-in falls back to acoustic-only decisions.
     private(set) var keywordClassifier: MLXKeywordClassifier?
 
+    /// Semantic turn detector for adaptive endpointing.
+    /// Non-critical: if unavailable, endpointing falls back to rule-based heuristics.
+    private(set) var turnDetector: MLXTurnDetector?
+
     /// Get a wired memory ticket for inference using measured or estimated budgets.
     func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
         guard let wiredPolicy else { return nil }
@@ -429,6 +433,21 @@ actor ModelManager {
         } else {
             NSLog("ModelManager: keyword classifier not found at %@ — acoustic-only barge-in",
                   MLXKeywordClassifier.defaultModelPath.path)
+        }
+
+        // Turn detector — non-critical, degrades gracefully to rule-based heuristics.
+        if MLXTurnDetector.modelExists {
+            let td = MLXTurnDetector()
+            do {
+                try await td.load(modelPath: MLXTurnDetector.defaultModelPath)
+                self.turnDetector = td
+                NSLog("ModelManager: turn detector loaded")
+            } catch {
+                NSLog("ModelManager: turn detector load failed (rule-based fallback): %@",
+                      error.localizedDescription)
+            }
+        } else {
+            NSLog("ModelManager: turn detector model not found — using rule-based endpointing")
         }
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))

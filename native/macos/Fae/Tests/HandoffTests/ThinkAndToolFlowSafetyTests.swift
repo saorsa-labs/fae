@@ -225,6 +225,50 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         )
     }
 
+    // MARK: - Turn Detector Endpointing
+
+    func testSilenceThresholdWithLowEOUProbability() {
+        // Below the 0.0049 English threshold → extended silence (user not done).
+        let ms = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: false,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 300,
+            eouProbability: 0.001
+        )
+        XCTAssertGreaterThanOrEqual(ms, 2200, "Low EOU probability should extend silence window")
+    }
+
+    func testSilenceThresholdWithHighEOUProbability() {
+        // Well above threshold (4x = 0.0196) → minimum silence (user clearly done).
+        let ms = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: false,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 300,
+            eouProbability: 0.05
+        )
+        XCTAssertEqual(ms, 1000, "High EOU probability should use config minimum silence")
+    }
+
+    func testSilenceThresholdWithNoEOUProbability() {
+        // nil EOU → existing behavior unchanged.
+        let ms = PipelineCoordinator.silenceThresholdMs(
+            assistantSpeaking: false,
+            gateState: .active,
+            inFollowup: false,
+            hasPendingSemanticTurn: false,
+            configMinSilenceMs: 1000,
+            bargeInSilenceMs: 300,
+            eouProbability: nil
+        )
+        XCTAssertEqual(ms, 1000, "No EOU probability should use config minimum silence")
+    }
+
     func testSelfConfigGetSettingsBypassesApproval() {
         XCTAssertFalse(
             PipelineCoordinator.toolRequiresApproval(
