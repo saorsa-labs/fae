@@ -1096,6 +1096,8 @@ actor PipelineCoordinator {
     private var lastSleepHintAt: Date?
     /// Last assistant response text — used to detect echo (mic picking up speaker output).
     private var lastAssistantResponseText: String = ""
+    /// Last detected correction — cleared after memory capture.
+    private var pendingCorrection: CorrectionRecord?
     /// Final reply text captured for the active remote relay turn, when present.
     private var relayReplyCaptureText: String?
 
@@ -4288,6 +4290,23 @@ actor PipelineCoordinator {
             if queryText.isEmpty {
                 debugLog(debugConsole, .command, "Wake-only utterance ignored after direct-address extraction")
                 return
+            }
+        }
+
+        // Correction detection — check if user is correcting Fae before processing.
+        if proactiveContext == nil {
+            if let correction = CorrectionDetector.detect(
+                in: queryText,
+                lastAssistantText: lastAssistantResponseText
+            ) {
+                let record = CorrectionRecord(
+                    correction: correction,
+                    lastAssistantText: lastAssistantResponseText.isEmpty ? nil : lastAssistantResponseText,
+                    speakerLabel: nil,
+                    timestamp: Date()
+                )
+                pendingCorrection = record
+                debugLog(debugConsole, .pipeline, "Correction detected: \(correction.kind.rawValue)")
             }
         }
 

@@ -206,3 +206,60 @@ enum CorrectionDetector {
         return first.uppercased() + str.dropFirst()
     }
 }
+
+/// A correction record with full context for memory storage.
+struct CorrectionRecord: Sendable {
+    /// The detected correction.
+    let correction: CorrectionDetector.Correction
+    /// What Fae last said (may have triggered the correction).
+    let lastAssistantText: String?
+    /// The speaker label at the time of correction.
+    let speakerLabel: String?
+    /// When the correction was detected.
+    let timestamp: Date
+
+    /// Build a human-readable memory text for this correction.
+    var memoryText: String {
+        var parts: [String] = []
+
+        switch correction.kind {
+        case .nameError:
+            if let correct = correction.correctedValue, let wrong = correction.originalValue {
+                parts.append("User corrected a name: their name is \(correct), not \(wrong).")
+            } else if let correct = correction.correctedValue {
+                parts.append("User corrected a name: their name is \(correct).")
+            } else {
+                parts.append("User indicated a name was incorrect.")
+            }
+        case .mishearing:
+            if let correct = correction.correctedValue {
+                parts.append("User corrected a mishearing: they actually said \"\(correct)\".")
+            } else {
+                parts.append("User indicated they were misheard.")
+            }
+        case .interruption:
+            parts.append("User felt interrupted and asked to be allowed to finish speaking.")
+        case .wrongAction:
+            parts.append("User indicated the last action or response was wrong.")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    /// The ``MemoryKind`` to use when storing this correction.
+    var memoryKind: MemoryKind {
+        switch correction.kind {
+        case .nameError:
+            return .profile
+        case .interruption, .mishearing, .wrongAction:
+            return .episode
+        }
+    }
+
+    /// Tags for the memory record.
+    var memoryTags: [String] {
+        var tags = ["correction", correction.kind.rawValue]
+        if correction.correctedValue != nil { tags.append("has_corrected_value") }
+        return tags
+    }
+}
