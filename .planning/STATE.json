@@ -3,19 +3,19 @@
   "project": "adaptive-interruption-fix",
   "active": true,
   "milestone": {
-    "number": 1,
-    "name": "Unblock barge-in during playback"
+    "number": 2,
+    "name": "Speaker verification resilience"
   },
   "phase": {
-    "number": "1.1",
-    "name": "Echo suppressor as signal not gate",
+    "number": "2.1",
+    "name": "Graceful degradation for verification",
     "plan": "complete"
   },
   "progress": {
-    "total_tasks": 6,
-    "completed_tasks": 0,
-    "current_task": 1
+    "total_tasks": 5,
+    "completed_tasks": 5,
+    "current_task": null
   },
-  "status": "executing",
-  "last_updated": "2026-03-20T12:45:00Z"
+  "status": "milestone_complete",
+  "last_updated": "2026-03-20T14:00:00Z"
 }

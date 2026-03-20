@@ -1131,7 +1131,7 @@ actor PipelineCoordinator {
 
     /// Cooldown after non-owner barge-in denial — prevents repeated embedding churn from TV/noise.
     private var bargeInDenyCooldownUntil: Date?
-    private static let bargeInDenyCooldownSeconds: TimeInterval = 5.0
+    private static let bargeInDenyCooldownSeconds: TimeInterval = 2.0
 
     /// Interruption decider — strategy pattern for barge-in decisions.
     private var interruptionDecider: any InterruptionDeciding
@@ -1807,6 +1807,8 @@ actor PipelineCoordinator {
     /// Set/clear the first-owner enrollment active flag.
     func setFirstOwnerEnrollmentActive(_ active: Bool) {
         firstOwnerEnrollmentActive = active
+        // Clear any deny cooldown from pre-enrollment barge-in attempts.
+        bargeInDenyCooldownUntil = nil
         vad.reset()
         resetStreamingSpeakerGate()
         resetStreamingWakeDetector()
@@ -7323,23 +7325,36 @@ actor PipelineCoordinator {
         return true
     }
 
-    /// Verify the barge-in speaker is the owner. Fail-closed: if owner exists but
-    /// verification is unavailable or errors, barge-in is DENIED. Fail-open ONLY
-    /// during enrollment (no owner profile yet).
+    /// Verify the barge-in speaker is the owner. Degrades gracefully when
+    /// verification is unavailable — allows interruption rather than silently
+    /// blocking the owner from ever interrupting Fae.
+    ///
+    /// Degradation hierarchy:
+    /// 1. Encoder loaded + enough audio → full cosine similarity check
+    /// 2. Encoder loaded + short audio → allow (collect more next time)
+    /// 3. Encoder not loaded → allow (degrade to acoustic-only interruption)
+    /// 4. Embed fails → allow (transient error, don't punish user)
+    /// 5. No speaker store → allow during enrollment, allow otherwise
     private func verifyBargeInSpeaker(audio: [Float]) async -> Bool {
         // During enrollment (no owner yet) — allow all barge-in.
-        guard let store = speakerProfileStore else { return firstOwnerEnrollmentActive }
+        guard let store = speakerProfileStore else { return true }
         let hasOwner = await store.hasOwnerProfile()
         guard hasOwner else { return true }  // No owner enrolled yet — allow
 
-        // Owner exists — fail closed if encoder unavailable.
+        // Degrade gracefully if encoder unavailable — allow interruption.
+        // A false positive (non-owner interrupts) is far less harmful than
+        // the owner being unable to interrupt at all.
         guard let encoder = speakerEncoder, await encoder.isLoaded else {
-            return false  // Encoder unavailable but owner exists — DENY
+            NSLog("PipelineCoordinator: speaker encoder unavailable — allowing barge-in (degraded)")
+            return true
         }
 
-        // Need minimum audio for a meaningful embedding (~350ms at 16kHz = 5600 samples).
+        // Short audio: allow the interruption but log it. The adaptive decider
+        // already filters noise/echo, so reaching here means genuine speech.
+        // Minimum for reasonable embedding is ~350ms (5600 samples at 16kHz).
         guard audio.count >= 5600 else {
-            return false  // Too little audio for reliable verification — DENY
+            NSLog("PipelineCoordinator: barge-in audio too short (%d samples) — allowing (degraded)", audio.count)
+            return true
         }
 
         do {
@@ -7364,7 +7379,9 @@ actor PipelineCoordinator {
             let relaxed = max(config.speaker.ownerThreshold - relaxation, 0.40)
             return await store.isOwner(embedding: embedding, threshold: relaxed)
         } catch {
-            return false  // Embed failed but owner exists — DENY
+            // Embed failed — allow interruption rather than silently blocking.
+            NSLog("PipelineCoordinator: speaker embed failed — allowing barge-in (degraded)")
+            return true
         }
     }
 
