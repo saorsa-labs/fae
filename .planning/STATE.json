@@ -3,19 +3,19 @@
   "project": "self-diagnostic-feedback",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "User Correction Feedback Loop"
+    "number": 3,
+    "name": "Testing + Integration"
   },
   "phase": {
-    "number": "2.3",
-    "name": "Memory capture",
+    "number": "3.1",
+    "name": "Unit + integration tests",
     "plan": "complete"
   },
   "progress": {
-    "total_tasks": 6,
-    "completed_tasks": 6,
+    "total_tasks": 7,
+    "completed_tasks": 7,
     "current_task": null
   },
   "status": "phase_complete",
-  "last_updated": "2026-03-20T02:15:00Z"
+  "last_updated": "2026-03-20T02:30:00Z"
 }
