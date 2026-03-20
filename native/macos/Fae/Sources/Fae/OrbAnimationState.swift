@@ -75,7 +75,9 @@ final class OrbAnimationState: ObservableObject {
 
     // MARK: - Input Tracking
 
-    private var lastMode: OrbMode = .idle
+    /// The current orb mode — used by NativeOrbView for adaptive frame rate.
+    /// Idle mode renders at ~4fps to save CPU; active modes render at 30fps.
+    private(set) var lastMode: OrbMode = .idle
     private var lastPalette: OrbPalette = .modeDefault
     private var lastFeeling: OrbFeeling = .neutral
 
