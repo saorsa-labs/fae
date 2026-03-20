@@ -2,6 +2,24 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## v1.5.0 — Self-Diagnostic + Correction Feedback (2026-03-20)
+
+### New features
+- **Self-diagnostic skill**: instruction skill (`self-diagnostic`) that guides Fae through a comprehensive health check — system resources, pipeline state, security events, tool health, memory status, and speaker profiles
+- **Voice command trigger**: say "diagnose", "run diagnostics", "health check", "how are you doing" to activate self-diagnostic
+- **Proactive anomaly watcher**: 6-hour scheduler task (`self_diagnostic`) silently checks memory health, skill health, and disk space; queues a spoken alert when anomalies are found
+- **User correction detection**: `CorrectionDetector` recognises name errors ("my name is X not Y"), mishearings ("I said X"), interruptions ("you interrupted me"), and wrong actions ("that was wrong")
+- **Correction memory capture**: corrections are stored as memory records (profile for names, episode for others) via `MemoryOrchestrator.storeCorrection()`
+- **ASR vocabulary learning**: name corrections are fed into `DynamicVocabularyCorrector.addCorrectionPair()` for immediate post-ASR improvement
+
+### Tests
+- 27 CorrectionDetector tests (all pattern types, false positives, CorrectionRecord)
+- 8 VocabularyLearning tests (addCorrectionPair, deduplication, integration flow)
+- 16 SelfDiagnosticSkill tests (voice commands, skill discovery, activation)
+- Total: 1395 tests, 0 failures
+
+---
+
 ## Completed milestones
 
 - **v0.6.2** — Production hardening: pipeline startup, runtime event routing, settings redesign

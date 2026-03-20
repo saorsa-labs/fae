@@ -147,6 +147,8 @@ Qwen3-ASR has no prompt conditioning or hot-word biasing, so all name correction
 
 Key files: `Pipeline/TextProcessing.swift` (static), `Pipeline/DynamicVocabularyCorrector.swift` (dynamic), `Memory/MemoryOrchestrator.swift:entityNamesForVocabulary()`.
 
+**Runtime correction learning**: When users say "my name is X not Y", `CorrectionDetector` detects the correction in `PipelineCoordinator.processTranscription()`, stores it as a memory record via `MemoryOrchestrator.storeCorrection()`, and feeds name corrections into `DynamicVocabularyCorrector.addCorrectionPair()` for immediate ASR improvement. Key files: `Pipeline/CorrectionDetector.swift`, `Pipeline/PipelineCoordinator.swift`.
+
 **Future improvements** (documented, not yet implemented):
 - Contextual biasing / hot words at decode time (requires STT model support)
 - Apple SFSpeechRecognizer custom language model as secondary validation
@@ -170,7 +172,7 @@ Truth sources: `SOUL.md`, `fae.db`, `docs/guides/Memory.md`.
 
 Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 
-**Repeating tasks**: `memory_reflect` (6h), `memory_reindex` (3h), `memory_migrate` (1h), `memory_inbox_ingest` (5min), `memory_digest` (6h), `check_fae_update` (6h), `skill_health_check` (5min).
+**Repeating tasks**: `memory_reflect` (6h), `memory_reindex` (3h), `memory_migrate` (1h), `memory_inbox_ingest` (5min), `memory_digest` (6h), `check_fae_update` (6h), `skill_health_check` (5min), `self_diagnostic` (6h).
 
 **Daily tasks** (via scheduler_tick): `memory_backup` (02:00), `vault_backup` (02:30), `memory_gc` (03:30), `noise_budget_reset` (00:00), `morning_briefing` (configurable, default 08:00, suppressed when enhanced briefing active), `skill_proposals` (11:00), `skill_distill` (13:00), `stale_relationships` (weekly Sun 10:00), `capability_discovery` (every 3 days, 14:00), `embedding_reindex` (weekly Sun 03:00).
 
@@ -250,7 +252,7 @@ cd native/macos/Fae/Sources/Fae/Resources/Skills/<skill-name>
 for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d' ' -f1)\""; done
 ```
 
-## Built-in skills (21)
+## Built-in skills (22)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -272,6 +274,7 @@ for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d
 | `training-orchestrator` | Executable | Personal LoRA fine-tuning pipeline |
 | `training-data-bridge` | Executable | Extract SFT/DPO training data from memory |
 | `huggingface-scout` | Executable | Search HuggingFace Hub for models/datasets |
+| `self-diagnostic` | Instruction | Comprehensive health check: system, pipeline, memory, tools, speaker |
 | `channel-discord` | Executable | Discord channel integration |
 | `channel-whatsapp` | Executable | WhatsApp channel integration |
 | `channel-imessage` | Executable | iMessage channel integration |
@@ -514,7 +517,8 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `PipelineCoordinator.swift` | Unified pipeline: STT→LLM→TTS; `injectProactiveQuery()`; barge-in |
 | `EchoSuppressor.swift` | Time-based + text-overlap + voice identity echo filtering |
 | `VoiceActivityDetector.swift` | Voice activity detection |
-| `DynamicVocabularyCorrector.swift` | Post-ASR name correction from user's known vocabulary |
+| `CorrectionDetector.swift` | Detect user corrections: name errors, mishearings, interruptions, wrong actions |
+| `DynamicVocabularyCorrector.swift` | Post-ASR name correction from user's known vocabulary + runtime learning |
 | `SileroVADEngine.swift` | Silero VAD model integration |
 | `KeywordSpotter.swift` | Wake word / keyword detection |
 | `WakeWordAcousticDetector.swift` | Acoustic wake word detection |
