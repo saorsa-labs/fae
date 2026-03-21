@@ -445,7 +445,11 @@ actor ModelManager {
         }
 
         // Parakeet streaming ASR — non-critical, degrades gracefully to growing-buffer Qwen3-ASR.
-        if config.streamingASR.enabled {
+        // FAE_DISABLE_STREAMING_ASR=1 skips Parakeet load (useful for test harnesses that inject text).
+        let streamingASRDisabledByEnv = ProcessInfo.processInfo.environment["FAE_DISABLE_STREAMING_ASR"] == "1"
+        if streamingASRDisabledByEnv {
+            NSLog("ModelManager: streaming ASR skipped (FAE_DISABLE_STREAMING_ASR=1)")
+        } else if config.streamingASR.enabled {
             await loadParakeetIfAvailable(config: config)
         } else {
             NSLog("ModelManager: streaming ASR disabled in config")

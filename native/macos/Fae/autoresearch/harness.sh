@@ -51,22 +51,36 @@ echo "║         FaeAutoResearch — Iteration              ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
-# Step 1: Build
-echo "==> [1/7] Building Fae..."
-just build 2>&1 | tail -3
+# Step 1: Build + Sign
+echo "==> [1/7] Building and signing Fae..."
+if [ -z "${MACOS_SIGNING_IDENTITY:-}" ]; then
+    echo "ERROR: MACOS_SIGNING_IDENTITY not set — run: source ~/.secrets"
+    exit 1
+fi
+# Unlock keychain to avoid password dialog during codesign
+security unlock-keychain -p "password" ~/Library/Keychains/login.keychain-db 2>/dev/null || true
+just bundle 2>&1 | tail -5
+FAE_APP="$(cd "../../.." && pwd)/Fae.app"
+FAE_BINARY="$FAE_APP/Contents/MacOS/Fae"
+if [ ! -x "$FAE_BINARY" ]; then
+    echo "ERROR: Fae binary not found at $FAE_BINARY"
+    exit 1
+fi
+echo "    Binary: $FAE_BINARY"
 echo ""
 
 # Step 2: Launch Fae with test server
+# Disable streaming ASR (Parakeet) — not needed for text injection tests, avoids 2.5GB download
 echo "==> [2/7] Launching Fae with test server..."
-FAE_TEST_SERVER=1 .build/debug/Fae --test-server &
+FAE_TEST_SERVER=1 FAE_DISABLE_STREAMING_ASR=1 "$FAE_BINARY" --test-server &
 FAE_PID=$!
 echo "    PID: $FAE_PID"
 
-# Step 3: Wait for ready
-echo "==> [3/7] Waiting for TestServer (max 120s)..."
+# Step 3: Wait for ready (up to 5 min — first run may download models)
+echo "==> [3/7] Waiting for TestServer (max 300s)..."
 READY=false
-for i in $(seq 1 60); do
-    if curl -sf http://127.0.0.1:7433/health 2>/dev/null | uv run python -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ready') else 1)" 2>/dev/null; then
+for i in $(seq 1 150); do
+    if curl -sf http://127.0.0.1:7433/health 2>/dev/null | uv run python -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)" 2>/dev/null; then
         READY=true
         echo "    Ready after $((i*2))s"
         break
@@ -80,15 +94,28 @@ for i in $(seq 1 60); do
 done
 
 if [ "$READY" = false ]; then
-    echo "ERROR: TestServer not ready after 120s"
+    echo "ERROR: TestServer not ready after 300s"
     # Try to get status for diagnostics
     curl -s http://127.0.0.1:7433/status 2>/dev/null || true
     exit 1
 fi
 
-# Extra warmup — let models finish loading
-echo "    Waiting 5s for model warmup..."
-sleep 5
+# Disable direct-address gating — test harness injects text directly, not via wake word
+echo "    Disabling direct-address gating for test mode..."
+curl -sf -X POST http://127.0.0.1:7433/config \
+    -H "Content-Type: application/json" \
+    -d '{"key":"conversation.require_direct_address","value":false}' > /dev/null 2>&1 || true
+sleep 1
+
+# Warmup inject — first LLM call compiles Metal shaders, subsequent are fast
+echo "    Warmup: priming LLM..."
+curl -sf -X POST http://127.0.0.1:7433/inject \
+    -H "Content-Type: application/json" \
+    -d '{"text":"Hi Fae, hello"}' > /dev/null 2>&1 || true
+sleep 10
+curl -sf -X POST http://127.0.0.1:7433/reset > /dev/null 2>&1 || true
+sleep 2
+echo "    Warmup complete."
 
 # Step 4: Run scenarios
 mkdir -p "$RESULTS_DIR"
@@ -136,25 +163,45 @@ FAE_PID=""
 # Step 6: Evaluate
 echo "==> [6/7] Evaluating results..."
 
-# Find latest results
-LATEST_RESULTS=$(ls -t "$RESULTS_DIR"/run_${TIMESTAMP}_*.json 2>/dev/null | head -1)
-if [ -z "$LATEST_RESULTS" ]; then
-    echo "ERROR: No results files found"
+# Merge all result files from this run into a single combined file
+COMBINED_RESULTS="$RESULTS_DIR/combined_${TIMESTAMP}.json"
+uv run python -c "
+import json, glob, sys
+files = sorted(glob.glob('$RESULTS_DIR/run_${TIMESTAMP}_*.json'))
+if not files:
+    print('ERROR: No result files found', file=sys.stderr)
+    sys.exit(1)
+combined = {'results': [], 'total': 0, 'passed': 0, 'failed': 0}
+for f in files:
+    with open(f) as fh:
+        data = json.load(fh)
+    combined['results'].extend(data.get('results', []))
+    combined['total'] += data.get('total', 0)
+    combined['passed'] += data.get('passed', 0)
+    combined['failed'] += data.get('failed', 0)
+combined['pass_rate'] = combined['passed'] / max(combined['total'], 1)
+combined['source_files'] = files
+with open('$COMBINED_RESULTS', 'w') as fh:
+    json.dump(combined, fh, indent=2, default=str)
+print(f'Combined {len(files)} result files ({combined[\"total\"]} scenarios)')
+"
+
+if [ ! -f "$COMBINED_RESULTS" ]; then
+    echo "ERROR: Failed to combine results"
     exit 1
 fi
 
-# Create combined results link
-ln -sf "$(basename "$LATEST_RESULTS")" "$RESULTS_DIR/latest.json"
+ln -sf "$(basename "$COMBINED_RESULTS")" "$RESULTS_DIR/latest.json"
 
 TIMING_OUTPUT="$RESULTS_DIR/timing_${TIMESTAMP}.json"
 ACCURACY_OUTPUT="$RESULTS_DIR/accuracy_${TIMESTAMP}.json"
 
 uv run "$AUTORESEARCH_DIR/evaluators/timing_evaluator.py" \
-    --results "$LATEST_RESULTS" \
+    --results "$COMBINED_RESULTS" \
     --output "$TIMING_OUTPUT" 2>&1 || true
 
 uv run "$AUTORESEARCH_DIR/evaluators/accuracy_evaluator.py" \
-    --results "$LATEST_RESULTS" \
+    --results "$COMBINED_RESULTS" \
     --output "$ACCURACY_OUTPUT" 2>&1 || true
 
 # Step 7: Update state
@@ -169,7 +216,7 @@ echo "╔═══════════════════════�
 echo "║         Iteration Complete                       ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
-echo "Results: $LATEST_RESULTS"
+echo "Results: $COMBINED_RESULTS"
 echo "Timing:  $TIMING_OUTPUT"
 echo "Accuracy: $ACCURACY_OUTPUT"
 echo "State:   $STATE"

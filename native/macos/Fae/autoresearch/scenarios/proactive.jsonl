@@ -1,0 +1,4 @@
+{"id": "pr_morning_briefing", "dimension": "proactive", "inject": "Give me my morning briefing", "max_latency_ms": 20000}
+{"id": "pr_awareness_status", "dimension": "proactive", "inject": "Are you watching my screen right now?", "max_latency_ms": 10000}
+{"id": "pr_overnight_research", "dimension": "proactive", "inject": "What have you been researching overnight?", "max_latency_ms": 12000}
+{"id": "pr_proactive_capability", "dimension": "proactive", "inject": "What proactive things can you do for me?", "max_latency_ms": 12000}

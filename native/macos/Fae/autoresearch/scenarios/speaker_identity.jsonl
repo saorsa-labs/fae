@@ -1,0 +1,4 @@
+{"id": "si_who_am_i", "dimension": "speaker_identity", "inject": "Who am I?", "max_latency_ms": 10000}
+{"id": "si_voice_enrollment_check", "dimension": "speaker_identity", "inject": "Is my voice enrolled?", "max_latency_ms": 10000}
+{"id": "si_owner_recognition", "dimension": "speaker_identity", "inject": "Am I the owner of this device?", "max_latency_ms": 10000}
+{"id": "si_identity_persistence", "dimension": "speaker_identity", "steps": [{"inject": "My name is David", "wait_ms": 8000}, {"inject": "Who am I?", "wait_ms": 10000, "expect_response_contains": ["David"]}]}

@@ -1,0 +1,5 @@
+{"id": "sk_list_skills", "dimension": "skills", "inject": "What skills do you have?", "max_latency_ms": 12000}
+{"id": "sk_activate_self_diagnostic", "dimension": "skills", "inject": "Run a self-diagnostic check", "expect_tool": "activate_skill", "max_latency_ms": 20000}
+{"id": "sk_voice_tools", "dimension": "skills", "inject": "Can you help me process an audio file?", "max_latency_ms": 12000}
+{"id": "sk_forge_info", "dimension": "skills", "inject": "Tell me about the forge skill for creating tools", "max_latency_ms": 12000}
+{"id": "sk_capability_query", "dimension": "skills", "inject": "What capabilities can you discover for me?", "max_latency_ms": 12000}
