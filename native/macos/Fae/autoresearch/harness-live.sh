@@ -62,8 +62,9 @@ echo ""
 
 # Step 2: Launch Fae (with mic ENABLED — we need it to hear us!)
 echo "==> [2/5] Launching Fae..."
-# FAE_DISABLE_SPEECH_VERIFIER: trained 1D-CNN classifies synthetic TTS as noise
-FAE_TEST_SERVER=1 FAE_DISABLE_STREAMING_ASR=1 FAE_DISABLE_SPEECH_VERIFIER=1 "$FAE_BINARY" --test-server > /tmp/fae-live-autoresearch.log 2>&1 &
+# Speech verifier stays ENABLED — it filters TV/music noise.
+# Volume control in the runner handles echo prevention (mute speakers after we speak).
+FAE_TEST_SERVER=1 FAE_DISABLE_STREAMING_ASR=1 "$FAE_BINARY" --test-server > /tmp/fae-live-autoresearch.log 2>&1 &
 FAE_PID=$!
 echo "    PID: $FAE_PID"
 
