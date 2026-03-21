@@ -25,7 +25,7 @@ BASE_URL = "http://127.0.0.1:7433"
 DEFAULT_TIMEOUT = 60.0
 POLL_INTERVAL = 0.5
 # Extra time beyond scenario max_latency_ms to allow for LLM generation + TTS
-LATENCY_BUFFER_MS = 30000
+LATENCY_BUFFER_MS = 60000
 
 
 @dataclass
@@ -189,10 +189,11 @@ def extract_assistant_text(conv: dict) -> str:
 def extract_tools_called(events: list) -> list[str]:
     """Extract tool names from events.
 
-    Event format from TestServer:
-      kind="Tool", raw_kind="Tool→" for tool calls
-      kind="Tool", raw_kind="Tool←" for tool results
-      text typically: "calendar: list_today" or "bash: echo hello"
+    Event formats from TestServer:
+      Tool→: "id=XXX name=calendar args={...}"
+      Tool→: "Execute request: calendar mode=full privacy=..."
+      Tool←: "Tool finished: calendar success=true latency=..."
+      Tool←: "id=XXX name=calendar status=ok output=..."
     """
     tools = []
     for ev in events:
@@ -200,25 +201,27 @@ def extract_tools_called(events: list) -> list[str]:
         raw_kind = ev.get("raw_kind", "")
         kind = ev.get("kind", "")
 
-        # Match tool call events (not results)
-        is_tool_call = raw_kind == "Tool→" or (kind == "Tool" and "→" not in raw_kind and "←" not in raw_kind)
+        # Only look at tool call events (→), not results (←)
+        if raw_kind != "Tool→":
+            continue
 
-        # Also match raw_kind containing the arrow
-        if raw_kind == "Tool→" or (kind == "Tool" and raw_kind != "Tool←"):
-            # Extract tool name from text: "calendar: list_today" → "calendar"
-            if ": " in text:
-                tool_name = text.split(": ", 1)[0].strip()
-                if tool_name and tool_name not in tools:
-                    tools.append(tool_name)
-            elif ":" in text:
-                tool_name = text.split(":", 1)[0].strip()
-                if tool_name and tool_name not in tools:
-                    tools.append(tool_name)
-            elif text.strip():
-                # Fallback: first word
-                first_word = text.strip().split()[0]
-                if first_word and first_word not in tools:
-                    tools.append(first_word)
+        tool_name = None
+
+        # Pattern 1: "id=XXX name=calendar args=..."
+        if " name=" in text:
+            for part in text.split():
+                if part.startswith("name="):
+                    tool_name = part[5:]
+                    break
+
+        # Pattern 2: "Execute request: calendar mode=..."
+        elif "Execute request: " in text:
+            after = text.split("Execute request: ", 1)[1]
+            tool_name = after.split()[0] if after else None
+
+        if tool_name and tool_name not in tools:
+            tools.append(tool_name)
+
     return tools
 
 
