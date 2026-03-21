@@ -1,7 +1,7 @@
 {
   "version": 1,
   "project": "parakeet-streaming-asr",
-  "active": true,
+  "active": false,
   "milestone": {
     "number": 1,
     "name": "Parakeet Streaming ASR — Production Ready"
@@ -17,11 +17,12 @@
     "current_task": null
   },
   "review": {
-    "status": "pending",
-    "iteration": 0,
-    "last_verdict": null
+    "status": "passed",
+    "iteration": 2,
+    "last_verdict": "APPROVED"
   },
-  "status": "designed",
-  "last_updated": "2026-03-21T12:00:00Z",
-  "phase_1_1_summary": "Tasks 1,2,4 implemented+committed. modelLoaded event, isCached check, env var gate testable. 7 new tests. Existing 13 ParakeetStreamingEngineTests cover remaining lifecycle scenarios."
+  "status": "blocked",
+  "last_updated": "2026-03-21T12:20:00Z",
+  "blocked_reason": "ARCHITECTURE_DECISION: Benchmark shows Parakeet 7.9% WER vs Qwen3-ASR 1.6% WER. 106ms streaming advantage does not justify 5x accuracy cost. Phase 1.1 complete (model loading, events, tests). Phases 1.2-1.4 deprioritized. Dual-path architecture validated — Qwen3-ASR growing-buffer (362ms first partial) is competitive and far more accurate.",
+  "phase_1_1_summary": "Tasks 1,2,4 complete. Review APPROVED."
 }
