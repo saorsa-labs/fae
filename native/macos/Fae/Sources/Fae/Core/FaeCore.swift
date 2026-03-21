@@ -1138,9 +1138,73 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 await resetAllData(includeVault: includeVault)
             }
 
+        case "test.inject_audio":
+            // Load a WAV file and inject its samples into the audio pipeline.
+            // Payload: {"path": "/absolute/path/to/file.wav"}
+            // The audio goes through the full pipeline: VAD → Speaker ID → STT → LLM → TTS.
+            if let path = payload["path"] as? String {
+                Task {
+                    do {
+                        let samples = try Self.loadWAVSamples(at: path)
+                        NSLog("FaeCore: injecting %d audio samples from %@", samples.count, path)
+                        self.injectAudio(samples: samples, sampleRate: 16000)
+                    } catch {
+                        NSLog("FaeCore: inject_audio failed — %@", error.localizedDescription)
+                    }
+                }
+            } else {
+                NSLog("FaeCore: inject_audio missing 'path' in payload")
+            }
+
+        case "test.mute_mic":
+            // Mute/unmute the microphone for test isolation.
+            // Payload: {"muted": true/false}
+            let muted = payload["muted"] as? Bool ?? true
+            Task {
+                await pipelineCoordinator?.setMicMuted(muted)
+                NSLog("FaeCore: mic %@ for testing", muted ? "muted" : "unmuted")
+            }
+
         default:
             NSLog("FaeCore: unhandled command '%@'", name)
         }
+    }
+
+    /// Load 16kHz mono PCM16 WAV file into Float32 samples.
+    private static func loadWAVSamples(at path: String) throws -> [Float] {
+        let url = URL(fileURLWithPath: path)
+        let data = try Data(contentsOf: url)
+
+        // Parse WAV header to find data chunk
+        guard data.count > 44 else {
+            throw NSError(domain: "FaeCore", code: 1, userInfo: [NSLocalizedDescriptionKey: "WAV file too small"])
+        }
+
+        // Find "data" chunk (handles extended headers)
+        var dataOffset = 12  // Skip RIFF header
+        while dataOffset + 8 < data.count {
+            let chunkID = String(data: data[dataOffset..<dataOffset + 4], encoding: .ascii) ?? ""
+            let chunkSize = data.withUnsafeBytes { ptr -> UInt32 in
+                ptr.load(fromByteOffset: dataOffset + 4, as: UInt32.self)
+            }
+            if chunkID == "data" {
+                dataOffset += 8
+                break
+            }
+            dataOffset += 8 + Int(chunkSize)
+        }
+
+        // Convert 16-bit PCM to Float32
+        let audioData = data[dataOffset...]
+        let sampleCount = audioData.count / 2
+        var samples = [Float](repeating: 0, count: sampleCount)
+        audioData.withUnsafeBytes { ptr in
+            let int16Ptr = ptr.bindMemory(to: Int16.self)
+            for i in 0..<sampleCount {
+                samples[i] = Float(int16Ptr[i]) / 32768.0
+            }
+        }
+        return samples
     }
 
     // MARK: - Query Command
