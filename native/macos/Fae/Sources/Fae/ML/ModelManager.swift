@@ -65,11 +65,11 @@ actor ModelManager {
     /// Non-critical: if unavailable, segments pass through with spectral tilt filter only.
     private(set) var speechVerifier: MLXSpeechVerifier?
 
-    /// Parakeet TDT streaming ASR engine — fast-path for partial transcripts.
+    /// Streaming ASR engine (Moonshine V2) — fast-path for partial transcripts.
     /// Non-critical: if unavailable, streaming falls back to growing-buffer Qwen3-ASR.
-    private(set) var parakeetEngine: ParakeetStreamingEngine?
+    private(set) var parakeetEngine: (any StreamingSTTEngine)?
 
-    /// Whether the Parakeet streaming ASR fast-path is available.
+    /// Whether the streaming ASR fast-path is available.
     var parakeetAvailable: Bool {
         parakeetEngine != nil
     }
@@ -448,15 +448,15 @@ actor ModelManager {
                   MLXKeywordClassifier.defaultModelPath.path)
         }
 
-        // Parakeet streaming ASR — non-critical, degrades gracefully to growing-buffer Qwen3-ASR.
-        // FAE_DISABLE_STREAMING_ASR=1 skips Parakeet load (useful for test harnesses that inject text).
+        // Streaming ASR — Moonshine V2 (true incremental decode, ~50ms first partial).
+        // FAE_DISABLE_STREAMING_ASR=1 skips load (useful for test harnesses that inject text).
         let streamingASRDisabledByEnv = Self.isStreamingASRDisabledByEnvironment(
             ProcessInfo.processInfo.environment
         )
         if streamingASRDisabledByEnv {
             NSLog("ModelManager: streaming ASR skipped (FAE_DISABLE_STREAMING_ASR=1)")
         } else if config.streamingASR.enabled {
-            await loadParakeetIfAvailable(config: config)
+            await loadStreamingASRIfAvailable(config: config)
         } else {
             NSLog("ModelManager: streaming ASR disabled in config")
         }
@@ -508,28 +508,26 @@ actor ModelManager {
         FaeEnvironment.defaults.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
     }
 
-    // MARK: - Parakeet Streaming ASR
+    // MARK: - Streaming ASR (Moonshine V2)
 
-    /// Load the Parakeet TDT streaming ASR engine if available.
+    /// Load the Moonshine V2 streaming ASR engine.
     ///
     /// Non-fatal: if loading fails, the pipeline falls back to growing-buffer
-    /// Qwen3-ASR for streaming partials. Reports progress via eventBus.
-    private func loadParakeetIfAvailable(config: FaeConfig) async {
-        let engine = ParakeetStreamingEngine(
-            chunkSamples: config.streamingASR.chunkSamples,
-            minChunkSamples: config.streamingASR.minChunkSamples
-        )
+    /// Qwen3-ASR for streaming partials.  Auto-downloads from HuggingFace
+    /// on first use (~300MB for tiny variant).
+    private func loadStreamingASRIfAvailable(config: FaeConfig) async {
+        let engine = MoonshineStreamingEngine(modelId: config.streamingASR.modelId)
 
         eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 0))
         do {
-            try await engine.load(modelID: config.streamingASR.modelId)
+            try await engine.load()
             self.parakeetEngine = engine
             eventBus.send(.modelLoaded(engine: "streaming_asr", modelId: config.streamingASR.modelId))
             eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 1.0))
-            NSLog("ModelManager: Parakeet streaming ASR loaded (%@)", config.streamingASR.modelId)
+            NSLog("ModelManager: Moonshine streaming ASR loaded (%@)", config.streamingASR.modelId)
         } catch {
             NSLog(
-                "ModelManager: Parakeet streaming ASR load failed (degraded — growing-buffer fallback): %@",
+                "ModelManager: Moonshine streaming ASR load failed (degraded — growing-buffer fallback): %@",
                 error.localizedDescription
             )
             eventBus.send(.runtimeProgress(stage: "streaming_asr_failed", progress: 1.0))

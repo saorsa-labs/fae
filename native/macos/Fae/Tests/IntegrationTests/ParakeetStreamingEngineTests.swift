@@ -250,8 +250,8 @@ final class ParakeetStreamingEngineTests: XCTestCase {
         XCTAssertTrue(config.streamingASR.enabled, "Streaming ASR should be enabled by default")
         XCTAssertEqual(
             config.streamingASR.modelId,
-            "mlx-community/parakeet-tdt-0.6b-v3",
-            "Default model should be Parakeet TDT 0.6B v3"
+            "UsefulSensors/moonshine-streaming-tiny",
+            "Default model should be Moonshine V2 Tiny"
         )
         XCTAssertEqual(config.streamingASR.chunkSamples, 8_000, "Default chunk size should be 500ms")
         XCTAssertEqual(config.streamingASR.minChunkSamples, 4_000, "Default min chunk should be 250ms")

@@ -216,7 +216,8 @@ struct FaeConfig: Codable {
         var enabled: Bool = true
 
         /// HuggingFace model repository for the streaming ASR model.
-        var modelId: String = "mlx-community/parakeet-tdt-0.6b-v3"
+        /// Default: Moonshine V2 Tiny (43M params, ~50ms first partial, MIT license).
+        var modelId: String = "UsefulSensors/moonshine-streaming-tiny"
 
         /// Audio samples to accumulate before each decode pass (16kHz mono).
         /// Default 8000 = 500ms. Lower values reduce latency but increase GPU load.
