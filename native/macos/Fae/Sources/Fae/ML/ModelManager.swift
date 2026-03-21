@@ -450,7 +450,9 @@ actor ModelManager {
 
         // Parakeet streaming ASR — non-critical, degrades gracefully to growing-buffer Qwen3-ASR.
         // FAE_DISABLE_STREAMING_ASR=1 skips Parakeet load (useful for test harnesses that inject text).
-        let streamingASRDisabledByEnv = ProcessInfo.processInfo.environment["FAE_DISABLE_STREAMING_ASR"] == "1"
+        let streamingASRDisabledByEnv = Self.isStreamingASRDisabledByEnvironment(
+            ProcessInfo.processInfo.environment
+        )
         if streamingASRDisabledByEnv {
             NSLog("ModelManager: streaming ASR skipped (FAE_DISABLE_STREAMING_ASR=1)")
         } else if config.streamingASR.enabled {
@@ -522,6 +524,7 @@ actor ModelManager {
         do {
             try await engine.load(modelID: config.streamingASR.modelId)
             self.parakeetEngine = engine
+            eventBus.send(.modelLoaded(engine: "streaming_asr", modelId: config.streamingASR.modelId))
             eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 1.0))
             NSLog("ModelManager: Parakeet streaming ASR loaded (%@)", config.streamingASR.modelId)
         } catch {
@@ -529,8 +532,13 @@ actor ModelManager {
                 "ModelManager: Parakeet streaming ASR load failed (degraded — growing-buffer fallback): %@",
                 error.localizedDescription
             )
-            eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 1.0))
+            eventBus.send(.runtimeProgress(stage: "streaming_asr_failed", progress: 1.0))
         }
+    }
+
+    /// Testable check for the `FAE_DISABLE_STREAMING_ASR` env var.
+    static func isStreamingASRDisabledByEnvironment(_ env: [String: String]) -> Bool {
+        env["FAE_DISABLE_STREAMING_ASR"] == "1"
     }
 
     // MARK: - Wired Memory Management (Phase 2)
