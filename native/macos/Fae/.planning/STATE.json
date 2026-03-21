@@ -1,21 +1,21 @@
 {
   "version": 1,
   "project": "voice-pipeline-hardening",
-  "active": true,
+  "active": false,
   "milestone": {
-    "number": 3,
-    "name": "PipelineCoordinator Decomposition"
+    "number": 4,
+    "name": "Echo Handling Hardening"
   },
   "phase": {
-    "number": "3.3",
-    "name": "Extract LLMStage + ToolExecutionStage",
-    "plan": null
+    "number": "4.3",
+    "name": "Integration & Acoustic Testing",
+    "plan": "PLAN-phase-4.3.md"
   },
   "progress": {
-    "total_tasks": 0,
-    "completed_tasks": 0,
+    "total_tasks": 5,
+    "completed_tasks": 5,
     "current_task": null
   },
-  "status": "phase_transition",
-  "last_updated": "2026-03-21T00:30:00Z"
+  "status": "PROJECT_COMPLETE",
+  "last_updated": "2026-03-21T12:30:00Z"
 }
