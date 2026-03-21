@@ -146,15 +146,15 @@ class FaeClient:
 
 
 def speak(text: str, voice_tool: str = "voice", voice_name: str | None = None) -> float:
-    """Speak text through Mac speakers. Returns duration in ms."""
+    """Speak text through Mac speakers. Returns duration in ms.
+
+    No volume manipulation — Fae's pipeline must handle echo rejection
+    through text-overlap matching and speaker identity (fae_self voiceprint).
+    """
     start = time.monotonic()
 
     if voice_tool == "voice":
-        # Kokoro TTS — high quality, Fae-like voice
-        subprocess.run(
-            ["voice", "-q", text],
-            capture_output=True, timeout=30
-        )
+        subprocess.run(["voice", "-q", text], capture_output=True, timeout=30)
     elif voice_tool == "say":
         cmd = ["say"]
         if voice_name:

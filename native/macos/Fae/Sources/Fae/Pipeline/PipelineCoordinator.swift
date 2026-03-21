@@ -1873,30 +1873,25 @@ actor PipelineCoordinator {
             return true
         }
 
-        // Use enhanced (more aggressive) fae_self threshold during playback window.
+        // fae_self voice match: ALWAYS reject when owner is enrolled.
+        // Fae should never respond to her own voice — whether inside or outside
+        // the echo suppression timing window. If the voiceprint matches fae_self,
+        // it's Fae hearing herself through the speakers. No exceptions.
         let faeSelfThreshold = echoSuppressor.faeSelfThresholdDuringPlayback(baseThreshold: threshold)
         if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: faeSelfThreshold) {
-            if echoSuppressor.isInSuppression {
-                NSLog(
-                    "PipelineCoordinator: dropping %.1fs segment (%@ fae_self sim=%.3f threshold=%.3f, echo suppressor active)",
-                    durationSecs,
-                    source,
-                    faeSelfSim,
-                    faeSelfThreshold
-                )
-                debugLog(
-                    debugConsole,
-                    .pipeline,
-                    "Echo rejected [\(source)] (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)), suppressor active)"
-                )
-                return false
-            }
-            NSLog("PipelineCoordinator: fae_self match sim=%.3f ignored (%@, echo suppressor expired)", faeSelfSim, source)
+            NSLog(
+                "PipelineCoordinator: dropping %.1fs segment (%@ fae_self sim=%.3f threshold=%.3f)",
+                durationSecs,
+                source,
+                faeSelfSim,
+                faeSelfThreshold
+            )
             debugLog(
                 debugConsole,
-                .speaker,
-                "fae_self sim=\(String(format: "%.3f", faeSelfSim)) [\(source)] outside echo window — passing as unknown"
+                .pipeline,
+                "Echo rejected [\(source)] (voice match fae_self sim=\(String(format: "%.3f", faeSelfSim)))"
             )
+            return false
         } else {
             NSLog("PipelineCoordinator: speaker not recognized (%@)", source)
             debugLog(
