@@ -61,6 +61,10 @@ actor ModelManager {
     /// Non-critical: if unavailable, endpointing falls back to rule-based heuristics.
     private(set) var turnDetector: MLXTurnDetector?
 
+    /// Post-VAD speech verifier — rejects music/noise segments that Silero misclassifies.
+    /// Non-critical: if unavailable, segments pass through with spectral tilt filter only.
+    private(set) var speechVerifier: MLXSpeechVerifier?
+
     /// Parakeet TDT streaming ASR engine — fast-path for partial transcripts.
     /// Non-critical: if unavailable, streaming falls back to growing-buffer Qwen3-ASR.
     private(set) var parakeetEngine: ParakeetStreamingEngine?
@@ -468,6 +472,21 @@ actor ModelManager {
             }
         } else {
             NSLog("ModelManager: turn detector model not found — using rule-based endpointing")
+        }
+
+        // Speech verifier — non-critical, degrades gracefully to spectral tilt filter.
+        if MLXSpeechVerifier.modelExists {
+            let sv = MLXSpeechVerifier()
+            do {
+                try await sv.load(modelPath: MLXSpeechVerifier.defaultModelPath)
+                self.speechVerifier = sv
+                NSLog("ModelManager: speech verifier loaded")
+            } catch {
+                NSLog("ModelManager: speech verifier load failed (spectral tilt fallback): %@",
+                      error.localizedDescription)
+            }
+        } else {
+            NSLog("ModelManager: speech verifier model not found — using spectral tilt filter only")
         }
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))

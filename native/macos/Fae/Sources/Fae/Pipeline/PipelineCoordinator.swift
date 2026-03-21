@@ -309,6 +309,9 @@ actor PipelineCoordinator {
     /// Fed into `silenceThresholdMs()` for adaptive endpointing.
     private var lastEOUProbability: Float?
 
+    /// Post-VAD speech verifier — rejects music/noise segments.
+    private var speechVerifier: MLXSpeechVerifier?
+
     /// Minimum audio samples before running keyword classification (500ms at 16kHz).
     private static let keywordClassifierMinSamples = 8_000
 
@@ -680,6 +683,7 @@ actor PipelineCoordinator {
         if let mm = modelManager {
             self.keywordClassifier = await mm.keywordClassifier
             self.turnDetector = await mm.turnDetector
+            self.speechVerifier = await mm.speechVerifier
         }
 
         startSpeechSegmentProcessingLoop()
@@ -3565,13 +3569,24 @@ actor PipelineCoordinator {
             return
         }
 
-        // Tier 2: Segment-level spectral speech verification.
-        // The full segment has accumulated enough audio for a reliable spectral check.
-        // Reject segments with non-speech spectral profiles (music, noise) that slipped
-        // through per-chunk Tier 1 filtering.
-        if !VoiceActivityDetector.spectralTiltLooksSpeechlike(
+        // Tier 2: Segment-level speech verification.
+        // Uses the trained 1D-CNN speech verifier when available (93% accuracy
+        // on MUSAN corpus), falls back to spectral tilt heuristic.
+        if let verifier = speechVerifier, await verifier.isLoaded {
+            if let result = try? await verifier.verify(
+                audio: segment.samples,
+                sampleRate: segment.sampleRate
+            ), result.label != .speech, result.confidence > 0.80 {
+                NSLog("PipelineCoordinator: dropping %.1fs segment (speech verifier: %@, conf=%.2f)",
+                      durationSecs, result.label.name, result.confidence)
+                debugLog(debugConsole, .pipeline,
+                         "Speech verifier rejected: \(result.label.name) (conf=\(String(format: "%.2f", result.confidence)))")
+                return
+            }
+        } else if !VoiceActivityDetector.spectralTiltLooksSpeechlike(
             samples: segment.samples, sampleRate: segment.sampleRate
         ) {
+            // Fallback: spectral tilt heuristic when neural verifier not available.
             NSLog("PipelineCoordinator: dropping %.1fs segment (spectral tilt non-speech, rms=%.4f)",
                   durationSecs, rms)
             debugLog(debugConsole, .pipeline,
