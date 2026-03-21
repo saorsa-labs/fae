@@ -5,20 +5,21 @@ import Foundation
 /// Speaker embedding engine with Core ML neural backend and mel-spectral fallback.
 ///
 /// Converts raw audio to a log-mel spectrogram using Accelerate (vDSP FFT + mel filterbank).
-/// When a compiled ECAPA-TDNN model (`SpeakerEncoder.mlmodelc`) is available, runs Core ML
-/// inference to produce a 1024-dimensional speaker embedding. Otherwise, falls back to
-/// mel-spectral statistics (mean + std of each mel band → 256-dimensional embedding).
+/// When a WeSpeaker ResNet34-LM CoreML model is available, runs Neural Engine inference to
+/// produce a 256-dimensional L2-normalized speaker embedding. Otherwise, falls back to
+/// mel-spectral statistics (mean + std of each mel band → 640-dimensional embedding).
 ///
+/// The WeSpeaker model provides accurate speaker discrimination between humans.
 /// The mel-spectral fallback is effective for distinguishing synthetic TTS voices from
 /// human speech — sufficient for self-echo rejection (Fae recognizing her own voice).
 ///
-/// Replaces: nothing (new subsystem for voice identity).
+/// Model: aufklarer/WeSpeaker-ResNet34-LM-CoreML (pyannote/wespeaker-voxceleb-resnet34-LM)
 actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
 
     // MARK: - State
 
     private var model: MLModel?
-    /// When `true`, the encoder produces 256-dim mel-spectral embeddings that can
+    /// When `true`, the encoder produces 640-dim mel-spectral embeddings that can
     /// distinguish TTS from human speech but **cannot** discriminate between different
     /// humans. The pipeline must fall back to wake-word gating when this is `true`.
     private(set) var usingMelFallback = false
@@ -27,22 +28,47 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     /// Last liveness analysis result — queried by pipeline for threshold enforcement.
     private(set) var lastLivenessResult: LivenessResult?
 
+    /// Whether the loaded model is the WeSpeaker neural encoder (vs legacy ECAPA-TDNN).
+    private var isWeSpeakerModel = false
+
     // MARK: - Constants
 
-    /// Model expects 24 kHz audio input.
-    private static let modelSampleRate = 24_000
+    /// WeSpeaker model expects 16 kHz audio input.
+    private static let weSpeakerSampleRate = 16_000
+    /// WeSpeaker uses 80-bin mel spectrogram.
+    private static let weSpeakerNumMels = 80
 
-    /// STFT parameters matching Qwen3-TTS preprocessing.
+    /// Legacy model sample rate (24 kHz) — used for mel-spectral fallback and liveness.
+    private static let legacySampleRate = 24_000
+    /// Legacy mel bins (128) — used for mel-spectral fallback and shared analysis.
+    private static let legacyNumMels = 128
+
+    /// WeSpeaker model accepts enumerated frame counts for flexible input shapes.
+    /// The model was traced with these specific lengths.
+    private static let weSpeakerEnumeratedFrames = [20, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000]
+
+    /// STFT parameters (same for both models).
     private static let nFFT = 1024
     private static let hopLength = 256
-    private static let numMels = 128
     private static let fMin: Float = 20
-    private static let fMax: Float = 12_000
+    private static let fMax: Float = 8_000  // WeSpeaker uses 8kHz max (16kHz Nyquist / 2)
+    private static let legacyFMax: Float = 12_000  // Legacy fallback uses 12kHz
 
     // MARK: - Precomputed Assets
 
-    /// Mel filterbank matrix: [numMels × numFreqBins].
-    private static let melFilterbank: [[Float]] = createMelFilterbank()
+    /// Mel filterbank matrix for WeSpeaker: [80 × numFreqBins].
+    private static let weSpeakerMelFilterbank: [[Float]] = createMelFilterbank(
+        numMels: weSpeakerNumMels,
+        sampleRate: weSpeakerSampleRate,
+        fMax: fMax
+    )
+
+    /// Mel filterbank matrix for legacy fallback: [128 × numFreqBins].
+    private static let legacyMelFilterbank: [[Float]] = createMelFilterbank(
+        numMels: legacyNumMels,
+        sampleRate: legacySampleRate,
+        fMax: legacyFMax
+    )
 
     /// Hanning window for STFT framing.
     private static let hannWindow: [Float] = {
@@ -56,8 +82,35 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     func load() async throws {
         loadState = .loading
 
-        // Try Core ML model first (neural speaker embedding).
-        let url = Bundle.faeResources.url(
+        // Try WeSpeaker CoreML model first (in Models/SpeakerEncoder/).
+        let weSpeakerURL = Bundle.faeResources.url(
+            forResource: "wespeaker",
+            withExtension: "mlmodelc",
+            subdirectory: "Models/SpeakerEncoder"
+        ) ?? Bundle.main.url(
+            forResource: "wespeaker",
+            withExtension: "mlmodelc",
+            subdirectory: "Models/SpeakerEncoder"
+        )
+
+        if let url = weSpeakerURL {
+            let mlConfig = MLModelConfiguration()
+            mlConfig.computeUnits = .cpuAndNeuralEngine
+            do {
+                model = try MLModel(contentsOf: url, configuration: mlConfig)
+                isWeSpeakerModel = true
+                isLoaded = true
+                loadState = .loaded
+                NSLog("CoreMLSpeakerEncoder: WeSpeaker ResNet34-LM loaded (256-dim, Neural Engine)")
+                return
+            } catch {
+                NSLog("CoreMLSpeakerEncoder: WeSpeaker load failed: %@, trying legacy model",
+                      error.localizedDescription)
+            }
+        }
+
+        // Try legacy ECAPA-TDNN model (SpeakerEncoder.mlmodelc in bundle root).
+        let legacyURL = Bundle.faeResources.url(
             forResource: "SpeakerEncoder",
             withExtension: "mlmodelc"
         ) ?? Bundle.main.url(
@@ -65,23 +118,24 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
             withExtension: "mlmodelc"
         )
 
-        if let url {
+        if let url = legacyURL {
             let mlConfig = MLModelConfiguration()
             mlConfig.computeUnits = .cpuAndNeuralEngine
             do {
                 model = try MLModel(contentsOf: url, configuration: mlConfig)
+                isWeSpeakerModel = false
                 isLoaded = true
                 loadState = .loaded
-                NSLog("CoreMLSpeakerEncoder: Core ML model loaded from bundle")
+                NSLog("CoreMLSpeakerEncoder: legacy ECAPA-TDNN model loaded")
                 return
             } catch {
-                NSLog("CoreMLSpeakerEncoder: Core ML load failed: %@, falling back to mel-spectral",
+                NSLog("CoreMLSpeakerEncoder: legacy model load failed: %@, falling back to mel-spectral",
                       error.localizedDescription)
             }
         }
 
         // Fallback: mel-spectral statistics (no trained model needed).
-        // Produces a 256-dim embedding (mean + std of 128 mel bands).
+        // Produces a 640-dim embedding (5 stats × 128 mel bands).
         // Effective for distinguishing synthetic TTS voice from human speech.
         usingMelFallback = true
         isLoaded = true
@@ -100,30 +154,32 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
             throw MLEngineError.notLoaded("SpeakerEncoder: empty audio")
         }
 
-        // 1. Resample to 24 kHz if needed.
-        let audio24k = sampleRate == Self.modelSampleRate
+        // Liveness check uses legacy mel-spectrogram (128 bins, 24kHz).
+        let audio24k = sampleRate == Self.legacySampleRate
             ? audio
-            : Self.resample(audio, from: sampleRate, to: Self.modelSampleRate)
-
-        // 2. Compute log-mel spectrogram → [numMels, numFrames].
-        let mel = Self.computeLogMelSpectrogram(audio24k)
-        let numFrames = mel.count / Self.numMels
-        guard numFrames > 0 else {
-            throw MLEngineError.notLoaded("SpeakerEncoder: audio too short for mel spectrogram")
+            : Self.resample(audio, from: sampleRate, to: Self.legacySampleRate)
+        let legacyMel = Self.computeLogMelSpectrogram(
+            audio24k,
+            filterbank: Self.legacyMelFilterbank,
+            numMels: Self.legacyNumMels
+        )
+        let legacyNumFrames = legacyMel.count / Self.legacyNumMels
+        if legacyNumFrames > 0 {
+            let liveness = Self.checkLiveness(mel: legacyMel, numFrames: legacyNumFrames, audio: audio24k)
+            lastLivenessResult = liveness
+            if liveness.suspicious {
+                NSLog("CoreMLSpeakerEncoder: liveness warning — score %.3f (spectral=%.4f, highFreq=%.4f, f0=%.4f, proximity=%.4f)",
+                      liveness.score, liveness.spectralVariance, liveness.highFreqRatio,
+                      liveness.f0Variance, liveness.proximityRatio)
+            }
         }
 
-        // Liveness check — result stored for pipeline threshold enforcement.
-        let liveness = Self.checkLiveness(mel: mel, numFrames: numFrames, audio: audio24k)
-        lastLivenessResult = liveness
-        if liveness.suspicious {
-            NSLog("CoreMLSpeakerEncoder: liveness warning — score %.3f (spectral=%.4f, highFreq=%.4f, f0=%.4f, proximity=%.4f)",
-                  liveness.score, liveness.spectralVariance, liveness.highFreqRatio,
-                  liveness.f0Variance, liveness.proximityRatio)
-        }
-
-        // Mel-spectral fallback: mean + std of each mel band → 256-dim vector.
+        // Mel-spectral fallback: 5 stats per mel band → 640-dim vector.
         if usingMelFallback {
-            return Self.melSpectralEmbed(mel: mel, numFrames: numFrames)
+            guard legacyNumFrames > 0 else {
+                throw MLEngineError.notLoaded("SpeakerEncoder: audio too short for mel spectrogram")
+            }
+            return Self.melSpectralEmbed(mel: legacyMel, numFrames: legacyNumFrames)
         }
 
         // Core ML neural path.
@@ -131,42 +187,171 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
             throw MLEngineError.notLoaded("SpeakerEncoder")
         }
 
-        // 3. Create MLMultiArray input [1, 128, T].
-        let shape: [NSNumber] = [1, NSNumber(value: Self.numMels), NSNumber(value: numFrames)]
+        if isWeSpeakerModel {
+            return try await embedWithWeSpeaker(audio: audio, sampleRate: sampleRate, model: model)
+        } else {
+            return try await embedWithLegacy(mel: legacyMel, numFrames: legacyNumFrames, model: model)
+        }
+    }
+
+    // MARK: - WeSpeaker Inference
+
+    /// WeSpeaker ResNet34-LM inference path (256-dim embeddings).
+    private func embedWithWeSpeaker(audio: [Float], sampleRate: Int, model: MLModel) async throws -> [Float] {
+        // 1. Resample to 16 kHz.
+        let audio16k = sampleRate == Self.weSpeakerSampleRate
+            ? audio
+            : Self.resample(audio, from: sampleRate, to: Self.weSpeakerSampleRate)
+
+        // 2. Compute 80-bin log-mel spectrogram → [numMels, numFrames].
+        let mel = Self.computeLogMelSpectrogram(
+            audio16k,
+            filterbank: Self.weSpeakerMelFilterbank,
+            numMels: Self.weSpeakerNumMels
+        )
+        let numFrames = mel.count / Self.weSpeakerNumMels
+        guard numFrames >= 20 else {
+            throw MLEngineError.notLoaded("SpeakerEncoder: audio too short (need at least 20 frames)")
+        }
+
+        // 3. Find the closest enumerated frame count (WeSpeaker model constraint).
+        let targetFrames = Self.closestEnumeratedFrameCount(numFrames)
+
+        // 4. Time-normalize mel to target frames.
+        let normalizedMel = Self.timeNormalizeMel(
+            mel,
+            numFrames: numFrames,
+            numMels: Self.weSpeakerNumMels,
+            targetFrames: targetFrames
+        )
+
+        // 5. Transpose to [1, T, 80] (WeSpeaker expects time-major).
+        // Current layout: [numMels, numFrames] row-major → need [numFrames, numMels]
+        var transposed = [Float](repeating: 0, count: targetFrames * Self.weSpeakerNumMels)
+        for t in 0..<targetFrames {
+            for m in 0..<Self.weSpeakerNumMels {
+                transposed[t * Self.weSpeakerNumMels + m] = normalizedMel[m * targetFrames + t]
+            }
+        }
+
+        // 6. Create MLMultiArray input [1, T, 80] as Float16.
+        let shape: [NSNumber] = [1, NSNumber(value: targetFrames), NSNumber(value: Self.weSpeakerNumMels)]
+        let input = try MLMultiArray(shape: shape, dataType: .float16)
+        for i in 0..<transposed.count {
+            input[i] = NSNumber(value: transposed[i])
+        }
+
+        // 7. Run Core ML prediction.
+        let provider = try MLDictionaryFeatureProvider(
+            dictionary: ["mel": MLFeatureValue(multiArray: input)]
+        )
+        let result = try await model.prediction(from: provider)
+
+        // 8. Extract embedding from output ("embedding" key, shape [1, 256]).
+        guard let embeddingValue = result.featureValue(for: "embedding"),
+              let embeddingArray = embeddingValue.multiArrayValue else {
+            throw MLEngineError.notLoaded("SpeakerEncoder: WeSpeaker output missing 'embedding' key")
+        }
+
+        let embeddingDim = 256
+        var embedding = [Float](repeating: 0, count: embeddingDim)
+        for i in 0..<embeddingDim {
+            embedding[i] = embeddingArray[i].floatValue
+        }
+
+        // WeSpeaker output is already L2-normalized, but normalize again for safety.
+        return Self.l2Normalize(embedding)
+    }
+
+    /// Legacy ECAPA-TDNN inference path.
+    private func embedWithLegacy(mel: [Float], numFrames: Int, model: MLModel) async throws -> [Float] {
+        guard numFrames > 0 else {
+            throw MLEngineError.notLoaded("SpeakerEncoder: audio too short for mel spectrogram")
+        }
+
+        // Create MLMultiArray input [1, 128, T].
+        let shape: [NSNumber] = [1, NSNumber(value: Self.legacyNumMels), NSNumber(value: numFrames)]
         let input = try MLMultiArray(shape: shape, dataType: .float32)
         for i in 0..<mel.count {
             input[i] = NSNumber(value: mel[i])
         }
 
-        // 4. Run Core ML prediction.
+        // Run Core ML prediction.
         let provider = try MLDictionaryFeatureProvider(
             dictionary: ["mel_input": MLFeatureValue(multiArray: input)]
         )
         let result = try await model.prediction(from: provider)
 
-        // 5. Extract embedding from output.
+        // Extract embedding from output.
         let embedding = try Self.extractEmbedding(from: result)
 
-        // 6. L2-normalize.
+        // L2-normalize.
         return Self.l2Normalize(embedding)
+    }
+
+    /// Find the closest enumerated frame count for WeSpeaker model.
+    private static func closestEnumeratedFrameCount(_ numFrames: Int) -> Int {
+        var closest = weSpeakerEnumeratedFrames[0]
+        var minDiff = abs(numFrames - closest)
+        for frames in weSpeakerEnumeratedFrames {
+            let diff = abs(numFrames - frames)
+            if diff < minDiff {
+                minDiff = diff
+                closest = frames
+            }
+        }
+        return closest
+    }
+
+    /// Time-normalize mel spectrogram to target frame count via linear interpolation.
+    private static func timeNormalizeMel(
+        _ mel: [Float],
+        numFrames: Int,
+        numMels: Int,
+        targetFrames: Int
+    ) -> [Float] {
+        guard numFrames > 0, numMels > 0, targetFrames > 1 else { return mel }
+        if numFrames == targetFrames { return mel }
+
+        var output = [Float](repeating: 0, count: numMels * targetFrames)
+        let denominator = max(targetFrames - 1, 1)
+        let sourceMax = Float(max(numFrames - 1, 0))
+
+        for melIndex in 0..<numMels {
+            let bandOffset = melIndex * numFrames
+            let outOffset = melIndex * targetFrames
+            for frameIndex in 0..<targetFrames {
+                let position = Float(frameIndex) * sourceMax / Float(denominator)
+                let left = Int(position.rounded(.down))
+                let right = min(left + 1, numFrames - 1)
+                let alpha = position - Float(left)
+                let lhs = mel[bandOffset + left]
+                let rhs = mel[bandOffset + right]
+                output[outOffset + frameIndex] = lhs + (rhs - lhs) * alpha
+            }
+        }
+        return output
     }
 
     // MARK: - Shared Analysis Helpers
 
     /// Shared sample rate for mel-spectral analysis helpers used by other audio subsystems.
-    static var analysisSampleRate: Int { modelSampleRate }
+    /// Uses legacy 24kHz for compatibility with existing liveness/analysis code.
+    static var analysisSampleRate: Int { legacySampleRate }
 
     /// Shared mel bin count for mel-spectral analysis helpers used by other audio subsystems.
-    static var analysisNumMels: Int { numMels }
+    /// Uses legacy 128 bins for compatibility with existing analysis code.
+    static var analysisNumMels: Int { legacyNumMels }
 
     /// Compute the same log-mel representation used by the speaker encoder for arbitrary audio.
     /// Returns a flat `[numMels × numFrames]` buffer in row-major order.
+    /// Uses legacy 128-bin mel for compatibility with existing analysis code.
     static func sharedLogMelSpectrogram(audio: [Float], sampleRate: Int) -> (mel: [Float], numFrames: Int) {
-        let audio24k = sampleRate == modelSampleRate
+        let audio24k = sampleRate == legacySampleRate
             ? audio
-            : resample(audio, from: sampleRate, to: modelSampleRate)
-        let mel = computeLogMelSpectrogram(audio24k)
-        let numFrames = mel.count / numMels
+            : resample(audio, from: sampleRate, to: legacySampleRate)
+        let mel = computeLogMelSpectrogram(audio24k, filterbank: legacyMelFilterbank, numMels: legacyNumMels)
+        let numFrames = mel.count / legacyNumMels
         return (mel, numFrames)
     }
 
@@ -185,15 +370,15 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     /// Total: 128 × 5 = 640-dimensional L2-normalized embedding.
     ///
     /// This is sufficient for speaker discrimination in typical (1-3 person)
-    /// home/office environments, though less accurate than neural ECAPA-TDNN
+    /// home/office environments, though less accurate than neural WeSpeaker/ECAPA-TDNN
     /// for large-scale verification.
     private static func melSpectralEmbed(mel: [Float], numFrames: Int) -> [Float] {
-        // mel layout: [numMels × numFrames] in row-major order.
+        // mel layout: [legacyNumMels × numFrames] in row-major order.
         // 5 stats per band: mean, std, skewness, kurtosis, delta_std
         let statsPerBand = 5
-        var embedding = [Float](repeating: 0, count: numMels * statsPerBand)
+        var embedding = [Float](repeating: 0, count: legacyNumMels * statsPerBand)
 
-        for m in 0..<numMels {
+        for m in 0..<legacyNumMels {
             let baseOffset = m * numFrames
             var sum: Float = 0
             var sumSq: Float = 0
@@ -245,10 +430,10 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
             }
 
             embedding[m] = mean
-            embedding[numMels + m] = std
-            embedding[numMels * 2 + m] = skewness
-            embedding[numMels * 3 + m] = kurtosis
-            embedding[numMels * 4 + m] = deltaStd
+            embedding[legacyNumMels + m] = std
+            embedding[legacyNumMels * 2 + m] = skewness
+            embedding[legacyNumMels * 3 + m] = kurtosis
+            embedding[legacyNumMels * 4 + m] = deltaStd
         }
 
         return l2Normalize(embedding)
@@ -256,11 +441,18 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
 
     // MARK: - Mel Spectrogram
 
-    /// Compute log-mel spectrogram from 24 kHz audio.
+    /// Compute log-mel spectrogram from audio using the specified filterbank.
     ///
-    /// Returns a flat array of shape [numMels × numFrames] in row-major order
-    /// (128 mel values for frame 0, then 128 for frame 1, etc.).
-    private static func computeLogMelSpectrogram(_ audio: [Float]) -> [Float] {
+    /// - Parameters:
+    ///   - audio: Audio samples at the expected sample rate for the filterbank.
+    ///   - filterbank: Mel filterbank matrix [numMels × numFreqBins].
+    ///   - numMels: Number of mel bands (must match filterbank).
+    /// - Returns: Flat array of shape [numMels × numFrames] in row-major order.
+    private static func computeLogMelSpectrogram(
+        _ audio: [Float],
+        filterbank: [[Float]],
+        numMels: Int
+    ) -> [Float] {
         let numFreqBins = nFFT / 2 + 1 // 513
         let numFrames = max(0, (audio.count - nFFT) / hopLength + 1)
         guard numFrames > 0 else { return [] }
@@ -337,7 +529,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         var melSpec = [Float](repeating: 0, count: numMels * numFrames)
 
         for m in 0..<numMels {
-            let filter = melFilterbank[m]
+            let filter = filterbank[m]
             for f in 0..<numFrames {
                 var dot: Float = 0
                 // Dot product of filter[0..<numFreqBins] with magnitudes[f*numFreqBins..<(f+1)*numFreqBins]
@@ -364,9 +556,19 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     // MARK: - Mel Filterbank
 
     /// Create a mel filterbank matrix [numMels × numFreqBins] with Slaney normalization.
-    private static func createMelFilterbank() -> [[Float]] {
+    ///
+    /// - Parameters:
+    ///   - numMels: Number of mel bands.
+    ///   - sampleRate: Audio sample rate (determines frequency resolution).
+    ///   - fMax: Maximum frequency for mel filterbank.
+    /// - Returns: Mel filterbank matrix [numMels × numFreqBins].
+    private static func createMelFilterbank(
+        numMels: Int,
+        sampleRate: Int,
+        fMax: Float
+    ) -> [[Float]] {
         let numFreqBins = nFFT / 2 + 1 // 513
-        let sr = Float(modelSampleRate)
+        let sr = Float(sampleRate)
 
         func hzToMel(_ hz: Float) -> Float { 2595.0 * log10f(1.0 + hz / 700.0) }
         func melToHz(_ mel: Float) -> Float { 700.0 * (powf(10.0, mel / 2595.0) - 1.0) }
@@ -529,13 +731,14 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         }
 
         // 1. Spectral variance: compute per-frame energy, then variance across frames.
+        // Uses legacyNumMels (128) since liveness is computed on legacy mel-spectrogram.
         var frameEnergies = [Float](repeating: 0, count: numFrames)
         for f in 0..<numFrames {
             var energy: Float = 0
-            for m in 0..<numMels {
+            for m in 0..<legacyNumMels {
                 energy += mel[m * numFrames + f]
             }
-            frameEnergies[f] = energy / Float(numMels)
+            frameEnergies[f] = energy / Float(legacyNumMels)
         }
 
         var meanEnergy: Float = 0
@@ -549,10 +752,10 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         let spectralVariance = sumSqDiff / Float(numFrames)
 
         // 2. High-frequency energy ratio: compare top 1/4 mel bands vs total.
-        let highBandStart = numMels * 3 / 4
+        let highBandStart = legacyNumMels * 3 / 4
         var totalEnergy: Float = 0
         var highEnergy: Float = 0
-        for m in 0..<numMels {
+        for m in 0..<legacyNumMels {
             var bandSum: Float = 0
             let base = m * numFrames
             vDSP_sve(Array(mel[base..<(base + numFrames)]), 1, &bandSum, vDSP_Length(numFrames))
@@ -598,11 +801,12 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     /// Real speech has natural pitch variation (coefficient of variation >0.15).
     /// Recordings played through speakers tend to flatten pitch dynamics (<0.10).
     /// Uses vDSP for efficient dot-product computation at each lag.
+    /// Note: Uses legacySampleRate (24kHz) since liveness is computed on resampled audio.
     private static func estimateF0Variance(_ audio: [Float]) -> Float {
-        let frameLen = modelSampleRate * 30 / 1000   // 30ms = 720 samples at 24kHz
-        let hopSamples = modelSampleRate * 10 / 1000  // 10ms hop = 240 samples
-        let minLag = modelSampleRate / 400            // 400 Hz max F0 -> lag 60
-        let maxLag = modelSampleRate / 80             // 80 Hz min F0 -> lag 300
+        let frameLen = legacySampleRate * 30 / 1000   // 30ms = 720 samples at 24kHz
+        let hopSamples = legacySampleRate * 10 / 1000  // 10ms hop = 240 samples
+        let minLag = legacySampleRate / 400            // 400 Hz max F0 -> lag 60
+        let maxLag = legacySampleRate / 80             // 80 Hz min F0 -> lag 300
 
         guard audio.count >= frameLen, maxLag < frameLen else { return 0 }
 
@@ -640,7 +844,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
                 }
 
                 if bestLag > 0 && bestCorr > 0.3 {
-                    f0Values.append(Float(modelSampleRate) / Float(bestLag))
+                    f0Values.append(Float(legacySampleRate) / Float(bestLag))
                 }
 
                 offset += hopSamples
@@ -667,9 +871,10 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     /// Direct speech has sharper transients (higher crest factor = peak/RMS)
     /// than speech played through a speaker, where room acoustics diffuse energy.
     /// Returns a value in [0, 1] where higher = more likely direct speech.
+    /// Note: Uses legacySampleRate (24kHz) since liveness is computed on resampled audio.
     private static func estimateProximityRatio(_ audio: [Float]) -> Float {
-        let windowSize = modelSampleRate * 20 / 1000  // 20ms windows at 24kHz
-        let hopSamples = modelSampleRate * 10 / 1000
+        let windowSize = legacySampleRate * 20 / 1000  // 20ms windows at 24kHz
+        let hopSamples = legacySampleRate * 10 / 1000
 
         guard audio.count >= windowSize else { return 0 }
 

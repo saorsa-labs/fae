@@ -1,0 +1,80 @@
+[
+  {
+    "metadataOutputVersion" : "3.0",
+    "storagePrecision" : "Float16",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float16",
+        "formattedType" : "MultiArray (Float16 1 × 256)",
+        "shortDescription" : "",
+        "shape" : "[1, 256]",
+        "name" : "embedding",
+        "type" : "MultiArray"
+      }
+    ],
+    "modelParameters" : [
+
+    ],
+    "specificationVersion" : 8,
+    "mlProgramOperationTypeHistogram" : {
+      "Ios17.mul" : 1,
+      "Ios17.sqrt" : 1,
+      "Ios17.square" : 1,
+      "Ios17.transpose" : 1,
+      "Ios17.sub" : 2,
+      "Ios17.linear" : 1,
+      "Ios17.conv" : 36,
+      "Shape" : 1,
+      "Ios17.concat" : 2,
+      "Ios17.add" : 16,
+      "Ios17.sliceByIndex" : 1,
+      "Ios16.reduceMean" : 3,
+      "Ios16.relu" : 33,
+      "Ios16.reduceProd" : 1,
+      "Ios17.expandDims" : 1,
+      "Ios17.realDiv" : 1,
+      "Ios17.reshape" : 1,
+      "Ios17.cast" : 1
+    },
+    "computePrecision" : "Mixed (Float16, Int32)",
+    "isUpdatable" : "0",
+    "stateSchema" : [
+
+    ],
+    "availability" : {
+      "macOS" : "14.0",
+      "tvOS" : "17.0",
+      "visionOS" : "1.0",
+      "watchOS" : "10.0",
+      "iOS" : "17.0",
+      "macCatalyst" : "17.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.conversion_date" : "2026-03-21",
+      "com.github.apple.coremltools.source" : "torch==2.10.0",
+      "com.github.apple.coremltools.version" : "9.0",
+      "com.github.apple.coremltools.source_dialect" : "TorchScript"
+    },
+    "inputSchema" : [
+      {
+        "shortDescription" : "",
+        "dataType" : "Float16",
+        "hasShapeFlexibility" : "1",
+        "isOptional" : "0",
+        "shapeFlexibility" : "1 × 20 × 80 | 1 × 50 × 80 | 1 × 100 × 80 | 1 × 200 × 80 | 1 × 300 × 80 | 1 × 500 × 80 | 1 × 750 × 80 | 1 × 1000 × 80 | 1 × 1500 × 80 | 1 × 2000 × 80",
+        "formattedType" : "MultiArray (Float16 1 × 20 × 80)",
+        "type" : "MultiArray",
+        "shape" : "[1, 20, 80]",
+        "name" : "mel",
+        "enumeratedShapes" : "[[1, 20, 80], [1, 50, 80], [1, 100, 80], [1, 200, 80], [1, 300, 80], [1, 500, 80], [1, 750, 80], [1, 1000, 80], [1, 1500, 80], [1, 2000, 80]]"
+      }
+    ],
+    "generatedClassName" : "wespeaker",
+    "method" : "predict"
+  }
+]
