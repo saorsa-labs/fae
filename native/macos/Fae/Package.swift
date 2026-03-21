@@ -174,5 +174,17 @@ let package = Package(
             ],
             path: "Tests/IntegrationTests"
         ),
+
+        // Offline audio evaluation tests — run against downloaded corpora
+        // (MUSAN, Google Speech Commands, OpenSLR RIR).  Slow (~2 min) and
+        // skipped when corpus data is absent.  Run explicitly via:
+        //   just eval-audio
+        .testTarget(
+            name: "EvalTests",
+            dependencies: [
+                "Fae",
+            ],
+            path: "Tests/EvalTests"
+        ),
     ]
 )

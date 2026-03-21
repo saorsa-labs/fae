@@ -44,13 +44,17 @@ clean:
 
 # ─── Test ───────────────────────────────────────────────────────────────────
 
-# Run all tests
+# Run all tests (excludes slow eval tests)
 test:
-    swift test
+    swift test --skip EvalTests
 
 # Run specific test target
 test-target target:
     swift test --filter {{target}}
+
+# Run audio eval tests against downloaded corpora (~2 min)
+eval-audio:
+    swift test --filter EvalTests
 
 # ─── Benchmark ──────────────────────────────────────────────────────────────
 
@@ -307,10 +311,6 @@ record-eval class transcript duration="5":
     }
     JSONEOF
     echo "Annotation: $CORPUS_DIR/$JSON_FILE"
-
-# Run audio eval harness against the corpus
-eval-audio:
-    swift test --filter AudioEvalHarnessTests
 
 # List eval corpus contents
 eval-list:

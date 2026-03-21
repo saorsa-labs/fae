@@ -103,11 +103,18 @@ Milestone 4 hardened Fae's echo rejection for MacBook speaker output without req
 
 ## Files Modified
 
-- `Sources/Fae/Pipeline/EchoSuppressor.swift` — All new features
+- `Sources/Fae/Pipeline/EchoSuppressor.swift` — All 12-layer echo rejection features
+- `Sources/Fae/Pipeline/PipelineCoordinator.swift` — Runtime wiring: route detection (startup + polling), band baseline tracking, decay measurement, cross-correlation + spectral echo rejection, enhanced fae_self threshold, TTS playback ring buffer capture
+- `Sources/Fae/Pipeline/VoiceActivityDetector.swift` — Spectral tilt speech pre-filter
 - `Tests/HandoffTests/EchoHandlingHardeningTests.swift` — 56 new tests (new file)
 
-## Files Not Modified (by design)
+## Pipeline Integration (Phase 4.4 wiring)
 
-- `PipelineCoordinator.swift` — New features are opt-in via EchoSuppressor API; pipeline integration wiring is a separate concern for when features are activated
-- `AudioCaptureManager.swift` — No changes needed; band energy computed from existing samples
-- `AudioPlaybackManager.swift` — Playback audio ring buffer fed by caller, not self-tapped
+All 12 echo suppression layers are wired into the live pipeline:
+- Output route detection at startup + periodic re-detection (~5s polling)
+- Band energy baseline tracking during active playback
+- Band-energy speech discrimination in barge-in candidate evaluation
+- Room decay measurement started on speech end, samples fed during echo tail
+- TTS audio captured into cross-correlation ring buffer in `synthesizeSentence()`
+- Cross-correlation + spectral envelope checks on segments during echo tail
+- Enhanced fae_self threshold applied in segment evaluation, barge-in, and playback paths

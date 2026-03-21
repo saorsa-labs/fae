@@ -4,11 +4,14 @@
 // Streaming speech-to-text engine using Parakeet TDT 0.6B via MLX.
 //
 // Architecture: This runs as the "fast path" alongside Qwen3-ASR.
-// Parakeet TDT is CTC-based (frame-independent) so it provides true
-// chunk-by-chunk streaming without the growing-buffer re-transcription
-// that Qwen3-ASR requires. The 0.6B model is lightweight enough to
-// share the GPU with other MLX workloads since it only runs during
-// active speech (never concurrent with Qwen3-ASR final transcription).
+// Parakeet TDT is a lighter model (0.6B vs 1.7B) providing independent
+// streaming partials on a separate decode cadence. Currently uses
+// periodic whole-buffer decode via model.generate() — the entire
+// accumulated audio is re-decoded on each pass. True incremental CTC
+// decode (skipping already-processed frames) requires exposing the
+// encoder's internal state and is deferred as future optimization.
+// The 0.6B model is lightweight enough to share the GPU with other
+// MLX workloads since it only runs during active speech.
 //
 // Model: mlx-community/parakeet-tdt-0.6b-v3
 // See: Vendor/mlx-audio-swift/Sources/MLXAudioSTT/Models/Parakeet/

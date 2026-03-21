@@ -278,6 +278,50 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertTrue(config.llm.thinkingEnabled)
     }
 
+    // MARK: - TTS Streaming Mode (Phase 1.1/1.2/1.3)
+
+    func testTTSPreferFinalOnlyDefaultIsFalse() {
+        // Sentence-streaming mode must be enabled by default.
+        // Regression guard: do not accidentally flip back to batched-only.
+        let config = FaeConfig()
+        XCTAssertFalse(config.tts.preferFinalOnly,
+                       "Streaming TTS must be ON by default (preferFinalOnly = false)")
+    }
+
+    func testTTSPreferFinalOnlyCanBeEnabledViaConfig() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [tts]
+        prefer_final_only = true
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertTrue(config.tts.preferFinalOnly,
+                      "Batched TTS must be configurable via prefer_final_only = true")
+    }
+
+    func testTTSPreferFinalOnlyFalseIsExplicitlyConfigurable() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let fileURL = tempRoot.appendingPathComponent("config.toml")
+
+        let content = """
+        [tts]
+        prefer_final_only = false
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let config = FaeConfig.load(from: fileURL)
+        XCTAssertFalse(config.tts.preferFinalOnly,
+                       "Streaming TTS must remain on when explicitly set to false")
+    }
+
     func testStartupIntroSeenParsesFromConfig() throws {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-config-tests-\(UUID().uuidString)", isDirectory: true)

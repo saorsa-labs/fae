@@ -1,63 +1,168 @@
-# Phase 1.1: Echo suppressor as signal, not gate
+# Phase 1.1: Enable Per-Sentence Streaming TTS
 
-## Problem
-Barge-in candidates are NEVER created while Fae speaks because:
-1. `advancePendingBargeIn()` (line 7216) kills candidates when `echoSuppression=true`
-2. `echoSuppressor.isInSuppression` returns `true` the entire time `assistantSpeaking=true` (line 61-62)
-3. `AdaptiveInterruptionDecider.process()` (line 37-39) also hard-gates on `echoSuppression`
+## Context
 
-Result: The decider never runs. Barge-in is architecturally impossible during playback.
+The sentence-level streaming TTS infrastructure is **already built** but disabled. Key facts:
+- `preferFinalOnlySpeech = true` (line ~5976) gates the entire streaming path
+- Sentence buffer + boundary detection + clause fallback already exist (lines ~6014-6284)
+- `emitStreamingChunk()` already calls `enqueueTTS()` in the streaming path (line ~6074)
+- `enqueueTTS()` chains onto `pendingTTSTask` for ordered synthesis (line ~7564)
+- `AudioPlaybackManager.enqueue()` already supports incremental buffers (line ~75)
+- Kokoro TTS is stateless per-call — per-sentence synthesis won't degrade prosody
+- Streaming thresholds already tuned: `minSentenceChunkChars=28`, `minClauseChunkChars=55`
 
-## Fix Strategy
-- Remove echo suppression as a creation gate for barge-in candidates
-- Remove echo suppression as a hard gate in the adaptive decider
-- Keep echo suppression as a SIGNAL in InterruptionInput (the decider can use it for weighting)
-- Keep echo suppression as a gate for SEGMENT ACCEPTANCE (shouldAccept) — that's for STT, not barge-in
-- Reduce echo tail from 2000ms to 800ms
-- Reduce holdoff from 500ms to 200ms
-- Lower adaptive thresholds
+The primary work is: flip the flag, handle edge cases, test thoroughly.
 
-## Tasks
+## Files
 
-### Task 1: Remove echo suppression gate from advancePendingBargeIn
-**File:** `Sources/Fae/Pipeline/PipelineCoordinator.swift` lines 7205-7238
-- Remove `echoSuppression` parameter from `advancePendingBargeIn()`
-- Remove the `echoSuppression` check at line 7216 and 7218
-- Update call site at line 3384-3393 to not pass echoSuppression
-- Keep `bargeInSuppressed` and `inDenyCooldown` as hard gates (those are intentional)
+- `Sources/Fae/Pipeline/PipelineCoordinator.swift` — Main changes
+- `Sources/Fae/Pipeline/TextProcessing.swift` — Sentence boundary detection (verify only)
+- `Sources/Fae/ML/KokoroMLXTTSEngine.swift` — Verify per-sentence synthesis (no changes expected)
+- `Sources/Fae/Audio/AudioPlaybackManager.swift` — Verify incremental enqueue (no changes expected)
+- `Tests/FaeTests/` — New and modified tests
 
-### Task 2: Change echo suppression from hard gate to signal in adaptive decider
-**File:** `Sources/Fae/Pipeline/AdaptiveInterruptionDecider.swift` lines 35-39
-- Remove the hard `echoSuppression` gate (lines 37-39)
-- Instead: when `echoSuppression=true`, require STRONGER evidence to interrupt
-  - Raise overlap threshold by 100ms
-  - Require keyword OR transcript evidence (not just acoustic)
-  - This filters noise/echo while allowing deliberate speech through
+---
 
-### Task 3: Do the same for LegacyThresholdInterruptionDecider
-**File:** `Sources/Fae/Pipeline/LegacyThresholdInterruptionDecider.swift`
-- Remove hard `echoSuppression` gate
-- When echoSuppression=true, double the confirmMs threshold (require longer overlap)
+## Task 1: Make preferFinalOnlySpeech configurable
 
-### Task 4: Reduce echo tail and holdoff timing
-**Files:**
-- `Sources/Fae/Pipeline/EchoSuppressor.swift` lines 26-29: reduce echoTailMs 2000→800, shortUtteranceGuardMs 2500→1200
-- `Sources/Fae/Core/FaeConfig.swift` line 225: reduce confirmMs 350→200
-- `Sources/Fae/Core/FaeConfig.swift` line 226: reduce assistantStartHoldoffMs 500→200
+**What**: Replace the hardcoded `let preferFinalOnlySpeech = true` with a computed value
+that defaults to `false` (streaming enabled). Add a config escape hatch
+`tts.preferFinalOnly` for fallback to batched mode if needed.
 
-### Task 5: Lower adaptive decider thresholds
-**File:** `Sources/Fae/Pipeline/InterruptionTypes.swift` lines 100-115
-- minOverlapMs: 300→150
-- rmsSustainFloor: 0.06→0.04
-- minSustainedChunks: 4→2
-- peakRmsRatio: 1.5→1.2
+**Files**: `PipelineCoordinator.swift` (~5976), `Core/FaeConfig.swift`
 
-### Task 6: Update tests
-**File:** `Tests/HandoffTests/AdaptiveInterruptionDeciderTests.swift`
-- Update existing tests for new thresholds
-- Add test: barge-in candidate created during echo suppression
-- Add test: adaptive decider allows interrupt during echo suppression with strong evidence
-- Add test: adaptive decider rejects weak signal during echo suppression
-- Add test: keyword interrupt works during echo suppression
-- Add test: reduced holdoff timing
-- Ensure all 19+ existing tests still pass (adjust thresholds as needed)
+**Details**:
+- Change `let preferFinalOnlySpeech = true` to read from config, defaulting to `false`
+- Add `tts.preferFinalOnly: Bool` to FaeConfig with default `false`
+- Keep the variable local to `generateWithTools()` — no state promotion needed
+- Add debug logging when streaming mode is active
+
+**Tests**: Verify config value is respected; verify default is `false`
+
+---
+
+## Task 2: Verify sentence boundary detection for real-time streaming
+
+**What**: Write targeted tests for `TextProcessing.findSentenceBoundary()` and
+`findClauseBoundary()` covering streaming edge cases that don't exist in
+batched mode.
+
+**Files**: `Tests/FaeTests/TextProcessingTests.swift`, `Pipeline/TextProcessing.swift`
+
+**Details**:
+- Test incremental accumulation: "Hello." arrives as "Hel" + "lo."
+- Test abbreviation guards: "Dr. Smith said hello." should not split at "Dr."
+- Test decimal guards: "It costs $3.14 per unit." should not split at "3."
+- Test multi-sentence: "First sentence. Second sentence." splits correctly
+- Test clause boundary fallback: long text without sentence end splits at comma
+- Test empty/whitespace-only input
+- Test unicode: emoji mid-sentence, CJK punctuation
+- Fix any bugs found
+
+---
+
+## Task 3: Handle short/single-sentence responses
+
+**What**: When the LLM produces a short response (<1 sentence) that ends before a
+sentence boundary is detected in the streaming buffer, ensure TTS still fires
+promptly at turn completion.
+
+**Files**: `PipelineCoordinator.swift` (~6590-6650)
+
+**Details**:
+- The end-of-turn path (line ~6590) already handles remaining `sentenceBuffer` contents
+- With `preferFinalOnlySpeech = false`, `deferredSentenceQueue` will be empty for
+  sentences that already went through streaming TTS
+- But the final buffer remainder still needs to be spoken — verify this path works
+  when some sentences were already streamed and only the tail remains
+- Handle edge case: response is a single short sentence (e.g., "Yes.") — it should
+  go through `emitStreamingChunk()` immediately, not wait for more tokens
+- Handle edge case: response has no sentence terminator (e.g., "Sure, I can help")
+  — the `sentenceBuffer` remainder at turn end must be spoken
+- Add debug logging showing which path (streaming vs. final) each chunk took
+
+**Tests**: Single-sentence response, no-terminator response, mixed streamed+final
+
+---
+
+## Task 4: Prevent double-synthesis of streamed sentences
+
+**What**: Ensure sentences that were already synthesized via the streaming path are NOT
+re-synthesized at turn completion in the batched fallback.
+
+**Files**: `PipelineCoordinator.swift` (~6597-6633)
+
+**Details**:
+- When `preferFinalOnlySpeech = false`, the streaming path calls `enqueueTTS()`
+  per sentence during generation. At turn end, `deferredSentenceQueue` should be
+  empty (nothing was deferred).
+- But `sentenceBuffer` may still have a remainder (partial sentence). The turn-end
+  path must ONLY synthesize that remainder, not re-join and re-synthesize everything.
+- Current code at line ~6597: `var sentences = deferredSentenceQueue` — when streaming
+  is active, this should be empty. Verify this is the case.
+- Add a guard: if `deferredSentenceQueue` is empty and `sentenceBuffer` remainder is
+  empty, skip TTS entirely at turn end (all audio already enqueued via streaming)
+- Track `streamedSentenceCount` to log how many sentences went through streaming vs final
+
+**Tests**: Multi-sentence response with streaming — verify no double-synthesis
+
+---
+
+## Task 5: Wire orb state to streaming TTS
+
+**What**: Ensure the orb transitions to `.speaking` state when the first streaming TTS
+chunk starts playing, not when the LLM finishes generating.
+
+**Files**: `PipelineCoordinator.swift`, `OrbStateBridgeController.swift` (verify only)
+
+**Details**:
+- `markAssistantSpeechStarted()` is already called inside `enqueueTTS()` (line ~7572)
+- With streaming mode, this fires on the first sentence, so the orb should transition
+  to speaking state earlier than before
+- Verify: orb shows `.thinking` while LLM generates, transitions to `.speaking` when
+  first TTS enqueues, stays `.speaking` through remaining sentences
+- Verify: the thinking tone (if active) stops when first TTS audio starts
+- No code changes expected — just verification and possible debug logging
+
+**Tests**: Orb state transition timing verification
+
+---
+
+## Task 6: Handle barge-in during sentence-queued playback
+
+**What**: Verify barge-in works correctly when multiple sentences are queued and playing
+sequentially. Barge-in should cancel remaining queued TTS, not just current sentence.
+
+**Files**: `PipelineCoordinator.swift` (barge-in section ~7761-8130)
+
+**Details**:
+- Barge-in already cancels `pendingTTSTask` and calls `playback.stop()` in multiple paths
+- With streaming TTS, there may be 2-3 sentences queued in `pendingTTSTask` chain
+- Verify: barge-in during sentence 1 cancels sentences 2 and 3
+- Verify: barge-in during sentence 2 doesn't replay sentence 1
+- Verify: false interruption recovery can resume from the interrupted point
+- Check `lastAssistantTextBuffer` accumulation — it should contain all streamed text
+  up to the interruption point for recovery purposes
+- The generation takeover (Path C) should also cancel queued TTS
+
+**Tests**: Barge-in mid-multi-sentence response; false interruption recovery
+
+---
+
+## Task 7: Build + test validation
+
+**What**: Full build validation and integration test pass.
+
+**Files**: All modified files
+
+**Details**:
+- `just build` — zero warnings
+- `just test` — all tests pass
+- Manually verify (or note for live test): multi-sentence response plays first sentence
+  while LLM is still generating
+- Verify: tool calls mid-response correctly handle the sentence queue
+  (tool responses may inject new text between streamed sentences)
+- Verify: proactive queries (which have different `generationContext`) work with streaming
+- Log time-to-first-audio in debug console for comparison
+
+**Tests**: Full test suite pass, integration test for streaming TTS path

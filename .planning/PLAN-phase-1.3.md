@@ -1,44 +1,47 @@
-# Plan: Phase 1.3 — CoworkToolExecutor Hardening & Contracts
+# Phase 1.3: Testing & Hardening
 
-## Status: RESOLVED (2026-03-19)
+**Milestone**: Milestone 1 — Sentence-Level TTS Pipelining
+**Phase**: 1.3 (final phase)
+**Status**: COMPLETE
 
-All carry-over items from Phase 1.1 have been addressed in the ship-blocker fix commit.
+## Objective
 
----
+Add regression tests and edge-case coverage for the streaming TTS changes from phases 1.1 and 1.2.
+All tests must be deterministic (no LLM calls, no audio devices). Focus on the static helpers
+and pure-logic paths that are fully testable.
 
-## Task 1: Add SecurityEventLogger Test Seam — DONE
-- Added `SecurityEventLogging` protocol in SecurityEventLogger.swift
-- `SecurityEventLogger` conforms to it
-- CoworkToolExecutor accepts `(any SecurityEventLogging)?` via init
-- `SecurityEventLoggerSpy` test actor in CoworkRemoteProviderTests.swift
-- Tests verify allow/flag logging without production file I/O
-- Commit: 510f0ec7 + ship-blocker fix
+## Tasks
 
-## Task 2: Define Redaction Metadata Contract — DONE
-- Redaction signal: `request.preparedPrompt.shareableExport?.hasRedactions`
-- Stripped fields: `export.excludedContext` (stable [String] array)
-- Event: `FaeEvent.coworkRedactionApplied(provider:strippedFields:)` emitted in performSecurityCheck()
-- No string-diff heuristics — uses the existing ShareableExport contract
-- Ship-blocker fix commit
+### Task 1: Streaming TTS config regression tests (FaeConfigTests.swift)
+- `testTTSPreferFinalOnlyDefaultIsFalse` — streaming mode is on by default
+- `testTTSPreferFinalOnlyCanBeEnabled` — batched mode can be configured
 
-## Task 3: Define Synthetic Tool Identity Contract — DESCOPED
-- CoworkToolExecutor no longer uses ToolExecutor.execute() with synthetic tool names
-- DamageControlPolicy is called directly with `locality: .nonLocal`
-- The synthetic names "external_llm"/"external_llm_streaming"/"external_llm_websearch"
-  only appear as DamageControlPolicy `toolName` arguments for logging context
-- Architecture rationale documented in CoworkToolExecutor.swift doc comment
-- No contract needed — these are not registered tools
+### Task 2: batchedTTSSegments edge cases (VoicePipelineRegressionTests.swift)
+- `testBatchedTTSSegmentsEmptyString` — returns empty array
+- `testBatchedTTSSegmentsShortString` — returns single segment
+- `testBatchedTTSSegmentsLongMultiSentence` — splits at sentence boundaries
+- `testBatchedTTSSegmentsVeryLongSentence` — >420 chars, no boundary → single segment forced
+- `testBatchedTTSSegmentsEmojiAndUnicode` — unicode chars don't break splitting
+- `testBatchedTTSSegmentsCodeBlock` — code text handled without crash
+- `testBatchedTTSSegmentsPreservesSegmentOrder` — segments are in correct order
 
-## Task 4: Specify Streaming Empty-Response Semantics — PARTIALLY DONE
-- guardNonEmpty() runs on final response for all paths including streaming
-- Streaming: if partials arrived but final response is empty → throws .emptyResponse
-- Contract: final assembled response must have non-whitespace content
-- TODO: add explicit test for "partials arrived, final empty" case (gap #6)
+### Task 3: Sentence boundary edge cases (TextProcessingTests.swift)
+- `testVeryLongSentence` — >420 chars with sentence boundary at end
+- `testEmojiMidSentence` — emoji doesn't prevent boundary detection
+- `testUnicodePunctuation` — Unicode sentence terminators
+- `testCodeBlockNoBoundary` — code block without sentence-ending punctuation
+- `testMultipleSentenceFlushSequence` — simulate multi-sentence streaming: flush first sentence,
+  keep remainder, accumulate to next sentence boundary
 
-## Task 5: Stabilize Provider Metrics Key — DONE
-- Replaced `String(describing: provider.kind)` with `provider.kind.rawValue`
-- Same stable key used for: metrics, security log arguments, emitted events
-- Test: `testProviderKindUsesRawValueForMetrics` verifies the contract
-- Ship-blocker fix commit
+### Task 4: looksLikeNonProse (TextProcessingTests.swift)
+- `testLooksLikeNonProseSuppressesToolCallXML`
+- `testLooksLikeNonProseSuppressesJSON`
+- `testLooksLikeNonProseAllowsNormalProse`
+- `testLooksLikeNonProseAllowsShortCode` — < 10 chars passes through
 
-## Task 6: Close the Phase 1.1 Carry-Over Loop — DONE (this file)
+### Task 5: Verify build + all tests pass
+
+## Files to modify
+- `Tests/HandoffTests/TextProcessingTests.swift` — add new tests in Tasks 3 + 4
+- `Tests/HandoffTests/VoicePipelineRegressionTests.swift` — add Task 2 tests
+- `Tests/HandoffTests/FaeConfigTests.swift` — add Task 1 tests

@@ -264,3 +264,65 @@ ToolRoutingHelpers, TurnHelpers, GateHelpers.
 **What remained (7,893 lines)**: Core pipeline methods with 10+ coordinator dependencies each.
 Cannot be extracted without async boundary changes to the actor.
 **Original target**: <2K (unrealistic). **Achieved**: maximum safe extraction.
+
+---
+
+## Milestone 4: Echo Handling Hardening — COMPLETE
+
+### Phase 4.1: Playback Baseline & Timing Improvements — COMPLETE
+
+- [x] Output route detection: `OutputRoute` enum (headphones/builtInSpeaker/externalSpeaker/unknown) with timing multipliers (0.3x-1.3x)
+- [x] Per-band energy tracking: `BandEnergy` struct with low/mid/high decomposition, spectral tilt analysis, DFT-based `computeBandEnergy()`
+- [x] Room decay estimation: post-playback RMS monitoring, EMA-smoothed adaptive `effectiveEchoTailMs`
+- [x] Enhanced fae_self rejection: 20% threshold reduction during playback window
+- [x] 35 tests added
+
+### Phase 4.2: WebRTC AEC3 Evaluation — COMPLETE (infeasible, alternatives shipped)
+
+- [x] AEC3 feasibility evaluation: **infeasible** — separate AVAudioEngine instances prevent reference signal access
+- [x] Feasibility documented in `.planning/reviews/aec3-feasibility.md`
+- [x] Alternative: cross-correlation echo detection (3s playback ring buffer, 0.6 threshold)
+- [x] Alternative: spectral envelope cosine similarity (0.95 threshold)
+- [x] 13 tests added
+
+### Phase 4.3: Integration & Acoustic Testing — COMPLETE
+
+- [x] 8 additional integration tests (synthetic echo scenarios, backward compatibility)
+- [x] Full build: zero warnings
+- [x] Full test suite: 1616 tests, 0 failures
+- [x] Milestone closeout doc created
+
+### Milestone 4 Evidence
+
+**Commit**: `7722c8e0` feat(echo-suppression): 12-layer echo rejection stack with spectral, temporal, and correlation analysis
+
+**Files modified** (1):
+- `Sources/Fae/Pipeline/EchoSuppressor.swift` — expanded from 5-layer to 12-layer stack
+
+**Files created** (1):
+- `Tests/HandoffTests/EchoHandlingHardeningTests.swift` — 56 tests
+
+**Echo rejection stack (12 layers)**:
+1. Active suppression (assistantSpeaking)
+2. Echo tail window (onset-time, duration-proportional, route-adjusted)
+3. Short utterance guard
+4. Duration cap (15s)
+5. Amplitude cap (rms > 0.12 during guard)
+6. Output route detection (headphones/speakers with timing multipliers)
+7. Per-band energy tracking (low/mid/high spectral decomposition)
+8. Room decay estimation (adaptive echo tail)
+9. Enhanced fae_self threshold during playback
+10. Text-overlap echo rejection (bag-of-words + substring)
+11. Cross-correlation echo detection (playback ring buffer)
+12. Spectral envelope similarity
+
+**Test count**: 1560 → 1616 (+56 new tests), 0 failures
+**Build**: zero warnings
+
+---
+
+## Project Complete: Voice Pipeline Hardening
+
+**Total tests added**: 1516 → 1616 (+100 across 4 milestones)
+**All milestones**: M1 ✅ M2 ✅ M3 ✅ M4 ✅
+**Closeout docs**: `.planning/reviews/project-closeout-voice-pipeline-hardening.md`

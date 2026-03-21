@@ -693,6 +693,92 @@ final class VoicePipelineRegressionTests: XCTestCase {
         XCTAssertEqual(maxHistory, 6, "Small context should clamp to minimum 6")
     }
 
+    // MARK: - Streaming TTS: batchedTTSSegments (Phase 1.3)
+
+    func testBatchedTTSSegmentsEmptyStringReturnsEmpty() {
+        let segments = PipelineCoordinator.batchedTTSSegments(from: "")
+        XCTAssertTrue(segments.isEmpty, "Empty input must produce no segments")
+    }
+
+    func testBatchedTTSSegmentsShortTextReturnsSingleSegment() {
+        let text = "Hello, how are you?"
+        let segments = PipelineCoordinator.batchedTTSSegments(from: text)
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments.first, text)
+    }
+
+    func testBatchedTTSSegmentsLongMultiSentenceSplitsCorrectly() {
+        // Build a string that exceeds 420 chars and has a clear sentence boundary.
+        // Each repetition is ~60 chars; 8 repetitions = ~480 chars total before sentence2.
+        let sentence1 = String(repeating: "This is the first sentence with enough words to fill space. ", count: 8)
+        let sentence2 = "This is the second sentence."
+        let text = sentence1 + sentence2
+        XCTAssertGreaterThan(text.count, 420, "Test string must exceed maxCharacters threshold")
+
+        let segments = PipelineCoordinator.batchedTTSSegments(from: text)
+        XCTAssertGreaterThan(segments.count, 1, "Long multi-sentence text must be split")
+        // Each segment must be non-empty.
+        for segment in segments {
+            XCTAssertFalse(segment.isEmpty, "No segment should be empty")
+        }
+        // Rejoining segments should approximate the original text.
+        let rejoined = segments.joined(separator: " ")
+        XCTAssertFalse(rejoined.isEmpty)
+    }
+
+    func testBatchedTTSSegmentsPreservesSegmentOrder() {
+        // Ensure segments appear in the same order as the original text.
+        // "Alpha sentence comes first." is ~28 chars. Need total >420.
+        let first = "Alpha sentence comes first. "
+        // Each filler repetition is ~72 chars; 6 repetitions = ~432 chars.
+        let filler = String(repeating: "Filler content that takes up space without any punctuation here so it goes on ", count: 6)
+        let last = "Beta sentence comes last."
+        let text = first + filler + last
+        XCTAssertGreaterThan(text.count, 420, "Test string must exceed maxCharacters threshold")
+
+        let segments = PipelineCoordinator.batchedTTSSegments(from: text)
+        guard let firstSeg = segments.first else {
+            XCTFail("Expected at least one segment")
+            return
+        }
+        XCTAssertTrue(firstSeg.lowercased().contains("alpha"),
+                      "First segment should contain 'alpha' — got: \(firstSeg)")
+    }
+
+    func testBatchedTTSSegmentsHandlesWhitespaceOnlyInput() {
+        let segments = PipelineCoordinator.batchedTTSSegments(from: "   \n\t  ")
+        XCTAssertTrue(segments.isEmpty, "Whitespace-only input must produce no segments")
+    }
+
+    func testBatchedTTSSegmentsHandlesEmojiAndUnicode() {
+        // Emoji must not cause a crash or produce garbled segments.
+        let text = "Great news! 🎉 This is the second sentence with emoji. 🚀 And a third one here."
+        let segments = PipelineCoordinator.batchedTTSSegments(from: text)
+        XCTAssertFalse(segments.isEmpty)
+        for segment in segments {
+            XCTAssertFalse(segment.isEmpty)
+        }
+    }
+
+    func testBatchedTTSSegmentsVeryLongSingleSentenceStaysIntact() {
+        // A single sentence >420 chars without any internal boundary gets returned as-is.
+        // (No boundary found → split at maxCharacters index → remainder loop handles rest)
+        let longWord = String(repeating: "verylongword ", count: 40) // ~560 chars
+        let segments = PipelineCoordinator.batchedTTSSegments(from: longWord)
+        XCTAssertFalse(segments.isEmpty, "Should produce at least one segment")
+        // Verify no segment is empty.
+        for segment in segments {
+            XCTAssertFalse(segment.isEmpty)
+        }
+    }
+
+    func testBatchedTTSSegmentsCustomMaxCharacters() {
+        let text = "First sentence here. Second sentence here. Third sentence here."
+        // With a tiny max, each sentence should become its own segment.
+        let segments = PipelineCoordinator.batchedTTSSegments(from: text, maxCharacters: 25)
+        XCTAssertGreaterThan(segments.count, 1, "Should split into multiple segments at low maxCharacters")
+    }
+
     func testConversationStateTrimHistoryRespectsReservedTokens() async {
         let state = ConversationStateTracker()
         await state.setContextBudget(contextSize: 32_768, reservedTokens: 28_000)

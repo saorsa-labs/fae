@@ -316,6 +316,36 @@ struct VoiceActivityDetector {
             : Int.max
     }
 
+    // MARK: - Spectral Tilt Speech Filter
+
+    /// Quick spectral check to reject music/noise that Silero misclassifies as speech.
+    ///
+    /// Speech has mid-band dominance (formants at 500-4000 Hz) and moderate high-frequency
+    /// energy (fricatives/sibilants). Music often has exaggerated bass or treble.
+    /// Environmental noise tends to be broadband.
+    ///
+    /// Returns `true` if the spectral shape is consistent with speech.
+    /// When `false`, the VAD's `isSpeech` should be overridden to prevent false
+    /// triggering on music or environmental noise.
+    static func spectralTiltLooksSpeechlike(samples: [Float], sampleRate: Int) -> Bool {
+        let energy = EchoSuppressor.computeBandEnergy(samples: samples, sampleRate: sampleRate)
+        let total = energy.low + energy.mid + energy.high
+        guard total > 0.0005 else { return false }  // Silence — not speech.
+
+        let midRatio = energy.mid / total
+        let tilt = energy.spectralTilt  // high / (low + mid)
+
+        // Speech characteristics:
+        // 1. Mid-band (formants) should carry a meaningful fraction of energy.
+        //    Music with heavy bass or treble fails this.
+        // 2. Spectral tilt should be moderate — not too low (pure bass/hum)
+        //    and not too high (pure hiss/static).
+        let midDominant = midRatio > 0.20
+        let tiltReasonable = tilt > 0.02 && tilt < 0.80
+
+        return midDominant && tiltReasonable
+    }
+
     static func computeRMS(_ samples: [Float]) -> Float {
         guard !samples.isEmpty else { return 0 }
         var sumSquares: Float = 0

@@ -3,19 +3,19 @@
   "project": "voice-pipeline-hardening",
   "active": false,
   "milestone": {
-    "number": 3,
-    "name": "PipelineCoordinator Decomposition"
+    "number": 4,
+    "name": "Echo Handling Hardening"
   },
   "phase": {
-    "number": "3.4",
-    "name": "Integration Testing & Cleanup",
-    "plan": null
+    "number": "4.3",
+    "name": "Integration & Acoustic Testing",
+    "plan": "PLAN-phase-4.3.md"
   },
   "progress": {
-    "total_tasks": 0,
-    "completed_tasks": 0,
+    "total_tasks": 3,
+    "completed_tasks": 3,
     "current_task": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-21T02:00:00Z"
+  "status": "project_complete",
+  "last_updated": "2026-03-21T03:00:00Z"
 }

@@ -1869,13 +1869,16 @@ actor PipelineCoordinator {
             return true
         }
 
-        if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: threshold) {
+        // Use enhanced (more aggressive) fae_self threshold during playback window.
+        let faeSelfThreshold = echoSuppressor.faeSelfThresholdDuringPlayback(baseThreshold: threshold)
+        if let faeSelfSim = await store.matchesFaeSelf(embedding: embedding, threshold: faeSelfThreshold) {
             if echoSuppressor.isInSuppression {
                 NSLog(
-                    "PipelineCoordinator: dropping %.1fs segment (%@ fae_self sim=%.3f, echo suppressor active)",
+                    "PipelineCoordinator: dropping %.1fs segment (%@ fae_self sim=%.3f threshold=%.3f, echo suppressor active)",
                     durationSecs,
                     source,
-                    faeSelfSim
+                    faeSelfSim,
+                    faeSelfThreshold
                 )
                 debugLog(
                     debugConsole,
@@ -2522,11 +2525,44 @@ actor PipelineCoordinator {
     // MARK: - Main Pipeline Loop
 
     private func runPipelineLoop(stream: AsyncStream<AudioChunk>) async {
+        // Detect audio output route for echo suppression tuning.
+        echoSuppressor.outputRoute = Self.detectOutputRoute(playback: playback)
+        debugLog(debugConsole, .pipeline, "Audio output route: \(echoSuppressor.outputRoute)")
+
+        // Re-detect route periodically during the pipeline loop (every ~5s).
+        // macOS does not have AVAudioSession route-change notifications, so we poll.
+        var lastRouteCheckAt = Date()
+        let routeCheckIntervalSec: TimeInterval = 5.0
+
         for await chunk in stream {
             guard !Task.isCancelled else { break }
 
+            // Periodic output route re-detection (~every 5s).
+            let now = Date()
+            if now.timeIntervalSince(lastRouteCheckAt) >= routeCheckIntervalSec {
+                lastRouteCheckAt = now
+                let currentRoute = Self.detectOutputRoute(playback: playback)
+                if currentRoute != echoSuppressor.outputRoute {
+                    echoSuppressor.outputRoute = currentRoute
+                    debugLog(debugConsole, .pipeline, "Audio output route changed: \(currentRoute)")
+                }
+            }
+
             // VAD stage.
-            let vadOutput = vad.processChunk(chunk)
+            var vadOutput = vad.processChunk(chunk)
+
+            // Tier 1: Spectral tilt pre-filter.
+            // Quick DSP check to reject music/noise that Silero misclassifies as
+            // speech.  Runs on every chunk where VAD says "speech" — <1ms overhead.
+            // Does NOT gate completed segments (Tier 2 handles those).
+            if vadOutput.isSpeech,
+               !VoiceActivityDetector.spectralTiltLooksSpeechlike(
+                   samples: chunk.samples, sampleRate: chunk.sampleRate
+               )
+            {
+                vadOutput.isSpeech = false
+                vadOutput.speechStarted = false
+            }
 
             // Emit audio level for orb animation.
             eventBus.send(.audioLevel(vadOutput.rms))
@@ -2597,6 +2633,11 @@ actor PipelineCoordinator {
                 NSLog("phase1.first_audio_latency_ms=%.2f", latencyMs)
             }
 
+            // Feed post-playback decay samples when in echo tail but not actively speaking.
+            if !assistantSpeaking && echoSuppressor.isInSuppression {
+                echoSuppressor.addDecaySample(timestamp: Date(), rms: vadOutput.rms)
+            }
+
             // Track barge-in only while the assistant is audibly speaking.
             // This avoids false interruptions during long LLM decode gaps where
             // assistantGenerating may be true but no speech is playing.
@@ -2604,10 +2645,14 @@ actor PipelineCoordinator {
                 // PATH A: Playback barge-in — identity-based detection during active TTS.
                 // Update playback baseline RMS (how loud Fae sounds through the mic).
                 echoSuppressor.updatePlaybackBaseline(rms: vadOutput.rms)
+                // Update per-band energy baseline for spectral discrimination.
+                let playbackBandEnergy = EchoSuppressor.computeBandEnergy(samples: chunk.samples, sampleRate: chunk.sampleRate)
+                echoSuppressor.updatePlaybackBandBaseline(energy: playbackBandEnergy)
 
                 // Accumulate audio into playback barge-in candidate when speech
-                // is detected above the playback baseline.
-                if vadOutput.isSpeech && echoSuppressor.userSpeechLikelyAbovePlayback(rms: vadOutput.rms) {
+                // is detected above the playback baseline and has speech-like spectrum.
+                let bandLooksSpeech = echoSuppressor.bandEnergyLooksLikeSpeech(playbackBandEnergy)
+                if vadOutput.isSpeech && echoSuppressor.userSpeechLikelyAbovePlayback(rms: vadOutput.rms) && bandLooksSpeech {
                     if vadOutput.speechStarted || bargeInState.playbackCandidate == nil {
                         bargeInState.playbackCandidate = PlaybackBargeInCandidate(
                             capturedAt: Date(),
@@ -3518,6 +3563,40 @@ actor PipelineCoordinator {
         if rms < 0.008 && durationSecs > 3.0 {
             NSLog("PipelineCoordinator: dropping ambient segment (rms=%.4f, dur=%.1fs)", rms, durationSecs)
             return
+        }
+
+        // Tier 2: Segment-level spectral speech verification.
+        // The full segment has accumulated enough audio for a reliable spectral check.
+        // Reject segments with non-speech spectral profiles (music, noise) that slipped
+        // through per-chunk Tier 1 filtering.
+        if !VoiceActivityDetector.spectralTiltLooksSpeechlike(
+            samples: segment.samples, sampleRate: segment.sampleRate
+        ) {
+            NSLog("PipelineCoordinator: dropping %.1fs segment (spectral tilt non-speech, rms=%.4f)",
+                  durationSecs, rms)
+            debugLog(debugConsole, .pipeline,
+                     "Spectral tilt rejected segment: \(String(format: "%.1f", durationSecs))s (rms=\(String(format: "%.3f", rms)))")
+            return
+        }
+
+        // Cross-correlation + spectral echo checks — compare segment against recent TTS playback.
+        // Only during echo tail window to avoid unnecessary computation on idle segments.
+        if echoSuppressor.isInSuppression {
+            if echoSuppressor.isLikelyAcousticEcho(micSamples: segment.samples) {
+                NSLog("PipelineCoordinator: dropping %.1fs segment (acoustic echo correlation)", durationSecs)
+                debugLog(debugConsole, .pipeline,
+                         "Acoustic echo rejected: \(String(format: "%.1f", durationSecs))s (cross-correlation match)")
+                return
+            }
+            // Spectral envelope comparison — cosine similarity between mic and TTS band energies.
+            let micBandEnergy = EchoSuppressor.computeBandEnergy(samples: segment.samples, sampleRate: segment.sampleRate)
+            let similarity = EchoSuppressor.spectralEnvelopeSimilarity(micEnergy: micBandEnergy, ttsEnergy: echoSuppressor.playbackBandBaseline)
+            if similarity >= EchoSuppressor.spectralSimilarityEchoThreshold {
+                NSLog("PipelineCoordinator: dropping %.1fs segment (spectral envelope similarity=%.3f)", durationSecs, similarity)
+                debugLog(debugConsole, .pipeline,
+                         "Spectral echo rejected: \(String(format: "%.1f", durationSecs))s (similarity=\(String(format: "%.3f", similarity)))")
+                return
+            }
         }
 
         // Speaker identification (best-effort, non-blocking).
@@ -6584,6 +6663,50 @@ actor PipelineCoordinator {
         }
     }
 
+    /// Detect audio output route from the playback engine for echo suppression tuning.
+    ///
+    /// Maps the system default output device name to an `EchoSuppressor.OutputRoute`.
+    /// Headphones get relaxed echo windows; external speakers get aggressive windows.
+    private nonisolated static func detectOutputRoute(playback: AudioPlaybackManager) -> EchoSuppressor.OutputRoute {
+        #if canImport(CoreAudio)
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID
+        )
+        guard status == noErr, deviceID != 0 else { return .unknown }
+
+        // Get device name.
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceNameCFString,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var name: CFString = "" as CFString
+        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        let nameStatus = AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name)
+        guard nameStatus == noErr else { return .unknown }
+
+        let deviceName = (name as String).lowercased()
+        if deviceName.contains("headphone") || deviceName.contains("airpod")
+            || deviceName.contains("earpod") || deviceName.contains("beats") {
+            return .headphones
+        } else if deviceName.contains("macbook") || deviceName.contains("built-in")
+                    || deviceName.contains("internal") {
+            return .builtInSpeaker
+        } else {
+            return .externalSpeaker
+        }
+        #else
+        return .unknown
+        #endif
+    }
+
     private func markAssistantSpeechStarted() {
         guard !assistantSpeaking else { return }
         assistantSpeaking = true
@@ -6600,6 +6723,7 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "Speech state → idle (\(reason), dur=\(String(format: "%.1f", speechDuration))s)")
             assistantSpeaking = false
             echoSuppressor.onAssistantSpeechEnd(speechDurationSecs: speechDuration)
+            echoSuppressor.beginDecayMeasurement(currentRms: echoSuppressor.playbackBaselineRms)
             echoSuppressor.resetPlaybackBaseline()
             bargeInState.interruptionDecider.reset()
             // Clear playback barge-in state.
@@ -6734,8 +6858,11 @@ actor PipelineCoordinator {
         let effectiveVoiceInstruct = voiceInstruct ?? config.tts.defaultVoiceInstruct
         var didProduceAudio = false
 
+        var ttsSamplesForEcho: [Float] = []
+        var ttsSampleRate = 24_000
+
         do {
-            didProduceAudio = try await withThrowingTaskGroup(of: Bool.self) { group in
+            didProduceAudio = try await withThrowingTaskGroup(of: (Bool, [Float], Int).self) { group in
                 // Child 1: consume the TTS stream.
                 // Uses Task.checkCancellation() for interruption — the timeout
                 // child or external cancellation (barge-in) cancels this task.
@@ -6752,6 +6879,7 @@ actor PipelineCoordinator {
                     // ~500ms of audio (12 000 samples at 24kHz) per enqueue gives the
                     // player a comfortable rolling buffer without inflating TTFA.
                     var accum: [Float] = []
+                    var allSamples: [Float] = []  // For echo suppressor playback ring buffer
                     var accumRate = 24_000
                     let accumTarget = 12_000  // ~500ms at 24kHz
                     for try await buffer in audioStream {
@@ -6763,7 +6891,9 @@ actor PipelineCoordinator {
                         }
                         produced = true
                         accumRate = Int(buffer.format.sampleRate)
-                        accum.append(contentsOf: Self.extractSamples(from: buffer))
+                        let samples = Self.extractSamples(from: buffer)
+                        accum.append(contentsOf: samples)
+                        allSamples.append(contentsOf: samples)
                         if accum.count >= accumTarget {
                             await playback.enqueue(samples: accum, sampleRate: accumRate, isFinal: false)
                             accum = []
@@ -6773,27 +6903,34 @@ actor PipelineCoordinator {
                     if !accum.isEmpty {
                         await playback.enqueue(samples: accum, sampleRate: accumRate, isFinal: false)
                     }
-                    return produced
+                    return (produced, allSamples, accumRate)
                 }
 
                 // Child 2: timeout watchdog — cancels the group if TTS hangs.
                 group.addTask {
                     try await Task.sleep(nanoseconds: TTSState.synthesisTimeoutSeconds * 1_000_000_000)
                     // If we reach here, the timeout expired before the stream finished.
-                    return false
+                    return (false, [], 24_000)
                 }
 
                 // Wait for whichever finishes first.
-                if let produced = try await group.next() {
+                if let result = try await group.next() {
                     // Cancel the remaining child (either the timeout or the stalled stream).
                     group.cancelAll()
-                    if !produced {
+                    if !result.0 {
                         NSLog("PipelineCoordinator: TTS synthesis timeout or produced no audio")
                         debugLog(debugConsole, .pipeline, "⚠️ TTS timeout/no-audio — forcing completion")
                     }
-                    return produced
+                    ttsSamplesForEcho = result.1
+                    ttsSampleRate = result.2
+                    return result.0
                 }
                 return false
+            }
+
+            // Record TTS audio for cross-correlation echo detection.
+            if !ttsSamplesForEcho.isEmpty {
+                echoSuppressor.recordPlaybackAudio(samples: ttsSamplesForEcho, sampleRate: ttsSampleRate)
             }
 
             if isFinal {
@@ -6921,8 +7058,9 @@ actor PipelineCoordinator {
                 audio: barge.audioSamples,
                 sampleRate: AudioCaptureManager.targetSampleRate
             ) {
-                    if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: Self.faeSelfEchoThreshold) {
-                    debugLog(debugConsole, .command, "Barge-in blocked (fae_self echo)")
+                    let faeSelfThreshold = echoSuppressor.faeSelfThresholdDuringPlayback(baseThreshold: Self.faeSelfEchoThreshold)
+                    if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: faeSelfThreshold) {
+                    debugLog(debugConsole, .command, "Barge-in blocked (fae_self echo, threshold=\(String(format: "%.3f", faeSelfThreshold)))")
                     NSLog("PipelineCoordinator: barge-in rejected — audio matches fae_self (echo)")
                     return
                 }
@@ -7013,8 +7151,10 @@ actor PipelineCoordinator {
         }
 
         // fae_self rejection — if audio matches Fae's TTS voice, it's echo.
-        if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: Self.faeSelfEchoThreshold) {
-            debugLog(debugConsole, .command, "Playback barge-in: fae_self match — echo, ignoring")
+        // Use enhanced threshold during playback (more aggressive).
+        let playbackFaeSelfThreshold = echoSuppressor.faeSelfThresholdDuringPlayback(baseThreshold: Self.faeSelfEchoThreshold)
+        if let _ = await store.matchesFaeSelf(embedding: embedding, threshold: playbackFaeSelfThreshold) {
+            debugLog(debugConsole, .command, "Playback barge-in: fae_self match — echo (threshold=\(String(format: "%.3f", playbackFaeSelfThreshold)))")
             return false
         }
 
