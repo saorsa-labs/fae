@@ -814,7 +814,17 @@ struct EchoSuppressor {
     /// Short utterance guard expiry.
     private var shortUtteranceGuardUntil: Date?
 
+    /// Time when the assistant's last speech ended (echo tail start).
+    private var lastSpeechEndedAt: Date?
+
     // MARK: - Computed Properties
+
+    /// Seconds since the assistant last stopped speaking.
+    /// Returns `Double.infinity` if the assistant has never spoken.
+    var secondsSinceLastSpeech: Double {
+        guard let lastEnd = lastSpeechEndedAt else { return .infinity }
+        return Date().timeIntervalSince(lastEnd)
+    }
 
     /// Whether the echo suppressor is currently actively suppressing audio.
     /// True when assistant is speaking or within the echo tail window.
@@ -842,6 +852,7 @@ struct EchoSuppressor {
     mutating func onAssistantSpeechEnd(speechDurationSecs: Double = 0) {
         assistantSpeaking = false
         let now = Date()
+        lastSpeechEndedAt = now
 
         // Scale echo windows based on speech duration: +50ms per second of speech,
         // capped at 300ms bonus. An 8s response adds ~300ms (total ~800ms).

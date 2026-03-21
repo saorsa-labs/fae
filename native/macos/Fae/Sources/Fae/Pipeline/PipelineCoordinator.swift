@@ -3867,6 +3867,17 @@ actor PipelineCoordinator {
                 return
             }
 
+            // Short-utterance echo guard: tiny transcriptions (1-2 words, < 2s)
+            // that arrive within 5s of Fae's last speech are almost always echo
+            // artifacts or ambient noise. Real user interruptions are typically
+            // longer ("stop", "wait" are caught by barge-in before STT).
+            let wordCount = text.split(separator: " ").count
+            if wordCount <= 2 && durationSecs < 2.0 && echoSuppressor.secondsSinceLastSpeech < 5.0 {
+                NSLog("PipelineCoordinator: dropping short utterance \"%@\" (echo guard: %d words, %.1fs, %.1fs after speech)", text, wordCount, durationSecs, echoSuppressor.secondsSinceLastSpeech)
+                debugLog(debugConsole, .pipeline, "Short-utterance echo guard: \"\(text)\" (\(wordCount) words)")
+                return
+            }
+
             let acousticWakeDetection = await acousticWakeDetectionForSegment(segment)
 
             await processRecognizedVoiceText(
