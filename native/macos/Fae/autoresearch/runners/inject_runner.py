@@ -54,9 +54,17 @@ class FaeTestClient:
         r = self.client.get("/health")
         return r.json()
 
-    def inject(self, text: str) -> dict:
-        r = self.client.post("/inject", json={"text": text})
-        return r.json()
+    def inject(self, text: str, max_retries: int = 10) -> dict:
+        """Inject text. Retries on 409 (already generating) with backoff."""
+        for attempt in range(max_retries):
+            r = self.client.post("/inject", json={"text": text})
+            data = r.json()
+            if r.status_code == 409:
+                # Already generating — wait and retry
+                time.sleep(2.0)
+                continue
+            return data
+        return data  # Return last response even if 409
 
     def status(self) -> dict:
         r = self.client.get("/status")

@@ -105,16 +105,47 @@ echo "    Disabling direct-address gating for test mode..."
 curl -sf -X POST http://127.0.0.1:7433/config \
     -H "Content-Type: application/json" \
     -d '{"key":"conversation.require_direct_address","value":false}' > /dev/null 2>&1 || true
+
+# Disable awareness/proactive tasks — they hijack the pipeline during testing
+echo "    Disabling proactive awareness for test mode..."
+curl -sf -X POST http://127.0.0.1:7433/config \
+    -H "Content-Type: application/json" \
+    -d '{"key":"awareness.enabled","value":false}' > /dev/null 2>&1 || true
+curl -sf -X POST http://127.0.0.1:7433/config \
+    -H "Content-Type: application/json" \
+    -d '{"key":"awareness.camera_enabled","value":false}' > /dev/null 2>&1 || true
+curl -sf -X POST http://127.0.0.1:7433/config \
+    -H "Content-Type: application/json" \
+    -d '{"key":"awareness.screen_enabled","value":false}' > /dev/null 2>&1 || true
+curl -sf -X POST http://127.0.0.1:7433/config \
+    -H "Content-Type: application/json" \
+    -d '{"key":"awareness.overnight_work","value":false}' > /dev/null 2>&1 || true
+curl -sf -X POST http://127.0.0.1:7433/config \
+    -H "Content-Type: application/json" \
+    -d '{"key":"awareness.enhanced_briefing","value":false}' > /dev/null 2>&1 || true
 sleep 1
 
-# Warmup inject — first LLM call compiles Metal shaders, subsequent are fast
-echo "    Warmup: priming LLM..."
+# Warmup inject — first LLM call compiles Metal shaders, subsequent are fast.
+# Also triggers enhanced_morning_briefing which we need to let complete.
+echo "    Warmup: priming LLM + waiting for morning briefing..."
 curl -sf -X POST http://127.0.0.1:7433/inject \
     -H "Content-Type: application/json" \
     -d '{"text":"Hi Fae, hello"}' > /dev/null 2>&1 || true
-sleep 10
+
+# Wait for generation + TTS + morning briefing to fully complete
+for i in $(seq 1 120); do
+    CONV=$(curl -sf http://127.0.0.1:7433/conversation 2>/dev/null)
+    IS_GEN=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('isGenerating',False))" 2>/dev/null)
+    IS_SPK=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('isSpeaking',False))" 2>/dev/null)
+    if [ "$IS_GEN" = "False" ] && [ "$IS_SPK" = "False" ] && [ "$i" -gt 10 ]; then
+        echo "    Warmup generation complete after $((i))s"
+        break
+    fi
+    sleep 1
+done
+
 curl -sf -X POST http://127.0.0.1:7433/reset > /dev/null 2>&1 || true
-sleep 2
+sleep 3
 echo "    Warmup complete."
 
 # Step 4: Run scenarios
