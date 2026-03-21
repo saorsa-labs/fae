@@ -70,10 +70,12 @@ struct EchoSuppressor {
 
     /// Base echo tail after assistant stops speaking (milliseconds).
     /// Adjusted by output route multiplier at runtime.
-    private var baseEchoTailMs: Int { aecEnabled ? 300 : 500 }
+    /// Without AEC, speaker→mic echo can take 800ms+ to fully decay.
+    private var baseEchoTailMs: Int { aecEnabled ? 300 : 800 }
 
     /// Base short-utterance guard window after assistant stops (milliseconds).
-    private var baseShortUtteranceGuardMs: Int { aecEnabled ? 500 : 800 }
+    /// Increased to prevent short echo fragments from triggering new turns.
+    private var baseShortUtteranceGuardMs: Int { aecEnabled ? 500 : 1200 }
 
     /// Echo tail after assistant stops speaking, adjusted for output route.
     var echoTailMs: Int {
@@ -707,17 +709,55 @@ struct EchoSuppressor {
         return false
     }
 
-    /// Convert number words to digit string: ["five", "fifty", "six"] → "556".
+    /// Convert number words to numeric value: ["fifty", "six"] → "56".
+    ///
+    /// Handles tens+ones combining: "fifty" + "six" = 56, not "506".
+    /// Also handles "hundred"/"thousand" multipliers.
     private static func extractDigitsFromNumberWords(_ words: [String]) -> String {
-        var digits = ""
+        // First pass: convert words to numeric components
+        let ones: Set<String> = ["one","two","three","four","five","six","seven","eight","nine"]
+        let tens: Set<String> = ["twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"]
+        let onesMap: [String: Int] = [
+            "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+            "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+            "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+            "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+            "eighteen": 18, "nineteen": 19,
+            "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+            "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+        ]
+
+        var result = 0
+        var current = 0
+        var hasNumber = false
+
         for word in words {
-            if let d = numberWords[word] {
-                digits += d
+            if let val = onesMap[word] {
+                hasNumber = true
+                if tens.contains(word) {
+                    current += val
+                } else if ones.contains(word) && current > 0 && current % 10 == 0 {
+                    // tens + ones: "fifty" (50) + "six" (6) = 56
+                    current += val
+                } else {
+                    current += val
+                }
+            } else if word == "hundred" {
+                hasNumber = true
+                current = (current == 0 ? 1 : current) * 100
+            } else if word == "thousand" {
+                hasNumber = true
+                current = (current == 0 ? 1 : current) * 1000
+                result += current
+                current = 0
             } else if word.allSatisfy(\.isNumber) {
-                digits += word
+                hasNumber = true
+                current = current * 10 + (Int(word) ?? 0)
             }
         }
-        return digits
+        result += current
+
+        return hasNumber ? String(result) : ""
     }
 
     /// Extract all digit sequences from text: "the answer is 546" → ["546"].
