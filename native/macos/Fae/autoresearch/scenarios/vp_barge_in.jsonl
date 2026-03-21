@@ -1,0 +1,6 @@
+{"id": "bi_text_stop", "dimension": "barge_in", "inject": "Tell me a very long and detailed story about a dragon", "wait_ms": 3000, "interrupt_inject": "Stop", "expect_tts_stopped": true, "max_interrupt_latency_ms": 2000}
+{"id": "bi_text_redirect", "dimension": "barge_in", "inject": "Count from 1 to 100 slowly", "wait_ms": 4000, "interrupt_inject": "Actually, what time is it?", "expect_tts_stopped": true, "max_interrupt_latency_ms": 2000}
+{"id": "bi_text_nevermind", "dimension": "barge_in", "inject": "Explain the history of computing in great detail", "wait_ms": 3000, "interrupt_inject": "Never mind", "expect_tts_stopped": true, "max_interrupt_latency_ms": 2000}
+{"id": "bi_text_correction", "dimension": "barge_in", "inject": "The capital of Australia is Sydney right?", "wait_ms": 3000, "interrupt_inject": "Wait, is it Canberra?", "expect_tts_stopped": true, "max_interrupt_latency_ms": 2000}
+{"id": "bi_rapid_fire", "dimension": "barge_in", "steps": [{"inject": "Tell me about the solar system", "wait_ms": 3000}, {"inject": "Actually tell me about galaxies", "wait_ms": 3000}, {"inject": "Never mind, what is 2 plus 2?", "wait_ms": 12000, "expect_response_contains": ["4"]}]}
+{"id": "bi_no_false_stop", "dimension": "barge_in", "inject": "Tell me three interesting facts about dolphins", "wait_ms": 8000, "interrupt_inject": "", "expect_tts_stopped": false}

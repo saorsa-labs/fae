@@ -1,0 +1,8 @@
+{"id": "sg_owner_greeting", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/primary/greeting_hello.wav", "expect_response": true, "expect_response_contains": ["hello", "hi", "hey"], "max_latency_ms": 15000}
+{"id": "sg_owner_question", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/primary/question_capital.wav", "expect_response": true, "expect_response_contains": ["Paris"], "max_latency_ms": 15000}
+{"id": "sg_owner_math", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/primary/question_math.wav", "expect_response": true, "expect_response_contains": ["546"], "max_latency_ms": 15000}
+{"id": "sg_stranger_greeting", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/stranger/karen_greeting.wav", "expect_response": false, "max_latency_ms": 10000}
+{"id": "sg_stranger_question", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/stranger/karen_question.wav", "expect_response": false, "max_latency_ms": 10000}
+{"id": "sg_stranger_help", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/stranger/karen_help.wav", "expect_response": false, "max_latency_ms": 10000}
+{"id": "sg_stranger_fred", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/stranger/fred_greeting.wav", "expect_response": false, "max_latency_ms": 10000}
+{"id": "sg_owner_after_silence", "dimension": "speaker_gate", "type": "audio", "audio_file": "autoresearch/audio/primary/greeting_morning.wav", "pre_delay_ms": 5000, "expect_response": true, "max_latency_ms": 15000}

@@ -1,0 +1,3 @@
+{"id": "res_idle", "dimension": "resource_usage", "type": "resource", "phase": "idle", "duration_ms": 5000}
+{"id": "res_generation", "dimension": "resource_usage", "type": "resource", "phase": "generation", "inject": "Tell me about the history of Scotland", "duration_ms": 15000}
+{"id": "res_memory_recall", "dimension": "resource_usage", "type": "resource", "phase": "memory_recall", "inject": "What do you remember about me?", "duration_ms": 10000}

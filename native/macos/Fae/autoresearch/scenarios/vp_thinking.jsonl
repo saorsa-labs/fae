@@ -1,0 +1,7 @@
+{"id": "think_hello_no_think", "dimension": "thinking_mode", "inject": "Hello", "expect_no_think_tags": true, "max_latency_ms": 5000}
+{"id": "think_math_no_think", "dimension": "thinking_mode", "inject": "What is 7 times 8?", "expect_response_contains": ["56"], "expect_no_think_tags": true, "max_latency_ms": 8000}
+{"id": "think_yesno_no_think", "dimension": "thinking_mode", "inject": "Is the Earth round?", "expect_no_think_tags": true, "max_latency_ms": 8000}
+{"id": "think_complex_quality", "dimension": "thinking_mode", "inject": "What causes thunder and lightning?", "expect_no_think_tags": true, "max_latency_ms": 15000}
+{"id": "think_factual_no_think", "dimension": "thinking_mode", "inject": "What year did humans first land on the moon?", "expect_response_contains": ["1969"], "expect_no_think_tags": true, "max_latency_ms": 10000}
+{"id": "think_tags_never_leak", "dimension": "thinking_mode", "inject": "Explain why the sky is blue step by step", "expect_no_think_tags": true, "max_latency_ms": 15000}
+{"id": "think_followup_fast", "dimension": "thinking_mode", "steps": [{"inject": "What is the largest planet?", "wait_ms": 12000, "expect_response_contains": ["Jupiter"]}, {"inject": "How many moons does it have?", "wait_ms": 10000}]}

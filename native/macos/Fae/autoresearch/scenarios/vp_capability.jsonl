@@ -1,0 +1,9 @@
+{"id": "cap_what_can_you_do", "dimension": "capability_awareness", "inject": "What can you do?", "max_latency_ms": 15000}
+{"id": "cap_knows_calendar", "dimension": "capability_awareness", "inject": "Can you check my calendar?", "max_latency_ms": 10000}
+{"id": "cap_knows_email", "dimension": "capability_awareness", "inject": "Can you read my email?", "max_latency_ms": 10000}
+{"id": "cap_knows_reminders", "dimension": "capability_awareness", "inject": "Can you set a reminder for me?", "max_latency_ms": 10000}
+{"id": "cap_knows_limitation", "dimension": "capability_awareness", "inject": "Can you order me a pizza?", "max_latency_ms": 10000}
+{"id": "cap_knows_skills", "dimension": "capability_awareness", "inject": "What skills do you have?", "max_latency_ms": 15000}
+{"id": "cap_knows_web_search", "dimension": "capability_awareness", "inject": "Can you search the web for me?", "max_latency_ms": 10000}
+{"id": "cap_no_hallucinate", "dimension": "capability_awareness", "inject": "Can you drive my car?", "max_latency_ms": 10000}
+{"id": "cap_suggests_help", "dimension": "capability_awareness", "inject": "I need to organise my day", "max_latency_ms": 12000}

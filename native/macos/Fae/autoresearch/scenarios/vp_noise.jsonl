@@ -1,0 +1,5 @@
+{"id": "noise_silence_stable", "dimension": "noise_resilience", "type": "audio", "audio_file": "autoresearch/audio/noise/silence_3s.wav", "expect_response": false, "max_latency_ms": 8000}
+{"id": "noise_white_reject", "dimension": "noise_resilience", "type": "audio", "audio_file": "autoresearch/audio/noise/white_noise_3s.wav", "expect_response": false, "max_latency_ms": 8000}
+{"id": "noise_pink_reject", "dimension": "noise_resilience", "type": "audio", "audio_file": "autoresearch/audio/noise/pink_noise_3s.wav", "expect_response": false, "max_latency_ms": 8000}
+{"id": "noise_tone_reject", "dimension": "noise_resilience", "type": "audio", "audio_file": "autoresearch/audio/noise/tone_440hz_3s.wav", "expect_response": false, "max_latency_ms": 8000}
+{"id": "noise_speech_over_noise", "dimension": "noise_resilience", "type": "audio", "audio_file": "autoresearch/audio/mixed/speech_over_noise.wav", "expect_response": true, "expect_response_contains": ["Paris"], "max_latency_ms": 15000}

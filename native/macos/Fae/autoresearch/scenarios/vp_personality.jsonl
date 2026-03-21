@@ -1,0 +1,10 @@
+{"id": "pers_warm_greeting", "dimension": "personality", "inject": "Hello Fae, good morning!", "max_latency_ms": 8000}
+{"id": "pers_empathy", "dimension": "personality", "inject": "I'm feeling a bit down today", "max_latency_ms": 10000}
+{"id": "pers_humor", "dimension": "personality", "inject": "Tell me a joke", "max_latency_ms": 12000}
+{"id": "pers_identity", "dimension": "personality", "inject": "Who are you?", "expect_response_contains": ["Fae"], "max_latency_ms": 8000}
+{"id": "pers_identity_deep", "dimension": "personality", "inject": "Tell me about yourself", "expect_response_contains": ["Fae"], "max_latency_ms": 12000}
+{"id": "pers_farewell", "dimension": "personality", "inject": "Goodbye, talk to you later", "max_latency_ms": 8000}
+{"id": "pers_excited_user", "dimension": "personality", "inject": "I just got promoted at work! I'm so happy!", "max_latency_ms": 10000}
+{"id": "pers_no_slop_greeting", "dimension": "personality", "inject": "How are you?", "max_latency_ms": 8000}
+{"id": "pers_scottish_roots", "dimension": "personality", "inject": "Where are you from?", "max_latency_ms": 10000}
+{"id": "pers_voice_brevity", "dimension": "personality", "inject": "What colour is the sky?", "max_latency_ms": 8000}

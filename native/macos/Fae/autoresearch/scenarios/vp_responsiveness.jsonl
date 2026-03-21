@@ -1,0 +1,6 @@
+{"id": "resp_greeting_fast", "dimension": "responsiveness", "inject": "Hello", "max_latency_ms": 5000}
+{"id": "resp_yesno_fast", "dimension": "responsiveness", "inject": "Is the sky blue?", "max_latency_ms": 5000}
+{"id": "resp_math_simple", "dimension": "responsiveness", "inject": "What is 3 plus 4?", "expect_response_contains": ["7"], "max_latency_ms": 8000}
+{"id": "resp_factual", "dimension": "responsiveness", "inject": "What is the capital of Japan?", "expect_response_contains": ["Tokyo"], "max_latency_ms": 10000}
+{"id": "resp_followup_faster", "dimension": "responsiveness", "steps": [{"inject": "What is the capital of France?", "wait_ms": 15000, "expect_response_contains": ["Paris"]}, {"inject": "And Germany?", "wait_ms": 12000, "expect_response_contains": ["Berlin"]}]}
+{"id": "resp_complex_ok", "dimension": "responsiveness", "inject": "In one sentence, explain why the sky is blue", "max_latency_ms": 15000}
