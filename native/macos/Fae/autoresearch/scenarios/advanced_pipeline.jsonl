@@ -1,0 +1,12 @@
+{"id": "ap_incomplete_turn_conjunction", "dimension": "advanced_pipeline", "inject": "I want to go to the store and", "wait_ms": 5000, "expect_patience": true, "max_latency_ms": 8000}
+{"id": "ap_incomplete_turn_preposition", "dimension": "advanced_pipeline", "inject": "Can you search for information about", "wait_ms": 5000, "expect_patience": true, "max_latency_ms": 8000}
+{"id": "ap_incomplete_turn_hesitation", "dimension": "advanced_pipeline", "inject": "I was thinking about, um, let me", "wait_ms": 5000, "expect_patience": true, "max_latency_ms": 8000}
+{"id": "ap_continuation_cue_hold_on", "dimension": "advanced_pipeline", "inject": "Hold on, let me think about this", "wait_ms": 6000, "expect_patience": true, "max_latency_ms": 10000}
+{"id": "ap_continuation_cue_wait", "dimension": "advanced_pipeline", "inject": "Wait, give me a second", "wait_ms": 6000, "expect_patience": true, "max_latency_ms": 10000}
+{"id": "ap_quick_question", "dimension": "advanced_pipeline", "inject": "What is 5 plus 3?", "expect_response_contains": ["8"], "max_latency_ms": 8000}
+{"id": "ap_natural_pause_rhythm", "dimension": "advanced_pipeline", "steps": [{"inject": "Hello Fae", "wait_ms": 6000}, {"inject": "How are you?", "wait_ms": 6000}, {"inject": "That's nice", "wait_ms": 6000}, {"inject": "What can you do?", "wait_ms": 10000}]}
+{"id": "ap_think_tag_never_leaks", "dimension": "advanced_pipeline", "inject": "What is the square root of 144?", "expect_response_contains": ["12"], "expect_no_think_tags": true, "max_latency_ms": 10000}
+{"id": "ap_multi_sentence_input", "dimension": "advanced_pipeline", "inject": "I need help with two things. First, what's the capital of Norway? Second, what's 7 times 8?", "expect_response_contains": ["Oslo", "56"], "max_latency_ms": 15000}
+{"id": "ap_followup_after_tool", "dimension": "advanced_pipeline", "steps": [{"inject": "What's on my calendar today?", "wait_ms": 15000, "expect_tool": "calendar"}, {"inject": "Can you add a meeting at 3pm?", "wait_ms": 15000, "expect_tool": "calendar"}]}
+{"id": "ap_rapid_succession", "dimension": "advanced_pipeline", "steps": [{"inject": "What is 1 plus 1?", "wait_ms": 8000, "expect_response_contains": ["2"]}, {"inject": "What is 2 plus 2?", "wait_ms": 8000, "expect_response_contains": ["4"]}, {"inject": "What is 3 plus 3?", "wait_ms": 8000, "expect_response_contains": ["6"]}]}
+{"id": "ap_long_generation_patience", "dimension": "advanced_pipeline", "inject": "Write me a haiku about spring", "max_latency_ms": 15000}

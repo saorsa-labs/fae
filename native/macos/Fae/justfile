@@ -357,6 +357,25 @@ prod-check:
     xcodebuild -resolvePackageDependencies -scheme Fae -derivedDataPath .build/xcode-derived -quiet
     xcodebuild build -scheme Fae -destination 'platform=macOS' -configuration Debug -derivedDataPath .build/xcode-derived -quiet
 
+# ─── AutoResearch ────────────────────────────────────────────────────────────
+
+# Run one autoresearch iteration (current focus dimension)
+autoresearch-run:
+    bash autoresearch/harness.sh
+
+# Run autoresearch on a specific dimension
+# Usage: just autoresearch voice_pipeline
+autoresearch dimension:
+    bash autoresearch/harness.sh {{dimension}}
+
+# Run autoresearch baseline across all dimensions
+autoresearch-baseline:
+    bash autoresearch/harness.sh --all
+
+# Show current autoresearch state
+autoresearch-status:
+    @uv run python -c "import json; s=json.load(open('autoresearch/STATE.json')); [print(f'  {d}: {v[\"score\"] or \"--\"}/100') for d,v in sorted(s['dimensions'].items())]; print(f'Focus: {s[\"currentFocus\"]}  Runs: {s[\"runCount\"]}')"
+
 # ─── Bundle & Sign (local development) ──────────────────────────────────────
 
 # Build app bundle and launch it.

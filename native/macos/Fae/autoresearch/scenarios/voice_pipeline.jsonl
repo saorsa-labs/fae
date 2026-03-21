@@ -1,0 +1,20 @@
+{"id": "vp_greeting_hello", "dimension": "voice_pipeline", "inject": "Hello Fae", "expect_response_contains": ["hello", "hi", "hey"], "max_latency_ms": 6000}
+{"id": "vp_greeting_morning", "dimension": "voice_pipeline", "inject": "Good morning", "expect_response_contains": ["morning", "hello", "hi"], "max_latency_ms": 6000}
+{"id": "vp_greeting_howdy", "dimension": "voice_pipeline", "inject": "Hey there, how are you?", "expect_response_contains": ["doing", "great", "good", "well", "help"], "max_latency_ms": 8000}
+{"id": "vp_question_time", "dimension": "voice_pipeline", "inject": "What time is it?", "max_latency_ms": 10000}
+{"id": "vp_question_day", "dimension": "voice_pipeline", "inject": "What day is it today?", "max_latency_ms": 10000}
+{"id": "vp_math_simple", "dimension": "voice_pipeline", "inject": "What is 42 times 13?", "expect_response_contains": ["546"], "max_latency_ms": 10000}
+{"id": "vp_math_division", "dimension": "voice_pipeline", "inject": "What is 144 divided by 12?", "expect_response_contains": ["12"], "max_latency_ms": 10000}
+{"id": "vp_name_tell", "dimension": "voice_pipeline", "inject": "My name is David", "expect_response_contains": ["David"], "max_latency_ms": 10000}
+{"id": "vp_factual_capital", "dimension": "voice_pipeline", "inject": "What is the capital of France?", "expect_response_contains": ["Paris"], "max_latency_ms": 10000}
+{"id": "vp_factual_planet", "dimension": "voice_pipeline", "inject": "What is the largest planet in our solar system?", "expect_response_contains": ["Jupiter"], "max_latency_ms": 10000}
+{"id": "vp_explain_brief", "dimension": "voice_pipeline", "inject": "In one sentence, what is photosynthesis?", "max_latency_ms": 12000}
+{"id": "vp_yes_no", "dimension": "voice_pipeline", "inject": "Is water wet?", "max_latency_ms": 8000}
+{"id": "vp_count_words", "dimension": "voice_pipeline", "inject": "Count from 1 to 5", "expect_response_contains": ["1", "2", "3", "4", "5"], "max_latency_ms": 10000}
+{"id": "vp_spelling", "dimension": "voice_pipeline", "inject": "How do you spell 'necessary'?", "expect_response_contains": ["n", "e", "c", "s", "a", "r", "y"], "max_latency_ms": 10000}
+{"id": "vp_followup", "dimension": "voice_pipeline", "steps": [{"inject": "What is the capital of Japan?", "wait_ms": 10000, "expect_response_contains": ["Tokyo"]}, {"inject": "And what about Germany?", "wait_ms": 10000, "expect_response_contains": ["Berlin"]}]}
+{"id": "vp_think_tag_leak", "dimension": "voice_pipeline", "inject": "What is 7 plus 8?", "expect_response_contains": ["15"], "expect_no_think_tags": true, "max_latency_ms": 10000}
+{"id": "vp_empty_polite", "dimension": "voice_pipeline", "inject": "Thanks", "max_latency_ms": 6000}
+{"id": "vp_long_question", "dimension": "voice_pipeline", "inject": "Can you tell me what the weather is typically like in Scotland during the month of December in terms of temperature and rainfall?", "max_latency_ms": 15000}
+{"id": "vp_ambiguous", "dimension": "voice_pipeline", "inject": "What do you think?", "max_latency_ms": 8000}
+{"id": "vp_multisentence", "dimension": "voice_pipeline", "inject": "Tell me three interesting facts about the moon. Keep it brief.", "max_latency_ms": 15000}
