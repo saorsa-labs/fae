@@ -22,8 +22,15 @@ final class SpeechInputStage: @unchecked Sendable {
     /// Maximum number of buffered speech segments before backpressure drops occur.
     static let speechSegmentQueueDepth = 6
 
+    /// Maximum age (seconds) for a queued segment before it's considered stale.
+    /// Segments older than this are dropped on dequeue rather than processed.
+    static let segmentStalenessThreshold: TimeInterval = 10.0
+
     /// Running count of segments dropped due to backpressure (diagnostic).
     private(set) var speechSegmentsDroppedForBackpressure: Int = 0
+
+    /// Running count of segments dropped due to staleness (diagnostic).
+    private(set) var speechSegmentsDroppedForStaleness: Int = 0
 
     // MARK: - Streaming Wake Detection
 
@@ -73,9 +80,21 @@ final class SpeechInputStage: @unchecked Sendable {
             self.speechSegmentContinuation = continuation
         }
 
-        speechSegmentTask = Task {
+        speechSegmentTask = Task { [weak self] in
             for await segment in stream {
                 guard !Task.isCancelled else { break }
+
+                // Staleness check: drop segments that sat in the queue too long.
+                // This prevents processing very old audio when the system was under load.
+                let age = Date().timeIntervalSince(segment.capturedAt)
+                if age > Self.segmentStalenessThreshold {
+                    self?.speechSegmentsDroppedForStaleness += 1
+                    NSLog("SpeechInputStage: dropped stale segment (age=%.1fs, threshold=%.1fs, count=%d)",
+                          age, Self.segmentStalenessThreshold,
+                          self?.speechSegmentsDroppedForStaleness ?? 0)
+                    continue
+                }
+
                 await handler(segment)
             }
         }

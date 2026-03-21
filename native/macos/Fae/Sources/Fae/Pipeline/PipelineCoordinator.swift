@@ -312,8 +312,17 @@ actor PipelineCoordinator {
     /// Post-VAD speech verifier — rejects music/noise segments.
     private var speechVerifier: MLXSpeechVerifier?
 
+    /// Apple SoundAnalysis classifier — filters speech from music/TV/noise.
+    /// Uses Apple's built-in 303-category sound classifier as a pre-filter
+    /// before speaker verification.
+    private let appleSpeechClassifier = AppleSpeechClassifier()
+
     /// Minimum audio samples before running keyword classification (500ms at 16kHz).
     private static let keywordClassifierMinSamples = 8_000
+
+    /// Single-slot guard for streaming transcription tasks.
+    /// Prevents task pile-up when transcription takes longer than the audio chunk interval.
+    private var streamingTranscriptionInFlight: Bool = false
 
     // MARK: - Speculative Prefill
 
@@ -692,6 +701,22 @@ actor PipelineCoordinator {
         let stream = try await capture.startCapture()
         captureStream = stream
 
+        // Setup Apple SoundAnalysis classifier for speech vs music/noise filtering.
+        // Uses 16kHz mono format matching the capture pipeline.
+        if let audioFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(AudioCaptureManager.targetSampleRate),
+            channels: 1,
+            interleaved: false
+        ) {
+            do {
+                try await appleSpeechClassifier.setup(format: audioFormat)
+            } catch {
+                NSLog("PipelineCoordinator: Apple speech classifier setup failed (non-fatal): %@",
+                      error.localizedDescription)
+            }
+        }
+
         eventBus.send(.pipelineStateChanged(.running))
         pipelineStartedAt = Date()
         await refreshDegradedModeIfNeeded(context: "startup")
@@ -735,6 +760,7 @@ actor PipelineCoordinator {
         await abandonAllWorkflowTraces(reason: "Pipeline stopped before workflow completion.")
         await capture.stopCapture()
         await playback.stop()
+        await appleSpeechClassifier.teardown()
         await llmEngine.shutdown()
         currentTurnID = nil
         eventBus.send(.pipelineStateChanged(.stopped))
@@ -2608,16 +2634,21 @@ actor PipelineCoordinator {
                 // final high-accuracy transcription after speech ends.
                 await sttEngine.feedStreamingAudio(chunk.samples)
                 if await sttEngine.shouldRunStreamingTranscription() {
-                    // Detached task so the 36ms audio loop is not blocked.
-                    Task { [weak self] in
-                        guard let self else { return }
-                        if let partial = await self.sttEngine.runStreamingTranscription() {
-                            // Drop stale partials from a previous streaming session.
-                            // When fast-path is active, slow-path partials supplement
-                            // with higher accuracy as more audio accumulates.
-                            await self.handleStreamingPartialTranscript(
-                                partial, epoch: epoch, source: .qwen3ASR
-                            )
+                    // Single-slot guard: only spawn if no transcription task is in flight.
+                    // Prevents task pile-up when transcription takes longer than chunk interval.
+                    if !streamingTranscriptionInFlight {
+                        streamingTranscriptionInFlight = true
+                        Task { [weak self] in
+                            guard let self else { return }
+                            defer { Task { await self.clearStreamingTranscriptionFlag() } }
+                            if let partial = await self.sttEngine.runStreamingTranscription() {
+                                // Drop stale partials from a previous streaming session.
+                                // When fast-path is active, slow-path partials supplement
+                                // with higher accuracy as more audio accumulates.
+                                await self.handleStreamingPartialTranscript(
+                                    partial, epoch: epoch, source: .qwen3ASR
+                                )
+                            }
                         }
                     }
                 }
@@ -3462,6 +3493,11 @@ actor PipelineCoordinator {
     /// Last fast-path partial for disagreement detection against slow-path.
     private var lastFastPathPartial: String?
 
+    /// Clear the streaming transcription single-slot guard.
+    private func clearStreamingTranscriptionFlag() {
+        streamingTranscriptionInFlight = false
+    }
+
     private func handleStreamingPartialTranscript(
         _ text: String,
         epoch: UInt64,
@@ -3562,6 +3598,36 @@ actor PipelineCoordinator {
         if rms < 0.008 && durationSecs > 3.0 {
             NSLog("PipelineCoordinator: dropping ambient segment (rms=%.4f, dur=%.1fs)", rms, durationSecs)
             return
+        }
+
+        // Apple SoundAnalysis pre-filter — reject music, TV, environmental noise.
+        // Uses Apple's 303-category classifier to ensure we only process speech.
+        // FAE_DISABLE_APPLE_CLASSIFIER=1 bypasses this for testing.
+        let appleClassifierDisabled = ProcessInfo.processInfo.environment["FAE_DISABLE_APPLE_CLASSIFIER"] == "1"
+        if !appleClassifierDisabled, await appleSpeechClassifier.isReady {
+            if let classification = await appleSpeechClassifier.classify(segment: segment) {
+                // Reject if music/TV is dominant over speech
+                if classification.isMusic && !classification.isSpeech {
+                    NSLog("PipelineCoordinator: dropping %.1fs segment (Apple classifier: music, conf=%.2f)",
+                          durationSecs, classification.musicConfidence)
+                    debugLog(debugConsole, .pipeline,
+                             "Apple classifier rejected: music (conf=\(String(format: "%.2f", classification.musicConfidence)))")
+                    return
+                }
+                // Reject if music confidence exceeds speech confidence (TV with speech+music)
+                if classification.musicConfidence > classification.speechConfidence + 0.2 {
+                    NSLog("PipelineCoordinator: dropping %.1fs segment (Apple classifier: music>speech, music=%.2f speech=%.2f)",
+                          durationSecs, classification.musicConfidence, classification.speechConfidence)
+                    debugLog(debugConsole, .pipeline,
+                             "Apple classifier rejected: music dominant (music=\(String(format: "%.2f", classification.musicConfidence)) > speech=\(String(format: "%.2f", classification.speechConfidence)))")
+                    return
+                }
+                // Log what we're accepting
+                if classification.isSpeech {
+                    debugLog(debugConsole, .pipeline,
+                             "Apple classifier: speech (conf=\(String(format: "%.2f", classification.speechConfidence)))")
+                }
+            }
         }
 
         // Tier 2: Segment-level speech verification.
