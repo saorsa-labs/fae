@@ -794,9 +794,10 @@ struct EchoSuppressor {
         recentAssistantText.removeAll()
     }
 
-    /// Normalize text for overlap comparison: lowercase, strip punctuation, collapse whitespace.
+    /// Normalize text for overlap comparison: lowercase, hyphens→spaces, strip punctuation, collapse whitespace.
     private static func normalizeForOverlap(_ text: String) -> String {
         text.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
             .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
             .map { String($0) }
             .joined()
