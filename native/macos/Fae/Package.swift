@@ -32,8 +32,6 @@ let package = Package(
         // Vendored Kokoro + Misaki packages are forced static to avoid duplicate
         // MLXNN runtime class loading and resource-packaging issues in app bundles.
         .package(path: "Vendor/kokoro-ios"),
-        // Moonshine V2 streaming ASR — native Swift MLX, true incremental decode.
-        .package(url: "https://github.com/kylehowells/moonshine-mlx.git", branch: "master"),
     ],
     targets: [
         .target(
@@ -66,8 +64,6 @@ let package = Package(
                 .product(name: "SileroVAD", package: "silero-vad-swift"),
                 // Kokoro-82M TTS via MLX — no Python/subprocess dependency.
                 .product(name: "KokoroSwift", package: "kokoro-ios"),
-                // Moonshine V2 streaming ASR — true incremental decode.
-                .product(name: "MoonshineMLX", package: "moonshine-mlx"),
             ],
             path: "Sources/Fae",
             exclude: [

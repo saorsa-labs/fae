@@ -247,7 +247,7 @@ final class ParakeetStreamingEngineTests: XCTestCase {
 
     func testStreamingASRConfigDefaults() {
         let config = FaeConfig()
-        XCTAssertTrue(config.streamingASR.enabled, "Streaming ASR should be enabled by default")
+        XCTAssertFalse(config.streamingASR.enabled, "Streaming ASR fast-path should be disabled by default")
         XCTAssertEqual(
             config.streamingASR.modelId,
             "UsefulSensors/moonshine-streaming-tiny",

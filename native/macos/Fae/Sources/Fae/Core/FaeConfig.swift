@@ -212,11 +212,13 @@ struct FaeConfig: Codable {
     /// transcription after speech ends.
     struct StreamingASRConfig: Codable {
         /// Whether the streaming ASR fast-path is enabled.
-        /// When false, the pipeline uses growing-buffer Qwen3-ASR for streaming.
-        var enabled: Bool = true
+        /// Default: false — Qwen3-ASR growing-buffer (1.6% WER) is the primary path.
+        /// External engines (Parakeet, Moonshine) were evaluated but accuracy/complexity
+        /// tradeoff doesn't justify dual-path.  Set to true when a <2% WER streaming
+        /// engine becomes available.
+        var enabled: Bool = false
 
         /// HuggingFace model repository for the streaming ASR model.
-        /// Default: Moonshine V2 Tiny (43M params, ~50ms first partial, MIT license).
         var modelId: String = "UsefulSensors/moonshine-streaming-tiny"
 
         /// Audio samples to accumulate before each decode pass (16kHz mono).

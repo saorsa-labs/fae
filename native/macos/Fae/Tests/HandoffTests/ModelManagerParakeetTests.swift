@@ -51,7 +51,7 @@ final class ModelManagerParakeetTests: XCTestCase {
         // verify the property interface exists and the default is correct.
         // The actual integration is tested in ParakeetStreamingEngineTests.
         let config = FaeConfig.StreamingASRConfig()
-        XCTAssertTrue(config.enabled, "Streaming ASR should be enabled by default")
+        XCTAssertFalse(config.enabled, "Streaming ASR fast-path should be disabled by default")
         XCTAssertEqual(config.modelId, "UsefulSensors/moonshine-streaming-tiny")
         XCTAssertEqual(config.chunkSamples, 8_000)
         XCTAssertEqual(config.minChunkSamples, 4_000)

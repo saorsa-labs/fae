@@ -448,17 +448,16 @@ actor ModelManager {
                   MLXKeywordClassifier.defaultModelPath.path)
         }
 
-        // Streaming ASR — Moonshine V2 (true incremental decode, ~50ms first partial).
-        // FAE_DISABLE_STREAMING_ASR=1 skips load (useful for test harnesses that inject text).
-        let streamingASRDisabledByEnv = Self.isStreamingASRDisabledByEnvironment(
-            ProcessInfo.processInfo.environment
-        )
-        if streamingASRDisabledByEnv {
-            NSLog("ModelManager: streaming ASR skipped (FAE_DISABLE_STREAMING_ASR=1)")
-        } else if config.streamingASR.enabled {
-            await loadStreamingASRIfAvailable(config: config)
-        } else {
-            NSLog("ModelManager: streaming ASR disabled in config")
+        // Streaming ASR fast-path — disabled.
+        // Qwen3-ASR growing-buffer (1.6% WER, 362ms first partial) is the primary
+        // streaming path.  External fast-path engines (Parakeet, Moonshine) were
+        // evaluated but their accuracy/complexity tradeoff doesn't justify the cost:
+        // - Parakeet TDT: 7.9% WER (5x worse than Qwen3-ASR)
+        // - Moonshine Tiny: 4.5% WER (3x worse), GPU monopolization issues
+        // The StreamingSTTEngine protocol and PipelineCoordinator fast-path wiring
+        // remain for future engines that achieve <2% WER with streaming support.
+        if config.streamingASR.enabled {
+            NSLog("ModelManager: streaming ASR fast-path disabled (Qwen3-ASR growing-buffer is primary)")
         }
 
         // Turn detector — non-critical, degrades gracefully to rule-based heuristics.
@@ -508,31 +507,12 @@ actor ModelManager {
         FaeEnvironment.defaults.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
     }
 
-    // MARK: - Streaming ASR (Moonshine V2)
-
-    /// Load the Moonshine V2 streaming ASR engine.
-    ///
-    /// Non-fatal: if loading fails, the pipeline falls back to growing-buffer
-    /// Qwen3-ASR for streaming partials.  Auto-downloads from HuggingFace
-    /// on first use (~300MB for tiny variant).
-    private func loadStreamingASRIfAvailable(config: FaeConfig) async {
-        let engine = MoonshineStreamingEngine(modelId: config.streamingASR.modelId)
-
-        eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 0))
-        do {
-            try await engine.load()
-            self.parakeetEngine = engine
-            eventBus.send(.modelLoaded(engine: "streaming_asr", modelId: config.streamingASR.modelId))
-            eventBus.send(.runtimeProgress(stage: "streaming_asr", progress: 1.0))
-            NSLog("ModelManager: Moonshine streaming ASR loaded (%@)", config.streamingASR.modelId)
-        } catch {
-            NSLog(
-                "ModelManager: Moonshine streaming ASR load failed (degraded — growing-buffer fallback): %@",
-                error.localizedDescription
-            )
-            eventBus.send(.runtimeProgress(stage: "streaming_asr_failed", progress: 1.0))
-        }
-    }
+    // MARK: - Streaming ASR Fast-Path (Reserved)
+    //
+    // The StreamingSTTEngine protocol, PipelineCoordinator fast-path wiring,
+    // and FaeConfig.StreamingASRConfig are retained for future use.
+    // No engine is loaded — parakeetEngine stays nil and the pipeline uses
+    // Qwen3-ASR growing-buffer exclusively.
 
     /// Testable check for the `FAE_DISABLE_STREAMING_ASR` env var.
     static func isStreamingASRDisabledByEnvironment(_ env: [String: String]) -> Bool {
