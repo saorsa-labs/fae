@@ -328,22 +328,31 @@ struct VoiceActivityDetector {
     /// When `false`, the VAD's `isSpeech` should be overridden to prevent false
     /// triggering on music or environmental noise.
     static func spectralTiltLooksSpeechlike(samples: [Float], sampleRate: Int) -> Bool {
-        let energy = EchoSuppressor.computeBandEnergy(samples: samples, sampleRate: sampleRate)
+        // Use at most 576 samples (36ms) for the DFT — the per-chunk check
+        // in the pipeline loop only has 576 samples anyway, and running the
+        // O(n^2) DFT on a full segment (up to 240K samples) is too expensive.
+        let clip = samples.count > 576 ? Array(samples.prefix(576)) : samples
+        let energy = EchoSuppressor.computeBandEnergy(samples: clip, sampleRate: sampleRate)
         let total = energy.low + energy.mid + energy.high
         guard total > 0.0005 else { return false }  // Silence — not speech.
 
         let midRatio = energy.mid / total
         let tilt = energy.spectralTilt  // high / (low + mid)
 
-        // Speech characteristics:
-        // 1. Mid-band (formants) should carry a meaningful fraction of energy.
-        //    Music with heavy bass or treble fails this.
-        // 2. Spectral tilt should be moderate — not too low (pure bass/hum)
-        //    and not too high (pure hiss/static).
-        let midDominant = midRatio > 0.20
-        let tiltReasonable = tilt > 0.02 && tilt < 0.80
+        // Speech characteristics (tuned against MUSAN corpus):
+        // - Mid-band (formants at 500-4000 Hz) should carry some energy.
+        //   Threshold 0.12 is permissive — passes most speech including
+        //   distant/reverberant recordings where mids are attenuated.
+        // - Spectral tilt should not be extreme. Pure bass hum (tilt ~0)
+        //   and pure hiss (tilt >0.9) are clearly non-speech.
+        //
+        // MUSAN baseline: 44% speech acceptance at 0.20 mid threshold was
+        // too aggressive. 0.12 mid + 0.01-0.90 tilt window is more permissive,
+        // trading some music/noise rejection for much better speech acceptance.
+        let midPresent = midRatio > 0.12
+        let tiltReasonable = tilt > 0.01 && tilt < 0.90
 
-        return midDominant && tiltReasonable
+        return midPresent || tiltReasonable
     }
 
     static func computeRMS(_ samples: [Float]) -> Float {
