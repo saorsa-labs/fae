@@ -612,9 +612,21 @@ struct EchoSuppressor {
     /// This catches partial echo more reliably than bag-of-words overlap alone.
     private static let textOverlapMinConsecutiveWords = 4
 
-    /// Minimum word count for text overlap checking (very short utterances
-    /// like "yes" or "stop" should not be rejected as echo).
+    /// Minimum word count for bag-of-words overlap checking.
+    /// Short utterances use exact-match instead (see isLikelyEchoText).
     private static let textOverlapMinWords = 4
+
+    /// Number words → digit normalization for echo matching.
+    /// "five fifty six" in transcript should match "556" in assistant text.
+    private static let numberWords: [String: String] = [
+        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+        "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+        "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+        "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+        "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30",
+        "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70",
+        "eighty": "80", "ninety": "90", "hundred": "00", "thousand": "000",
+    ]
 
     /// Record text that the assistant is about to speak (call before TTS).
     /// This builds the reference corpus for text-overlap echo detection.
@@ -629,24 +641,40 @@ struct EchoSuppressor {
 
     /// Check whether a transcribed text is likely echo of Fae's own speech.
     ///
-    /// Uses two complementary signals:
+    /// Uses multiple signals:
+    /// 0. **Short utterance match**: For < 4 words, checks exact substring or number-word match.
     /// 1. **Bag-of-words overlap**: 75%+ of transcript words appear in recent assistant text.
-    /// 2. **Consecutive-word match**: 4+ consecutive words from the transcript appear in order
-    ///    in the assistant text (catches partial echo more reliably).
+    /// 2. **Consecutive-word match**: 4+ consecutive words from the transcript appear in order.
+    /// 3. **Number-word match**: "five fifty six" matches assistant text containing "556".
     ///
-    /// Either signal alone is sufficient — echo text typically shows both, but partial
-    /// echo (mic catches the end of a sentence) may only show the consecutive signal.
-    ///
-    /// Short utterances (< 4 words) are exempt — "stop", "no thanks", "yes please" should
-    /// never be rejected as echo even if Fae recently said those words.
+    /// Short utterances that are clearly user commands ("stop", "no", "yes") pass through
+    /// because they won't match assistant text (Fae doesn't say "stop" to herself).
     func isLikelyEchoText(_ transcript: String) -> Bool {
         let normalized = Self.normalizeForOverlap(transcript)
-        let words = normalized.split(separator: " ")
-        guard words.count >= Self.textOverlapMinWords else { return false }
+        let words = normalized.split(separator: " ").map(String.init)
+        guard !words.isEmpty else { return false }
 
         let assistantText = recentAssistantText.joined(separator: " ")
-        let assistantWords = Set(assistantText.split(separator: " "))
-        guard !assistantWords.isEmpty else { return false }
+        guard !assistantText.isEmpty else { return false }
+
+        // Signal 0: Short utterance — exact/substring match + number normalization.
+        // "Five fifty six" (3 words) won't hit the bag-of-words check but is clearly echo.
+        if words.count < Self.textOverlapMinWords {
+            if assistantText.contains(normalized) {
+                return true
+            }
+            // Number-word → digit matching: "five fifty six" → "556", check against assistant "546"
+            let transcriptDigits = Self.extractDigitsFromNumberWords(words)
+            if !transcriptDigits.isEmpty {
+                let assistantNumbers = Self.extractNumbersFromText(assistantText)
+                for num in assistantNumbers where Self.numbersFuzzyMatch(transcriptDigits, num) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        let assistantWords = Set(assistantText.split(separator: " ").map(String.init))
 
         // Signal 1: Bag-of-words overlap (75%+ threshold).
         let matchCount = words.filter { assistantWords.contains($0) }.count
@@ -656,7 +684,6 @@ struct EchoSuppressor {
         }
 
         // Signal 2: Consecutive-word substring match.
-        // Check if any run of N+ consecutive transcript words appears in assistant text.
         if words.count >= Self.textOverlapMinConsecutiveWords {
             let assistantNormalized = assistantText
             for startIdx in 0...(words.count - Self.textOverlapMinConsecutiveWords) {
@@ -668,7 +695,58 @@ struct EchoSuppressor {
             }
         }
 
+        // Signal 3: Number-word match for longer transcripts.
+        let transcriptDigits = Self.extractDigitsFromNumberWords(words)
+        if !transcriptDigits.isEmpty {
+            let assistantNumbers = Self.extractNumbersFromText(assistantText)
+            for num in assistantNumbers where Self.numbersFuzzyMatch(transcriptDigits, num) {
+                return true
+            }
+        }
+
         return false
+    }
+
+    /// Convert number words to digit string: ["five", "fifty", "six"] → "556".
+    private static func extractDigitsFromNumberWords(_ words: [String]) -> String {
+        var digits = ""
+        for word in words {
+            if let d = numberWords[word] {
+                digits += d
+            } else if word.allSatisfy(\.isNumber) {
+                digits += word
+            }
+        }
+        return digits
+    }
+
+    /// Extract all digit sequences from text: "the answer is 546" → ["546"].
+    private static func extractNumbersFromText(_ text: String) -> [String] {
+        var numbers: [String] = []
+        var current = ""
+        for ch in text {
+            if ch.isNumber {
+                current.append(ch)
+            } else if !current.isEmpty {
+                numbers.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty { numbers.append(current) }
+        return numbers
+    }
+
+    /// Fuzzy number match — allows off-by-one digits (ASR might hear "556" instead of "546").
+    private static func numbersFuzzyMatch(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        // Same length, at most 1 digit different
+        guard a.count == b.count, a.count <= 6 else { return false }
+        var diffs = 0
+        for (ca, cb) in zip(a, b) {
+            if ca != cb { diffs += 1 }
+            if diffs > 1 { return false }
+        }
+        return true
     }
 
     /// Clear text history (call on pipeline reset or conversation change).
