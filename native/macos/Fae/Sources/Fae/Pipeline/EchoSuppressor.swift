@@ -659,13 +659,11 @@ struct EchoSuppressor {
         let assistantText = recentAssistantText.joined(separator: " ")
         guard !assistantText.isEmpty else { return false }
 
-        // Signal 0: Short utterance — exact/substring match + number normalization.
-        // "Five fifty six" (3 words) won't hit the bag-of-words check but is clearly echo.
+        // Signal 0: Short utterance — only catch number-words as echo.
+        // Single/two-word commands ("stop", "no", "cancel", "yes") must ALWAYS
+        // pass through for barge-in.  Only number sequences ("five fifty six")
+        // are reliably identifiable as echo from assistant speech.
         if words.count < Self.textOverlapMinWords {
-            if assistantText.contains(normalized) {
-                return true
-            }
-            // Number-word → digit matching: "five fifty six" → "556", check against assistant "546"
             let transcriptDigits = Self.extractDigitsFromNumberWords(words)
             if !transcriptDigits.isEmpty {
                 let assistantNumbers = Self.extractNumbersFromText(assistantText)
