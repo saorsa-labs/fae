@@ -373,6 +373,18 @@ def run_multi_step_scenario(client: FaeTestClient, scenario: dict) -> ScenarioRe
         all_passed = True
 
         for i, step in enumerate(steps):
+            # Between steps, wait for previous generation + TTS to finish
+            if i > 0:
+                for _ in range(40):  # Up to 20s
+                    try:
+                        c = client.conversation()
+                        if not c.get("isGenerating", False) and not c.get("isSpeaking", False):
+                            break
+                    except httpx.HTTPError:
+                        pass
+                    time.sleep(0.5)
+                time.sleep(1.0)  # Extra settle time
+
             step_start = time.monotonic()
             event_start = client.mark_event_position()
 
