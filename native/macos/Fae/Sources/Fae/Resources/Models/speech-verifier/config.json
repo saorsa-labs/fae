@@ -1,0 +1,12 @@
+{
+  "model_type": "speech_verifier",
+  "num_classes": 3,
+  "input_features": 128,
+  "target_frames": 48,
+  "sample_rate": 24000,
+  "label_names": [
+    "speech",
+    "music",
+    "noise"
+  ]
+}

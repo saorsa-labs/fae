@@ -225,7 +225,16 @@ actor MLXSpeechVerifier {
 
     // MARK: - Model Discovery
 
+    /// Resolves model path: bundled Resources/Models first, then App Support.
     static let defaultModelPath: URL = {
+        // Check bundled resources first (397KB model shipped with the app).
+        if let bundled = Bundle.main.url(forResource: "speech-verifier", withExtension: nil, subdirectory: "Models") {
+            let weights = bundled.appendingPathComponent("model.safetensors")
+            if FileManager.default.fileExists(atPath: weights.path) {
+                return bundled
+            }
+        }
+        // Fallback: user-trained model in App Support.
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
