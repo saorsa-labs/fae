@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "created": "2026-03-21T00:00:00Z",
+  "lastRun": null,
+  "currentFocus": "voice_pipeline",
+  "runCount": 0,
+  "dimensions": {
+    "voice_pipeline": { "score": null, "submetrics": {} },
+    "barge_in": { "score": null, "submetrics": {} },
+    "tool_execution": { "score": null, "submetrics": {} },
+    "memory_context": { "score": null, "submetrics": {} },
+    "conversation": { "score": null, "submetrics": {} },
+    "speaker_identity": { "score": null, "submetrics": {} },
+    "proactive": { "score": null, "submetrics": {} },
+    "skills": { "score": null, "submetrics": {} },
+    "advanced_pipeline": { "score": null, "submetrics": {} }
+  },
+  "history": [],
+  "modifications": []
+}

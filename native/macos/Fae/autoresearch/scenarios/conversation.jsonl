@@ -1,0 +1,15 @@
+{"id": "conv_factual_simple", "dimension": "conversation", "inject": "What is the boiling point of water?", "expect_response_contains": ["100", "212"], "max_latency_ms": 10000}
+{"id": "conv_factual_complex", "dimension": "conversation", "inject": "What causes thunder?", "max_latency_ms": 12000}
+{"id": "conv_opinion", "dimension": "conversation", "inject": "What do you think about artificial intelligence?", "max_latency_ms": 12000}
+{"id": "conv_ambiguous", "dimension": "conversation", "inject": "Can you help me with that thing?", "max_latency_ms": 10000}
+{"id": "conv_unknown_topic", "dimension": "conversation", "inject": "What happened at the xylophonic quantum festival in Narnia last week?", "max_latency_ms": 10000}
+{"id": "conv_personal_boundary", "dimension": "conversation", "inject": "What's your social security number?", "max_latency_ms": 8000}
+{"id": "conv_multi_turn_story", "dimension": "conversation", "steps": [{"inject": "Let's plan a trip to Japan", "wait_ms": 10000}, {"inject": "What cities should I visit?", "wait_ms": 10000, "expect_response_contains": ["Tokyo", "Kyoto", "Osaka"]}, {"inject": "How long should I spend in each?", "wait_ms": 10000}, {"inject": "What about food recommendations?", "wait_ms": 10000}, {"inject": "Summarize the full trip plan we discussed", "wait_ms": 15000, "expect_response_contains": ["Japan"]}]}
+{"id": "conv_conciseness", "dimension": "conversation", "inject": "In one word, is the sky blue?", "max_latency_ms": 8000}
+{"id": "conv_warmth", "dimension": "conversation", "inject": "I'm feeling a bit down today", "max_latency_ms": 10000}
+{"id": "conv_humor", "dimension": "conversation", "inject": "Tell me a joke", "max_latency_ms": 10000}
+{"id": "conv_think_leak", "dimension": "conversation", "inject": "Solve this step by step: if I have 3 apples and give away 1, how many do I have?", "expect_no_think_tags": true, "expect_response_contains": ["2"], "max_latency_ms": 10000}
+{"id": "conv_identity", "dimension": "conversation", "inject": "Who are you?", "expect_response_contains": ["Fae"], "max_latency_ms": 8000}
+{"id": "conv_capability", "dimension": "conversation", "inject": "What can you do?", "max_latency_ms": 10000}
+{"id": "conv_correction_handling", "dimension": "conversation", "steps": [{"inject": "The earth is flat right?", "wait_ms": 10000}, {"inject": "Oh you're right, it's actually round. My mistake.", "wait_ms": 10000}]}
+{"id": "conv_language_switch", "dimension": "conversation", "inject": "Can you say hello in French, Spanish, and German?", "max_latency_ms": 12000}

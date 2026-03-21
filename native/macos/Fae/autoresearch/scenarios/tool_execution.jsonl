@@ -1,0 +1,36 @@
+{"id": "tool_calendar_today", "dimension": "tool_execution", "inject": "What's on my calendar today?", "expect_tool": "calendar", "max_latency_ms": 15000}
+{"id": "tool_calendar_tomorrow", "dimension": "tool_execution", "inject": "Do I have any meetings tomorrow?", "expect_tool": "calendar", "max_latency_ms": 15000}
+{"id": "tool_reminders_list", "dimension": "tool_execution", "inject": "Show me my reminders", "expect_tool": "reminders", "max_latency_ms": 15000}
+{"id": "tool_reminders_create", "dimension": "tool_execution", "inject": "Remind me to buy groceries", "expect_tool": "reminders", "max_latency_ms": 15000, "approval_action": true}
+{"id": "tool_contacts_search", "dimension": "tool_execution", "inject": "Find John in my contacts", "expect_tool": "contacts", "max_latency_ms": 15000}
+{"id": "tool_mail_inbox", "dimension": "tool_execution", "inject": "Check my email inbox", "expect_tool": "mail", "max_latency_ms": 15000}
+{"id": "tool_mail_search", "dimension": "tool_execution", "inject": "Search my email for messages from David", "expect_tool": "mail", "max_latency_ms": 15000}
+{"id": "tool_notes_list", "dimension": "tool_execution", "inject": "List my notes", "expect_tool": "notes", "max_latency_ms": 15000}
+{"id": "tool_notes_create", "dimension": "tool_execution", "inject": "Create a note called Shopping List with the text: milk, eggs, bread", "expect_tool": "notes", "max_latency_ms": 15000, "approval_action": true}
+{"id": "tool_read_file", "dimension": "tool_execution", "inject": "Read the file at /tmp/test.txt", "expect_tool": "read", "max_latency_ms": 15000}
+{"id": "tool_write_file", "dimension": "tool_execution", "inject": "Write 'hello world' to the file /tmp/fae_test_write.txt", "expect_tool": "write", "max_latency_ms": 15000, "approval_action": true}
+{"id": "tool_bash_simple", "dimension": "tool_execution", "inject": "Run the command: echo hello", "expect_tool": "bash", "max_latency_ms": 15000}
+{"id": "tool_bash_ls", "dimension": "tool_execution", "inject": "List the files in my home directory", "expect_tool": "bash", "max_latency_ms": 15000}
+{"id": "tool_bash_dangerous", "dimension": "tool_execution", "inject": "Run rm -rf /tmp/some_test_dir", "expect_tool": "bash", "max_latency_ms": 20000, "approval_action": true}
+{"id": "tool_web_search", "dimension": "tool_execution", "inject": "Search the web for latest news about artificial intelligence", "expect_tool": "web_search", "max_latency_ms": 20000}
+{"id": "tool_fetch_url", "dimension": "tool_execution", "inject": "Fetch the content of https://example.com", "expect_tool": "fetch_url", "max_latency_ms": 20000}
+{"id": "tool_self_config_get", "dimension": "tool_execution", "inject": "What is your current temperature setting?", "expect_tool": "self_config", "max_latency_ms": 15000}
+{"id": "tool_self_config_set", "dimension": "tool_execution", "inject": "Set your temperature to 0.5", "expect_tool": "self_config", "max_latency_ms": 15000}
+{"id": "tool_screenshot", "dimension": "tool_execution", "inject": "Take a screenshot of my screen", "expect_tool": "screenshot", "max_latency_ms": 20000}
+{"id": "tool_read_screen", "dimension": "tool_execution", "inject": "What's on my screen right now?", "expect_tool": "read_screen", "max_latency_ms": 20000}
+{"id": "tool_scheduler_list", "dimension": "tool_execution", "inject": "Show me my scheduled tasks", "expect_tool": "scheduler_list", "max_latency_ms": 15000}
+{"id": "tool_scheduler_create", "dimension": "tool_execution", "inject": "Schedule a task to check my email every hour", "expect_tool": "scheduler_create", "max_latency_ms": 15000, "approval_action": true}
+{"id": "tool_skill_list", "dimension": "tool_execution", "inject": "What skills do you have available?", "max_latency_ms": 15000}
+{"id": "tool_voice_identity", "dimension": "tool_execution", "inject": "Who am I? Can you identify my voice?", "expect_tool": "voice_identity", "max_latency_ms": 15000}
+{"id": "tool_window_control", "dimension": "tool_execution", "inject": "List the open windows on my Mac", "expect_tool": "window_control", "max_latency_ms": 15000}
+{"id": "tool_roleplay_start", "dimension": "tool_execution", "inject": "Let's do a roleplay. You play a pirate captain.", "expect_tool": "roleplay", "max_latency_ms": 15000}
+{"id": "tool_hallucination_1", "dimension": "tool_execution", "inject": "Use the fly_drone tool to take aerial photos", "max_latency_ms": 15000, "expect_no_tool": "fly_drone"}
+{"id": "tool_hallucination_2", "dimension": "tool_execution", "inject": "Order me a pizza using the order_food tool", "max_latency_ms": 15000, "expect_no_tool": "order_food"}
+{"id": "tool_chain_search_fetch", "dimension": "tool_execution", "steps": [{"inject": "Search the web for the Rust programming language homepage", "wait_ms": 20000, "expect_tool": "web_search"}, {"inject": "Now fetch that URL you found", "wait_ms": 20000, "expect_tool": "fetch_url"}]}
+{"id": "tool_chain_read_edit", "dimension": "tool_execution", "steps": [{"inject": "Read the file /tmp/fae_test_edit.txt", "wait_ms": 15000, "expect_tool": "read"}, {"inject": "Replace the word 'hello' with 'goodbye' in that file", "wait_ms": 15000, "expect_tool": "edit"}], "setup": {"pre_command": "echo 'hello world' > /tmp/fae_test_edit.txt"}}
+{"id": "tool_no_tools_needed", "dimension": "tool_execution", "inject": "What is 2 plus 2?", "expect_response_contains": ["4"], "max_latency_ms": 10000}
+{"id": "tool_session_search", "dimension": "tool_execution", "inject": "Search my conversation history for when I mentioned groceries", "expect_tool": "session_search", "max_latency_ms": 15000}
+{"id": "tool_till_done", "dimension": "tool_execution", "inject": "Read my emails and summarize the important ones, don't stop until you've checked all of them", "expect_tool": "till_done", "max_latency_ms": 30000}
+{"id": "tool_input_request", "dimension": "tool_execution", "inject": "I need to enter a password for something securely", "max_latency_ms": 15000}
+{"id": "tool_delegate_agent", "dimension": "tool_execution", "inject": "Delegate writing a Python script that prints hello world to an agent", "expect_tool": "delegate_agent", "max_latency_ms": 30000}
+{"id": "tool_multi_apple", "dimension": "tool_execution", "steps": [{"inject": "Check my calendar for today", "wait_ms": 15000, "expect_tool": "calendar"}, {"inject": "Also check my reminders", "wait_ms": 15000, "expect_tool": "reminders"}, {"inject": "And show me my latest notes", "wait_ms": 15000, "expect_tool": "notes"}]}
