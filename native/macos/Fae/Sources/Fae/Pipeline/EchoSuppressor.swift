@@ -667,11 +667,7 @@ struct EchoSuppressor {
             let transcriptDigits = Self.extractDigitsFromNumberWords(words)
             if !transcriptDigits.isEmpty {
                 let assistantNumbers = Self.extractNumbersFromText(assistantText)
-                NSLog("EchoSuppressor: short number check — transcript=%@ digits=%@ assistantNums=%@ assistantText=%@",
-                      normalized, transcriptDigits, assistantNumbers.joined(separator: ","),
-                      String(assistantText.prefix(80)))
                 for num in assistantNumbers where Self.numbersFuzzyMatch(transcriptDigits, num) {
-                    NSLog("EchoSuppressor: number echo CAUGHT — %@ matches %@", transcriptDigits, num)
                     return true
                 }
             }
