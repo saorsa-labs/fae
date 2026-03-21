@@ -376,6 +376,29 @@ autoresearch-baseline:
 autoresearch-status:
     @uv run python -c "import json; s=json.load(open('autoresearch/STATE.json')); [print(f'  {d}: {v[\"score\"] or \"--\"}/100') for d,v in sorted(s['dimensions'].items())]; print(f'Focus: {s[\"currentFocus\"]}  Runs: {s[\"runCount\"]}')"
 
+# ─── Voice Pipeline AutoResearch ─────────────────────────────────────────────
+
+# Run voice pipeline autoresearch (all dimensions)
+autoresearch-voice:
+    bash autoresearch/harness-voice.sh
+
+# Run voice pipeline autoresearch on a specific dimension
+# Usage: just autoresearch-voice-dim vp_conversation
+autoresearch-voice-dim dimension:
+    bash autoresearch/harness-voice.sh {{dimension}}
+
+# Run voice pipeline autoresearch (text dimensions only, skip audio)
+autoresearch-voice-text:
+    bash autoresearch/harness-voice.sh --text-only
+
+# Generate test audio corpus (requires ffmpeg)
+autoresearch-voice-gen-audio:
+    bash autoresearch/generate_audio.sh
+
+# Show voice pipeline autoresearch state
+autoresearch-voice-status:
+    @uv run python -c "import json,os; f='autoresearch/STATE-voice.json'; s=json.load(open(f)) if os.path.exists(f) else {'dimensions':{},'runCount':0,'currentFocus':'none'}; [print(f'  {d}: {v.get(\"score\") or \"--\"}/100') for d,v in sorted(s['dimensions'].items())]; print(f'Focus: {s.get(\"currentFocus\",\"none\")}  Runs: {s.get(\"runCount\",0)}')"
+
 # ─── Bundle & Sign (local development) ──────────────────────────────────────
 
 # Build app bundle and launch it.
