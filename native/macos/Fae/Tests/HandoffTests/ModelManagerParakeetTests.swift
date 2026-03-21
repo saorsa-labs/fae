@@ -29,6 +29,20 @@ final class ModelManagerParakeetTests: XCTestCase {
         )
     }
 
+    // MARK: - Task 2: isCached Tests
+
+    func testIsCachedFalseWhenNoCacheDirectory() {
+        // A model ID that definitely isn't cached.
+        XCTAssertFalse(
+            ParakeetStreamingEngine.isCached(modelID: "nonexistent-org/nonexistent-model-xyz")
+        )
+    }
+
+    func testIsCachedFalseForInvalidModelID() {
+        // No slash = can't split into org/repo.
+        XCTAssertFalse(ParakeetStreamingEngine.isCached(modelID: "no-slash-here"))
+    }
+
     // MARK: - Task 6: Graceful Fallback
 
     func testParakeetAvailableFalseByDefault() {

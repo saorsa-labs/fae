@@ -132,7 +132,10 @@ actor ParakeetStreamingEngine: StreamingSTTEngine {
     /// - Parameter modelID: HuggingFace model repository (e.g. "mlx-community/parakeet-tdt-0.6b-v3").
     func load(modelID: String) async throws {
         loadState = .loading
-        NSLog("ParakeetStreamingEngine: loading model %@", modelID)
+        let cached = Self.isCached(modelID: modelID)
+        NSLog("ParakeetStreamingEngine: %@ model %@",
+              cached ? "loading from cache" : "downloading",
+              modelID)
         do {
             let loaded = try await ParakeetModel.fromPretrained(modelID)
             model = loaded
@@ -143,6 +146,21 @@ actor ParakeetStreamingEngine: StreamingSTTEngine {
             NSLog("ParakeetStreamingEngine: load failed: %@", error.localizedDescription)
             throw error
         }
+    }
+
+    /// Check if a model is already cached in the local HuggingFace hub cache.
+    ///
+    /// The standard cache layout is:
+    /// `~/.cache/huggingface/hub/models--{org}--{repo}/snapshots/{hash}/`
+    static func isCached(modelID: String) -> Bool {
+        let parts = modelID.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return false }
+        let repoDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub/models--\(parts[0])--\(parts[1])/snapshots")
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: repoDir.path) else {
+            return false
+        }
+        return !entries.isEmpty
     }
 
     // MARK: - Audio Processing
