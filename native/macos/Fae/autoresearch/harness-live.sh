@@ -62,7 +62,8 @@ echo ""
 
 # Step 2: Launch Fae (with mic ENABLED — we need it to hear us!)
 echo "==> [2/5] Launching Fae..."
-FAE_TEST_SERVER=1 FAE_DISABLE_STREAMING_ASR=1 "$FAE_BINARY" --test-server > /tmp/fae-live-autoresearch.log 2>&1 &
+# FAE_DISABLE_SPEECH_VERIFIER: trained 1D-CNN classifies synthetic TTS as noise
+FAE_TEST_SERVER=1 FAE_DISABLE_STREAMING_ASR=1 FAE_DISABLE_SPEECH_VERIFIER=1 "$FAE_BINARY" --test-server > /tmp/fae-live-autoresearch.log 2>&1 &
 FAE_PID=$!
 echo "    PID: $FAE_PID"
 
@@ -104,20 +105,46 @@ sleep 1
 # whether Fae hears "Fae" in our speech and wakes up properly.
 # NOTE: We do NOT mute the mic — the whole point is real audio through the mic.
 
-# Step 3: Warmup — speak to prime the LLM
+# Step 3: Warmup — prime the LLM (first inference compiles Metal shaders, ~30-60s)
 echo ""
-echo "==> [3/5] Warming up (speaking to Fae)..."
-voice -q "Hello Fae"
-echo "    Spoke: 'Hello Fae'"
+echo "==> [3/5] Warming up LLM..."
 
-# Wait for Fae to respond and finish
+# Phase 1: Text injection warmup (bypasses mic, guaranteed to reach LLM)
+echo "    Phase 1: Text injection to compile Metal shaders..."
+curl -sf -X POST http://127.0.0.1:7433/inject -H "Content-Type: application/json" \
+    -d '{"text":"Hi Fae, hello"}' > /dev/null 2>&1 || true
+
+# Wait for LLM generation + TTS to fully complete
+for i in $(seq 1 120); do
+    CONV=$(curl -sf http://127.0.0.1:7433/conversation 2>/dev/null || echo '{}')
+    IS_GEN=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('isGenerating',False))" 2>/dev/null || echo "True")
+    IS_SPK=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('isSpeaking',False))" 2>/dev/null || echo "True")
+    if [ "$IS_GEN" = "False" ] && [ "$IS_SPK" = "False" ] && [ "$i" -gt 15 ]; then
+        echo "    LLM warmup complete after ${i}s"
+        break
+    fi
+    sleep 1
+done
+
+curl -sf -X POST http://127.0.0.1:7433/reset > /dev/null 2>&1 || true
+sleep 3
+
+# Phase 2: Voice warmup (test that mic picks up speech)
+echo "    Phase 2: Voice warmup through speakers..."
+voice -q "Hello Fae"
+echo "    Spoke: 'Hello Fae' — waiting for Fae to respond..."
+
 for i in $(seq 1 60); do
     CONV=$(curl -sf http://127.0.0.1:7433/conversation 2>/dev/null || echo '{}')
     IS_GEN=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('isGenerating',False))" 2>/dev/null || echo "False")
     IS_SPK=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('isSpeaking',False))" 2>/dev/null || echo "False")
-    if [ "$IS_GEN" = "False" ] && [ "$IS_SPK" = "False" ] && [ "$i" -gt 10 ]; then
-        echo "    Warmup complete after ${i}s"
+    COUNT=$(echo "$CONV" | uv run python -c "import sys,json; d=json.load(sys.stdin); print(d.get('count',0))" 2>/dev/null || echo "0")
+    if [ "$IS_GEN" = "False" ] && [ "$IS_SPK" = "False" ] && [ "$COUNT" -gt 1 ]; then
+        echo "    Voice warmup complete after ${i}s (Fae heard and responded)"
         break
+    fi
+    if [ "$i" -eq 60 ]; then
+        echo "    WARNING: Voice warmup timed out — Fae may not be hearing mic"
     fi
     sleep 1
 done

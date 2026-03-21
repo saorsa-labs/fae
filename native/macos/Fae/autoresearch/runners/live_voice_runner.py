@@ -615,14 +615,15 @@ def main():
             print(f"      errors: {result.errors}")
         print()
 
+    total_passed = sum(1 for r in results if r["passed"])
     output = {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "runner": "live_voice",
         "scenario_file": args.scenarios,
         "total": len(results),
-        "passed": passed := sum(1 for r in results if r["passed"]),
-        "failed": len(results) - passed,
-        "pass_rate": passed / max(len(results), 1),
+        "passed": total_passed,
+        "failed": len(results) - total_passed,
+        "pass_rate": total_passed / max(len(results), 1),
         "results": results,
     }
 

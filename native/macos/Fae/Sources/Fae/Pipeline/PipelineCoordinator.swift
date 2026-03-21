@@ -3572,7 +3572,10 @@ actor PipelineCoordinator {
         // Tier 2: Segment-level speech verification.
         // Uses the trained 1D-CNN speech verifier when available (93% accuracy
         // on MUSAN corpus), falls back to spectral tilt heuristic.
-        if let verifier = speechVerifier, await verifier.isLoaded {
+        // FAE_DISABLE_SPEECH_VERIFIER=1 bypasses this (for TTS-driven test harnesses
+        // where synthetic speech gets misclassified as noise).
+        let speechVerifierDisabled = ProcessInfo.processInfo.environment["FAE_DISABLE_SPEECH_VERIFIER"] == "1"
+        if !speechVerifierDisabled, let verifier = speechVerifier, await verifier.isLoaded {
             if let result = try? await verifier.verify(
                 audio: segment.samples,
                 sampleRate: segment.sampleRate
