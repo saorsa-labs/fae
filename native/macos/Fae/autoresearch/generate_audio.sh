@@ -127,8 +127,8 @@ if [ -f "$AUDIO_DIR/primary/question_capital.wav" ] && [ -f "$AUDIO_DIR/noise/pi
     ffmpeg -y \
         -i "$AUDIO_DIR/primary/question_capital.wav" \
         -i "$AUDIO_DIR/noise/pink_noise_3s.wav" \
-        -filter_complex "[0]apad[a];[1]volume=0.3[b];[a][b]amix=inputs=2:duration=first:dropout_transition=0" \
-        -ar 16000 -ac 1 -sample_fmt s16 \
+        -filter_complex "[1]volume=0.3[noise];[0][noise]amix=inputs=2:duration=shortest" \
+        -ar 16000 -ac 1 -sample_fmt s16 -t 5 \
         "$AUDIO_DIR/mixed/speech_over_noise.wav" -loglevel error
 fi
 

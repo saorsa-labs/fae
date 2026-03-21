@@ -105,6 +105,8 @@ echo ""
 
 # Step 2: Launch Fae
 echo "==> [2/6] Launching Fae with test server..."
+# Disable streaming ASR for text-injection tests (saves GPU memory for LLM).
+# Audio injection scenarios test the streaming ASR separately.
 FAE_TEST_SERVER=1 FAE_DISABLE_STREAMING_ASR=1 "$FAE_BINARY" --test-server > /tmp/fae-voice-autoresearch.log 2>&1 &
 FAE_PID=$!
 echo "    PID: $FAE_PID"

@@ -391,6 +391,16 @@ autoresearch-voice-dim dimension:
 autoresearch-voice-text:
     bash autoresearch/harness-voice.sh --text-only
 
+# Run LIVE voice autoresearch — speaks to Fae through speakers, full e2e pipeline
+# Requires: Fae running with --test-server, speakers on, mic enabled
+autoresearch-live:
+    bash autoresearch/harness-live.sh
+
+# Run specific live voice scenario file
+# Usage: just autoresearch-live-file autoresearch/scenarios/live_pipeline.jsonl
+autoresearch-live-file file:
+    bash autoresearch/harness-live.sh {{file}}
+
 # Generate test audio corpus (requires ffmpeg)
 autoresearch-voice-gen-audio:
     bash autoresearch/generate_audio.sh
