@@ -514,11 +514,21 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `VoiceLibrary.swift` | Voice preset library |
 | `WakeWordProfileStore.swift` | Wake word profile management |
 
-### Pipeline/ (10 files)
+### Pipeline/ (20 files)
 
 | File | Role |
 |------|------|
 | `PipelineCoordinator.swift` | Unified pipeline: STT→LLM→TTS; `injectProactiveQuery()`; barge-in |
+| `ToolRoutingHelpers.swift` | Pure static helpers: tool routing, repair, intent detection, result processing |
+| `TurnHelpers.swift` | Pure static helpers: memory recall, tool visibility, easy turns, TTS batching |
+| `GateHelpers.swift` | Pure static helpers: idle rearm, silence threshold, speaker verification, voice attention |
+| `BargeInState.swift` | Barge-in state variables + BargeInDecisions pure decision functions |
+| `BargeInTypes.swift` | PendingBargeIn, PlaybackBargeInCandidate, GenerationTakeoverCandidate |
+| `TTSState.swift` | TTS task chain + TTFA telemetry state |
+| `SpeechInputStage.swift` | Speech segment queue, streaming epoch, wake detection state |
+| `SpeakerGateState.swift` | Speaker identity + enrollment + streaming gate state |
+| `ToolCallParsing.swift` | ToolCall, ScriptBlock types + parser |
+| `PipelineTypes.swift` | PipelineMode, PipelineDegradedMode, GateState, etc. |
 | `EchoSuppressor.swift` | Time-based + text-overlap + voice identity echo filtering |
 | `VoiceActivityDetector.swift` | Voice activity detection |
 | `CorrectionDetector.swift` | Detect user corrections: name errors, mishearings, interruptions, wrong actions |

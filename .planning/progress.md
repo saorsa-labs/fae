@@ -226,3 +226,41 @@ second, lighter model providing independent partials on a different decode caden
 **Pure functions extracted**: 6 static decision functions to BargeInDecisions enum
 **Test count**: 1560 tests, 0 failures throughout
 **Build**: zero warnings throughout
+
+### Phase 3.3: Extract Static Helpers + Type Definitions — COMPLETE
+
+**Baseline**: PipelineCoordinator 9,663 lines, 1560 tests passing
+
+- [x] Extract ToolRoutingHelpers (~50 pure static functions) (commit: 23e84b86)
+  - Created `ToolRoutingHelpers.swift` (1,077 lines)
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract TurnHelpers (memory recall, tool visibility, easy turns, TTS batching) (commit: 8a7d34cb)
+  - Created `TurnHelpers.swift` (772 lines)
+  - 1560 tests pass, 0 warnings
+
+- [x] Extract GateHelpers (idle rearm, silence threshold, speaker verification) (commit: deddc869)
+  - Created `GateHelpers.swift` (213 lines)
+  - 1560 tests pass, 0 warnings
+
+- [SKIPPED] Task 4: Private struct types cannot move without losing encapsulation.
+
+**PipelineCoordinator line count**: 9,663 -> 7,893 (-1,770 lines)
+
+### Phase 3.4: Integration Testing & Cleanup — COMPLETE
+
+- [x] Full build validation: zero warnings
+- [x] Full test pass: 1560 tests, 0 failures
+- [x] Dead code scan: clean
+- [x] Progress documentation updated
+
+### Milestone 3 Summary
+
+**PipelineCoordinator**: 10,080 -> 7,893 lines (-2,187 lines, -21.7%)
+**Extracted files** (10): 2,942 lines total across SpeechInputStage, SpeakerGateState,
+BargeInTypes, ToolCallParsing, PipelineTypes, BargeInState, TTSState,
+ToolRoutingHelpers, TurnHelpers, GateHelpers.
+
+**What remained (7,893 lines)**: Core pipeline methods with 10+ coordinator dependencies each.
+Cannot be extracted without async boundary changes to the actor.
+**Original target**: <2K (unrealistic). **Achieved**: maximum safe extraction.
