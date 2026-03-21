@@ -570,8 +570,8 @@ private struct InputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
-    private static let cardFill = Color(red: 28 / 255, green: 31 / 255, blue: 40 / 255).opacity(0.96)
-    private static let cardStroke = Color.white.opacity(0.08)
+    private static let cardFill = Color(NSColor.windowBackgroundColor).opacity(0.96)
+    private static let cardStroke = Color.primary.opacity(0.12)
 
     private var field: ApprovalOverlayController.InputField {
         request.fields.first ?? .init(
@@ -721,8 +721,8 @@ private struct FormInputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
-    private static let cardFill = Color(red: 28 / 255, green: 31 / 255, blue: 40 / 255).opacity(0.96)
-    private static let cardStroke = Color.white.opacity(0.08)
+    private static let cardFill = Color(NSColor.windowBackgroundColor).opacity(0.96)
+    private static let cardStroke = Color.primary.opacity(0.12)
 
     private var hasMultilineField: Bool {
         request.fields.contains { $0.isMultiline }
