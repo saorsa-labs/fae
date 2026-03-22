@@ -194,6 +194,9 @@ struct SpeakerEnrollmentView: View {
     // MARK: - Recording Logic
 
     @MainActor
+    /// Maximum automatic retries when capture gets silence (mic warmup).
+    private static let maxAutoRetries = 2
+
     private func recordSample() async {
         isRecording = true
         recordingProgress = 0
@@ -210,20 +213,33 @@ struct SpeakerEnrollmentView: View {
         }
 
         do {
-            let samples = try await captureManager.captureSegment(durationSeconds: Self.sampleDuration)
+            // Retry automatically if mic returns silence (AVAudioEngine warmup).
+            var samples: [Float] = []
+            var quality = AudioCaptureManager.SegmentSpeechQuality(rms: 0, peak: 0, voicedFrameRatio: 0, voicedDurationSeconds: 0)
+
+            for attempt in 0...Self.maxAutoRetries {
+                samples = try await captureManager.captureSegment(durationSeconds: Self.sampleDuration)
+                quality = AudioCaptureManager.analyzeSegment(samples)
+                NSLog(
+                    "SpeakerEnrollmentView: sample %d attempt %d quality rms=%.4f peak=%.4f voiced_ratio=%.3f voiced_seconds=%.2f usable=%@",
+                    sampleIndex + 1,
+                    attempt + 1,
+                    quality.rms,
+                    quality.peak,
+                    quality.voicedFrameRatio,
+                    quality.voicedDurationSeconds,
+                    quality.hasUsableSpeech ? "true" : "false"
+                )
+                if quality.hasUsableSpeech { break }
+                if attempt < Self.maxAutoRetries {
+                    NSLog("SpeakerEnrollmentView: auto-retrying (attempt %d got silence)", attempt + 1)
+                    recordingProgress = 0
+                }
+            }
+
             progressTask.cancel()
             recordingProgress = 1.0
 
-            let quality = AudioCaptureManager.analyzeSegment(samples)
-            NSLog(
-                "SpeakerEnrollmentView: sample %d quality rms=%.4f peak=%.4f voiced_ratio=%.3f voiced_seconds=%.2f usable=%@",
-                sampleIndex + 1,
-                quality.rms,
-                quality.peak,
-                quality.voicedFrameRatio,
-                quality.voicedDurationSeconds,
-                quality.hasUsableSpeech ? "true" : "false"
-            )
             guard quality.hasUsableSpeech else {
                 errorMessage = "I didn't hear enough clear speech. Move a bit closer and try that sample again."
                 isRecording = false
