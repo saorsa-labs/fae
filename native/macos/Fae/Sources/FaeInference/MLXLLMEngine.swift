@@ -249,6 +249,8 @@ public actor MLXLLMEngine: LLMEngine {
                     return
                 }
 
+                NSLog("MLXLLMEngine: generate() starting — messages=%d", messages.count)
+
                 let turnContextPrefix = options.turnContextPrefix?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let toolSignature = await self.toolSignature(for: options.tools)
@@ -309,8 +311,10 @@ public actor MLXLLMEngine: LLMEngine {
                 }
 
                 do {
+                    NSLog("MLXLLMEngine: about to acquire container lock (parseTools=%@)", shouldParseToolCalls ? "true" : "false")
                     if shouldParseToolCalls {
                         let setup = try await container.perform { context in
+                            NSLog("MLXLLMEngine: lock acquired — preparing input")
                             var userInput = UserInput(chat: chatMessages)
                             userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
                             userInput.tools = options.tools ?? []
@@ -389,7 +393,10 @@ public actor MLXLLMEngine: LLMEngine {
                         let setup = try await container.perform { context in
                             var userInput = UserInput(chat: chatMessages)
                             userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
-                            userInput.tools = []
+                            // Pass the SAME tools as the cached session to keep tokenization
+                            // consistent with the KV cache. We just won't parse the output
+                            // for tool calls (text-only generation path).
+                            userInput.tools = options.tools ?? []
 
                             let input = try await context.processor.prepare(input: userInput)
                             let cachedTokenCount = cacheBox.value.first?.offset ?? 0
@@ -577,7 +584,11 @@ public actor MLXLLMEngine: LLMEngine {
         guard let session else { return false }
         guard session.reusable else { return false }
         guard session.systemPrompt == systemPrompt else { return false }
-        guard session.toolSignature == toolSignature else { return false }
+        // Tool signature changes between tool-calling turns (tools active) and
+        // tool follow-up turns (tools suppressed to prevent recursive calls).
+        // Don't invalidate the cache for this — the KV cache from the prompt +
+        // history is still valid; only the generation behaviour changes.
+        // guard session.toolSignature == toolSignature else { return false }
         guard messages.count >= session.history.count else { return false }
         return Array(messages.prefix(session.history.count)) == session.history
     }
