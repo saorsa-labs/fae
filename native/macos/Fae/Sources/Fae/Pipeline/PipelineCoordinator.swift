@@ -3820,7 +3820,7 @@ actor PipelineCoordinator {
                             hasOwner: hasOwner,
                             store: store,
                             durationSecs: durationSecs,
-                            threshold: max(config.speaker.threshold - Self.previewSpeakerThresholdRelaxation, 0.55),
+                            threshold: max(config.speaker.threshold - Self.previewSpeakerThresholdRelaxation, 0.40),
                             progressiveEnrollment: true,
                             source: "preview"
                         ) else {

@@ -24,7 +24,9 @@ final class SpeechInputStage: @unchecked Sendable {
 
     /// Maximum age (seconds) for a queued segment before it's considered stale.
     /// Segments older than this are dropped on dequeue rather than processed.
-    static let segmentStalenessThreshold: TimeInterval = 10.0
+    /// Set high enough to accommodate long utterances (8-10s speech + pipeline
+    /// processing time). Was 10s but dropped valid segments during long sentences.
+    static let segmentStalenessThreshold: TimeInterval = 30.0
 
     /// Running count of segments dropped due to backpressure (diagnostic).
     private(set) var speechSegmentsDroppedForBackpressure: Int = 0

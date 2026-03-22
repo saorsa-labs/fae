@@ -35,10 +35,10 @@ ENROLL_DIR = Path(__file__).parent / "audio" / "enrollment_voice"
 FAE_APP = Path(__file__).parent.parent.parent.parent.parent / "Fae.app" / "Contents" / "MacOS" / "Fae"
 
 
-def _voice_to_wav(text: str, output: str):
+def _voice_to_wav(text: str, output: str, voice: str = "am_adam"):
     """Generate speech with Kokoro voice CLI and convert to 16kHz mono WAV."""
     raw = output.replace(".wav", "_raw.wav")
-    subprocess.run(["voice", "-q", "-o", raw, text], capture_output=True, timeout=30)
+    subprocess.run(["voice", "-v", voice, "-q", "-o", raw, text], capture_output=True, timeout=30)
     subprocess.run(
         ["ffmpeg", "-y", "-i", raw, "-ar", "16000", "-ac", "1", output],
         capture_output=True, timeout=15,
@@ -139,21 +139,25 @@ def cmd_setup():
     time.sleep(4)
     print("Enrolled owner")
 
-    # Configure
+    # Configure — disable proactive features that hijack conversation
     for key, val in [
         ("awareness.enabled", False),
         ("awareness.camera_enabled", False),
         ("awareness.screen_enabled", False),
+        ("awareness.enhanced_briefing", False),
         ("conversation.require_direct_address", False),
     ]:
         CLIENT.post("/config", json={"key": key, "value": val})
 
-    # Warmup LLM
+    # Wait for enrollment TTS ("Thanks, David") to finish playing
+    time.sleep(6)
+
+    # Warmup LLM (compiles Metal shaders on first inference)
     print("Warming up LLM...")
     CLIENT.post("/inject", json={"text": "Hi"})
     _wait_idle(timeout_s=60, min_count=2)
     CLIENT.post("/reset")
-    time.sleep(2)
+    time.sleep(3)
     print("Ready for conversation.")
 
 
