@@ -1035,7 +1035,10 @@ enum TextProcessing {
         for token in tokens {
             guard token.text.count >= 3 else { continue }
             for alias in singleWordAliases {
-                let maxDist = alias.count <= 4 ? 1 : 2
+                // For very short aliases (≤3 chars, e.g. "fae"), require exact match only.
+                // Common English words like "far", "fan", "fee", "few" are all within
+                // edit distance 1 and cause false wake-word triggers.
+                let maxDist = alias.count <= 3 ? 0 : (alias.count <= 4 ? 1 : 2)
                 let distance = editDistance(token.text, alias)
                 guard distance <= maxDist else { continue }
 

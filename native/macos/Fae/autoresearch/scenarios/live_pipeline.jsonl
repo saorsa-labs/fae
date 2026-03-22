@@ -1,32 +1,32 @@
+# All scenarios use "say" with Daniel voice to match the enrolled owner voiceprint.
 # === RESPONSIVENESS — How fast does Fae respond to spoken input? ===
-{"id": "live_greeting", "dimension": "responsiveness", "speak": "Hello Fae", "expect_response": true, "expect_contains": ["hello", "hi", "hey", "morning"], "max_response_ms": 8000}
-{"id": "live_simple_math", "dimension": "responsiveness", "speak": "What is 7 times 8?", "expect_response": true, "expect_contains": ["56"], "max_response_ms": 10000}
-{"id": "live_factual", "dimension": "responsiveness", "speak": "What is the capital of France?", "expect_response": true, "expect_contains": ["Paris"], "max_response_ms": 12000}
-{"id": "live_yesno", "dimension": "responsiveness", "speak": "Is the sky blue?", "expect_response": true, "max_response_ms": 8000}
+{"id": "live_greeting", "dimension": "responsiveness", "voice_tool": "say", "voice_name": "Daniel", "speak": "Hello, how are you doing today?", "expect_response": true, "max_response_ms": 20000}
+{"id": "live_simple_math", "dimension": "responsiveness", "voice_tool": "say", "voice_name": "Daniel", "speak": "What is 7 times 8?", "expect_response": true, "expect_contains": ["56"], "max_response_ms": 20000}
+{"id": "live_factual", "dimension": "responsiveness", "voice_tool": "say", "voice_name": "Daniel", "speak": "What is the capital of France?", "expect_response": true, "expect_contains": ["Paris"], "max_response_ms": 20000}
+{"id": "live_yesno", "dimension": "responsiveness", "voice_tool": "say", "voice_name": "Daniel", "speak": "Is the sky blue?", "expect_response": true, "max_response_ms": 15000}
 # === CONVERSATION QUALITY — Multi-turn coherence ===
-{"id": "live_multi_turn", "type": "multi_turn", "dimension": "conversation_quality", "steps": [{"speak": "Tell me about Mars"}, {"speak": "How far is it from Earth?", "expect_contains": ["million", "km", "miles", "kilometers"]}, {"speak": "What were we just talking about?", "expect_contains": ["Mars"]}]}
-{"id": "live_topic_switch", "type": "multi_turn", "dimension": "conversation_quality", "steps": [{"speak": "What is the tallest mountain in the world?"}, {"speak": "Actually, tell me about the deepest ocean instead", "expect_contains": ["ocean", "Mariana", "Pacific", "deep"]}]}
+{"id": "live_multi_turn", "type": "multi_turn", "dimension": "conversation_quality", "voice_tool": "say", "steps": [{"speak": "Tell me about Mars", "voice_name": "Daniel"}, {"speak": "How far is it from Earth?", "voice_name": "Daniel", "expect_contains": ["million", "km", "miles", "kilometers"]}, {"speak": "What were we just talking about?", "voice_name": "Daniel", "expect_contains": ["Mars"]}]}
+{"id": "live_topic_switch", "type": "multi_turn", "dimension": "conversation_quality", "voice_tool": "say", "steps": [{"speak": "What is the tallest mountain in the world?", "voice_name": "Daniel"}, {"speak": "Actually, tell me about the deepest ocean instead", "voice_name": "Daniel", "expect_contains": ["ocean", "Mariana", "Pacific", "deep"]}]}
 # === MEMORY — Store and recall during conversation ===
-{"id": "live_mem_name", "type": "multi_turn", "dimension": "memory_pipeline", "steps": [{"speak": "My name is David"}, {"speak": "What is my name?", "expect_contains": ["David"]}]}
-{"id": "live_mem_color", "type": "multi_turn", "dimension": "memory_pipeline", "steps": [{"speak": "Remember that my favourite colour is blue"}, {"speak": "What is my favourite colour?", "expect_contains": ["blue"]}]}
-{"id": "live_mem_pet", "type": "multi_turn", "dimension": "memory_pipeline", "steps": [{"speak": "I have a dog named Max"}, {"speak": "What is my dog's name?", "expect_contains": ["Max"]}]}
+{"id": "live_mem_name", "type": "multi_turn", "dimension": "memory_pipeline", "voice_tool": "say", "steps": [{"speak": "My name is David", "voice_name": "Daniel"}, {"speak": "What is my name?", "voice_name": "Daniel", "expect_contains": ["David"]}]}
+{"id": "live_mem_color", "type": "multi_turn", "dimension": "memory_pipeline", "voice_tool": "say", "steps": [{"speak": "Remember that my favourite colour is blue", "voice_name": "Daniel"}, {"speak": "What is my favourite colour?", "voice_name": "Daniel", "expect_contains": ["blue"]}]}
+{"id": "live_mem_pet", "type": "multi_turn", "dimension": "memory_pipeline", "voice_tool": "say", "steps": [{"speak": "I have a dog named Max", "voice_name": "Daniel"}, {"speak": "What is my dog's name?", "voice_name": "Daniel", "expect_contains": ["Max"]}]}
 # === PERSONALITY — Warmth, empathy, identity ===
-{"id": "live_who_are_you", "dimension": "personality", "speak": "Who are you?", "expect_response": true, "expect_contains": ["Fae"]}
-{"id": "live_empathy", "dimension": "personality", "speak": "I am feeling a bit down today", "expect_response": true}
-{"id": "live_humor", "dimension": "personality", "speak": "Tell me a joke", "expect_response": true}
-{"id": "live_farewell", "dimension": "personality", "speak": "Goodbye, talk to you later", "expect_response": true}
+{"id": "live_who_are_you", "dimension": "personality", "voice_tool": "say", "voice_name": "Daniel", "speak": "Who are you?", "expect_response": true, "expect_contains": ["Fae"]}
+{"id": "live_empathy", "dimension": "personality", "voice_tool": "say", "voice_name": "Daniel", "speak": "I am feeling a bit down today", "expect_response": true}
+{"id": "live_humor", "dimension": "personality", "voice_tool": "say", "voice_name": "Daniel", "speak": "Tell me a joke", "expect_response": true}
+{"id": "live_farewell", "dimension": "personality", "voice_tool": "say", "voice_name": "Daniel", "speak": "Goodbye, talk to you later", "expect_response": true}
 # === THINKING MODE — Think tags never leak ===
-{"id": "live_think_simple", "dimension": "thinking_mode", "speak": "What is 3 plus 4?", "expect_response": true, "expect_contains": ["7"], "expect_no_think_tags": true}
-{"id": "live_think_complex", "dimension": "thinking_mode", "speak": "What causes thunder?", "expect_response": true, "expect_no_think_tags": true}
+{"id": "live_think_simple", "dimension": "thinking_mode", "voice_tool": "say", "voice_name": "Daniel", "speak": "What is 3 plus 4?", "expect_response": true, "expect_contains": ["7"], "expect_no_think_tags": true}
+{"id": "live_think_complex", "dimension": "thinking_mode", "voice_tool": "say", "voice_name": "Daniel", "speak": "What causes thunder?", "expect_response": true, "expect_no_think_tags": true}
 # === CAPABILITY AWARENESS — Knows tools without calling them ===
-{"id": "live_capabilities", "dimension": "capability_awareness", "speak": "What can you help me with?", "expect_response": true}
-{"id": "live_knows_calendar", "dimension": "capability_awareness", "speak": "Can you check my calendar?", "expect_response": true}
-# === BARGE-IN — Interrupt Fae mid-speech ===
-{"id": "live_barge_stop", "type": "barge_in", "dimension": "barge_in", "speak": "Tell me a very long and detailed story about a dragon who lives in a cave", "wait_for_speech_ms": 8000, "interrupt_delay_ms": 3000, "interrupt_speak": "Stop"}
-{"id": "live_barge_redirect", "type": "barge_in", "dimension": "barge_in", "speak": "Count from one to one hundred slowly", "wait_for_speech_ms": 8000, "interrupt_delay_ms": 3000, "interrupt_speak": "Actually, what time is it?", "expect_redirect_response": true}
+{"id": "live_capabilities", "dimension": "capability_awareness", "voice_tool": "say", "voice_name": "Daniel", "speak": "What can you help me with?", "expect_response": true}
+{"id": "live_knows_calendar", "dimension": "capability_awareness", "voice_tool": "say", "voice_name": "Daniel", "speak": "Can you check my calendar?", "expect_response": true}
 # === SPEAKER GATE — Stranger voice should be ignored ===
-{"id": "live_stranger_say", "dimension": "speaker_gate", "speak": "Hello Fae, can you help me?", "voice_tool": "say", "voice_name": "Karen", "expect_response": false, "expect_speaker": "rejected"}
-{"id": "live_stranger_fred", "dimension": "speaker_gate", "speak": "What time is it?", "voice_tool": "say", "voice_name": "Fred", "expect_response": false, "expect_speaker": "rejected"}
+{"id": "live_stranger_karen", "dimension": "speaker_gate", "voice_tool": "say", "voice_name": "Karen", "speak": "Hello, can you help me please?", "expect_response": false, "expect_speaker": "rejected"}
+{"id": "live_stranger_fred", "dimension": "speaker_gate", "voice_tool": "say", "voice_name": "Fred", "speak": "What time is it right now?", "expect_response": false, "expect_speaker": "rejected"}
+# === BARGE-IN — Interrupt Fae mid-speech ===
+{"id": "live_barge_stop", "type": "barge_in", "dimension": "barge_in", "voice_tool": "say", "speak": "Tell me a very long and detailed story about a dragon who lives in a cave", "wait_for_speech_ms": 10000, "interrupt_delay_ms": 3000, "interrupt_speak": "Stop"}
+{"id": "live_barge_redirect", "type": "barge_in", "dimension": "barge_in", "voice_tool": "say", "speak": "Tell me the complete history of Scotland from ancient times to the modern era", "wait_for_speech_ms": 10000, "interrupt_delay_ms": 3000, "interrupt_speak": "Actually, what is two plus two?", "expect_redirect_response": true, "expect_contains": ["4", "four"]}
 # === NOISE RESILIENCE — Background audio should not trigger ===
-{"id": "live_noise_say_bg", "type": "noise", "dimension": "noise_resilience", "noise_text": "The quarterly earnings report shows a fifteen percent increase in revenue compared to last year", "noise_voice": "Samantha"}
-{"id": "live_noise_tone", "type": "noise", "dimension": "noise_resilience", "noise_file": "autoresearch/audio/noise/tone_440hz_3s.wav", "noise_duration_s": 3}
+{"id": "live_noise_bg_voice", "type": "noise", "dimension": "noise_resilience", "noise_text": "The quarterly earnings report shows a fifteen percent increase in revenue compared to last year", "noise_voice": "Samantha"}

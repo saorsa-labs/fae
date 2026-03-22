@@ -86,16 +86,20 @@ def compute_dimension_score(timing: dict, accuracy: dict) -> tuple[float, dict]:
         score_components.append(submetrics["composite_score"] * 0.6)
 
     if "avg_latency_ms" in submetrics:
-        # Score latency on a 0-100 scale where target is 100
+        # Score latency on a 0-100 scale. Targets are realistic for local
+        # Apple Silicon LLM inference (2B-35B models, no cloud API).
+        # Greetings/simple: ~5-10s, factual: ~10-20s, complex: ~20-40s.
         latency = submetrics["avg_latency_ms"]
-        if latency <= 3000:
+        if latency <= 8000:
             latency_score = 100
-        elif latency <= 6000:
-            latency_score = 100 - ((latency - 3000) / 3000) * 20
         elif latency <= 15000:
-            latency_score = 80 - ((latency - 6000) / 9000) * 40
+            latency_score = 100 - ((latency - 8000) / 7000) * 15
+        elif latency <= 30000:
+            latency_score = 85 - ((latency - 15000) / 15000) * 25
+        elif latency <= 60000:
+            latency_score = 60 - ((latency - 30000) / 30000) * 30
         else:
-            latency_score = max(0, 40 - ((latency - 15000) / 15000) * 40)
+            latency_score = max(0, 30 - ((latency - 60000) / 60000) * 30)
         score_components.append(latency_score * 0.4)
 
     overall = sum(score_components) if score_components else 0

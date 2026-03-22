@@ -1165,6 +1165,48 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 NSLog("FaeCore: mic %@ for testing", muted ? "muted" : "unmuted")
             }
 
+        case "test.enroll_owner":
+            // Programmatic owner enrollment from audio files — no UI needed.
+            // Payload: {"name": "David", "audio_files": ["/path/to/sample1.wav", ...]}
+            // Each WAV must be 16kHz mono. Minimum 1 file, ideally 3.
+            // After enrollment, the pipeline treats matched speakers as owner.
+            let ownerName = payload["name"] as? String ?? "TestOwner"
+            let audioPaths = payload["audio_files"] as? [String] ?? []
+            guard !audioPaths.isEmpty else {
+                NSLog("FaeCore: test.enroll_owner requires 'audio_files' array")
+                break
+            }
+            Task {
+                do {
+                    var embeddings: [[Float]] = []
+                    for path in audioPaths {
+                        let samples = try Self.loadWAVSamples(at: path)
+                        let embedding = try await self.speakerEncoder.embed(
+                            audio: samples,
+                            sampleRate: AudioCaptureManager.targetSampleRate
+                        )
+                        embeddings.append(embedding)
+                        NSLog("FaeCore: test.enroll_owner embedded %@ (%d samples)", path, samples.count)
+                    }
+                    await self.speakerProfileStore.bulkEnroll(
+                        label: "owner",
+                        embeddings: embeddings,
+                        role: .owner,
+                        displayName: ownerName
+                    )
+                    let consistency = SpeakerProfileStore.consistencyScore(embeddings)
+                    NSLog(
+                        "FaeCore: test.enroll_owner complete — %@ enrolled with %d embeddings, consistency=%.3f",
+                        ownerName,
+                        embeddings.count,
+                        consistency
+                    )
+                    self.completeNativeOwnerEnrollment(displayName: ownerName)
+                } catch {
+                    NSLog("FaeCore: test.enroll_owner failed — %@", error.localizedDescription)
+                }
+            }
+
         default:
             NSLog("FaeCore: unhandled command '%@'", name)
         }
@@ -1180,12 +1222,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
             throw NSError(domain: "FaeCore", code: 1, userInfo: [NSLocalizedDescriptionKey: "WAV file too small"])
         }
 
-        // Find "data" chunk (handles extended headers)
+        // Find "data" chunk (handles extended headers).
+        // Use loadUnaligned to avoid misaligned-pointer crashes on debug builds.
         var dataOffset = 12  // Skip RIFF header
         while dataOffset + 8 < data.count {
             let chunkID = String(data: data[dataOffset..<dataOffset + 4], encoding: .ascii) ?? ""
-            let chunkSize = data.withUnsafeBytes { ptr -> UInt32 in
-                ptr.load(fromByteOffset: dataOffset + 4, as: UInt32.self)
+            let chunkSize: UInt32 = data.withUnsafeBytes { ptr in
+                ptr.loadUnaligned(fromByteOffset: dataOffset + 4, as: UInt32.self)
             }
             if chunkID == "data" {
                 dataOffset += 8
@@ -1194,14 +1237,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             dataOffset += 8 + Int(chunkSize)
         }
 
-        // Convert 16-bit PCM to Float32
+        // Convert 16-bit PCM to Float32 using byte-level reads to avoid alignment issues.
         let audioData = data[dataOffset...]
         let sampleCount = audioData.count / 2
         var samples = [Float](repeating: 0, count: sampleCount)
         audioData.withUnsafeBytes { ptr in
-            let int16Ptr = ptr.bindMemory(to: Int16.self)
             for i in 0..<sampleCount {
-                samples[i] = Float(int16Ptr[i]) / 32768.0
+                let value: Int16 = ptr.loadUnaligned(fromByteOffset: i * 2, as: Int16.self)
+                samples[i] = Float(value) / 32768.0
             }
         }
         return samples
@@ -2029,6 +2072,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     self.persistConfig(reason: "owner_enrolled_auto_voice_identity")
                 }
                 self.refreshAwarenessRuntime(restartSchedulerTasks: true)
+
+                // Dismiss any pending enrollment-required overlay.
+                NotificationCenter.default.post(name: .faeToolModeUpgradeDismiss, object: nil)
+
                 NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true, awareness active")
             }
         }

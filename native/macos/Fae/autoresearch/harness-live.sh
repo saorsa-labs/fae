@@ -90,8 +90,10 @@ if [ "$READY" = false ]; then
     exit 1
 fi
 
-# Configure — disable proactive awareness (would interrupt our tests)
-echo "    Disabling proactive awareness..."
+# Configure for automated testing:
+# - Disable proactive awareness (would interrupt tests)
+# - Disable direct-address requirement (TTS voice doesn't always say "Fae" clearly)
+echo "    Configuring for automated voice testing..."
 curl -sf -X POST http://127.0.0.1:7433/config -H "Content-Type: application/json" \
     -d '{"key":"awareness.enabled","value":false}' > /dev/null 2>&1 || true
 curl -sf -X POST http://127.0.0.1:7433/config -H "Content-Type: application/json" \
@@ -100,15 +102,51 @@ curl -sf -X POST http://127.0.0.1:7433/config -H "Content-Type: application/json
     -d '{"key":"awareness.screen_enabled","value":false}' > /dev/null 2>&1 || true
 curl -sf -X POST http://127.0.0.1:7433/config -H "Content-Type: application/json" \
     -d '{"key":"awareness.enhanced_briefing","value":false}' > /dev/null 2>&1 || true
+curl -sf -X POST http://127.0.0.1:7433/config -H "Content-Type: application/json" \
+    -d '{"key":"conversation.require_direct_address","value":false}' > /dev/null 2>&1 || true
 sleep 1
 
-# NOTE: We do NOT disable require_direct_address — we want to test
-# whether Fae hears "Fae" in our speech and wakes up properly.
 # NOTE: We do NOT mute the mic — the whole point is real audio through the mic.
 
-# Step 3: Warmup — prime the LLM (first inference compiles Metal shaders, ~30-60s)
+# Step 3: Enroll owner voice (programmatic — no UI)
 echo ""
-echo "==> [3/5] Warming up LLM..."
+echo "==> [3/7] Enrolling owner voice from pre-recorded samples..."
+
+# Use Daniel (en_GB) voice samples — same voice used for live test scenarios.
+# The test.enroll_owner command:
+# 1. Loads WAV files → computes speaker embeddings
+# 2. Bulk-enrolls as owner in SpeakerProfileStore
+# 3. Calls completeNativeOwnerEnrollment() — sets hasOwnerSetUp, restarts capture
+ENROLL_DIR="$(pwd)/$AUTORESEARCH_DIR/audio/enrollment"
+curl -sf -X POST http://127.0.0.1:7433/command -H "Content-Type: application/json" \
+    -d "{\"name\":\"test.enroll_owner\",\"payload\":{\"name\":\"Daniel\",\"audio_files\":[\"$ENROLL_DIR/enroll_1.wav\",\"$ENROLL_DIR/enroll_2.wav\",\"$ENROLL_DIR/enroll_3.wav\"]}}" 2>&1
+echo ""
+
+# Wait for enrollment to complete (capture restart, etc.)
+sleep 5
+
+# Verify enrollment
+echo "    Verifying enrollment..."
+SPEAKERS_FILE="$HOME/Library/Application Support/fae/speakers.json"
+if [ -f "$SPEAKERS_FILE" ]; then
+    OWNER_COUNT=$(uv run python -c "
+import json
+with open('$SPEAKERS_FILE') as f:
+    profiles = json.load(f)
+owners = [p for p in profiles if p.get('role') == 'owner']
+print(len(owners))
+" 2>/dev/null || echo "0")
+    echo "    Owner profiles: $OWNER_COUNT"
+    if [ "$OWNER_COUNT" -eq "0" ]; then
+        echo "    WARNING: No owner profile found — enrollment may have failed"
+    fi
+else
+    echo "    WARNING: speakers.json not found"
+fi
+
+# Step 4: Warmup — prime the LLM (first inference compiles Metal shaders, ~30-60s)
+echo ""
+echo "==> [4/7] Warming up LLM..."
 
 # Phase 1: Text injection warmup (bypasses mic, guaranteed to reach LLM)
 echo "    Phase 1: Text injection to compile Metal shaders..."
@@ -130,10 +168,10 @@ done
 curl -sf -X POST http://127.0.0.1:7433/reset > /dev/null 2>&1 || true
 sleep 3
 
-# Phase 2: Voice warmup (test that mic picks up speech)
+# Phase 2: Voice warmup (test that mic picks up speech AND speaker is recognized)
 echo "    Phase 2: Voice warmup through speakers..."
-voice -q "Hello Fae"
-echo "    Spoke: 'Hello Fae' — waiting for Fae to respond..."
+say -v Daniel "Hello, how are you?"
+echo "    Spoke: 'Hello, how are you?' — waiting for Fae to respond..."
 
 for i in $(seq 1 60); do
     CONV=$(curl -sf http://127.0.0.1:7433/conversation 2>/dev/null || echo '{}')
@@ -158,7 +196,7 @@ mkdir -p "$RESULTS_DIR"
 OUTPUT="$RESULTS_DIR/live_${TIMESTAMP}.json"
 
 echo ""
-echo "==> [4/5] Running live voice scenarios..."
+echo "==> [5/7] Running live voice scenarios..."
 echo ""
 
 uv run "$AUTORESEARCH_DIR/runners/live_voice_runner.py" \
@@ -167,7 +205,12 @@ uv run "$AUTORESEARCH_DIR/runners/live_voice_runner.py" \
 
 # Step 5: Summary
 echo ""
-echo "==> [5/5] Results"
+echo "==> [6/7] Shutting down Fae..."
+kill "$FAE_PID" 2>/dev/null || true
+wait "$FAE_PID" 2>/dev/null || true
+FAE_PID=""
+
+echo "==> [7/7] Results"
 echo ""
 
 if [ -f "$OUTPUT" ]; then

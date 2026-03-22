@@ -1,0 +1,234 @@
+{
+  "version": 2,
+  "type": "voice_pipeline",
+  "created": "2026-03-21T11:33:59Z",
+  "lastRun": "2026-03-22T12:56:12.510291+00:00",
+  "runCount": 6,
+  "currentFocus": "speaker_gate",
+  "dimensions": {
+    "responsiveness": {
+      "score": 94.8,
+      "submetrics": {
+        "avg_latency_ms": 10575.788229180034,
+        "max_latency_ms": 15812.530332943425,
+        "pass_rate": 1.0,
+        "composite_score": 95.0,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "conversation_quality": {
+      "score": 78.8,
+      "submetrics": {
+        "avg_latency_ms": 37361.26027640421,
+        "max_latency_ms": 54132.06037611235,
+        "pass_rate": 1.0,
+        "composite_score": 96.2,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "memory_pipeline": {
+      "score": 92.4,
+      "submetrics": {
+        "avg_latency_ms": 15994.600916502532,
+        "max_latency_ms": 35390.268042101525,
+        "pass_rate": 1.0,
+        "composite_score": 98.5,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "personality": {
+      "score": 84.3,
+      "submetrics": {
+        "avg_latency_ms": 17408.967120794114,
+        "max_latency_ms": 25583.48641602788,
+        "pass_rate": 1.0,
+        "composite_score": 86.5,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "thinking_mode": {
+      "score": 87.4,
+      "submetrics": {
+        "avg_latency_ms": 15307.141523442364,
+        "max_latency_ms": 25197.95666600112,
+        "pass_rate": 1.0,
+        "composite_score": 89.3,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "capability_awareness": {
+      "score": 88.0,
+      "submetrics": {
+        "avg_latency_ms": 14976.356198985337,
+        "max_latency_ms": 20919.46270794142,
+        "pass_rate": 1.0,
+        "composite_score": 90.0,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "speaker_gate": {
+      "score": 47.3,
+      "submetrics": {
+        "avg_latency_ms": 19362.585562506865,
+        "max_latency_ms": 77776.58054203494,
+        "pass_rate": 0.0,
+        "composite_score": 60.0,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "noise_resilience": {
+      "score": 76.0,
+      "submetrics": {
+        "avg_latency_ms": 0.0,
+        "max_latency_ms": 0.0,
+        "pass_rate": 0.0,
+        "composite_score": 60.0,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "barge_in": {
+      "score": 69.3,
+      "submetrics": {
+        "avg_latency_ms": 46697.433951116785,
+        "max_latency_ms": 174328.55712389573,
+        "pass_rate": 0.6666666666666666,
+        "composite_score": 86.7,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    },
+    "resource_usage": {
+      "score": 100.0,
+      "submetrics": {
+        "avg_latency_ms": 0.0,
+        "max_latency_ms": 0.0,
+        "pass_rate": 1.0,
+        "composite_score": 100.0,
+        "no_think_leak_rate": 1.0,
+        "no_hallucination_rate": 1.0,
+        "tool_accuracy_rate": 1.0
+      }
+    }
+  },
+  "history": [
+    {
+      "timestamp": "2026-03-21T12:52:31.733394+00:00",
+      "runCount": 1,
+      "focus": "vp_responsiveness",
+      "scores": {
+        "responsiveness": 46.0,
+        "conversation_quality": 54.7,
+        "memory_pipeline": 56.7,
+        "personality": 51.0,
+        "thinking_mode": 50.2,
+        "capability_awareness": 51.0,
+        "speaker_gate": null,
+        "noise_resilience": null,
+        "barge_in": 40.0,
+        "resource_usage": 100.0
+      }
+    },
+    {
+      "timestamp": "2026-03-21T15:06:22.959640+00:00",
+      "runCount": 2,
+      "focus": "barge_in",
+      "scores": {
+        "responsiveness": 42.0,
+        "conversation_quality": 54.7,
+        "memory_pipeline": 52.8,
+        "personality": 51.0,
+        "thinking_mode": 50.2,
+        "capability_awareness": 51.0,
+        "speaker_gate": null,
+        "noise_resilience": null,
+        "barge_in": 40.0,
+        "resource_usage": 100.0
+      }
+    },
+    {
+      "timestamp": "2026-03-21T15:54:28.648209+00:00",
+      "runCount": 3,
+      "focus": "barge_in",
+      "scores": {
+        "responsiveness": 54.0,
+        "conversation_quality": 49.9,
+        "memory_pipeline": 39.9,
+        "personality": 61.5,
+        "thinking_mode": 47.0,
+        "capability_awareness": 51.0,
+        "speaker_gate": 47.3,
+        "noise_resilience": 76.0,
+        "barge_in": 40.0,
+        "resource_usage": 100.0
+      }
+    },
+    {
+      "timestamp": "2026-03-21T17:08:12.079461+00:00",
+      "runCount": 4,
+      "focus": "memory_pipeline",
+      "scores": {
+        "responsiveness": 46.0,
+        "conversation_quality": 54.7,
+        "memory_pipeline": 56.7,
+        "personality": 51.0,
+        "thinking_mode": 50.2,
+        "capability_awareness": 51.0,
+        "speaker_gate": 47.3,
+        "noise_resilience": 76.0,
+        "barge_in": 41.0,
+        "resource_usage": 100.0
+      }
+    },
+    {
+      "timestamp": "2026-03-22T12:21:52.035629+00:00",
+      "runCount": 5,
+      "focus": "barge_in",
+      "scores": {
+        "responsiveness": 77.1,
+        "conversation_quality": 56.0,
+        "memory_pipeline": 74.1,
+        "personality": 67.6,
+        "thinking_mode": 64.6,
+        "capability_awareness": 61.4,
+        "speaker_gate": 47.3,
+        "noise_resilience": 76.0,
+        "barge_in": 60.7,
+        "resource_usage": 100.0
+      }
+    },
+    {
+      "timestamp": "2026-03-22T12:56:12.510291+00:00",
+      "runCount": 6,
+      "focus": "speaker_gate",
+      "scores": {
+        "responsiveness": 94.8,
+        "conversation_quality": 78.8,
+        "memory_pipeline": 92.4,
+        "personality": 84.3,
+        "thinking_mode": 87.4,
+        "capability_awareness": 88.0,
+        "speaker_gate": 47.3,
+        "noise_resilience": 76.0,
+        "barge_in": 69.3,
+        "resource_usage": 100.0
+      }
+    }
+  ]
+}
