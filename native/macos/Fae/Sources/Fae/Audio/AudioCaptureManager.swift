@@ -280,12 +280,99 @@ actor AudioCaptureManager {
             }
 
             do {
+                // Pause main capture while temp engine uses the mic.
+                let mainWasCapturing = self.isCapturing
+                if mainWasCapturing {
+                    self.engine.inputNode.removeTap(onBus: 0)
+                    self.engine.stop()
+                    NSLog("AudioCaptureManager: paused main capture for enrollment")
+                }
+
                 try tempEngine.start()
                 self.logMicrophoneModeDiagnosticsIfAvailable()
+
+                // After temp engine finishes (continuation resumes),
+                // restart the main engine. Schedule on this actor.
+                Task { [weak self] in
+                    // Wait for the continuation to complete.
+                    while !finished {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                    guard let self, mainWasCapturing else { return }
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 500ms settle
+                    await self.restartMainCaptureAfterEnrollment()
+                }
             } catch {
                 finished = true
                 cont.resume(throwing: error)
             }
+        }
+    }
+
+    /// Restart the main capture engine after enrollment stole the mic.
+    private func restartMainCaptureAfterEnrollment() {
+        guard !isCapturing else { return }
+        NSLog("AudioCaptureManager: restarting main capture after enrollment")
+
+        let inputNode = engine.inputNode
+        configureVoiceProcessingIfAvailable(on: inputNode)
+        let nativeFormat = inputNode.outputFormat(forBus: 0)
+
+        let nativeChunkSize = AVAudioFrameCount(
+            Double(Self.chunkSize) * nativeFormat.sampleRate / Double(Self.targetSampleRate)
+        )
+
+        guard let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(Self.targetSampleRate),
+            channels: 1,
+            interleaved: false
+        ) else {
+            NSLog("AudioCaptureManager: failed to create target format for restart")
+            return
+        }
+
+        let converter: AVAudioConverter?
+        if nativeFormat.sampleRate != Double(Self.targetSampleRate) || nativeFormat.channelCount != 1 {
+            converter = AVAudioConverter(from: nativeFormat, to: targetFormat)
+        } else {
+            converter = nil
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: nativeChunkSize, format: nativeFormat) {
+            [weak self] buffer, _ in
+            guard let self else { return }
+
+            let chunk: AudioChunk
+            if let conv = converter {
+                let frameCapacity = AVAudioFrameCount(
+                    Double(buffer.frameLength) * Double(Self.targetSampleRate)
+                        / buffer.format.sampleRate
+                )
+                guard let converted = AVAudioPCMBuffer(
+                    pcmFormat: targetFormat,
+                    frameCapacity: frameCapacity
+                ) else { return }
+                var error: NSError?
+                conv.convert(to: converted, error: &error) { _, outStatus in
+                    outStatus.pointee = .haveData
+                    return buffer
+                }
+                guard error == nil else { return }
+                chunk = Self.extractChunk(from: converted)
+            } else {
+                chunk = Self.extractChunk(from: buffer)
+            }
+
+            self.continuation?.yield(chunk)
+        }
+
+        do {
+            try engine.start()
+            isCapturing = true
+            NSLog("AudioCaptureManager: main capture restarted successfully")
+        } catch {
+            NSLog("AudioCaptureManager: main capture restart failed: %@", error.localizedDescription)
         }
     }
 
