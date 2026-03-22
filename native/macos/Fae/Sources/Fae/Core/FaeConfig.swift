@@ -275,8 +275,8 @@ struct FaeConfig: Codable {
     // MARK: - Speaker
 
     struct SpeakerConfig: Codable {
-        var threshold: Float = 0.55
-        var ownerThreshold: Float = 0.60
+        var threshold: Float = 0.45
+        var ownerThreshold: Float = 0.50
         /// Voice identity gates tool access. Always true in proactive-by-default mode —
         /// only the primary user (owner) or explicitly granted guests get tool access.
         var requireOwnerForTools: Bool = true

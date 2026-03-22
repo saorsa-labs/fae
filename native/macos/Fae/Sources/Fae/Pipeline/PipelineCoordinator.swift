@@ -1592,11 +1592,11 @@ actor PipelineCoordinator {
             )
             let previewThreshold = max(
                 config.speaker.threshold - Self.previewSpeakerThresholdRelaxation,
-                0.55
+                0.30
             )
             let rejectThreshold = max(
                 previewThreshold - Self.previewSpeakerRejectMargin,
-                0.35
+                0.20
             )
 
             let bestHumanSimilarity = await store.bestMatch(
@@ -1825,11 +1825,11 @@ actor PipelineCoordinator {
             )
             let previewThreshold = max(
                 config.speaker.threshold - Self.previewSpeakerThresholdRelaxation,
-                0.55
+                0.30
             )
             let rejectThreshold = max(
                 previewThreshold - Self.previewSpeakerRejectMargin,
-                0.35
+                0.20
             )
             let bestHumanSimilarity = await store.bestMatch(
                 embedding: embedding,
@@ -2583,8 +2583,12 @@ actor PipelineCoordinator {
         var lastRouteCheckAt = Date()
         let routeCheckIntervalSec: TimeInterval = 5.0
 
+        NSLog("PipelineCoordinator: pipeline loop STARTED")
         for await chunk in stream {
-            guard !Task.isCancelled else { break }
+            guard !Task.isCancelled else {
+                NSLog("PipelineCoordinator: pipeline loop EXITING (task cancelled)")
+                break
+            }
 
             // Periodic output route re-detection (~every 5s).
             let now = Date()
@@ -3079,6 +3083,7 @@ actor PipelineCoordinator {
                 enqueueSpeechSegment(segment)
             }
         }
+        NSLog("PipelineCoordinator: pipeline loop EXITED (stream ended)")
     }
 
     // MARK: - Speech Segment Processing

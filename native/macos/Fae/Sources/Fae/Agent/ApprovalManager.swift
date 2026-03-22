@@ -39,7 +39,11 @@ actor ApprovalManager {
     private var pendingOrder: [UInt64] = []
     private var nextRequestId: UInt64 = 1
 
-    static let timeoutSeconds: TimeInterval = 20
+    /// Approval timeout. Set to 45s to accommodate voice-first flow:
+    /// Fae speaks the prompt (~3s TTS), echo tail clears (~1s), user says
+    /// "yes"/"no" (~2s), VAD + STT processes (~3s) = ~9s minimum. Previous
+    /// 20s was too tight and caused all write tool calls to time out.
+    static let timeoutSeconds: TimeInterval = 45
     private let timeoutSeconds: TimeInterval
 
     // MARK: - Batch Approval State
