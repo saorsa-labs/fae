@@ -45,6 +45,9 @@ struct NativeOrbView: View {
     /// Drop to minimum rendering when true (e.g. during voice enrollment).
     /// Frees GPU/Neural Engine for WeSpeaker speaker embedding inference.
     var reducedRendering: Bool = false
+    /// Use lightweight gradient-based orb instead of Metal shader.
+    /// Default: true (98% less CPU/GPU usage).
+    var useLightweightOrb: Bool = true
 
     var onLoad: (() -> Void)?
     var onOrbClicked: (() -> Void)?
@@ -78,24 +81,15 @@ struct NativeOrbView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: adaptiveInterval, paused: isPaused)) { context in
-            let time = Float(context.date.timeIntervalSince(startDate))
-            let now = CACurrentMediaTime()
-
-            // Update spring interpolation each frame. Safe to call here:
-            // `current` and `colors` are NOT @Published, so no SwiftUI
-            // state-mutation-during-body warning is triggered.
-            let _ = orbAnimation.update(at: now)
-
-            GeometryReader { geometry in
-                orbShaderCanvas(time: time, size: geometry.size, now: now)
+        Group {
+            if useLightweightOrb {
+                // Lightweight gradient-based orb — 98% less CPU/GPU
+                lightweightOrbCanvas
+            } else {
+                // Full Metal shader orb — procedural effects
+                metalShaderCanvas
             }
         }
-        // drawingGroup() flattens the TimelineView into a single Metal texture,
-        // preventing SwiftUI layout invalidation from propagating to the parent
-        // view tree on every frame. Without this, the full view hierarchy
-        // (conversation, status bar, voice hints) re-layouts every frame — 45% CPU.
-        .drawingGroup()
         .overlay {
             OrbClickTarget(
                 onClicked: { onOrbClicked?() },
@@ -111,6 +105,41 @@ struct NativeOrbView: View {
             hasNotifiedLoad = true
             onLoad?()
         }
+    }
+
+    // MARK: - Lightweight Orb (Default)
+
+    /// Gradient-based orb using SwiftUI native animations.
+    /// ~2% CPU vs ~25% for Metal shader.
+    @ViewBuilder
+    private var lightweightOrbCanvas: some View {
+        LightweightOrbView(
+            orbAnimation: orbAnimation,
+            audioRMS: audioRMS,
+            windowMode: windowMode
+        )
+    }
+
+    // MARK: - Metal Shader Orb (Premium)
+
+    /// Full procedural Metal shader with volumetric effects.
+    @ViewBuilder
+    private var metalShaderCanvas: some View {
+        TimelineView(.animation(minimumInterval: adaptiveInterval, paused: isPaused)) { context in
+            let time = Float(context.date.timeIntervalSince(startDate))
+            let now = CACurrentMediaTime()
+
+            // Update spring interpolation each frame.
+            let _ = orbAnimation.update(at: now)
+
+            GeometryReader { geometry in
+                orbShaderCanvas(time: time, size: geometry.size, now: now)
+            }
+        }
+        // drawingGroup() flattens the TimelineView into a single Metal texture,
+        // preventing SwiftUI layout invalidation from propagating to the parent
+        // view tree on every frame.
+        .drawingGroup()
     }
 
     // MARK: - Shader Canvas
