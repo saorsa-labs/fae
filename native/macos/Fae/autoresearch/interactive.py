@@ -168,24 +168,13 @@ def cmd_setup():
     # Wait for enrollment TTS ("Thanks, David") to finish playing
     time.sleep(6)
 
-    # Warmup LLM (compiles Metal shaders on first inference)
+    # LLM warmup already happens internally during pipeline start
+    # (MLXLLMEngine.warmup). Skip the inject-based warmup entirely —
+    # it causes TTS/barge-in state pollution that kills subsequent tool
+    # follow-up turns. The first real user turn will be slightly slower
+    # (Metal shader compilation) but won't have state corruption.
     print("Warming up LLM...")
-    CLIENT.post("/inject", json={"text": "Hi"})
-    _wait_idle(timeout_s=120, min_count=2)
-
-    # Reset and WAIT for it to fully complete before returning.
-    # The reset's cancelAndWait runs async — if we return too early,
-    # the next injection will be interrupted by the late-firing reset.
-    CLIENT.post("/reset")
-    for _ in range(30):
-        try:
-            conv = CLIENT.get("/conversation").json()
-            if conv.get("count", 1) == 0 and not conv.get("isGenerating"):
-                break
-        except Exception:
-            pass
-        time.sleep(1)
-    time.sleep(3)
+    time.sleep(5)  # Wait for internal warmup to complete
     print("Ready for conversation.")
 
 

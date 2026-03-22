@@ -686,6 +686,17 @@ actor PipelineCoordinator {
                 await self.runPipelineLoop(stream: stream)
             }
 
+            // Clear any stale pipeline state from before the restart.
+            // The enrollment's speakDirect("Thanks, David") may have set
+            // assistantSpeaking without a matching clear (playback completed
+            // during the old pipeline loop which is now dead).
+            assistantSpeaking = false
+            assistantGenerating = false
+            interrupted = false
+            interruptedGenerationID = nil
+            ttsState.cancelPending()
+            ttsState.resetForNewTurn()
+
             NSLog("PipelineCoordinator: audio capture restarted successfully")
         } catch {
             NSLog("PipelineCoordinator: audio capture restart failed: %@", error.localizedDescription)
@@ -2939,9 +2950,12 @@ actor PipelineCoordinator {
                         bargeInState.generationTakeoverCandidate = candidate
 
                         // Decide whether to take over generation.
-                        let shouldTakeover = candidate.hasInterruptKeyword
+                        // Suppress during prefill (generating but not yet speaking) to prevent
+                        // ambient noise from killing tool follow-up prompt processing.
+                        let inPrefill = assistantGenerating && !assistantSpeaking
+                        let shouldTakeover = !inPrefill && (candidate.hasInterruptKeyword
                             || (candidate.consecutiveSpeechChunks >= GenerationTakeoverCandidate.minConsecutiveChunksForTakeover
-                                && candidate.peakRms >= GenerationTakeoverCandidate.minRmsForTakeover)
+                                && candidate.peakRms >= GenerationTakeoverCandidate.minRmsForTakeover))
                         if shouldTakeover {
                             NSLog("PipelineCoordinator: PATH C generation takeover — keyword=%d chunks=%d peakRms=%.3f",
                                   candidate.hasInterruptKeyword ? 1 : 0,
@@ -4054,10 +4068,17 @@ actor PipelineCoordinator {
         }
 
         // Barge-in: if assistant is still active, interrupt and process the new input.
-        if assistantSpeaking || assistantGenerating {
+        // Suppress barge-in when generating but not yet speaking — this happens during
+        // tool follow-up prefill where the model processes 15K+ tokens of prompt.
+        // Ambient noise or echo must not interrupt prefill before the first TTS chunk.
+        if assistantSpeaking {
             markGenerationInterrupted()
             ttsState.cancelPending()
             await playback.stop()
+        } else if assistantGenerating && !assistantSpeaking {
+            // Generating but not speaking yet (prefill phase) — suppress barge-in.
+            debugLog(debugConsole, .pipeline, "Suppressed barge-in during prefill (generating, not yet speaking)")
+            return
         }
 
         let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)
@@ -7217,9 +7238,11 @@ actor PipelineCoordinator {
         bargeInState.recordInterruption(outcome: outcome, paused: true)
     }
 
-    private func markGenerationInterrupted() {
+    private func markGenerationInterrupted(file: String = #file, line: Int = #line) {
         interrupted = true
         interruptedGenerationID = activeGenerationID
+        let caller = URL(fileURLWithPath: file).lastPathComponent
+        NSLog("PipelineCoordinator: markGenerationInterrupted() called from %@:%d", caller, line)
     }
 
     /// Evaluate a playback barge-in candidate using speaker identity.
