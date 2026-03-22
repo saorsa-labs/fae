@@ -915,21 +915,10 @@ actor PipelineCoordinator {
         speakerGate.currentSpeakerIsKnownNonOwner = false
 
         if gateState == .idle {
-            // When direct-address gating is off, any text wakes Fae (she should always respond).
-            // When gating is on, require the name to avoid responding to ambient conversation.
-            guard isAddressedToFae(trimmed) || !effectiveRequireDirectAddress() else {
-                debugLog(debugConsole, .pipeline, "Text ignored while sleeping (not addressed)")
-                return
-            }
+            // Text injection is always a deliberate user action — always wake.
+            // Direct-address gating only applies to VOICE input (ambient conversation
+            // filtering). Typed/injected text should never be silently dropped.
             wake()
-        } else if effectiveRequireDirectAddress() {
-            // Direct-address gating applies to typed text too: when enabled, non-addressed
-            // input is dropped unless we're within the follow-up window.
-            let inFollowup = engagedUntil.map { Date() < $0 } ?? false
-            if !isAddressedToFae(trimmed) && !inFollowup {
-                debugLog(debugConsole, .pipeline, "Text ignored (direct-address required, not addressed): \(trimmed)")
-                return
-            }
         }
 
         // If assistant is active, trigger barge-in.
@@ -3062,7 +3051,9 @@ actor PipelineCoordinator {
                 // system prompt + conversation history while the segment flows
                 // through STT.  The prefill runs in parallel with final STT
                 // (different models, brief GPU overlap).
-                if let cachedPrompt = cachedGenerationSystemPrompt,
+                let speculativePrefillDisabled = ProcessInfo.processInfo.environment["FAE_DISABLE_SPECULATIVE_PREFILL"] == "1"
+                if !speculativePrefillDisabled,
+                   let cachedPrompt = cachedGenerationSystemPrompt,
                    !assistantGenerating,
                    !assistantSpeaking,
                    await llmEngine.isLoaded
