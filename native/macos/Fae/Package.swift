@@ -17,7 +17,9 @@ let package = Package(
         // Sparkle 2 auto-update framework (EdDSA signature verification).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         // MLX ecosystem — local ML inference on Apple Silicon.
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main"),
+        // Vendored locally for Qwen3.5 hybrid-model KV cache fixes + async_eval verification.
+        // Original: https://github.com/ml-explore/mlx-swift-lm (branch: main)
+        .package(path: "Vendor/mlx-swift-lm"),
         .package(path: "Vendor/mlx-audio-swift"),
         // SQLite with ORM — memory store.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),

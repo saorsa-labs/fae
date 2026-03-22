@@ -845,10 +845,14 @@ actor PipelineCoordinator {
         await sttEngine.resetStreaming()
         await streamingSTTEngine?.reset()
 
+        // Cancel and drain the entire TTS task chain. This prevents stale
+        // isFinal chunks from prior generations interfering with new turns.
+        ttsState.cancelPending()
         let activeTTSTask = ttsState.pendingTask
         ttsState.pendingTask = nil
         activeTTSTask?.cancel()
         await activeTTSTask?.value
+        ttsState.resetForNewTurn()
 
         cancelDeferredToolJobs()
         await playback.stop()

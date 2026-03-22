@@ -171,8 +171,20 @@ def cmd_setup():
     # Warmup LLM (compiles Metal shaders on first inference)
     print("Warming up LLM...")
     CLIENT.post("/inject", json={"text": "Hi"})
-    _wait_idle(timeout_s=60, min_count=2)
+    _wait_idle(timeout_s=120, min_count=2)
+
+    # Reset and WAIT for it to fully complete before returning.
+    # The reset's cancelAndWait runs async — if we return too early,
+    # the next injection will be interrupted by the late-firing reset.
     CLIENT.post("/reset")
+    for _ in range(30):
+        try:
+            conv = CLIENT.get("/conversation").json()
+            if conv.get("count", 1) == 0 and not conv.get("isGenerating"):
+                break
+        except Exception:
+            pass
+        time.sleep(1)
     time.sleep(3)
     print("Ready for conversation.")
 
