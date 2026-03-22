@@ -42,6 +42,9 @@ struct NativeOrbView: View {
     @ObservedObject var orbAnimation: OrbAnimationState
     var audioRMS: Double
     var windowMode: String
+    /// Drop to minimum rendering when true (e.g. during voice enrollment).
+    /// Frees GPU/Neural Engine for WeSpeaker speaker embedding inference.
+    var reducedRendering: Bool = false
 
     var onLoad: (() -> Void)?
     var onOrbClicked: (() -> Void)?
@@ -59,7 +62,9 @@ struct NativeOrbView: View {
     /// Idle: 1.0s (~1fps) — breathing is so slow that higher cadence is wasted.
     /// Listening: 0.1s (~10fps) — responsive to audio but not wasteful.
     /// Thinking/Speaking: 0.033s (~30fps) — smooth animation.
+    /// Reduced: 2.0s (~0.5fps) — during enrollment, free GPU for WeSpeaker.
     private var adaptiveInterval: Double {
+        if reducedRendering { return 2.0 }
         switch orbAnimation.lastMode {
         case .idle: return 1.0       // ~1fps — breathing cycle is 37s, 1fps is plenty
         case .listening: return 0.1  // ~10fps — responsive to audio changes
@@ -67,7 +72,7 @@ struct NativeOrbView: View {
         }
     }
 
-    /// Pause rendering entirely when the window is collapsed (orb not visible).
+    /// Pause rendering when the window is collapsed (orb not visible).
     private var isPaused: Bool {
         windowMode == "collapsed"
     }

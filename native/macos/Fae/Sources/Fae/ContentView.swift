@@ -100,6 +100,7 @@ struct ContentView: View {
             orbAnimation: orbAnimation,
             audioRMS: pipelineAux.audioRMS,
             windowMode: windowState.mode.rawValue,
+            reducedRendering: showingNativeEnrollment,
             onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
             onOrbClicked: {
                 windowState.transitionToCompact()
