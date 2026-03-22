@@ -473,7 +473,18 @@ struct FaeConfig: Codable {
     ) -> (modelId: String, contextSize: Int) {
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
 
-        switch canonicalVoiceModelPreset(preset) {
+        // Allow env var override for testing (e.g. FAE_VOICE_MODEL_PRESET=qwen3_5_4b).
+        let effectivePreset: String
+        if let envPreset = ProcessInfo.processInfo.environment["FAE_VOICE_MODEL_PRESET"],
+           !envPreset.isEmpty
+        {
+            effectivePreset = envPreset
+            NSLog("FaeConfig: model preset overridden by FAE_VOICE_MODEL_PRESET=%@", envPreset)
+        } else {
+            effectivePreset = preset
+        }
+
+        switch canonicalVoiceModelPreset(effectivePreset) {
         case "qwen3_5_35b_a3b":
             // MoE: 35B total, 3B active per token. ~18 GB 4-bit. Natively multimodal.
             return ("mlx-community/Qwen3.5-35B-A3B-4bit", 131_072)

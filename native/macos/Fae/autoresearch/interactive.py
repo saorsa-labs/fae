@@ -114,6 +114,9 @@ def cmd_setup():
         "FAE_DISABLE_APPLE_CLASSIFIER": "1",
         "FAE_DISABLE_SPEECH_VERIFIER": "1",
         "FAE_DISABLE_SPEAKER_GATE": "1",
+        # Force 4B model for faster inference during testing.
+        # 35B stalls at 0.00 TPS under GPU contention with other apps.
+        "FAE_VOICE_MODEL_PRESET": "qwen3_5_4b",
     }
     log = open("/tmp/fae-interactive.log", "w")
     proc = subprocess.Popen(
