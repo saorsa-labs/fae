@@ -2080,9 +2080,27 @@ final class FaeCore: ObservableObject, HostCommandSender {
         )
 
         Task { [weak self] in
-            await self?.pipelineCoordinator?.wake()
-            await self?.pipelineCoordinator?.speakDirect("Thanks, \(trimmedName). I know your voice now.")
+            guard let self else { return }
+
+            // Restart audio capture — enrollment's temp AVAudioEngine
+            // may have stolen the mic from the main pipeline.
+            await self.restartAudioCaptureAfterEnrollment()
+
+            await self.pipelineCoordinator?.wake()
+            await self.pipelineCoordinator?.speakDirect("Thanks, \(trimmedName). I know your voice now.")
         }
+    }
+
+    /// Restart the audio capture pipeline after enrollment.
+    ///
+    /// The enrollment flow creates temporary AVAudioEngine instances that
+    /// compete with the main capture engine for the microphone input node.
+    /// After enrollment, the main engine's tap may be dead. This restarts it.
+    private func restartAudioCaptureAfterEnrollment() async {
+        guard let coordinator = pipelineCoordinator else { return }
+        NSLog("FaeCore: restarting audio capture after enrollment")
+        await coordinator.restartCapture()
+        NSLog("FaeCore: audio capture restarted")
     }
 
     /// Check if an owner voiceprint is enrolled in the speaker profile store.

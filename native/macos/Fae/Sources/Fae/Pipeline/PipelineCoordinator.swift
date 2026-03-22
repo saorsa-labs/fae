@@ -668,6 +668,20 @@ actor PipelineCoordinator {
     // MARK: - Lifecycle
 
     /// Start the voice pipeline.
+    /// Restart audio capture after enrollment stole the mic.
+    /// Stops and restarts the AudioCaptureManager without restarting the whole pipeline.
+    func restartCapture() async {
+        NSLog("PipelineCoordinator: restarting audio capture")
+        await capture.stopCapture()
+        do {
+            let stream = try await capture.startCapture()
+            captureStream = stream
+            NSLog("PipelineCoordinator: audio capture restarted successfully")
+        } catch {
+            NSLog("PipelineCoordinator: audio capture restart failed: %@", error.localizedDescription)
+        }
+    }
+
     func start() async throws {
         guard pipelineTask == nil else { return }
 
