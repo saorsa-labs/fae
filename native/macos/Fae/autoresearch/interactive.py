@@ -139,13 +139,14 @@ def cmd_setup():
     time.sleep(4)
     print("Enrolled owner")
 
-    # Configure — disable proactive features that hijack conversation
+    # Configure — disable proactive features that hijack conversation.
+    # NOTE: require_direct_address stays ON — user must say "Fae" to wake her.
+    # This prevents Fae from interrupting other conversations in the room.
     for key, val in [
         ("awareness.enabled", False),
         ("awareness.camera_enabled", False),
         ("awareness.screen_enabled", False),
         ("awareness.enhanced_briefing", False),
-        ("conversation.require_direct_address", False),
     ]:
         CLIENT.post("/config", json={"key": key, "value": val})
 

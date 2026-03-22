@@ -189,10 +189,61 @@ struct CalendarTool: Tool {
             guard let title = input["title"] as? String, !title.isEmpty else {
                 return .error("Missing required parameter: title")
             }
-            return .error("Creating calendar events requires approval. Please confirm you'd like me to create '\(title)'.")
+            return createEvent(store: store, title: title, input: input)
 
         default:
             return .error("Unknown action: \(action). Use list_today, list_week, list_date, create, or search.")
+        }
+    }
+
+    private func createEvent(store: EKEventStore, title: String, input: [String: Any]) -> ToolResult {
+        let event = EKEvent(eventStore: store)
+        event.title = title
+        event.calendar = store.defaultCalendarForNewEvents
+
+        let isoFormatter = ISO8601DateFormatter()
+        if let startStr = input["start_date"] as? String ?? input["startDate"] as? String,
+           let startDate = isoFormatter.date(from: startStr)
+        {
+            event.startDate = startDate
+            if let endStr = input["end_date"] as? String ?? input["endDate"] as? String,
+               let endDate = isoFormatter.date(from: endStr)
+            {
+                event.endDate = endDate
+            } else {
+                event.endDate = startDate.addingTimeInterval(3600) // 1 hour default
+            }
+        } else {
+            // Default to tomorrow at 10am, 1 hour
+            let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+            var components = Calendar.current.dateComponents([.year, .month, .day], from: tomorrow)
+            components.hour = 10
+            event.startDate = Calendar.current.date(from: components) ?? tomorrow
+            event.endDate = event.startDate.addingTimeInterval(3600)
+        }
+
+        if let notes = input["notes"] as? String {
+            event.notes = notes
+        }
+        if let location = input["location"] as? String {
+            event.location = location
+        }
+
+        do {
+            try store.save(event, span: .thisEvent)
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            return .success(
+                "Created calendar event: '\(title)' on \(formatter.string(from: event.startDate))",
+                structuredData: [
+                    "created": title,
+                    "eventId": event.eventIdentifier ?? "unknown",
+                    "startDate": isoFormatter.string(from: event.startDate),
+                ]
+            )
+        } catch {
+            return .error("Failed to create event: \(error.localizedDescription)")
         }
     }
 
@@ -351,7 +402,7 @@ struct RemindersTool: Tool {
             guard let title = input["title"] as? String, !title.isEmpty else {
                 return .error("Missing required parameter: title")
             }
-            return .error("Creating reminders requires approval. Please confirm you'd like me to create '\(title)'.")
+            return await createReminder(store: store, title: title, input: input)
 
         case "complete":
             guard let reminderId = input["reminder_id"] as? String, !reminderId.isEmpty else {
@@ -510,6 +561,43 @@ struct RemindersTool: Tool {
             ])
         } catch {
             return .error("Failed to complete reminder: \(error.localizedDescription)")
+        }
+    }
+
+    private func createReminder(store: EKEventStore, title: String, input: [String: Any]) async -> ToolResult {
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = title
+
+        // Use default reminders calendar.
+        reminder.calendar = store.defaultCalendarForNewReminders()
+
+        // Parse optional due date (e.g. "2026-03-22T18:00:00" or natural language hint).
+        if let dueDateStr = input["due_date"] as? String ?? input["dueDate"] as? String,
+           let dueDate = ISO8601DateFormatter().date(from: dueDateStr)
+        {
+            reminder.dueDateComponents = Calendar.current.dateComponents(
+                [.year, .month, .day, .hour, .minute],
+                from: dueDate
+            )
+        }
+
+        // Parse optional notes.
+        if let notes = input["notes"] as? String {
+            reminder.notes = notes
+        }
+
+        do {
+            try store.save(reminder, commit: true)
+            var summary = "Created reminder: '\(title)'"
+            if let due = reminder.dueDateComponents, let month = due.month, let day = due.day {
+                summary += " (due \(month)/\(day))"
+            }
+            return .success(summary, structuredData: [
+                "created": title,
+                "reminderId": reminder.calendarItemIdentifier,
+            ])
+        } catch {
+            return .error("Failed to create reminder: \(error.localizedDescription)")
         }
     }
 

@@ -432,7 +432,25 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
 
         case .confirm(let prompt, _, let manualOnly, let isDisasterLevel):
-            if let manager = approvalManager {
+            // Voice identity auto-approval: when the speaker is the verified
+            // owner and the operation is not disaster-level or manual-only,
+            // auto-approve. Voice identity IS the security model — asking
+            // "say yes" after already verifying the speaker's voice is redundant
+            // and breaks the voice-first UX (echo suppression blocks the response).
+            if context.isOwner && !manualOnly && !isDisasterLevel {
+                debugLog(debugConsole, .approval, "Auto-approved \(call.name) for verified owner (voice identity)")
+                approvedByUser = true
+                await securityLogger.log(
+                    event: "tool_auto_approved_owner",
+                    toolName: call.name,
+                    decision: "confirm",
+                    reasonCode: brokerReasonCode,
+                    approved: true,
+                    success: true,
+                    error: nil,
+                    arguments: call.arguments
+                )
+            } else if let manager = approvalManager {
                 debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message) manualOnly=\(manualOnly)")
                 await callbacks.onApprovalPending(true, manualOnly)
                 async let approvalDecision = manager.requestApproval(
