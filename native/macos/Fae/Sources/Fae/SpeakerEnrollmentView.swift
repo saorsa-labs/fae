@@ -202,13 +202,20 @@ struct SpeakerEnrollmentView: View {
         recordingProgress = 0
         errorMessage = nil
 
-        // Animate progress ring.
+        // Pulsing progress indicator — shows recording is active without
+        // implying a fixed duration. Pulses between 0.2 and 0.8 until
+        // capture completes (speech detection handles the timing).
         let progressTask = Task {
-            let steps = 40
-            for i in 1...steps {
-                try Task.checkCancellation()
-                try await Task.sleep(nanoseconds: UInt64(Self.sampleDuration / Double(steps) * 1_000_000_000))
-                recordingProgress = Double(i) / Double(steps)
+            var up = true
+            while !Task.isCancelled {
+                try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+                if up {
+                    recordingProgress = min(recordingProgress + 0.02, 0.8)
+                    if recordingProgress >= 0.8 { up = false }
+                } else {
+                    recordingProgress = max(recordingProgress - 0.01, 0.2)
+                    if recordingProgress <= 0.2 { up = true }
+                }
             }
         }
 
@@ -233,7 +240,7 @@ struct SpeakerEnrollmentView: View {
                 if quality.hasUsableSpeech { break }
                 if attempt < Self.maxAutoRetries {
                     NSLog("SpeakerEnrollmentView: auto-retrying (attempt %d got silence)", attempt + 1)
-                    recordingProgress = 0
+                    recordingProgress = 0.2
                 }
             }
 
