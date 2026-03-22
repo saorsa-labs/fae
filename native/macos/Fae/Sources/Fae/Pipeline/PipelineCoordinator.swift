@@ -1781,6 +1781,13 @@ actor PipelineCoordinator {
             return
         }
 
+        // Bypass streaming speaker gate for synthetic voice testing.
+        // The speaker→mic round-trip degrades voiceprints below usable thresholds.
+        // Full-segment verification + preview still run after segment close.
+        if ProcessInfo.processInfo.environment["FAE_DISABLE_SPEAKER_GATE"] == "1" {
+            return
+        }
+
         guard vadOutput.isSpeech,
               !assistantSpeaking,
               !assistantGenerating,

@@ -104,7 +104,17 @@ def cmd_setup():
     speakers_path.write_text("[]")
 
     # Launch
-    env = {**os.environ, "FAE_TEST_SERVER": "1", "FAE_DISABLE_STREAMING_ASR": "1"}
+    env = {
+        **os.environ,
+        "FAE_TEST_SERVER": "1",
+        "FAE_DISABLE_STREAMING_ASR": "1",
+        # Disable classifiers + speaker gate for synthetic voice testing.
+        # Kokoro TTS voice gets misclassified as "music" by Apple SoundAnalysis,
+        # and the speaker→mic round-trip degrades voiceprints below usable thresholds.
+        "FAE_DISABLE_APPLE_CLASSIFIER": "1",
+        "FAE_DISABLE_SPEECH_VERIFIER": "1",
+        "FAE_DISABLE_SPEAKER_GATE": "1",
+    }
     log = open("/tmp/fae-interactive.log", "w")
     proc = subprocess.Popen(
         [str(FAE_APP), "--test-server"],
