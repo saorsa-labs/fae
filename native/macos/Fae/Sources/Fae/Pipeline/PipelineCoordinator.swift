@@ -6939,7 +6939,10 @@ actor PipelineCoordinator {
             // after we clear it. Without this, a queued sentence could start playing
             // immediately after stop(), re-setting the flag.
             ttsState.cancelPending()
-            markGenerationInterrupted()
+            // Do NOT interrupt the current generation — the speech drain is about
+            // playback cleanup, not about the LLM. Tool follow-up generations were
+            // being killed here because assistantSpeaking was still true from the
+            // first turn's "Let me check that for you" TTS.
             await playback.stop()
             markAssistantSpeechEnded(reason: "speech_drain_timeout")
         }

@@ -586,18 +586,11 @@ public actor MLXLLMEngine: LLMEngine {
         guard let session else { return false }
         guard session.reusable else { return false }
 
-        // Qwen3.5 is a hybrid Attention+Mamba architecture. KV cache reuse is
-        // fundamentally broken for hybrid models — the Mamba/SSM recurrent state
-        // cannot be extended like standard KV cache, causing 0-token stalls on
-        // the second generation in a session.
-        // References:
-        //   QwenLM/Qwen3.5#37, ml-explore/mlx-lm#980,
-        //   lmstudio-ai/lmstudio-bug-tracker#1563
-        // Force fresh cache on every generation until mlx-swift-lm merges
-        // the cache round-trip fix (PR #155).
-        if let modelId = loadedModelId, modelId.lowercased().contains("qwen3.5") {
-            return false
-        }
+        // Qwen3.5 is a hybrid Attention+Mamba architecture. KV cache reuse was
+        // broken for hybrid models (QwenLM/Qwen3.5#37, ml-explore/mlx-lm#980).
+        // PR #155 (cherry-picked into vendored mlx-swift-lm) adds CacheList
+        // serialization/deserialization, enabling cache round-trip for hybrids.
+        // Session reuse is now re-enabled for Qwen3.5.
 
         guard session.systemPrompt == systemPrompt else { return false }
         guard messages.count >= session.history.count else { return false }
