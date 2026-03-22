@@ -22,8 +22,8 @@ struct SpeakerEnrollmentView: View {
     @State private var consistencyScore: Float = 0
     @State private var errorMessage: String?
 
-    private static let sampleCount = 3
-    private static let sampleDuration: Double = 4.0
+    private static let sampleCount = 5
+    private static let sampleDuration: Double = 8.0
 
     enum EnrollmentStep {
         case name

@@ -13,7 +13,9 @@ actor AudioCaptureManager {
         let voicedDurationSeconds: Double
 
         var hasUsableSpeech: Bool {
-            rms >= 0.003 && peak >= 0.012 && voicedFrameRatio >= 0.08 && voicedDurationSeconds >= 0.25
+            // Require substantial voiced speech for reliable speaker embeddings.
+            // WeSpeaker needs ~3s+ of speech for stable 256-dim embeddings.
+            rms >= 0.01 && peak >= 0.05 && voicedFrameRatio >= 0.15 && voicedDurationSeconds >= 2.0
         }
     }
 
@@ -177,7 +179,7 @@ actor AudioCaptureManager {
 
         // Collect MORE than needed — we'll trim silence afterward.
         let maxSamples = Int(Double(Self.targetSampleRate) * (durationSeconds + 2.0))
-        let minSpeechSamples = Int(Double(Self.targetSampleRate) * 1.0) // At least 1s of speech
+        let minSpeechSamples = Int(Double(Self.targetSampleRate) * 3.0) // At least 3s of speech for stable embeddings
         var collected = [Float]()
         collected.reserveCapacity(maxSamples)
 
