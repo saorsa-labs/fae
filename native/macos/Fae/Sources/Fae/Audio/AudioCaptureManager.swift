@@ -192,7 +192,7 @@ actor AudioCaptureManager {
         var speechDetected = false
         var speechStartIndex = 0
         var silenceAfterSpeechFrames = 0
-        let silenceEndThreshold = Int(Double(Self.targetSampleRate) * 0.8) // 800ms silence = end
+        let silenceEndThreshold = Int(Double(Self.targetSampleRate) * 2.0) // 2s silence = end (TTS has natural pauses)
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Float], Error>) in
             var finished = false
