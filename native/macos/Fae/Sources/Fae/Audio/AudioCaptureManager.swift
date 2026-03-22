@@ -178,7 +178,7 @@ actor AudioCaptureManager {
         }
 
         // Collect MORE than needed — we'll trim silence afterward.
-        let maxSamples = Int(Double(Self.targetSampleRate) * (durationSeconds + 2.0))
+        let maxSamples = Int(Double(Self.targetSampleRate) * (durationSeconds + 6.0))
         let minSpeechSamples = Int(Double(Self.targetSampleRate) * 3.0) // At least 3s of speech for stable embeddings
         var collected = [Float]()
         collected.reserveCapacity(maxSamples)
