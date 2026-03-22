@@ -145,12 +145,16 @@ class FaeClient:
         self.client.close()
 
 
-def speak(text: str, voice_tool: str = "voice", voice_name: str | None = None) -> float:
+def speak(text: str, voice_tool: str = "say", voice_name: str | None = None) -> float:
     """Speak text through Mac speakers. Returns duration in ms.
 
+    Default voice_tool is 'say' with Daniel voice (matching enrolled owner).
     No volume manipulation — Fae's pipeline must handle echo rejection
     through text-overlap matching and speaker identity (fae_self voiceprint).
     """
+    # Default to Daniel voice for say (matches enrolled owner)
+    if voice_tool == "say" and voice_name is None:
+        voice_name = "Daniel"
     start = time.monotonic()
 
     if voice_tool == "voice":

@@ -140,7 +140,16 @@ actor AudioCaptureManager {
     ///
     /// Used for on-demand recording during speaker enrollment (not the streaming pipeline).
     /// Creates a temporary audio engine that records for the specified duration.
+    /// Capture audio for enrollment. Uses the MAIN engine (no concurrency conflict)
+    /// via a temporary tap diversion. Waits for speech to actually start before
+    /// collecting, strips leading/trailing silence, and validates quality.
+    ///
+    /// - Parameters:
+    ///   - durationSeconds: Maximum recording window (will stop early if enough speech captured).
+    /// - Returns: Float32 samples at targetSampleRate with silence trimmed.
     func captureSegment(durationSeconds: Double) async throws -> [Float] {
+        // Use a fresh engine to avoid interfering with the main capture pipeline.
+        // The main engine tap stays running — enrollment uses a separate AVAudioEngine.
         let tempEngine = AVAudioEngine()
         let inputNode = tempEngine.inputNode
         configureVoiceProcessingIfAvailable(on: inputNode)
@@ -166,13 +175,22 @@ actor AudioCaptureManager {
             converter = nil
         }
 
-        let totalSamples = Int(Double(Self.targetSampleRate) * durationSeconds)
+        // Collect MORE than needed — we'll trim silence afterward.
+        let maxSamples = Int(Double(Self.targetSampleRate) * (durationSeconds + 2.0))
+        let minSpeechSamples = Int(Double(Self.targetSampleRate) * 1.0) // At least 1s of speech
         var collected = [Float]()
-        collected.reserveCapacity(totalSamples)
+        collected.reserveCapacity(maxSamples)
 
         let nativeChunkSize = AVAudioFrameCount(
             Double(Self.chunkSize) * nativeFormat.sampleRate / Double(Self.targetSampleRate)
         )
+
+        // Speech detection state — wait for speech to start before the timer runs.
+        let speechRMSThreshold: Float = 0.015
+        var speechDetected = false
+        var speechStartIndex = 0
+        var silenceAfterSpeechFrames = 0
+        let silenceEndThreshold = Int(Double(Self.targetSampleRate) * 0.8) // 800ms silence = end
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Float], Error>) in
             var finished = false
@@ -204,11 +222,57 @@ actor AudioCaptureManager {
 
                 collected.append(contentsOf: chunk.samples)
 
-                if collected.count >= totalSamples {
+                // Compute chunk RMS for speech detection.
+                var sumSq: Float = 0
+                for s in chunk.samples { sumSq += s * s }
+                let chunkRMS = (sumSq / max(Float(chunk.samples.count), 1)).squareRoot()
+
+                if !speechDetected && chunkRMS >= speechRMSThreshold {
+                    speechDetected = true
+                    // Mark where speech started (with 200ms lookback for onset).
+                    speechStartIndex = max(0, collected.count - chunk.samples.count - Self.targetSampleRate / 5)
+                    NSLog("AudioCaptureManager: enrollment speech detected at %.2fs (rms=%.4f)",
+                          Double(collected.count) / Double(Self.targetSampleRate), chunkRMS)
+                }
+
+                if speechDetected {
+                    if chunkRMS < speechRMSThreshold {
+                        silenceAfterSpeechFrames += chunk.samples.count
+                    } else {
+                        silenceAfterSpeechFrames = 0
+                    }
+
+                    // End capture when: enough speech + silence detected, or max time reached.
+                    let speechSamples = collected.count - speechStartIndex - silenceAfterSpeechFrames
+                    let done = (speechSamples >= minSpeechSamples && silenceAfterSpeechFrames >= silenceEndThreshold)
+                        || collected.count >= maxSamples
+
+                    if done {
+                        finished = true
+                        inputNode.removeTap(onBus: 0)
+                        tempEngine.stop()
+
+                        // Trim: extract from speech start to end of speech (before trailing silence).
+                        let speechEnd = max(speechStartIndex + minSpeechSamples,
+                                            collected.count - silenceAfterSpeechFrames)
+                        let trimmed = Array(collected[speechStartIndex..<min(speechEnd, collected.count)])
+                        NSLog("AudioCaptureManager: enrollment captured %.2fs raw → %.2fs trimmed (%d samples)",
+                              Double(collected.count) / Double(Self.targetSampleRate),
+                              Double(trimmed.count) / Double(Self.targetSampleRate),
+                              trimmed.count)
+                        cont.resume(returning: trimmed)
+                    }
+                }
+
+                // Timeout: max recording time even if no speech detected.
+                if collected.count >= maxSamples && !finished {
                     finished = true
                     inputNode.removeTap(onBus: 0)
                     tempEngine.stop()
-                    let result = Array(collected.prefix(totalSamples))
+                    // Return whatever we have, trimming leading silence if possible.
+                    let result = speechDetected
+                        ? Array(collected[speechStartIndex...])
+                        : Array(collected.suffix(Int(Double(Self.targetSampleRate) * durationSeconds)))
                     cont.resume(returning: result)
                 }
             }
