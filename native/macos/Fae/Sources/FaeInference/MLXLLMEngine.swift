@@ -39,6 +39,7 @@ public actor MLXLLMEngine: LLMEngine {
     }
 
     private var container: ModelContainer?
+    private var loadedModelId: String?
     public private(set) var isLoaded: Bool = false
     public private(set) var loadState: MLEngineLoadState = .notStarted
     private var sessionState: SessionState?
@@ -81,6 +82,7 @@ public actor MLXLLMEngine: LLMEngine {
             )
             isLoaded = true
             loadState = .loaded
+            loadedModelId = modelID
             sessionState = nil
             lastCompletionInfo = nil
             NSLog("MLXLLMEngine: model loaded")
@@ -583,12 +585,21 @@ public actor MLXLLMEngine: LLMEngine {
     ) -> Bool {
         guard let session else { return false }
         guard session.reusable else { return false }
+
+        // Qwen3.5 is a hybrid Attention+Mamba architecture. KV cache reuse is
+        // fundamentally broken for hybrid models — the Mamba/SSM recurrent state
+        // cannot be extended like standard KV cache, causing 0-token stalls on
+        // the second generation in a session.
+        // References:
+        //   QwenLM/Qwen3.5#37, ml-explore/mlx-lm#980,
+        //   lmstudio-ai/lmstudio-bug-tracker#1563
+        // Force fresh cache on every generation until mlx-swift-lm merges
+        // the cache round-trip fix (PR #155).
+        if let modelId = loadedModelId, modelId.lowercased().contains("qwen3.5") {
+            return false
+        }
+
         guard session.systemPrompt == systemPrompt else { return false }
-        // Tool signature changes between tool-calling turns (tools active) and
-        // tool follow-up turns (tools suppressed to prevent recursive calls).
-        // Don't invalidate the cache for this — the KV cache from the prompt +
-        // history is still valid; only the generation behaviour changes.
-        // guard session.toolSignature == toolSignature else { return false }
         guard messages.count >= session.history.count else { return false }
         return Array(messages.prefix(session.history.count)) == session.history
     }

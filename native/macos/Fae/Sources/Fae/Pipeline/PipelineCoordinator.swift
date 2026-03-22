@@ -6876,14 +6876,11 @@ actor PipelineCoordinator {
         ttsState.pendingTask = Task {
             await previous?.value  // Ensure sentence ordering
             guard !isGenerationInterrupted(generationID) else {
-                // If this was the final chunk and we're interrupted, ensure speaking
-                // state is cleared. The barge-in path calls playback.stop() which
-                // fires .stopped → clears assistantSpeaking, but there's a race
-                // window where that hasn't fired yet. Belt-and-suspenders.
-                if isFinal && assistantSpeaking {
-                    NSLog("PipelineCoordinator: interrupted final TTS chunk — clearing speaking state")
-                    markAssistantSpeechEnded(reason: "interrupted_final_chunk")
-                }
+                // Silently drop TTS chunks from interrupted (prior) generations.
+                // Do NOT clear speaking state — a new generation may already be
+                // running and the stale isFinal chunk from the old generation was
+                // causing the new generation's follow-up to be flagged as 0-token
+                // (because markAssistantSpeechEnded triggered the failure path).
                 return
             }
             await synthesizeSentence(text, isFinal: isFinal, voiceInstruct: voiceInstruct)
