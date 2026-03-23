@@ -727,6 +727,9 @@ enum TextProcessing {
         ("hey, create", "Fae, create"),
         ("hey, make", "Fae, make"),
         ("hey, run", "Fae, run"),
+        ("hey, hello", "Fae, hello"),
+        ("hey, good", "Fae, good"),
+        ("hey, how", "Fae, how"),
         // Multi-word garbles (check first — longer patterns before shorter).
         ("hi fae", "Hi Fae"),
         ("hey fae", "Hey Fae"),

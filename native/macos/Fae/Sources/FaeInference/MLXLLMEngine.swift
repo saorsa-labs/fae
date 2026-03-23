@@ -572,16 +572,17 @@ public actor MLXLLMEngine: LLMEngine {
             sessionState.kvCache = kvCache
             self.sessionState = sessionState
         }
-        // Save prompt cache to disk after first real generation.
-        // Deferred by 10s to avoid crash from concurrent MLXArray access during TTS.
-        if !hasPersistedCache, !kvCache.isEmpty {
-            hasPersistedCache = true
-            NSLog("MLXLLMEngine: scheduling prompt cache save (10s delay for GPU idle)")
-            Task.detached { [weak self] in
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
-                await self?.savePromptCacheToDisk()
-            }
-        }
+        // KV cache disk persistence disabled — savePromptCache crashes with
+        // concurrent MLXArray access during TTS even with a 10s delay.
+        // TODO: Save cache explicitly from a scheduler task during idle time,
+        // or serialize on a dedicated Metal queue that doesn't conflict with TTS.
+        // if !hasPersistedCache, !kvCache.isEmpty {
+        //     hasPersistedCache = true
+        //     Task.detached { [weak self] in
+        //         try? await Task.sleep(nanoseconds: 30_000_000_000)
+        //         await self?.savePromptCacheToDisk()
+        //     }
+        // }
     }
 
     // MARK: - KV Cache Disk Persistence
