@@ -57,11 +57,12 @@ struct EchoSuppressor {
     private var routeTimingMultiplier: Float {
         switch outputRoute {
         case .headphones:
-            return 0.3  // 30% of normal — minimal speaker bleed
+            return 0.1  // Near-zero — headphones produce no acoustic echo.
+                        // Rely on fae_self voiceprint as safety net.
         case .builtInSpeaker:
-            return 1.0  // Standard — MacBook speakers
+            return 0.8  // Reduced from 1.0 — MacBook speakers have tight coupling
         case .externalSpeaker:
-            return 1.3  // 130% — external speakers may have more reverb
+            return 1.2  // External speakers may have more reverb
         case .unknown:
             return 1.0  // Conservative default
         }
@@ -447,8 +448,8 @@ struct EchoSuppressor {
     /// of the fixed default — this adapts to the actual room acoustics.
     var effectiveEchoTailMs: Int {
         if let decay = estimatedDecayMs {
-            // Add 50% safety margin to measured decay.
-            let adaptiveTail = Int(Float(decay) * 1.5)
+            // Add 20% safety margin to measured decay (reduced from 50%).
+            let adaptiveTail = Int(Float(decay) * 1.2)
             // Clamp between route-adjusted minimum and the route-adjusted default.
             return max(Int(Float(Self.minDecayMs) * routeTimingMultiplier),
                        min(adaptiveTail, echoTailMs))
