@@ -5040,7 +5040,17 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .pipeline, "Tool prompt summary: lines=\(lineCount) chars=\(schemas.count)")
             }
 
-            let soul = isRescueMode ? SoulManager.defaultSoul() : SoulManager.loadSoul()
+            // Use condensed SOUL on first turn to reduce prefill by ~2K tokens.
+            // Full SOUL loads on subsequent turns when KV cache makes prefill near-instant.
+            let isFirstTurn = await conversationState.history.isEmpty
+            let soul: String
+            if isRescueMode {
+                soul = SoulManager.defaultSoul()
+            } else if isFirstTurn {
+                soul = SoulManager.loadCondensedSoul()
+            } else {
+                soul = SoulManager.loadSoul()
+            }
             let heartbeat = isRescueMode
                 ? HeartbeatManager.defaultHeartbeat()
                 : HeartbeatManager.loadHeartbeat()

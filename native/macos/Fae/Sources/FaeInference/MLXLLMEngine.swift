@@ -43,6 +43,8 @@ public actor MLXLLMEngine: LLMEngine {
     public private(set) var isLoaded: Bool = false
     public private(set) var loadState: MLEngineLoadState = .notStarted
     private var sessionState: SessionState?
+    /// Whether a KV cache session exists from a prior generation.
+    public var hasSessionCache: Bool { sessionState != nil }
     private var wiredMemoryTicketProvider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
     public private(set) var lastCompletionInfo: GenerateCompletionInfo?
 
