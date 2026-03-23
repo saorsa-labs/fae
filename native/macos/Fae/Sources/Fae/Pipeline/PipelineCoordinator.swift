@@ -1362,6 +1362,9 @@ actor PipelineCoordinator {
         assistantSpeaking = false
         lastAssistantStart = nil
         echoSuppressor.reset()
+        vad.reset()
+        speechInputStage.incrementStreamingEpoch()
+        speechInputStage.lastStreamingPartialTranscript = nil
         NSLog("PipelineCoordinator: conversation fully reset (test harness)")
     }
 
