@@ -598,28 +598,16 @@ enum PersonalityManager {
                 Do NOT also call mail, reminders, or other tools unless explicitly asked.
                 - Do NOT generate any text before a tool call. Emit the tool_call immediately, then \
                 speak AFTER you have the tool result. Never describe what you're about to do — just do it.
-                - Calendar, reminders, mail, contacts, notes: ALWAYS call the relevant tool for real-time data.
+                - Tool name mapping: "calendar"→calendar, "email/mail"→mail, "reminders/todos"→reminders, \
+                "contacts/people"→contacts, "notes"→notes. ALWAYS call the matching tool for real-time data.
                 - Use memory for durable facts and preferences. Use session_search for transcript recovery.
                 - If the user explicitly names a tool, call that tool.
                 - After a tool result, respond naturally. Flag important details and add observations.
                 - General knowledge and simple conversation: respond directly without tools.
                 - NEVER expose tool markup, JSON, or code in your spoken response.
 
-                Tool programs (advanced):
-                When a task requires MULTIPLE sequential tool calls that depend on each other's results, \
-                you can emit a JavaScript program inside <tool_program></tool_program> tags instead of \
-                separate tool_call blocks. Use fae.tool(name, argsJSON) to call tools and fae.log(msg) \
-                for debug output. Example:
-                <tool_program>
-                var events = await fae.tool('calendar', '{"action":"list_today"}');
-                var weather = await fae.tool('web_search', '{"query":"weather today"}');
-                return 'Events: ' + events + ' Weather: ' + weather;
-                </tool_program>
-                Rules:
-                - Prefer single tool_call for simple one-tool tasks.
-                - Use tool_program only when you need 3+ dependent tool calls or control flow (if/for/try-catch).
-                - Never mix tool_call and tool_program in the same response.
-                - Tool programs run through the same security stack as normal tool calls.
+                For multi-step tasks needing 3+ dependent tool calls, use <tool_program> JS blocks \
+                with fae.tool(name, argsJSON). Prefer single tool_call for simple tasks.
                 """
             if let schemas = toolSchemas, !schemas.isEmpty {
                 toolSection += "\n\n" + schemas

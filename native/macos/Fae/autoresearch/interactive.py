@@ -114,9 +114,9 @@ def cmd_setup():
         "FAE_DISABLE_APPLE_CLASSIFIER": "1",
         "FAE_DISABLE_SPEECH_VERIFIER": "1",
         "FAE_DISABLE_SPEAKER_GATE": "1",
-        # 4B for fast iteration. Use qwen3_5_9b for quality, qwen3_5_35b_a3b for best accuracy.
+        # 9B sweet spot — accurate tool use, reasonable TPS.
         # Speculative prefill disabled to prevent KV cache thrashing on tool follow-ups.
-        "FAE_VOICE_MODEL_PRESET": "qwen3_5_4b",
+        "FAE_VOICE_MODEL_PRESET": "qwen3_5_9b",
         "FAE_DISABLE_SPECULATIVE_PREFILL": "1",
     }
     log = open("/tmp/fae-interactive.log", "w")

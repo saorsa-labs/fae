@@ -398,7 +398,7 @@ struct RemindersTool: Tool {
         openAppleApp(bundleId: "com.apple.reminders")
 
         switch action {
-        case "list_incomplete":
+        case "list_incomplete", "list", "list_all", "list_due", "get_reminders", "pending":
             return await listIncomplete(store: store)
 
         case "search":
@@ -820,7 +820,7 @@ struct MailTool: Tool {
         }
 
         switch action {
-        case "check_inbox", "read_recent":
+        case "check_inbox", "read_recent", "get_inbox", "list_inbox", "inbox", "recent":
             let count = input["count"] as? Int ?? 5
             let firstAttempt = runMailScript(count: min(count, 20))
             if firstAttempt.isError, isAppleScriptPermissionError(firstAttempt.output) {
