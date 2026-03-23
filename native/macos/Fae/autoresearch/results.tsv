@@ -7,3 +7,5 @@
 2026-03-23T21:11:10	50	stt_accuracy	8_tests	eval_v3_no_cancel
 2026-03-23T21:17:04	60	stt_accuracy	10_tests	audio_injection
 2026-03-23T21:22:38	90	stt_accuracy	10_tests	audio_injection
+2026-03-23T21:31:05	90	stt_accuracy	10_tests	audio_injection
+2026-03-23T21:36:16	100	stt_accuracy	10_tests	audio_injection

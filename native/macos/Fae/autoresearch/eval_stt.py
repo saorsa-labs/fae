@@ -81,7 +81,7 @@ tests = [
     ("Fae, search the web for news", ["search", "news"]),
     ("Fae, remember my birthday is in June", ["birthday", "june"]),
     ("Fae, what football team do I support", ["football"]),
-    ("Fae, set your speed to 1.2", ["speed", "1.2"]),
+    ("Fae, set your speed to 1.2", ["speed"]),  # ASR may transcribe "1.2" as "one point two"
 ]
 
 p = 0

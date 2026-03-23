@@ -3984,7 +3984,11 @@ actor PipelineCoordinator {
             // Text-overlap echo rejection: if the transcribed text closely matches
             // what Fae recently said, it's almost certainly speaker bleedthrough that
             // survived timing-based and voice-identity echo checks.
-            if echoSuppressor.isLikelyEchoText(text) {
+            // Exception: text starting with "Fae" or a wake word is a direct address
+            // from the user — real echoes don't start with the wake word.
+            let startsWithWakeWord = text.lowercased().hasPrefix("fae")
+                || text.lowercased().hasPrefix("hey fae")
+            if !startsWithWakeWord && echoSuppressor.isLikelyEchoText(text) {
                 NSLog("PipelineCoordinator: dropping STT text — matches recent assistant speech (text-overlap echo)")
                 debugLog(debugConsole, .pipeline, "Text-overlap echo rejected: \"\(text)\"")
                 return
