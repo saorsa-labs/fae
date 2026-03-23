@@ -711,6 +711,22 @@ enum TextProcessing {
     /// The ASR model doesn't know the name "Fae" and frequently garbles it
     /// into phonetically similar words. We fix these at word boundaries.
     private static let nameCorrections: [(pattern: String, replacement: String)] = [
+        // Sentence-initial "Hey, [command]" → "Fae, [command]"
+        // The most common STT garble through speakers.
+        ("hey, check", "Fae, check"),
+        ("hey, tell", "Fae, tell"),
+        ("hey, what", "Fae, what"),
+        ("hey, who", "Fae, who"),
+        ("hey, when", "Fae, when"),
+        ("hey, where", "Fae, where"),
+        ("hey, show", "Fae, show"),
+        ("hey, set", "Fae, set"),
+        ("hey, remind", "Fae, remind"),
+        ("hey, remember", "Fae, remember"),
+        ("hey, search", "Fae, search"),
+        ("hey, create", "Fae, create"),
+        ("hey, make", "Fae, make"),
+        ("hey, run", "Fae, run"),
         // Multi-word garbles (check first — longer patterns before shorter).
         ("hi fae", "Hi Fae"),
         ("hey fae", "Hey Fae"),

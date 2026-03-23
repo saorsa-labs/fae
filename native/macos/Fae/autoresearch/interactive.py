@@ -116,7 +116,7 @@ def cmd_setup():
         "FAE_DISABLE_SPEAKER_GATE": "1",
         # 9B sweet spot — accurate tool use, reasonable TPS.
         # Speculative prefill disabled to prevent KV cache thrashing on tool follow-ups.
-        "FAE_VOICE_MODEL_PRESET": "qwen3_5_9b",
+        "FAE_VOICE_MODEL_PRESET": "qwen3_5_4b",
         "FAE_DISABLE_SPECULATIVE_PREFILL": "1",
     }
     log = open("/tmp/fae-interactive.log", "w")

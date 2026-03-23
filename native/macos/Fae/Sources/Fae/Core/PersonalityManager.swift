@@ -494,6 +494,12 @@ enum PersonalityManager {
         var parts: [String] = []
         let toolsActive = nativeToolsAvailable || (toolSchemas != nil && !toolSchemas!.isEmpty)
 
+        // ═══════════════════════════════════════════════════════════
+        // STATIC PREFIX — identical across sessions, KV-cacheable.
+        // Order matters: these tokens form the cached prefix that
+        // loadPromptCacheFromDisk restores on subsequent launches.
+        // ═══════════════════════════════════════════════════════════
+
         // 1. Core prompt.
         parts.append(voiceCorePrompt)
 
@@ -506,38 +512,6 @@ enum PersonalityManager {
         // 3. SOUL contract.
         if let soul = soulContract, !soul.isEmpty {
             parts.append(soul)
-        }
-
-        // 3b. HEARTBEAT contract.
-        if let heartbeat = heartbeatContract, !heartbeat.isEmpty {
-            parts.append(heartbeat)
-        }
-
-        // 4. User name.
-        if let name = userName, !name.isEmpty {
-            parts.append("""
-                User context:
-                - The user's name is \(name). Address them by name naturally when appropriate.
-                """)
-        }
-
-        if includeEphemeralContext {
-            if let ephemeral = assembleEphemeralTurnContext(
-                speakerDisplayName: speakerDisplayName,
-                speakerRole: speakerRole,
-                memoryContext: memoryContext
-            ) {
-                parts.append(ephemeral)
-            }
-        }
-
-        // 9. Directive (critical overriding instructions, usually empty).
-        let directive = directiveOverride ?? loadDirective()
-        if !directive.isEmpty {
-            parts.append("""
-                User directive (critical instructions — follow these in EVERY conversation):
-                \(directive)
-                """)
         }
 
         // 10. Capability and behaviour fragments (only when tools are available).
@@ -631,6 +605,38 @@ enum PersonalityManager {
                 Available tools:
                 \(schemas)
                 """)
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // DYNAMIC SUFFIX — changes per session/turn, appended AFTER
+        // the static prefix so KV cache for the prefix stays valid.
+        // ═══════════════════════════════════════════════════════════
+
+        // Heartbeat contract.
+        if let heartbeat = heartbeatContract, !heartbeat.isEmpty {
+            parts.append(heartbeat)
+        }
+
+        // User name.
+        if let name = userName, !name.isEmpty {
+            parts.append("User context: The user's name is \(name).")
+        }
+
+        // Ephemeral turn context (speaker, memory, time).
+        if includeEphemeralContext {
+            if let ephemeral = assembleEphemeralTurnContext(
+                speakerDisplayName: speakerDisplayName,
+                speakerRole: speakerRole,
+                memoryContext: memoryContext
+            ) {
+                parts.append(ephemeral)
+            }
+        }
+
+        // Directive (critical overriding instructions, usually empty).
+        let directive = directiveOverride ?? loadDirective()
+        if !directive.isEmpty {
+            parts.append("User directive: \(directive)")
         }
 
         return parts.joined(separator: "\n\n")
