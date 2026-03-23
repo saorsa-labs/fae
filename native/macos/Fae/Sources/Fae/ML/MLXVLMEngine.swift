@@ -109,11 +109,14 @@ actor MLXVLMEngine: VLMEngine {
                     userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
                     let lmInput = try await container.prepare(input: userInput)
 
+                    // Disable repetition penalty for VLM — the TokenRing penalty
+                    // processor (PR #147) crashes on VLM models where token shapes
+                    // differ from standard LLM. Pass nil to skip processor creation.
                     let params = GenerateParameters(
                         maxTokens: options.maxTokens,
                         temperature: options.temperature,
                         topP: options.topP,
-                        repetitionPenalty: options.repetitionPenalty
+                        repetitionPenalty: nil
                     )
 
                     let stream = try await container.generate(
