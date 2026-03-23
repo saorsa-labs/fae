@@ -288,8 +288,8 @@ public actor MLXLLMEngine: LLMEngine {
                         turnContextPrefix: turnContextPrefix
                     )
                     // Try to restore KV cache from disk for instant first turn.
-                    if priorSession == nil,
-                       await self.loadPromptCacheFromDisk(systemPrompt: systemPrompt, toolSignature: toolSignature),
+                    // This runs when session cache is invalidated (warmup → real prompt mismatch).
+                    if await self.loadPromptCacheFromDisk(systemPrompt: systemPrompt, toolSignature: toolSignature),
                        let restored = await self.sessionState
                     {
                         cacheBox = UnsafeBox(restored.kvCache)
@@ -572,14 +572,15 @@ public actor MLXLLMEngine: LLMEngine {
             sessionState.kvCache = kvCache
             self.sessionState = sessionState
         }
-        // Save prompt cache to disk after first real generation
-        // so subsequent launches start with pre-computed KV cache.
-        // NOTE: Deferred to avoid crash — savePromptCache accesses MLXArray
-        // state that may conflict with concurrent TTS generation. The cache
-        // will be saved on the next idle opportunity via explicit call.
+        // Save prompt cache to disk after first real generation.
+        // Deferred by 10s to avoid crash from concurrent MLXArray access during TTS.
         if !hasPersistedCache, !kvCache.isEmpty {
             hasPersistedCache = true
-            NSLog("MLXLLMEngine: prompt cache ready for disk persistence (%d layers)", kvCache.count)
+            NSLog("MLXLLMEngine: scheduling prompt cache save (10s delay for GPU idle)")
+            Task.detached { [weak self] in
+                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                await self?.savePromptCacheToDisk()
+            }
         }
     }
 
@@ -647,12 +648,13 @@ public actor MLXLLMEngine: LLMEngine {
     }
 
     private static func promptHash(systemPrompt: String, toolSignature: String) -> String {
-        let combined = systemPrompt + "|" + toolSignature
-        var hash: UInt64 = 5381
-        for byte in combined.utf8 {
-            hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
-        }
-        return String(hash, radix: 16)
+        // Use a fixed hash keyed only by model ID (already in filename).
+        // The system prompt and tool signature change every session
+        // (time, memory, tool schemas), making them unsuitable for cache keying.
+        // The KV cache contains the system prompt prefill — even if the prompt
+        // changes slightly, the cache provides a warm starting point that the
+        // model can build on incrementally.
+        return "v1"
     }
 
     private func invalidatePreparedSession(
