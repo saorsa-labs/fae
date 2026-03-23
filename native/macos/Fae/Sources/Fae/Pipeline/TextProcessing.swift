@@ -331,6 +331,14 @@ enum TextProcessing {
             result = urlRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
         }
 
+        // Strip spaced-out domain fragments (LLM artifact: "bbc. co. uk" instead of "bbc.co.uk").
+        if let spacedUrlRegex = try? NSRegularExpression(
+            pattern: #"[a-zA-Z0-9]+\.\s+(?:com|co|org|net|io|uk|gov|edu)(?:\.\s*\w+)*\.?\s*"#
+        ) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = spacedUrlRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
         // Strip any leaked XML-style tags (voice, think, tool_call, etc.).
         if let regex = try? NSRegularExpression(pattern: "</?[a-zA-Z_][a-zA-Z0-9_]*[^>]*>") {
             let range = NSRange(result.startIndex..., in: result)
