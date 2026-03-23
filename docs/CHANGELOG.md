@@ -2,7 +2,7 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
-## v0.8.146 — Conversational Tool Responses + Orb Performance (2026-03-23)
+## v0.8.147 — Conversational Tool Responses + Orb Performance (2026-03-23)
 
 ### Improvements
 - **Conversational tool responses**: Apple tool results (calendar, reminders, mail, contacts, notes) now route through the LLM for natural-language interpretation instead of being read back verbatim — Fae analyzes, summarizes, and flags what matters
