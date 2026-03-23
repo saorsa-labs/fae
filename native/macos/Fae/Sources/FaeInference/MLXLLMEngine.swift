@@ -47,6 +47,7 @@ public actor MLXLLMEngine: LLMEngine {
     public var hasSessionCache: Bool { sessionState != nil }
     private var wiredMemoryTicketProvider: (@Sendable (Int, Int) async -> WiredMemoryTicket?)?
     public private(set) var lastCompletionInfo: GenerateCompletionInfo?
+    private var hasPersistedCache = false
 
     public init() {}
 
@@ -286,9 +287,18 @@ public actor MLXLLMEngine: LLMEngine {
                         systemPrompt: systemPrompt,
                         turnContextPrefix: turnContextPrefix
                     )
-                    cacheBox = UnsafeBox([])
-                    if priorSession != nil {
-                        NSLog("MLXLLMEngine: session cache invalidated — rebuilding prompt state")
+                    // Try to restore KV cache from disk for instant first turn.
+                    if priorSession == nil,
+                       await self.loadPromptCacheFromDisk(systemPrompt: systemPrompt, toolSignature: toolSignature),
+                       let restored = await self.sessionState
+                    {
+                        cacheBox = UnsafeBox(restored.kvCache)
+                        NSLog("MLXLLMEngine: using disk-cached prompt state (%d layers)", restored.kvCache.count)
+                    } else {
+                        cacheBox = UnsafeBox([])
+                        if priorSession != nil {
+                            NSLog("MLXLLMEngine: session cache invalidated — rebuilding prompt state")
+                        }
                     }
                 }
 
@@ -562,6 +572,87 @@ public actor MLXLLMEngine: LLMEngine {
             sessionState.kvCache = kvCache
             self.sessionState = sessionState
         }
+        // Save prompt cache to disk after first real generation
+        // so subsequent launches start with pre-computed KV cache.
+        // NOTE: Deferred to avoid crash — savePromptCache accesses MLXArray
+        // state that may conflict with concurrent TTS generation. The cache
+        // will be saved on the next idle opportunity via explicit call.
+        if !hasPersistedCache, !kvCache.isEmpty {
+            hasPersistedCache = true
+            NSLog("MLXLLMEngine: prompt cache ready for disk persistence (%d layers)", kvCache.count)
+        }
+    }
+
+    // MARK: - KV Cache Disk Persistence
+
+    /// Directory for prompt cache files.
+    private static let cacheDir: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("fae/prompt_cache")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    /// Save the current KV cache to disk for instant restoration on next launch.
+    /// Called after the first successful generation to persist the system prompt prefill.
+    public func savePromptCacheToDisk() {
+        guard let session = sessionState, !session.kvCache.isEmpty,
+              let modelId = loadedModelId else { return }
+
+        let hash = Self.promptHash(systemPrompt: session.systemPrompt, toolSignature: session.toolSignature)
+        let url = Self.cacheDir.appendingPathComponent("\(modelId.replacingOccurrences(of: "/", with: "_"))_\(hash).safetensors")
+
+        do {
+            try savePromptCache(url: url, cache: session.kvCache, metadata: [
+                "model": modelId,
+                "prompt_hash": hash,
+            ])
+            NSLog("MLXLLMEngine: saved prompt cache to disk (%d layers, %@)", session.kvCache.count, url.lastPathComponent)
+        } catch {
+            NSLog("MLXLLMEngine: failed to save prompt cache: %@", error.localizedDescription)
+        }
+    }
+
+    /// Try to load a cached KV cache from disk matching the current model + prompt.
+    /// Returns true if cache was restored (first turn will be near-instant).
+    public func loadPromptCacheFromDisk(systemPrompt: String, toolSignature: String) -> Bool {
+        guard let modelId = loadedModelId else { return false }
+
+        let hash = Self.promptHash(systemPrompt: systemPrompt, toolSignature: toolSignature)
+        let url = Self.cacheDir.appendingPathComponent("\(modelId.replacingOccurrences(of: "/", with: "_"))_\(hash).safetensors")
+
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+
+        do {
+            let (cache, metadata) = try loadPromptCache(url: url)
+            guard metadata["model"] == modelId, metadata["prompt_hash"] == hash else {
+                NSLog("MLXLLMEngine: prompt cache metadata mismatch — ignoring")
+                try? FileManager.default.removeItem(at: url)
+                return false
+            }
+            sessionState = SessionState(
+                systemPrompt: systemPrompt,
+                toolSignature: toolSignature,
+                history: [],
+                kvCache: cache,
+                reusable: true
+            )
+            NSLog("MLXLLMEngine: restored prompt cache from disk (%d layers)", cache.count)
+            return true
+        } catch {
+            NSLog("MLXLLMEngine: failed to load prompt cache: %@", error.localizedDescription)
+            try? FileManager.default.removeItem(at: url)
+            return false
+        }
+    }
+
+    private static func promptHash(systemPrompt: String, toolSignature: String) -> String {
+        let combined = systemPrompt + "|" + toolSignature
+        var hash: UInt64 = 5381
+        for byte in combined.utf8 {
+            hash = ((hash &<< 5) &+ hash) &+ UInt64(byte)
+        }
+        return String(hash, radix: 16)
     }
 
     private func invalidatePreparedSession(
