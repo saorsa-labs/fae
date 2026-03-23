@@ -989,6 +989,34 @@ enum TextProcessing {
         "call", "send", "create", "list", "get", "run", "activate",
     ]
 
+    /// Replace a garbled sentence-initial word before a command with "Fae".
+    /// Pattern: "[single word], [command verb] ..." → "Fae, [command verb] ..."
+    /// The STT garbles "Fae" into many words (Hey, To, Say, They, etc.)
+    /// but the comma + command verb pattern is distinctive.
+    static func fixGarbledWakeWord(_ text: String) -> String {
+        let lower = text.lowercased()
+        // Look for pattern: single word + comma + space + command verb
+        guard let commaIdx = lower.firstIndex(of: ","),
+              commaIdx > lower.startIndex,
+              commaIdx < lower.index(lower.endIndex, offsetBy: -3)
+        else { return text }
+
+        let prefix = String(lower[lower.startIndex..<commaIdx])
+        // Must be a single short word (1-5 chars, no spaces)
+        guard prefix.count <= 5, !prefix.contains(" ") else { return text }
+
+        let afterComma = String(lower[lower.index(after: commaIdx)...])
+            .trimmingCharacters(in: .whitespaces)
+        let firstWord = String(afterComma.split(separator: " ").first ?? "")
+            .trimmingCharacters(in: .punctuationCharacters)
+
+        if commandVerbs.contains(firstWord) || ["hello", "good", "how", "what", "who", "when", "where"].contains(firstWord) {
+            let rest = String(text[text.index(after: text.firstIndex(of: ",")!)...])
+            return "Fae," + rest
+        }
+        return text
+    }
+
     /// Strip inserted pronouns and fix past tense on command verbs.
     /// ASR through speakers often garbles imperative commands:
     /// - "check my calendar" → "I checked my calendar"

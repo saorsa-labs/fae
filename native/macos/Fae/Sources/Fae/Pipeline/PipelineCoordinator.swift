@@ -3972,6 +3972,8 @@ actor PipelineCoordinator {
             // Fix ASR tense/pronoun errors on command verbs:
             // "I checked my calendar" → "Check my calendar"
             text = TextProcessing.normalizeCommandTense(text)
+            // Fix garbled wake word: "[garble], [command]" → "Fae, [command]"
+            text = TextProcessing.fixGarbledWakeWord(text)
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
