@@ -5417,9 +5417,16 @@ actor PipelineCoordinator {
 
                 case .toolCall(let nativeCall):
                     detectedToolCall = true
+                    // Normalize tool name: smaller models sometimes emit
+                    // "reminders=create" instead of "reminders" with action
+                    // as a separate parameter. Strip the =action suffix.
+                    var toolName = nativeCall.function.name
+                    if let eqRange = toolName.range(of: "=") {
+                        toolName = String(toolName[..<eqRange.lowerBound])
+                    }
                     streamedToolCalls.append(
                         ToolCall(
-                            name: nativeCall.function.name,
+                            name: toolName,
                             arguments: nativeCall.function.arguments.mapValues { $0.anyValue }
                         )
                     )
