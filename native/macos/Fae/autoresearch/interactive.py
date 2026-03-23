@@ -108,12 +108,13 @@ def cmd_setup():
         **os.environ,
         "FAE_TEST_SERVER": "1",
         "FAE_DISABLE_STREAMING_ASR": "1",
-        # Disable classifiers + speaker gate for synthetic voice testing.
-        # Kokoro TTS voice gets misclassified as "music" by Apple SoundAnalysis,
-        # and the speaker→mic round-trip degrades voiceprints below usable thresholds.
+        # Disable Apple SoundAnalysis (Kokoro TTS gets classified as "music")
+        # and speech verifier (spectral tilt rejects synthetic voice).
+        # Speaker gate stays ON — provides TV/music rejection via voiceprint.
+        # Enrollment uses the same Kokoro voice, so the gate should pass.
         "FAE_DISABLE_APPLE_CLASSIFIER": "1",
         "FAE_DISABLE_SPEECH_VERIFIER": "1",
-        "FAE_DISABLE_SPEAKER_GATE": "1",
+        # "FAE_DISABLE_SPEAKER_GATE": "1",  # RE-ENABLED: provides TV rejection
         # 9B sweet spot — accurate tool use, reasonable TPS.
         # Speculative prefill disabled to prevent KV cache thrashing on tool follow-ups.
         "FAE_VOICE_MODEL_PRESET": "qwen3_5_4b",
