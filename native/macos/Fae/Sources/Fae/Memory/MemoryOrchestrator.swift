@@ -657,6 +657,16 @@ actor MemoryOrchestrator {
             if !shouldSuppressStructuredExtraction,
                let fact = Self.extractRememberFact(from: sanitizedUserText)
             {
+                // Check for contradictions with existing remembered facts.
+                // Without this, "remember my cat is Whiskers" + "remember my cat is Luna"
+                // both persist, causing confusion on recall.
+                try await supersedeContradiction(
+                    tag: "remembered",
+                    newText: fact,
+                    sourceTurnId: turnId,
+                    speakerId: speakerId,
+                    metadata: timestampMetadata
+                )
                 _ = try await store.insertRecord(
                     kind: .fact,
                     text: fact,

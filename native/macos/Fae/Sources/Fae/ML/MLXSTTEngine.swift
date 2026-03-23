@@ -63,9 +63,13 @@ actor MLXSTTEngine: STTEngine {
         NSLog("MLXSTTEngine: loading model %@", modelID)
         do {
             model = try await Qwen3ASRModel.fromPretrained(modelID)
+            // Context biasing: inject vocabulary hints into the ASR system prompt.
+            // This nudges the model toward expected words without constraining output.
+            // Dramatically improves accuracy for the assistant's name and common commands.
+            model?.contextBiasing = "Transcribe speech directed at an AI assistant. The assistant's name is Fae (spelled F-A-E). When the speaker says a word that sounds like 'Fae', 'fay', 'hey', or 'they' at the start of a sentence, transcribe it as 'Fae'. Common utterance patterns: 'Fae, check...', 'Fae, tell...', 'Fae, what...', 'Fae, remind...', 'Fae, who...', 'Fae, show...', 'Hey Fae, ...'."
             isLoaded = true
             loadState = .loaded
-            NSLog("MLXSTTEngine: model loaded")
+            NSLog("MLXSTTEngine: model loaded (context biasing enabled)")
         } catch {
             loadState = .failed(error.localizedDescription)
             NSLog("MLXSTTEngine: load failed: %@", error.localizedDescription)
@@ -79,7 +83,11 @@ actor MLXSTTEngine: STTEngine {
             throw MLEngineError.notLoaded("STT")
         }
 
-        let audio = MLXArray(samples)
+        // Audio preprocessing: peak normalize + high-pass filter for better ASR accuracy.
+        var processed = samples
+        Self.preprocessForASR(&processed, sampleRate: sampleRate)
+
+        let audio = MLXArray(processed)
         let output = model.generate(audio: audio)
 
         return STTResult(
@@ -87,6 +95,33 @@ actor MLXSTTEngine: STTEngine {
             language: output.language,
             confidence: nil
         )
+    }
+
+    // MARK: - Audio Preprocessing
+
+    /// Normalize peak amplitude to -3dBFS and apply 80Hz high-pass filter.
+    /// Peak normalization ensures consistent input level; high-pass removes
+    /// low-frequency rumble/hum that degrades ASR accuracy.
+    private static func preprocessForASR(_ samples: inout [Float], sampleRate: Int) {
+        // Peak normalize to -3dBFS (0.707 linear)
+        let peak = samples.lazy.map { abs($0) }.max() ?? 0
+        if peak > 0.001 {
+            let gain = Float(0.707) / peak
+            for i in samples.indices { samples[i] *= gain }
+        }
+
+        // 80Hz high-pass filter (1-pole IIR)
+        let rc = 1.0 / (2.0 * Float.pi * 80.0)
+        let dt = 1.0 / Float(sampleRate)
+        let alpha = rc / (rc + dt)
+        var prev: Float = 0
+        var prevFiltered: Float = 0
+        for i in samples.indices {
+            let filtered = alpha * (prevFiltered + samples[i] - prev)
+            prev = samples[i]
+            prevFiltered = filtered
+            samples[i] = filtered
+        }
     }
 
     // MARK: - Streaming ASR

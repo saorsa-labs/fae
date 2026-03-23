@@ -314,6 +314,23 @@ enum TextProcessing {
         // Strip self-introductions (TTS refText bleed or LLM-generated).
         result = stripSelfIntroductions(result)
 
+        // Strip file paths that leak from tool results (/Users/..., ~/...).
+        if let pathRegex = try? NSRegularExpression(
+            pattern: #"(?:~/|/(?:Users|Library|Applications|System|Volumes|tmp|var|etc|opt|usr|private)/)[^\s,;:!?"'()\[\]{}]+"#
+        ) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = pathRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        // Strip bare URL fragments that leak from web search results.
+        // Matches "word.tld" patterns (bbc.co, weather25.com, etc.) and full URLs.
+        if let urlRegex = try? NSRegularExpression(
+            pattern: #"(?:https?://)?(?:www\.)?[a-zA-Z0-9][-a-zA-Z0-9]*\.(?:com|co|org|net|io|uk|gov|edu|info)[^\s]*"#
+        ) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = urlRegex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
         // Strip any leaked XML-style tags (voice, think, tool_call, etc.).
         if let regex = try? NSRegularExpression(pattern: "</?[a-zA-Z_][a-zA-Z0-9_]*[^>]*>") {
             let range = NSRange(result.startIndex..., in: result)
@@ -708,12 +725,15 @@ enum TextProcessing {
         ("hey faye", "Hey Fae"),
         ("hi fay", "Hi Fae"),
         ("hey fay", "Hey Fae"),
+        ("hey fag", "Hey Fae"),
+        ("hi fag", "Hi Fae"),
         ("i fae", "Hi Fae"),
         ("i fay", "Hi Fae"),
         ("i faye", "Hi Fae"),
         // Single-word garbles at word boundaries.
         // NOTE: "faith", "ivy", and "fee" removed — common English words
         // that cause false corrections in normal conversation.
+        ("fag", "Fae"),
         ("ife", "Fae"),
         ("ifae", "Fae"),
         ("ifay", "Fae"),
@@ -938,6 +958,63 @@ enum TextProcessing {
         }
 
         return result
+    }
+
+    // MARK: - Command Tense Normalization
+
+    /// Known command verbs that Fae responds to. Used to detect and fix
+    /// ASR tense/pronoun errors like "I checked my calendar" → "check my calendar".
+    private static let commandVerbs: Set<String> = [
+        "check", "tell", "make", "show", "set", "remind", "search",
+        "open", "close", "play", "stop", "find", "read", "write",
+        "call", "send", "create", "list", "get", "run", "activate",
+    ]
+
+    /// Strip inserted pronouns and fix past tense on command verbs.
+    /// ASR through speakers often garbles imperative commands:
+    /// - "check my calendar" → "I checked my calendar"
+    /// - "tell me a joke" → "they tell me a joke"
+    /// - "remind me" → "they remind me"
+    static func normalizeCommandTense(_ text: String) -> String {
+        let words = text.split(separator: " ", maxSplits: 3)
+        guard words.count >= 2 else { return text }
+
+        let pronouns: Set<String> = ["i", "they", "he", "she", "we", "it", "you"]
+        let first = String(words[0]).lowercased()
+            .trimmingCharacters(in: .punctuationCharacters)
+
+        guard pronouns.contains(first) else { return text }
+
+        var verb = String(words[1]).lowercased()
+            .trimmingCharacters(in: .punctuationCharacters)
+
+        // Fix past tense: "checked" → "check", "reminded" → "remind"
+        if verb.hasSuffix("ed"), verb.count > 4 {
+            let root = String(verb.dropLast(2))
+            if commandVerbs.contains(root) {
+                verb = root
+            } else if verb.hasSuffix("ked") {
+                let altRoot = String(verb.dropLast(3)) + "k"
+                if commandVerbs.contains(String(verb.dropLast(3))) {
+                    verb = String(verb.dropLast(3))
+                } else if commandVerbs.contains(altRoot) {
+                    verb = altRoot
+                }
+            }
+        }
+
+        // Only strip the pronoun if the remaining verb is a known command
+        if commandVerbs.contains(verb) {
+            let rest = words.dropFirst().joined(separator: " ")
+            // Replace the original verb with the corrected one
+            let restWords = rest.split(separator: " ", maxSplits: 1)
+            if restWords.count > 1 {
+                return verb.capitalized + " " + String(restWords[1])
+            }
+            return verb.capitalized
+        }
+
+        return text
     }
 
     // MARK: - Name Detection

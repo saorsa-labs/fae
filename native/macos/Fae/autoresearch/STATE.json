@@ -1,9 +1,9 @@
 {
   "version": 1,
   "created": "2026-03-21T00:00:00Z",
-  "lastRun": "2026-03-23T08:30:00.000000+00:00",
-  "currentFocus": "conversation",
-  "runCount": 13,
+  "lastRun": "2026-03-23T12:55:00.000000+00:00",
+  "currentFocus": "first_turn_latency",
+  "runCount": 19,
   "dimensions": {
     "voice_pipeline": {
       "score": 48.6,

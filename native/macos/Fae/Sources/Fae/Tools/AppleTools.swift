@@ -259,15 +259,24 @@ struct CalendarTool: Tool {
             ])
         }
 
+        // Use natural language format for LLM-friendly output.
+        // "23/03/2026, 14:30" confuses models — "2:30 PM" is unambiguous.
         let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
+        formatter.dateFormat = "h:mm a"  // "2:30 PM"
+
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "EEEE, MMM d"  // "Monday, Mar 23"
 
         let iso = ISO8601DateFormatter()
 
         let displayed = Array(events.prefix(20))
         let lines = displayed.map { event in
-            let time = event.isAllDay ? "All day" : formatter.string(from: event.startDate)
+            let time: String
+            if event.isAllDay {
+                time = "All day"
+            } else {
+                time = "\(dayFormatter.string(from: event.startDate)) at \(formatter.string(from: event.startDate))"
+            }
             let title = event.title ?? "(no title)"
             return "- \(time): \(title)"
         }

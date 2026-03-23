@@ -1001,6 +1001,11 @@ public class Qwen3ASRModel: Module {
 
     // MARK: - Prompt Building
 
+    /// Context biasing text injected into the ASR system prompt.
+    /// Nudges the model toward expected vocabulary (names, commands, etc.)
+    /// without constraining it — the model can still transcribe freely.
+    public var contextBiasing: String = ""
+
     public func buildPrompt(numAudioTokens: Int, language: String = "English") -> MLXArray {
         guard let tokenizer = tokenizer else {
             fatalError("Tokenizer not loaded")
@@ -1010,7 +1015,8 @@ public class Qwen3ASRModel: Module {
         let supportedLower = Dictionary(uniqueKeysWithValues: supported.map { ($0.lowercased(), $0) })
         let langName = supportedLower[language.lowercased()] ?? language
 
-        let prompt = "<|im_start|>system\n<|im_end|>\n"
+        let systemContent = contextBiasing.isEmpty ? "" : contextBiasing
+        let prompt = "<|im_start|>system\n\(systemContent)<|im_end|>\n"
             + "<|im_start|>user\n<|audio_start|>"
             + String(repeating: "<|audio_pad|>", count: numAudioTokens)
             + "<|audio_end|><|im_end|>\n"

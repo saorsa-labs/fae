@@ -461,6 +461,8 @@ struct FaeConfig: Codable {
         switch preset.lowercased() {
         case "qwen3_5_35b_a3b":
             return "qwen3_5_35b_a3b"
+        case "qwen3_5_9b":
+            return "qwen3_5_9b"
         case "qwen3_5_4b":
             return "qwen3_5_4b"
         case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
@@ -497,6 +499,9 @@ struct FaeConfig: Codable {
         case "qwen3_5_35b_a3b":
             // MoE: 35B total, 3B active per token. ~18 GB 4-bit. Natively multimodal.
             return ("mlx-community/Qwen3.5-35B-A3B-4bit", 131_072)
+        case "qwen3_5_9b":
+            // Dense 9B. ~5 GB 4-bit. Sweet spot: better tool use than 4B, much faster than 35B.
+            return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
         case "qwen3_5_4b":
             return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
         case "saorsa_1_1_tiny":
@@ -510,6 +515,10 @@ struct FaeConfig: Codable {
                 // 64+ GB: full 128K context. 32-63 GB: 32K context (tighter headroom).
                 let ctx = totalGB >= 64 ? 131_072 : 32_768
                 return ("mlx-community/Qwen3.5-35B-A3B-4bit", ctx)
+            } else if totalGB >= 24 {
+                // 9B: sweet spot — better tool use and conversation than 4B,
+                // ~5 GB VRAM, 30+ TPS on most Apple Silicon.
+                return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
             } else if totalGB >= 16 {
                 return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
             } else {

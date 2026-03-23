@@ -508,6 +508,8 @@ actor PipelineCoordinator {
     /// Prevents the LLM looping on identical web_search / calendar calls.
     /// Reset at the start of each new user turn (turnCount == 0, isToolFollowUp == false).
     private var seenToolCallSignatures: Set<String> = []
+    /// Cached results for duplicate tool calls — returns real data instead of hallucination-causing notices.
+    private var seenToolCallResults: [String: ToolResult] = [:]
 
     // MARK: - Proactive Awareness
 
@@ -3967,6 +3969,9 @@ actor PipelineCoordinator {
             // entities, speaker profiles).
             var text = TextProcessing.correctNameRecognition(rawText)
             text = await vocabularyCorrector.correct(text)
+            // Fix ASR tense/pronoun errors on command verbs:
+            // "I checked my calendar" → "Check my calendar"
+            text = TextProcessing.normalizeCommandTense(text)
 
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
@@ -4740,7 +4745,10 @@ actor PipelineCoordinator {
         allowsAudibleOutput: Bool = true
     ) async {
         let tillDoneListActive = await TillDoneManager.shared.isListActive
-        let maxToolTurns = tillDoneListActive ? 25 : 5
+        // Allow enough tool turns for thorough multi-step queries.
+        // A web search chain alone can use 4-5 turns (search → fetch → fetch → search → summarize).
+        // Previously capped at 5, which killed multi-tool chains.
+        let maxToolTurns = tillDoneListActive ? 25 : 10
 
         let generationID: UUID
         if let providedGenerationID {
@@ -4761,6 +4769,7 @@ actor PipelineCoordinator {
         if !isToolFollowUp {
             computerUseStepCount = 0
             seenToolCallSignatures = []
+            seenToolCallResults = [:]
             pruneUnusedWorkflowTraceContexts(keeping: currentTurnID)
             prepareWorkflowTraceContextIfNeeded(
                 turnID: currentTurnID,
@@ -4804,7 +4813,7 @@ actor PipelineCoordinator {
             {
                 sendAssistantText(forgetReply, isFinal: true)
                 if allowsAudibleOutput {
-                    await speakText(forgetReply, isFinal: true)
+                    await speakText(forgetReply, isFinal: true, emitAssistantText: false)
                 }
                 await conversationState.addAssistantMessage(
                     forgetReply,
@@ -4823,7 +4832,9 @@ actor PipelineCoordinator {
             {
                 sendAssistantText(directRecallReply, isFinal: true)
                 if allowsAudibleOutput {
-                    await speakText(directRecallReply, isFinal: true)
+                    // emitAssistantText: false — sendAssistantText already fired above.
+                    // Without this, the UI receives two isFinal events → duplicate message.
+                    await speakText(directRecallReply, isFinal: true, emitAssistantText: false)
                 }
                 await conversationState.addAssistantMessage(
                     directRecallReply,
@@ -6540,9 +6551,13 @@ actor PipelineCoordinator {
 
             let callSignature = "\(call.name)|\(inputJSON)"
             var result: ToolResult
-            if seenToolCallSignatures.contains(callSignature) {
-                debugLog(debugConsole, .toolCall, "⚠️ Duplicate tool call blocked: \(call.name) — returning cached notice")
-                result = .success("You already retrieved these results earlier in this conversation. Please synthesize your response using the data already provided rather than repeating the same search.")
+            if seenToolCallSignatures.contains(callSignature),
+               let cached = seenToolCallResults[callSignature] {
+                // Return the ACTUAL cached result so the LLM has real data.
+                // Previously returned a "you already retrieved" notice which
+                // forced the model to hallucinate content.
+                debugLog(debugConsole, .toolCall, "⚠️ Duplicate tool call: \(call.name) — returning cached result")
+                result = cached
                 await recordWorkflowPreflightDenied(
                     turnID: currentTurnID,
                     callId: callId,
@@ -6560,6 +6575,7 @@ actor PipelineCoordinator {
                     traceTurnID: currentTurnID,
                     traceToolCallID: callId
                 )
+                seenToolCallResults[callSignature] = result
             }
             if call.name == "camera", proactiveContext?.taskId == "camera_presence_check", !result.isError {
                 let userPresent = Self.inferUserPresentFromCameraOutput(result.output)
@@ -6580,10 +6596,12 @@ actor PipelineCoordinator {
                 }
             } else {
                 toolSuccessCount += 1
-                if toolCalls.count == 1,
-                   let reply = Self.directToolReplyText(for: call, result: result)
-                {
-                    directToolReply = reply
+                if let reply = Self.directToolReplyText(for: call, result: result) {
+                    if directToolReply == nil {
+                        directToolReply = reply
+                    } else {
+                        directToolReply = directToolReply! + "\n" + reply
+                    }
                 }
             }
 
@@ -6640,7 +6658,7 @@ actor PipelineCoordinator {
             // Tool execution errors (wrong params, validation) should be fed back
             // to the LLM so it can self-correct with the right arguments.
             let allFailuresAreDenials = preflightDenialCount == toolFailureCount
-            if allFailuresAreDenials || turnCount >= 4 {
+            if allFailuresAreDenials || turnCount >= 8 {
                 await conversationState.removeMessages(taggedWith: "tilldone_nudge")
                 let reason = firstToolError ?? "the tool call was denied or failed"
                 let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
@@ -6657,9 +6675,11 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .qa, "Tool error is recoverable (turn \(turnCount)) — feeding back to LLM for self-correction")
         }
 
+        // Use direct reply for single or multi-tool calls when ALL tools
+        // produced direct replies. This prevents hallucination on multi-tool
+        // chains (calendar + mail + reminders) where the LLM ignores real data.
         if turnCount == 0,
            toolFailureCount == 0,
-           toolCalls.count == 1,
            let directToolReply
         {
             sendAssistantText(directToolReply, isFinal: true)

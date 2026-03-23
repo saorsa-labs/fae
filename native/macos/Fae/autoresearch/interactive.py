@@ -114,9 +114,9 @@ def cmd_setup():
         "FAE_DISABLE_APPLE_CLASSIFIER": "1",
         "FAE_DISABLE_SPEECH_VERIFIER": "1",
         "FAE_DISABLE_SPEAKER_GATE": "1",
-        # Use 35B-A3B MoE (3B active params) — better tool use, less hallucination.
+        # 4B for fast iteration. Use qwen3_5_9b for quality, qwen3_5_35b_a3b for best accuracy.
         # Speculative prefill disabled to prevent KV cache thrashing on tool follow-ups.
-        "FAE_VOICE_MODEL_PRESET": "qwen3_5_35b_a3b",
+        "FAE_VOICE_MODEL_PRESET": "qwen3_5_4b",
         "FAE_DISABLE_SPECULATIVE_PREFILL": "1",
     }
     log = open("/tmp/fae-interactive.log", "w")
@@ -166,6 +166,11 @@ def cmd_setup():
 
     # Wait for enrollment TTS ("Thanks, David") to finish playing
     time.sleep(6)
+
+    # Reset conversation to clear any auto-activated skills (morning briefing
+    # hijacks conversations by calling calendar + mail + reminders as a package).
+    CLIENT.post("/reset")
+    time.sleep(2)
 
     # LLM warmup already happens internally during pipeline start
     # (MLXLLMEngine.warmup). Skip the inject-based warmup entirely —
