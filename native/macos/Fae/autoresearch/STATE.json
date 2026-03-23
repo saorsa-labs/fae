@@ -1,27 +1,27 @@
 {
   "version": 1,
   "created": "2026-03-21T00:00:00Z",
-  "lastRun": "2026-03-21T05:11:46.599927+00:00",
-  "currentFocus": "tool_execution",
-  "runCount": 6,
+  "lastRun": "2026-03-23T08:30:00.000000+00:00",
+  "currentFocus": "conversation",
+  "runCount": 13,
   "dimensions": {
     "voice_pipeline": {
-      "score": 43.7,
+      "score": 48.6,
       "submetrics": {
-        "avg_latency_ms": 32271.365079152747,
-        "max_latency_ms": 47074.17462504236,
-        "pass_rate": 0.6,
-        "composite_score": 72.8,
+        "avg_latency_ms": 36177.96038550441,
+        "max_latency_ms": 76382.52166705206,
+        "pass_rate": 0.75,
+        "composite_score": 81.0,
         "no_think_leak_rate": 1.0,
         "no_hallucination_rate": 1.0,
         "tool_accuracy_rate": 1.0
       }
     },
     "barge_in": {
-      "score": 71.0,
+      "score": 42.3,
       "submetrics": {
-        "avg_latency_ms": 5515.348752860778,
-        "max_latency_ms": 16356.201581947971,
+        "avg_latency_ms": 25689.3296637115,
+        "max_latency_ms": 56829.07295896439,
         "pass_rate": 0.07142857142857142,
         "composite_score": 62.9,
         "no_think_leak_rate": 1.0,
@@ -30,46 +30,46 @@
       }
     },
     "tool_execution": {
-      "score": 23.8,
+      "score": 41.9,
       "submetrics": {
-        "avg_latency_ms": 44031.94355902896,
-        "max_latency_ms": 60658.861249976326,
-        "pass_rate": 0.1388888888888889,
-        "composite_score": 39.7,
+        "avg_latency_ms": 64458.3625971718,
+        "max_latency_ms": 118711.24087506905,
+        "pass_rate": 0.6944444444444444,
+        "composite_score": 69.9,
         "no_think_leak_rate": 1.0,
         "no_hallucination_rate": 1.0,
-        "tool_accuracy_rate": 0.1388888888888889
+        "tool_accuracy_rate": 0.6944444444444444
       }
     },
     "memory": {
-      "score": 48.5,
+      "score": 53.6,
       "submetrics": {
-        "avg_latency_ms": 21258.915761202417,
-        "max_latency_ms": 48989.79112500092,
-        "pass_rate": 0.13333333333333333,
-        "composite_score": 65.3,
+        "avg_latency_ms": 34946.34855800153,
+        "max_latency_ms": 69655.45370802283,
+        "pass_rate": 0.7333333333333333,
+        "composite_score": 89.3,
         "no_think_leak_rate": 1.0,
         "no_hallucination_rate": 1.0,
         "tool_accuracy_rate": 1.0
       }
     },
     "conversation": {
-      "score": 45.8,
+      "score": 47.4,
       "submetrics": {
-        "avg_latency_ms": 40043.40974179407,
-        "max_latency_ms": 56174.15950098075,
-        "pass_rate": 0.7333333333333333,
-        "composite_score": 76.3,
+        "avg_latency_ms": 72207.05654167105,
+        "max_latency_ms": 141633.6764160078,
+        "pass_rate": 0.8,
+        "composite_score": 79.0,
         "no_think_leak_rate": 1.0,
         "no_hallucination_rate": 1.0,
         "tool_accuracy_rate": 1.0
       }
     },
     "speaker_identity": {
-      "score": 60.8,
+      "score": 55.5,
       "submetrics": {
-        "avg_latency_ms": 25055.0609062484,
-        "max_latency_ms": 40374.25529200118,
+        "avg_latency_ms": 35410.41389598104,
+        "max_latency_ms": 71534.08691700315,
         "pass_rate": 1.0,
         "composite_score": 92.5,
         "no_think_leak_rate": 1.0,
@@ -80,8 +80,8 @@
     "proactive": {
       "score": 51.0,
       "submetrics": {
-        "avg_latency_ms": 43786.64441675937,
-        "max_latency_ms": 50022.635750006884,
+        "avg_latency_ms": 63115.375708497595,
+        "max_latency_ms": 82026.04274998885,
         "pass_rate": 1.0,
         "composite_score": 85.0,
         "no_think_leak_rate": 1.0,
@@ -92,8 +92,8 @@
     "skills": {
       "score": 44.4,
       "submetrics": {
-        "avg_latency_ms": 43855.20494139055,
-        "max_latency_ms": 50003.73904098524,
+        "avg_latency_ms": 66909.95563300094,
+        "max_latency_ms": 81071.17891602684,
         "pass_rate": 0.8,
         "composite_score": 74.0,
         "no_think_leak_rate": 1.0,
@@ -104,8 +104,8 @@
     "advanced_pipeline": {
       "score": 47.3,
       "submetrics": {
-        "avg_latency_ms": 33530.594920167154,
-        "max_latency_ms": 45387.53058400471,
+        "avg_latency_ms": 51967.4535208372,
+        "max_latency_ms": 75133.28662503045,
         "pass_rate": 0.75,
         "composite_score": 78.8,
         "no_think_leak_rate": 1.0,
@@ -206,6 +206,102 @@
         "memory": 48.5,
         "conversation": 45.8,
         "speaker_identity": 60.8,
+        "proactive": 51.0,
+        "skills": 44.4,
+        "advanced_pipeline": 47.3
+      }
+    },
+    {
+      "timestamp": "2026-03-21T05:46:55.507501+00:00",
+      "runCount": 7,
+      "focus": "tool_execution",
+      "scores": {
+        "voice_pipeline": 43.7,
+        "barge_in": 71.0,
+        "tool_execution": 22.9,
+        "memory": 48.5,
+        "conversation": 45.8,
+        "speaker_identity": 60.8,
+        "proactive": 51.0,
+        "skills": 44.4,
+        "advanced_pipeline": 47.3
+      }
+    },
+    {
+      "timestamp": "2026-03-21T07:46:07.062888+00:00",
+      "runCount": 8,
+      "focus": "tool_execution",
+      "scores": {
+        "voice_pipeline": 47.3,
+        "barge_in": 71.0,
+        "tool_execution": 37.6,
+        "memory": 48.1,
+        "conversation": 45.8,
+        "speaker_identity": 55.5,
+        "proactive": 51.0,
+        "skills": 44.4,
+        "advanced_pipeline": 49.3
+      }
+    },
+    {
+      "timestamp": "2026-03-21T08:00:43.408602+00:00",
+      "runCount": 9,
+      "focus": "tool_execution",
+      "scores": {
+        "voice_pipeline": 47.3,
+        "barge_in": 71.0,
+        "tool_execution": 37.6,
+        "memory": 48.5,
+        "conversation": 45.8,
+        "speaker_identity": 55.5,
+        "proactive": 51.0,
+        "skills": 44.4,
+        "advanced_pipeline": 49.3
+      }
+    },
+    {
+      "timestamp": "2026-03-21T08:14:42.790469+00:00",
+      "runCount": 10,
+      "focus": "tool_execution",
+      "scores": {
+        "voice_pipeline": 47.3,
+        "barge_in": 71.0,
+        "tool_execution": 37.6,
+        "memory": 48.5,
+        "conversation": 45.8,
+        "speaker_identity": 55.5,
+        "proactive": 51.0,
+        "skills": 44.4,
+        "advanced_pipeline": 49.3
+      }
+    },
+    {
+      "timestamp": "2026-03-21T08:30:16.048851+00:00",
+      "runCount": 11,
+      "focus": "tool_execution",
+      "scores": {
+        "voice_pipeline": 47.3,
+        "barge_in": 71.0,
+        "tool_execution": 37.6,
+        "memory": 50.6,
+        "conversation": 45.8,
+        "speaker_identity": 55.5,
+        "proactive": 51.0,
+        "skills": 44.4,
+        "advanced_pipeline": 49.3
+      }
+    },
+    {
+      "timestamp": "2026-03-21T10:59:48.439945+00:00",
+      "runCount": 12,
+      "focus": "tool_execution",
+      "scores": {
+        "voice_pipeline": 48.6,
+        "barge_in": 42.3,
+        "tool_execution": 41.9,
+        "memory": 53.6,
+        "conversation": 47.4,
+        "speaker_identity": 55.5,
         "proactive": 51.0,
         "skills": 44.4,
         "advanced_pipeline": 47.3

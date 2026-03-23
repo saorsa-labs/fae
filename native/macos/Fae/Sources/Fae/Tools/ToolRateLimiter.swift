@@ -11,7 +11,7 @@ actor ToolRateLimiter {
 
     /// Per-tool limits (calls per minute).
     private static let limits: [String: Int] = [
-        "bash": 5,
+        "bash": 30,
         "write": 10,
         "edit": 10,
         "web_search": 15,
@@ -52,7 +52,7 @@ actor ToolRateLimiter {
         // Risk-tier guardrails.
         switch riskLevel {
         case .high:
-            limit = min(limit, 3)
+            limit = min(limit, 15)
         case .medium:
             limit = min(limit, 10)
         case .low:

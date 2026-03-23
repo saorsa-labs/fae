@@ -74,7 +74,7 @@ def _get_response(conv):
 
 
 def _get_transcription(conv):
-    for m in conv.get("messages", []):
+    for m in reversed(conv.get("messages", [])):
         if m.get("role") == "user":
             return m.get("content", "")
     return ""
@@ -114,10 +114,9 @@ def cmd_setup():
         "FAE_DISABLE_APPLE_CLASSIFIER": "1",
         "FAE_DISABLE_SPEECH_VERIFIER": "1",
         "FAE_DISABLE_SPEAKER_GATE": "1",
-        # Force 4B model + disable speculative prefill for faster testing.
-        # 35B stalls under GPU contention; speculative prefill causes cache
-        # thrashing that drops tool follow-up TPS to 0.00.
-        "FAE_VOICE_MODEL_PRESET": "qwen3_5_4b",
+        # Use 35B-A3B MoE (3B active params) — better tool use, less hallucination.
+        # Speculative prefill disabled to prevent KV cache thrashing on tool follow-ups.
+        "FAE_VOICE_MODEL_PRESET": "qwen3_5_35b_a3b",
         "FAE_DISABLE_SPECULATIVE_PREFILL": "1",
     }
     log = open("/tmp/fae-interactive.log", "w")

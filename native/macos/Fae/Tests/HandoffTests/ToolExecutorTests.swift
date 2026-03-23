@@ -81,7 +81,8 @@ private func makeExecutor(
 
 private func makeContext(
     toolMode: String = "full",
-    privacyMode: String = "local_preferred"
+    privacyMode: String = "local_preferred",
+    isOwner: Bool = true
 ) -> ToolExecutorContext {
     ToolExecutorContext(
         toolMode: toolMode,
@@ -90,7 +91,7 @@ private func makeContext(
         capabilityTicket: nil,
         hasCapabilityTicketForTool: true,
         explicitUserAuthorization: false,
-        isOwner: true,
+        isOwner: isOwner,
         livenessScore: nil,
         actionSource: .voice,
         proactiveContext: nil,
@@ -315,7 +316,8 @@ final class ToolExecutorTests: XCTestCase {
             outboundGuard: OutboundExfiltrationGuard.shared,
             approvalManager: nil // no manager
         )
-        let context = makeContext()
+        // Use isOwner: false so auto-approval doesn't bypass the approval path.
+        let context = makeContext(isOwner: false)
         let call = makeCall(name: "write", arguments: ["path": "/tmp/test", "content": "hello"])
 
         let result = await executor.execute(call, context: context, callbacks: noopCallbacks)

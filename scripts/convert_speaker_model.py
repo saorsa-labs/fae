@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Convert Qwen3-Voice-Embedding ONNX model to Core ML for Fae speaker verification.
+Convert WeSpeaker ECAPA-TDNN ONNX model to Core ML for Fae speaker verification.
 
 Usage:
-    pip install coremltools onnx huggingface_hub
-    python3 scripts/convert_speaker_model.py
+    pip install coremltools onnx onnx2torch huggingface_hub torch
+    python scripts/convert_speaker_model.py
 
-This downloads the ONNX model from HuggingFace, converts to Core ML (.mlpackage),
-then compiles to .mlmodelc (ready for Xcode / SPM bundling).
+This downloads the ONNX model from HuggingFace, converts to PyTorch,
+then to Core ML (.mlpackage), and compiles to .mlmodelc.
+
+Model: onnx-community/wespeaker-voxceleb-resnet34-LM
+- Input: mel features [B, T, 80] (80 mel bins, variable time frames)
+- Output: 256-dim speaker embedding
 
 Output: native/macos/Fae/Sources/Fae/Resources/Models/SpeakerEncoder.mlmodelc/
 """
@@ -17,8 +21,8 @@ import subprocess
 import sys
 import tempfile
 
-MODEL_REPO = "marksverdhei/Qwen3-Voice-Embedding-12Hz-0.6B-onnx"
-ONNX_FILENAME = "model_fp16.onnx"
+MODEL_REPO = "onnx-community/wespeaker-voxceleb-resnet34-LM"
+ONNX_FILENAME = "onnx/model.onnx"
 OUTPUT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "native", "macos", "Fae", "Sources", "Fae", "Resources", "Models",
@@ -29,38 +33,52 @@ def main():
     try:
         import coremltools as ct
         import onnx
-    except ImportError:
-        print("Missing dependencies. Install them:")
-        print("  pip install coremltools onnx huggingface_hub")
+        import torch
+        from onnx2torch import convert as onnx2torch_convert
+    except ImportError as e:
+        print(f"Missing dependency: {e}")
+        print("Install with:")
+        print("  pip install coremltools onnx onnx2torch huggingface_hub torch")
         sys.exit(1)
 
     # Download ONNX model from HuggingFace.
     print(f"Downloading {ONNX_FILENAME} from {MODEL_REPO}...")
     try:
         from huggingface_hub import hf_hub_download
-
         onnx_path = hf_hub_download(repo_id=MODEL_REPO, filename=ONNX_FILENAME)
     except ImportError:
-        print("huggingface_hub not installed. Install it:")
+        print("huggingface_hub not installed.")
         print("  pip install huggingface_hub")
         sys.exit(1)
 
     print(f"ONNX model: {onnx_path}")
 
-    # Load ONNX model.
-    print("Loading ONNX model...")
-    model = onnx.load(onnx_path)
+    # Load ONNX model and convert to PyTorch.
+    print("Converting ONNX to PyTorch...")
+    onnx_model = onnx.load(onnx_path)
+    pytorch_model = onnx2torch_convert(onnx_model)
+    pytorch_model.eval()
+
+    # Create example input for tracing.
+    # Input shape: [batch=1, time=100, mel_bins=80]
+    example_input = torch.randn(1, 100, 80)
+
+    # Trace the model.
+    print("Tracing PyTorch model...")
+    traced_model = torch.jit.trace(pytorch_model, example_input)
 
     # Convert to Core ML.
-    # Input: mel_input with shape (1, 128, T) where T is variable (1-3000 frames).
     print("Converting to Core ML...")
-    mlmodel = ct.converters.convert(
-        model,
+    mlmodel = ct.convert(
+        traced_model,
         inputs=[
             ct.TensorType(
-                name="mel_input",
-                shape=(1, 128, ct.RangeDim(lower_bound=1, upper_bound=3000)),
+                name="input_features",
+                shape=(1, ct.RangeDim(lower_bound=10, upper_bound=3000), 80),
             )
+        ],
+        outputs=[
+            ct.TensorType(name="embedding"),
         ],
         compute_precision=ct.precision.FLOAT16,
         minimum_deployment_target=ct.target.macOS14,
@@ -79,7 +97,6 @@ def main():
         # Remove existing compiled model if present.
         if os.path.exists(mlmodelc_path):
             import shutil
-
             shutil.rmtree(mlmodelc_path)
 
         print(f"Compiling to .mlmodelc at {mlmodelc_path}...")
@@ -101,6 +118,10 @@ def main():
             for filename in filenames
         ) / (1024 * 1024)
         print(f"Success: {mlmodelc_path} ({size_mb:.1f} MB)")
+        print()
+        print("Model info:")
+        print("  Input: input_features [1, T, 80] (80 mel bins, variable time)")
+        print("  Output: embedding [1, 256] (256-dim speaker embedding)")
     else:
         print("Error: .mlmodelc not found after compilation")
         sys.exit(1)

@@ -88,7 +88,12 @@ struct FaeConfig: Codable {
         var temperature: Float = 0.7
         var topP: Float = 0.9
         var topK: Int = 40
-        var repeatPenalty: Float = 1.1
+        /// Repetition penalty. 0.0 = disabled (no TokenRing overhead).
+        /// Previously 1.1, but TokenRing processor adds per-token overhead
+        /// (array indexing + MLX.where + multiply/divide per token) that
+        /// costs 10-20% TPS on MoE models. Qwen3.5 handles repetition
+        /// well without explicit penalty.
+        var repeatPenalty: Float = 0.0
         var maxHistoryMessages: Int = 10
         /// Operator / control model preset for the main local pipeline.
         var voiceModelPreset: String = "auto"
@@ -110,9 +115,13 @@ struct FaeConfig: Codable {
 
         // MARK: KV Cache Optimization (Phase 1)
 
-        /// Enable 4-bit KV cache quantization for 4x memory savings.
-        /// Set to nil to disable quantization (uses f16). Default: 4.
-        var kvQuantBits: Int? = 4
+        /// KV cache quantization bits. 4 = 4x memory savings with encode/decode
+        /// overhead. nil = full precision (f16), faster but uses more memory.
+        /// Auto-disabled on 64GB+ systems where memory is plentiful.
+        var kvQuantBits: Int? = {
+            let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
+            return totalGB >= 64 ? nil : 4
+        }()
 
         /// Maximum KV cache size in tokens. When set, uses sliding window
         /// (RotatingKVCache) for bounded memory. nil = unlimited.
@@ -534,9 +543,12 @@ struct FaeConfig: Codable {
     ///
     /// Based on research into Ollama, mistral.rs, and LM Studio optimizations.
     static func recommendedPrefillStepSize(modelId: String) -> Int {
+        let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
         let modelLower = modelId.lowercased()
         if modelLower.contains("35b") {
-            return 256  // Large models: smaller chunks to avoid Metal spikes
+            // MoE 35B: scale with available RAM. 256 was too conservative —
+            // community reports show 512-1024 works well on 64GB+ systems.
+            return totalGB >= 64 ? 1024 : (totalGB >= 32 ? 512 : 256)
         } else if modelLower.contains("4b") || modelLower.contains("3b") {
             return 768  // 4B: larger chunks
         } else {

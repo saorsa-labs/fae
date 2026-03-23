@@ -2,7 +2,26 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
-## v1.5.0 — Self-Diagnostic + Correction Feedback (2026-03-20)
+## v0.8.146 — Conversational Tool Responses + Orb Performance (2026-03-23)
+
+### Improvements
+- **Conversational tool responses**: Apple tool results (calendar, reminders, mail, contacts, notes) now route through the LLM for natural-language interpretation instead of being read back verbatim — Fae analyzes, summarizes, and flags what matters
+- **Improved personality prompts**: system prompt updated to guide Fae toward interpreting and presenting information as a thoughtful friend, not a text-to-speech reader
+- **Orb shader optimized**: NebulaOrb Metal shader rewritten with half-precision, reduced FBM octaves, and constant folding — significantly lower GPU cost at 120px render size
+- **Rate limiter relaxed**: bash tool limit raised from 5 to 30 calls/min; high-risk minimum raised from 3 to 15 to support multi-tool scripting workflows
+- **Speech verifier resilience**: speech verifier now logs and continues when model is not loaded rather than silently skipping verification
+
+### Bug fixes
+- **Approval manager timeout**: updated test expectations to match 45s timeout (was 20s)
+- **Voice pipeline test**: synthetic speech signal strengthened to meet WeSpeaker 2s+ voiced duration threshold
+- **Owner auto-approval test**: fixed test that was accidentally auto-approving via voice identity instead of testing the no-approval-manager path
+
+### Tests
+- Total: 1616 tests, 0 failures
+
+---
+
+## v0.8.145 — Self-Diagnostic + Correction Feedback (2026-03-20)
 
 ### New features
 - **Self-diagnostic skill**: instruction skill (`self-diagnostic`) that guides Fae through a comprehensive health check — system resources, pipeline state, security events, tool health, memory status, and speaker profiles

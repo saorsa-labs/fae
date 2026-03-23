@@ -576,7 +576,10 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         )
     }
 
-    func testDirectToolReplyTextUsesGroundedCalendarOutputVerbatim() {
+    func testDirectToolReplyTextReturnsNilForCalendarToRouteViaLLM() {
+        // Apple tools (calendar, reminders, etc.) return nil so the result
+        // is routed through the LLM for conversational interpretation rather
+        // than being read back verbatim.
         let call = ToolCall(
             name: "calendar",
             arguments: ["action": "list_today"]
@@ -589,13 +592,8 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
             """
         )
 
-        XCTAssertEqual(
-            PipelineCoordinator.directToolReplyText(for: call, result: result),
-            """
-            2 events:
-            - All day: Food Waste Caddy
-            - 12/03/2026, 17:00: Peader
-            """
+        XCTAssertNil(
+            PipelineCoordinator.directToolReplyText(for: call, result: result)
         )
     }
 

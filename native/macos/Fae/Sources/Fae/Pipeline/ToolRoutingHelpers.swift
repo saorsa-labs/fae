@@ -978,8 +978,12 @@ enum ToolRoutingHelpers {
         // for interpretation so the user gets a natural-language response
         // instead of raw command output like "HTTP/2 301".
 
+        // Apple tools: route through LLM for conversational interpretation.
+        // The raw data goes into the conversation as a tool result, and the LLM
+        // generates a natural-language summary with analysis and observations
+        // instead of reading the raw output verbatim.
         case "calendar", "reminders", "contacts", "mail", "notes":
-            return trimmed
+            return nil
 
         case "screenshot":
             return stripScreenshotEnvelope(from: trimmed)

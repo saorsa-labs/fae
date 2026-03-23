@@ -3681,26 +3681,28 @@ actor PipelineCoordinator {
         // FAE_DISABLE_SPEECH_VERIFIER=1 bypasses this (for TTS-driven test harnesses
         // where synthetic speech gets misclassified as noise).
         let speechVerifierDisabled = ProcessInfo.processInfo.environment["FAE_DISABLE_SPEECH_VERIFIER"] == "1"
-        if !speechVerifierDisabled, let verifier = speechVerifier, await verifier.isLoaded {
-            if let result = try? await verifier.verify(
-                audio: segment.samples,
-                sampleRate: segment.sampleRate
-            ), result.label != .speech, result.confidence > 0.80 {
-                NSLog("PipelineCoordinator: dropping %.1fs segment (speech verifier: %@, conf=%.2f)",
-                      durationSecs, result.label.name, result.confidence)
+        if !speechVerifierDisabled {
+            if let verifier = speechVerifier, await verifier.isLoaded {
+                if let result = try? await verifier.verify(
+                    audio: segment.samples,
+                    sampleRate: segment.sampleRate
+                ), result.label != .speech, result.confidence > 0.80 {
+                    NSLog("PipelineCoordinator: dropping %.1fs segment (speech verifier: %@, conf=%.2f)",
+                          durationSecs, result.label.name, result.confidence)
+                    debugLog(debugConsole, .pipeline,
+                             "Speech verifier rejected: \(result.label.name) (conf=\(String(format: "%.2f", result.confidence)))")
+                    return
+                }
+            } else if !VoiceActivityDetector.spectralTiltLooksSpeechlike(
+                samples: segment.samples, sampleRate: segment.sampleRate
+            ) {
+                // Fallback: spectral tilt heuristic when neural verifier not available.
+                NSLog("PipelineCoordinator: dropping %.1fs segment (spectral tilt non-speech, rms=%.4f)",
+                      durationSecs, rms)
                 debugLog(debugConsole, .pipeline,
-                         "Speech verifier rejected: \(result.label.name) (conf=\(String(format: "%.2f", result.confidence)))")
+                         "Spectral tilt rejected segment: \(String(format: "%.1f", durationSecs))s (rms=\(String(format: "%.3f", rms)))")
                 return
             }
-        } else if !VoiceActivityDetector.spectralTiltLooksSpeechlike(
-            samples: segment.samples, sampleRate: segment.sampleRate
-        ) {
-            // Fallback: spectral tilt heuristic when neural verifier not available.
-            NSLog("PipelineCoordinator: dropping %.1fs segment (spectral tilt non-speech, rms=%.4f)",
-                  durationSecs, rms)
-            debugLog(debugConsole, .pipeline,
-                     "Spectral tilt rejected segment: \(String(format: "%.1f", durationSecs))s (rms=\(String(format: "%.3f", rms)))")
-            return
         }
 
         // Cross-correlation + spectral echo checks — compare segment against recent TTS playback.

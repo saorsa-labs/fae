@@ -291,8 +291,9 @@ final class ToolRateLimiterTests: XCTestCase {
 
     func testAllowsWithinLimit() async {
         let limiter = ToolRateLimiter()
-        // bash has a limit of 5 per minute.
-        for _ in 0..<5 {
+        // bash base limit is 30, but the backward-compatible checkLimit(tool:)
+        // defaults to medium risk which caps at 10.
+        for _ in 0..<10 {
             let result = await limiter.checkLimit(tool: "bash")
             XCTAssertNil(result)
         }
@@ -300,8 +301,8 @@ final class ToolRateLimiterTests: XCTestCase {
 
     func testBlocksOverLimit() async {
         let limiter = ToolRateLimiter()
-        // bash has a limit of 5 per minute.
-        for _ in 0..<5 {
+        // Effective limit for bash at medium risk: min(30, 10) = 10.
+        for _ in 0..<10 {
             _ = await limiter.checkLimit(tool: "bash")
         }
         let result = await limiter.checkLimit(tool: "bash")
@@ -311,8 +312,8 @@ final class ToolRateLimiterTests: XCTestCase {
 
     func testDifferentToolsHaveSeparateLimits() async {
         let limiter = ToolRateLimiter()
-        // Exhaust bash limit (5).
-        for _ in 0..<5 {
+        // Exhaust bash limit (10 at medium risk).
+        for _ in 0..<10 {
             _ = await limiter.checkLimit(tool: "bash")
         }
         // web_search should still be allowed (separate counter).
@@ -493,8 +494,8 @@ final class FetchURLCloudMetadataTests: XCTestCase {
 
 final class ApprovalManagerTimeoutTests: XCTestCase {
 
-    func testTimeoutIs20Seconds() {
-        XCTAssertEqual(ApprovalManager.timeoutSeconds, 20)
+    func testTimeoutIs45Seconds() {
+        XCTAssertEqual(ApprovalManager.timeoutSeconds, 45)
     }
 }
 

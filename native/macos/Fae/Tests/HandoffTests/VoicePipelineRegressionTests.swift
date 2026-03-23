@@ -41,21 +41,26 @@ final class VoicePipelineRegressionTests: XCTestCase {
     }
 
     func testSegmentAnalysisAcceptsStrongSpeechLikeSignal() {
+        // Generate 4s of speech-like signal (two harmonics with amplitude envelope)
+        // preceded and followed by 0.5s silence. WeSpeaker needs ~3s+ of voiced
+        // speech with voicedDurationSeconds >= 2.0.
         let sampleRate = 16_000
-        var samples = [Float](repeating: 0, count: sampleRate * 4)
-        for index in sampleRate..<(sampleRate * 3) {
-            let t = Float(index - sampleRate) / Float(sampleRate)
+        let speechStart = sampleRate / 2        // 0.5s silence lead-in
+        let speechEnd = speechStart + sampleRate * 4  // 4s of speech
+        var samples = [Float](repeating: 0, count: speechEnd + sampleRate / 2)
+        for index in speechStart..<speechEnd {
+            let t = Float(index - speechStart) / Float(sampleRate)
             let phaseA = 2 * Float.pi * 180 * t
             let phaseB = 2 * Float.pi * 240 * t
-            let envelope = 0.65 + 0.35 * sin(2 * Float.pi * 3 * t)
-            samples[index] = (sin(phaseA) * 0.07 + sin(phaseB) * 0.05) * envelope
+            let envelope = 0.75 + 0.25 * sin(2 * Float.pi * 3 * t)
+            samples[index] = (sin(phaseA) * 0.12 + sin(phaseB) * 0.08) * envelope
         }
 
         let quality = AudioCaptureManager.analyzeSegment(samples, sampleRate: sampleRate)
 
         XCTAssertTrue(quality.hasUsableSpeech)
         XCTAssertGreaterThan(quality.voicedFrameRatio, 0.18)
-        XCTAssertGreaterThan(quality.voicedDurationSeconds, 0.6)
+        XCTAssertGreaterThan(quality.voicedDurationSeconds, 2.0)
     }
 
     func testShouldSkipSTTAfterSpeakerVerificationForUnknownSpeakerWhenOwnerExists() {
