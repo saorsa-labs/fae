@@ -1,9 +1,9 @@
 {
   "version": 1,
   "created": "2026-03-21T00:00:00Z",
-  "lastRun": "2026-03-23T16:55:00.000000+00:00",
-  "currentFocus": "mail_tool_reliability",
-  "runCount": 22,
+  "lastRun": "2026-03-23T18:00:00.000000+00:00",
+  "currentFocus": "prompt_split_for_cache",
+  "runCount": 25,
   "dimensions": {
     "voice_pipeline": {
       "score": 48.6,
