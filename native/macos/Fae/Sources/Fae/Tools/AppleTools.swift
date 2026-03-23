@@ -301,7 +301,20 @@ struct CalendarTool: Tool {
             return dict
         }
 
-        let header = events.count > 20 ? "Showing 20 of \(events.count) events:" : "\(events.count) events:"
+        // Conversational header instead of "N events:"
+        let header: String
+        if events.count == 0 {
+            // Shouldn't reach here (handled by isEmpty above), but just in case
+            header = "Nothing on your calendar for that period."
+        } else if events.count == 1 {
+            header = "You've got one thing on your calendar:"
+        } else if events.count <= 3 {
+            header = "You've got a couple of things on your calendar:"
+        } else if events.count > 20 {
+            header = "You've got a busy schedule. Here are the highlights:"
+        } else {
+            header = "Here's what's on your calendar:"
+        }
         return .success(header + "\n" + lines.joined(separator: "\n"), structuredData: [
             "events": structured as [any Sendable],
             "count": events.count,

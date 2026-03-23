@@ -978,10 +978,10 @@ enum ToolRoutingHelpers {
         // for interpretation so the user gets a natural-language response
         // instead of raw command output like "HTTP/2 301".
 
-        // Apple tools: direct reply. LLM interpretation causes hallucination
-        // on 4B/9B models — they ignore the actual data and fabricate content.
-        // The new natural-language date format (e.g. "Monday, Mar 23 at 2:30 PM")
-        // makes the direct reply conversational enough for voice.
+        // Apple tools: direct reply with conversational formatting.
+        // LLM interpretation causes hallucination on all models (4B/9B/35B)
+        // because tool results aren't reliably visible in the follow-up context.
+        // Instead, format the raw data as natural speech directly.
         case "calendar", "reminders", "contacts", "mail", "notes":
             return trimmed
 
