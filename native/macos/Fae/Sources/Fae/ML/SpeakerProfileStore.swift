@@ -396,6 +396,19 @@ actor SpeakerProfileStore {
         persist()
     }
 
+    /// Remove all profiles whose embeddings are incompatible with the current
+    /// encoder dimension. This handles model upgrades (e.g. 256→1024 dim)
+    /// that make stored embeddings unusable for cosine similarity.
+    func clearIncompatibleProfiles(currentDim: Int) {
+        let before = profiles.count
+        profiles.removeAll { !$0.centroid.isEmpty && $0.centroid.count != currentDim }
+        let removed = before - profiles.count
+        if removed > 0 {
+            NSLog("SpeakerProfileStore: cleared %d profiles with incompatible dimension (expected %d)", removed, currentDim)
+            persist()
+        }
+    }
+
     /// Remove all speaker profiles (for full onboarding reset / first-contact testing).
     func clearAllProfiles() {
         let count = profiles.count

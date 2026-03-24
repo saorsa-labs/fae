@@ -537,16 +537,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 // clear it and force re-enrollment. Without this, speaker
                 // verification is permanently degraded (mel-spectral fallback)
                 // and Fae responds to everyone as role=unknown.
+                // Dimension mismatch check: clear ALL profiles (owner + fae_self +
+                // guests) with incompatible embeddings. Without this, speaker
+                // verification is permanently degraded and Fae responds to everyone.
+                let currentDim = await speakerEncoder.embeddingDimension
+                await speakerProfileStore.clearIncompatibleProfiles(currentDim: currentDim)
+
+                // Re-check owner status after clearing incompatible profiles.
                 if hasOwner {
-                    let currentDim = await speakerEncoder.embeddingDimension
                     let compatible = await speakerProfileStore.hasCompatibleOwnerProfile(embeddingDim: currentDim)
                     if !compatible {
-                        NSLog("FaeCore: owner profile dimension mismatch (stored vs encoder=%d) — clearing for re-enrollment", currentDim)
-                        await speakerProfileStore.clearOwnerProfile()
+                        NSLog("FaeCore: owner profile cleared due to dimension mismatch (encoder=%d)", currentDim)
                         hasOwner = false
                         // Notify the user after pipeline warmup completes.
                         Task { [weak self] in
-                            // Small delay so TTS engine is ready.
                             try? await Task.sleep(nanoseconds: 3_000_000_000)
                             await self?.pipelineCoordinator?.speakDirect(
                                 "I've had a voice model update and need to relearn your voice. "
