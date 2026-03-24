@@ -391,7 +391,10 @@ actor AudioCaptureManager {
 
         let frameSize = max(sampleRate / 50, 160) // ~20 ms
         let hopSize = max(frameSize / 2, 80) // ~10 ms
-        let voicedThreshold = max(0.02, rms * 0.6)
+        // Floor was 0.02 but that's too high for normal desk-distance speech
+        // (rms ~0.01-0.03). Per-frame RMS can't exceed the floor when overall
+        // RMS is below it, causing voicedFrameRatio=0 for valid speech.
+        let voicedThreshold = max(0.008, rms * 0.6)
 
         var frameCount = 0
         var voicedFrames = 0
