@@ -3,4 +3,6 @@
 Package.resolved
 # Built binaries (build from source: just build-acpx)
 Resources/Binaries/
-Vendor/mlx-swift-lm/
+# Vendor build artifacts (source is tracked, build products are not)
+Vendor/mlx-swift-lm/.build/
+Vendor/mlx-swift-lm/.swiftpm/
