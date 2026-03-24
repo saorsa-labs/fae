@@ -508,16 +508,16 @@ struct FaeConfig: Codable {
             // Our fine-tuned Qwen3.5-2B. Compact, fast, good tool use.
             return ("saorsa-labs/saorsa-1.1-tiny", 32_768)
         default: // "auto"
-            if totalGB >= 32 {
+            if totalGB >= 64 {
                 // 35B-A3B MoE: frontier intelligence at 3B activation speed.
-                // Only 3B params active per token despite 35B total — 4x faster than dense 27B.
+                // 20GB VRAM — needs 64GB+ for comfortable headroom with KV cache + TTS + STT.
                 // Natively multimodal — no separate VLM needed.
-                // 64+ GB: full 128K context. 32-63 GB: 32K context (tighter headroom).
-                let ctx = totalGB >= 64 ? 131_072 : 32_768
-                return ("mlx-community/Qwen3.5-35B-A3B-4bit", ctx)
+                return ("mlx-community/Qwen3.5-35B-A3B-4bit", 131_072)
             } else if totalGB >= 24 {
-                // 9B: sweet spot — better tool use and conversation than 4B,
-                // ~5 GB VRAM, 30+ TPS on most Apple Silicon.
+                // 9B: the sweet spot for most machines.
+                // 3x faster TPS than 35B, follows tool instructions reliably,
+                // no pre-tool hallucination, clean conversational responses.
+                // ~5 GB VRAM + ~3GB for STT/TTS/speaker = ~8GB total pipeline.
                 return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
             } else if totalGB >= 16 {
                 return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
