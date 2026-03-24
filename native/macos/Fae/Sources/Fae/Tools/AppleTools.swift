@@ -253,7 +253,7 @@ struct CalendarTool: Tool {
             .sorted { $0.startDate < $1.startDate }
 
         if events.isEmpty {
-            return .success("No events found for that period.", structuredData: [
+            return .success("Your calendar is clear — nothing scheduled for that period.", structuredData: [
                 "events": [] as [any Sendable],
                 "count": 0,
             ])
@@ -453,7 +453,7 @@ struct RemindersTool: Tool {
         }
 
         guard let reminders, !reminders.isEmpty else {
-            return .success("No incomplete reminders found.", structuredData: [
+            return .success("You're all caught up — no pending reminders.", structuredData: [
                 "reminders": [] as [any Sendable],
                 "count": 0,
             ])
@@ -488,7 +488,15 @@ struct RemindersTool: Tool {
             return dict
         }
 
-        return .success("\(reminders.count) incomplete reminders:\n" + lines.joined(separator: "\n"), structuredData: [
+        let rHeader: String
+        if reminders.count == 1 {
+            rHeader = "You've got one reminder:"
+        } else if reminders.count <= 3 {
+            rHeader = "You've got a few reminders:"
+        } else {
+            rHeader = "You've got \(reminders.count) reminders pending:"
+        }
+        return .success(rHeader + "\n" + lines.joined(separator: "\n"), structuredData: [
             "reminders": structured as [any Sendable],
             "count": reminders.count,
         ])
@@ -722,7 +730,7 @@ struct ContactsTool: Tool {
             let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: keysToFetch)
 
             if contacts.isEmpty {
-                return .success("No contacts found matching '\(query)'.", structuredData: [
+                return .success("I couldn't find anyone matching '\(query)' in your contacts.", structuredData: [
                     "contacts": [] as [any Sendable],
                     "count": 0,
                     "query": query,
@@ -756,7 +764,8 @@ struct ContactsTool: Tool {
                     if !phone.isEmpty { parts.append(phone) }
                     return "- " + parts.joined(separator: " | ")
                 }
-                return .success("Found \(contacts.count) contacts:\n" + lines.joined(separator: "\n"), structuredData: [
+                let cHeader = contacts.count == 1 ? "Found one match:" : "Found \(contacts.count) contacts:"
+                return .success(cHeader + "\n" + lines.joined(separator: "\n"), structuredData: [
                     "contacts": structured as [any Sendable],
                     "count": contacts.count,
                     "query": query,
@@ -882,7 +891,7 @@ struct MailTool: Tool {
 
         let output = result.stringValue ?? "No messages found."
         if output.isEmpty {
-            return .success("No messages found.", structuredData: [
+            return .success("Your inbox is empty — no new messages.", structuredData: [
                 "messages": [] as [any Sendable],
                 "count": 0,
             ])
@@ -904,7 +913,15 @@ struct MailTool: Tool {
                 ] as [String: any Sendable]
             }
 
-        return .success(output, structuredData: [
+        let mHeader: String
+        if messages.count == 1 {
+            mHeader = "You've got one new email:"
+        } else if messages.count <= 3 {
+            mHeader = "You've got a couple of emails:"
+        } else {
+            mHeader = "Here are your recent emails:"
+        }
+        return .success(mHeader + "\n" + output, structuredData: [
             "messages": messages as [any Sendable],
             "count": messages.count,
         ])
@@ -1041,12 +1058,18 @@ struct NotesTool: Tool {
                 return ["title": title] as [String: any Sendable]
             }
 
+        let nHeader: String
+        if let query {
+            nHeader = notes.count == 1 ? "Found one note matching '\(query)':" : "Found \(notes.count) notes matching '\(query)':"
+        } else {
+            nHeader = notes.count == 1 ? "Here's your most recent note:" : "Here are your recent notes:"
+        }
         var data: [String: any Sendable] = [
             "notes": notes as [any Sendable],
             "count": notes.count,
         ]
         if let query { data["query"] = query }
-        return .success(output, structuredData: data)
+        return .success(nHeader + "\n" + output, structuredData: data)
     }
 
     /// Sanitize user input for safe AppleScript string interpolation.
