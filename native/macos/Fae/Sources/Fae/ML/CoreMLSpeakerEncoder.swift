@@ -31,6 +31,14 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     /// Whether the loaded model is the WeSpeaker neural encoder (vs legacy ECAPA-TDNN).
     private var isWeSpeakerModel = false
 
+    /// The embedding dimension produced by the currently loaded encoder.
+    /// WeSpeaker: 256, ECAPA-TDNN: 1024, mel-spectral fallback: 640.
+    var embeddingDimension: Int {
+        if usingMelFallback { return 640 }
+        if isWeSpeakerModel { return 256 }
+        return 1024
+    }
+
     // MARK: - Constants
 
     /// WeSpeaker model expects 16 kHz audio input.
