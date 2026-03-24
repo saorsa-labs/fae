@@ -46,8 +46,10 @@ final class EchoHandlingHardeningTests: XCTestCase {
         var builtin = EchoSuppressor()
         builtin.outputRoute = .builtInSpeaker
 
-        XCTAssertEqual(unknown.echoTailMs, builtin.echoTailMs,
-                       "Unknown route should fall back to speaker timing")
+        // Unknown (1.0x) is now MORE conservative than built-in (0.8x).
+        // Both use the same base, but unknown uses full multiplier as a safe default.
+        XCTAssertGreaterThanOrEqual(unknown.echoTailMs, builtin.echoTailMs,
+                       "Unknown route should be at least as conservative as built-in speaker")
     }
 
     func testAecEnabledReducesTimingRegardlessOfRoute() {

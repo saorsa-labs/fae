@@ -592,8 +592,10 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
             """
         )
 
-        XCTAssertNil(
-            PipelineCoordinator.directToolReplyText(for: call, result: result)
+        // Calendar uses direct reply (not LLM interpretation) to avoid hallucination.
+        XCTAssertNotNil(
+            PipelineCoordinator.directToolReplyText(for: call, result: result),
+            "Calendar should use direct reply path"
         )
     }
 

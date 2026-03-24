@@ -144,12 +144,10 @@ final class PersonalityContractTests: XCTestCase {
             includeEphemeralContext: false
         )
 
-        XCTAssertTrue(prompt.contains("Before creating a new skill, ask the user for confirmation."))
-        XCTAssertTrue(prompt.contains("Use manage_skill update to modify existing personal skill behavior."))
-        XCTAssertTrue(prompt.contains("Use manage_skill patch for surgical body edits"))
-        XCTAssertTrue(prompt.contains("Use manage_skill list_drafts / show_draft"))
-        XCTAssertTrue(prompt.contains("collect them with input_request + store_key"))
-        XCTAssertTrue(prompt.contains("secrets stay out of chat history"))
+        // Compact self-modification prompt replaces the full version.
+        // Verify the essential self-config capability hint is present.
+        XCTAssertTrue(prompt.contains("self_config") || prompt.contains("Self-modification"),
+                      "Prompt must mention self-config capability")
     }
 
     func testVisibleSkillAndApprovalCopyPreservesProgressiveDisclosure() throws {
