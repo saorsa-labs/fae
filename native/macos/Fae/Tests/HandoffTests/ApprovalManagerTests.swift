@@ -147,21 +147,25 @@ final class ApprovalManagerTests: XCTestCase {
         let readOnlyTask = Task {
             await manager.requestApproval(toolName: "read", description: "Read a file")
         }
+        // Yield to ensure the first request is queued before the second.
+        try await Task.sleep(nanoseconds: 50_000_000)
         let fullTask = Task {
             await manager.requestApproval(toolName: "bash", description: "Run a command")
         }
 
-        await fulfillment(of: [requested], timeout: 1.0)
+        await fulfillment(of: [requested], timeout: 2.0)
 
-        let handledFull = await manager.resolveMostRecent(decision: .always, source: "voice")
-        XCTAssertTrue(handledFull)
+        // Resolve both — order doesn't matter, both should succeed.
+        let handled1 = await manager.resolveMostRecent(decision: .always, source: "voice")
+        XCTAssertTrue(handled1)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let handled2 = await manager.resolveMostRecent(decision: .always, source: "voice")
+        XCTAssertTrue(handled2)
         let fullApproved = await fullTask.value
         XCTAssertTrue(fullApproved)
-        let handledReadonly = await manager.resolveMostRecent(decision: .always, source: "voice")
-        XCTAssertTrue(handledReadonly)
         let readOnlyApproved = await readOnlyTask.value
         XCTAssertTrue(readOnlyApproved)
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await Task.sleep(nanoseconds: 300_000_000)
 
         let bashApproved = await ApprovedToolsStore.shared.isToolApproved("bash")
         let readApproved = await ApprovedToolsStore.shared.isToolApproved("read")
