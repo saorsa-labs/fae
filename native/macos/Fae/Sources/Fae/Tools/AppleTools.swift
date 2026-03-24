@@ -145,14 +145,14 @@ struct CalendarTool: Tool {
         openAppleApp(bundleId: "com.apple.iCal")
 
         switch action {
-        case "list_today":
+        case "list_today", "get_events", "get_today", "today", "events_today":
             let start = Calendar.current.startOfDay(for: Date())
             guard let end = Calendar.current.date(byAdding: .day, value: 1, to: start) else {
                 return .error("Failed to compute date range.")
             }
             return listEvents(store: store, start: start, end: end)
 
-        case "list_week":
+        case "list_week", "get_week", "this_week", "week":
             let start = Calendar.current.startOfDay(for: Date())
             guard let end = Calendar.current.date(byAdding: .day, value: 7, to: start) else {
                 return .error("Failed to compute date range.")
@@ -411,7 +411,7 @@ struct RemindersTool: Tool {
         openAppleApp(bundleId: "com.apple.reminders")
 
         switch action {
-        case "list_incomplete", "list", "list_all", "list_due", "get_reminders", "pending":
+        case "list_incomplete", "list", "list_all", "list_due", "get_reminders", "pending", "get_due_today", "due_today", "due":
             return await listIncomplete(store: store)
 
         case "search":
@@ -842,7 +842,7 @@ struct MailTool: Tool {
         }
 
         switch action {
-        case "check_inbox", "read_recent", "get_inbox", "list_inbox", "inbox", "recent":
+        case "check_inbox", "read_recent", "get_inbox", "list_inbox", "inbox", "recent", "get_unread", "unread":
             let count = input["count"] as? Int ?? 5
             let firstAttempt = runMailScript(count: min(count, 20))
             if firstAttempt.isError, isAppleScriptPermissionError(firstAttempt.output) {
