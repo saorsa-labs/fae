@@ -537,6 +537,19 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 // clear it and force re-enrollment. Without this, speaker
                 // verification is permanently degraded (mel-spectral fallback)
                 // and Fae responds to everyone as role=unknown.
+                // Warn if speaker encoder is running in mel-spectral fallback —
+                // voice identity is effectively broken in this mode.
+                if await speakerEncoder.usingMelFallback {
+                    NSLog("FaeCore: ⚠️ speaker encoder in mel-spectral fallback — voice identity degraded")
+                    Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        await self?.pipelineCoordinator?.speakDirect(
+                            "Warning: my voice recognition model didn't load properly. "
+                            + "I can't reliably tell who's speaking. You may need to reinstall."
+                        )
+                    }
+                }
+
                 // Dimension mismatch check: clear ALL profiles (owner + fae_self +
                 // guests) with incompatible embeddings. Without this, speaker
                 // verification is permanently degraded and Fae responds to everyone.

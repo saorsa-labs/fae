@@ -90,8 +90,14 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     func load() async throws {
         loadState = .loading
 
+        // Diagnostic: log bundle paths to help debug model-not-found issues.
+        let faeBundle = Bundle.faeResources
+        NSLog("CoreMLSpeakerEncoder: faeResources bundle=%@ resourceURL=%@",
+              faeBundle.bundlePath,
+              faeBundle.resourceURL?.path ?? "nil")
+
         // Try WeSpeaker CoreML model first (in Models/SpeakerEncoder/).
-        let weSpeakerURL = Bundle.faeResources.url(
+        let weSpeakerURL = faeBundle.url(
             forResource: "wespeaker",
             withExtension: "mlmodelc",
             subdirectory: "Models/SpeakerEncoder"
@@ -102,6 +108,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         )
 
         if let url = weSpeakerURL {
+            NSLog("CoreMLSpeakerEncoder: found WeSpeaker model at %@", url.path)
             let mlConfig = MLModelConfiguration()
             mlConfig.computeUnits = .cpuAndNeuralEngine
             do {
@@ -112,13 +119,14 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
                 NSLog("CoreMLSpeakerEncoder: WeSpeaker ResNet34-LM loaded (256-dim, Neural Engine)")
                 return
             } catch {
-                NSLog("CoreMLSpeakerEncoder: WeSpeaker load failed: %@, trying legacy model",
-                      error.localizedDescription)
+                NSLog("CoreMLSpeakerEncoder: WeSpeaker load FAILED: %@", error.localizedDescription)
             }
+        } else {
+            NSLog("CoreMLSpeakerEncoder: WeSpeaker model NOT FOUND in bundle — voice identity will be degraded")
         }
 
         // Try legacy ECAPA-TDNN model (SpeakerEncoder.mlmodelc in bundle root).
-        let legacyURL = Bundle.faeResources.url(
+        let legacyURL = faeBundle.url(
             forResource: "SpeakerEncoder",
             withExtension: "mlmodelc"
         ) ?? Bundle.main.url(
@@ -127,6 +135,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
         )
 
         if let url = legacyURL {
+            NSLog("CoreMLSpeakerEncoder: found legacy ECAPA-TDNN model at %@", url.path)
             let mlConfig = MLModelConfiguration()
             mlConfig.computeUnits = .cpuAndNeuralEngine
             do {
@@ -134,17 +143,20 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
                 isWeSpeakerModel = false
                 isLoaded = true
                 loadState = .loaded
-                NSLog("CoreMLSpeakerEncoder: legacy ECAPA-TDNN model loaded")
+                NSLog("CoreMLSpeakerEncoder: legacy ECAPA-TDNN model loaded (1024-dim)")
                 return
             } catch {
-                NSLog("CoreMLSpeakerEncoder: legacy model load failed: %@, falling back to mel-spectral",
-                      error.localizedDescription)
+                NSLog("CoreMLSpeakerEncoder: legacy model load FAILED: %@", error.localizedDescription)
             }
+        } else {
+            NSLog("CoreMLSpeakerEncoder: legacy ECAPA-TDNN model NOT FOUND in bundle")
         }
 
-        // Fallback: mel-spectral statistics (no trained model needed).
-        // Produces a 640-dim embedding (5 stats × 128 mel bands).
-        // Effective for distinguishing synthetic TTS voice from human speech.
+        // Mel-spectral fallback: last resort when no neural model loads.
+        // WARNING: mel-spectral cannot distinguish between different humans
+        // and poorly rejects high-quality TTS. Voice identity is effectively
+        // broken in this mode.
+        NSLog("CoreMLSpeakerEncoder: ⚠️ FALLING BACK TO MEL-SPECTRAL — voice identity degraded, cannot distinguish speakers")
         usingMelFallback = true
         isLoaded = true
         loadState = .loaded
