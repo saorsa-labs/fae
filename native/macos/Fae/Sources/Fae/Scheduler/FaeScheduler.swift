@@ -1303,11 +1303,15 @@ actor FaeScheduler {
         }
         lastCameraCheckAt = Date()
 
-        // Include the owner's visual description when available so the VLM can
-        // identify whether the person at the desk is the owner.
-        var prompt = "[PROACTIVE CAMERA OBSERVATION] Check who is at the desk using the camera tool. Follow the proactive-awareness skill instructions."
+        // The prompt MUST instruct the LLM to call the camera tool. The owner
+        // description is provided as a separate reference hint — never inline as
+        // if it's already-captured output, or the LLM skips the tool call.
+        var prompt = "[PROACTIVE CAMERA OBSERVATION] You MUST use the `camera` tool to take a photo right now. Do NOT respond without calling the camera tool first. Follow the proactive-awareness skill instructions."
         if let description = await speakerProfileStore?.ownerPhotoDescription() {
-            prompt += " The owner looks like: \(description). If you see someone, note whether they appear to be the owner."
+            // Trim to a short summary — the full VLM output is too long and
+            // makes the LLM think it already has the observation.
+            let trimmed = String(description.prefix(200))
+            prompt += "\n\n[REFERENCE — not current observation] Owner appearance from previous session: \(trimmed)"
         }
         _ = await dispatchProactiveTask(
             taskId: "camera_presence_check",
