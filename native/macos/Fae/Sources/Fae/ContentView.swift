@@ -168,7 +168,10 @@ struct ContentView: View {
                 }
 
                 // Photo setup — visible after voice enrollment until a photo is taken.
-                if ownerEnrollmentComplete && !faeCore.hasOwnerPhoto {
+                // Gate on hasOwnerSetUp (synced from speaker profile store during
+                // startup) rather than ownerEnrollmentComplete to avoid showing the
+                // photo banner during the brief window before the owner check runs.
+                if faeCore.hasOwnerSetUp && !faeCore.hasOwnerPhoto {
                     PhotoSetupBanner {
                         showingPhotoCapture = true
                     }
