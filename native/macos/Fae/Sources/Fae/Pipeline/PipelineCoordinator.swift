@@ -1216,9 +1216,21 @@ actor PipelineCoordinator {
             consentGranted: consentGranted
         )
 
+        // Defer proactive tasks when:
+        // 1. Assistant is generating or speaking
+        // 2. User is in an active conversation (spoke recently)
+        // This preserves GPU for responsive voice interaction.
+        let recentConversation = await conversationState.lastAssistantMessageAt
+            .map { Date().timeIntervalSince($0) < 30 } ?? false
         guard !assistantGenerating, !assistantSpeaking else {
             enqueueDeferredProactiveRequest(request)
             NSLog("PipelineCoordinator: proactive query deferred — assistant busy")
+            return
+        }
+        if recentConversation, request.silent {
+            // Silent proactive tasks can wait — don't steal GPU during conversation
+            enqueueDeferredProactiveRequest(request)
+            NSLog("PipelineCoordinator: silent proactive query deferred — active conversation")
             return
         }
 
@@ -1254,7 +1266,9 @@ actor PipelineCoordinator {
             wakeMatch: nil,
             rms: nil,
             durationSecs: nil,
-            proactiveContext: proactiveContext
+            proactiveContext: proactiveContext,
+            playsThinkingTone: !request.silent,
+            allowsAudibleOutput: !request.silent
         )
 
         await conversationState.removeMessages(taggedWith: proactiveTag)
