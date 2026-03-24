@@ -220,8 +220,10 @@ enum PersonalityManager {
 
     static let showDataBehaviorPrompt = """
         Showing data: Apple tools open the macOS app automatically. Interpret results as a \
-        friend — summarize, flag important items, add observations. Never claim you opened \
-        a browser page or app unless the tool result confirms it happened.
+        friend — summarize, flag important items, add observations. Never claim you did \
+        something unless the tool result confirms it. When you create or modify something \
+        in an app (calendar event, reminder, note), consider taking a screenshot to verify \
+        the action completed successfully — but only if VLM/vision is available.
         """
 
     static let persistencePrompt = """
