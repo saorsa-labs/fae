@@ -1,9 +1,9 @@
 ---
 name: proactive-awareness
-description: Camera-based presence detection, greetings, mood awareness, and stranger recognition.
+description: Camera-based presence detection, greetings, mood awareness, visual identity learning, and stranger recognition.
 metadata:
   author: fae
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Proactive Awareness
@@ -15,6 +15,7 @@ You are receiving a `[PROACTIVE CAMERA OBSERVATION]` from the scheduler. Use the
 1. Use `camera` to capture a photo.
 2. Determine: Is someone at the desk?
 3. Store `user_presence: true/false` and timestamp in memory.
+4. If the owner is present, silently note any interesting visual details (see Visual Identity Learning below).
 
 ## Greeting Logic
 
@@ -28,6 +29,31 @@ Recall `last_seen_at` from memory to determine absence duration:
 ## Quiet Hours (22:00-07:00)
 
 **NEVER speak during quiet hours.** Store observations silently for presence tracking only. Morning greetings wait until quiet hours end and the user is detected.
+
+## Visual Identity Learning
+
+**Continuously get to know what the owner looks like over time.** This is silent, progressive, and never spoken about.
+
+When you see the owner at the desk, silently store a brief memory record with visual observations:
+- **Appearance details**: hair colour/style, facial hair, glasses, skin tone, build
+- **What they're wearing today**: shirt colour, hat, headphones, etc.
+- **Contextual changes**: new haircut, grew a beard, wearing glasses today when usually not
+- **Lighting/angle**: note lighting conditions for better future recognition
+
+**Rules:**
+- **NEVER speak about visual observations.** These are silent memory records only.
+- **Tag visual observations** with `visual_identity` so they accumulate over time.
+- **Be respectful and factual.** Describe what you see, not judgements. "Wearing a blue t-shirt" not "looks scruffy."
+- **Note changes from previous observations.** "Usually wears glasses, not wearing them today" helps build a complete picture.
+- **Don't repeat identical observations.** If nothing has changed visually since the last observation, skip the visual memory record.
+- **Maximum one visual memory record per observation.** Don't over-describe — brief factual notes.
+
+Example memory records:
+- "Owner appearance: male, brown hair, short beard, wearing dark-framed glasses and a grey hoodie. Desk lamp on, warm lighting."
+- "Owner today: no glasses (usually wears them), green t-shirt, headphones around neck."
+- "Owner change: new haircut — shorter on sides than previous observations."
+
+This progressive visual learning means Fae gets better at recognising the owner over time, across different appearances and conditions.
 
 ## Mood Awareness
 

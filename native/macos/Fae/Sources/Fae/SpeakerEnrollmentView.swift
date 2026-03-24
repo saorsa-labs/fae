@@ -1,8 +1,11 @@
+import AVFoundation
 import SwiftUI
 
-/// Guided speaker enrollment flow: name → record 3 samples → confirm.
+/// Guided speaker enrollment flow: name → record 3 samples → photo → confirm.
 ///
 /// Used for first-launch owner enrollment and re-enrollment from Settings.
+/// The photo step captures a reference image so Fae can visually identify the owner
+/// during camera presence checks.
 struct SpeakerEnrollmentView: View {
     let captureManager: AudioCaptureManager
     let speakerEncoder: CoreMLSpeakerEncoder
@@ -13,6 +16,10 @@ struct SpeakerEnrollmentView: View {
     /// Pre-filled name (e.g. from config.userName during first launch).
     var initialName: String = ""
 
+    /// Optional callback to save the captured photo. Injected by ContentView
+    /// so the enrollment view doesn't depend on FaeCore directly.
+    var onPhotoCapture: ((Data) -> Void)?
+
     @State private var step: EnrollmentStep = .name
     @State private var displayName: String = ""
     @State private var sampleIndex: Int = 0
@@ -21,6 +28,9 @@ struct SpeakerEnrollmentView: View {
     @State private var recordingProgress: Double = 0
     @State private var consistencyScore: Float = 0
     @State private var errorMessage: String?
+    @State private var capturedPhoto: NSImage?
+    @State private var capturedPhotoData: Data?
+    @State private var isCapturingPhoto: Bool = false
 
     private static let sampleCount = 3
     private static let sampleDuration: Double = 8.0
@@ -28,6 +38,7 @@ struct SpeakerEnrollmentView: View {
     enum EnrollmentStep {
         case name
         case recording
+        case photo
         case complete
     }
 
@@ -38,12 +49,14 @@ struct SpeakerEnrollmentView: View {
                 nameStep
             case .recording:
                 recordingStep
+            case .photo:
+                photoStep
             case .complete:
                 completeStep
             }
         }
         .padding(32)
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 480)
         .onAppear {
             if !initialName.isEmpty {
                 displayName = initialName
@@ -160,7 +173,81 @@ struct SpeakerEnrollmentView: View {
         }
     }
 
-    // MARK: - Step 3: Complete
+    // MARK: - Step 3: Photo
+
+    private var photoStep: some View {
+        VStack(spacing: 16) {
+            Text("Let me see you")
+                .font(.title2.weight(.semibold))
+
+            Text("A quick photo helps me recognise you at your desk.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let photo = capturedPhoto {
+                Image(nsImage: photo)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 160, height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.green.opacity(0.6), lineWidth: 2)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.secondary.opacity(0.1))
+                    .frame(width: 160, height: 160)
+                    .overlay {
+                        if isCapturingPhoto {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                        } else {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 36))
+                                .foregroundStyle(.secondary.opacity(0.5))
+                        }
+                    }
+            }
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack(spacing: 12) {
+                Button("Skip for now") {
+                    step = .complete
+                }
+
+                if capturedPhoto != nil {
+                    Button("Retake") {
+                        capturedPhoto = nil
+                        capturedPhotoData = nil
+                        Task { await capturePhoto() }
+                    }
+
+                    Button("Looks good") {
+                        if let data = capturedPhotoData {
+                            onPhotoCapture?(data)
+                        }
+                        step = .complete
+                    }
+                    .keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Take Photo") {
+                        Task { await capturePhoto() }
+                    }
+                    .disabled(isCapturingPhoto)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+    }
+
+    // MARK: - Step 4: Complete
 
     private var completeStep: some View {
         VStack(spacing: 20) {
@@ -171,9 +258,15 @@ struct SpeakerEnrollmentView: View {
             Text("Got it, \(displayName)!")
                 .font(.title2.weight(.semibold))
 
-            Text("I'll recognize your voice from now on.")
-                .font(.body)
-                .foregroundStyle(.secondary)
+            if capturedPhoto != nil {
+                Text("I'll recognise your voice and face from now on.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("I'll recognise your voice from now on.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 4) {
                 Text("Voice consistency:")
@@ -262,7 +355,7 @@ struct SpeakerEnrollmentView: View {
             sampleIndex += 1
 
             if sampleIndex >= Self.sampleCount {
-                // All samples collected — enroll and show confirmation.
+                // All samples collected — enroll and advance to photo step.
                 let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
                 await speakerProfileStore.bulkEnroll(
                     label: "owner",
@@ -271,7 +364,7 @@ struct SpeakerEnrollmentView: View {
                     displayName: trimmedName
                 )
                 consistencyScore = SpeakerProfileStore.consistencyScore(embeddings)
-                step = .complete
+                step = .photo
             }
         } catch {
             progressTask.cancel()
@@ -279,5 +372,131 @@ struct SpeakerEnrollmentView: View {
         }
 
         isRecording = false
+    }
+
+    // MARK: - Photo Capture
+
+    private func capturePhoto() async {
+        isCapturingPhoto = true
+        errorMessage = nil
+
+        let frameCapture = CameraFrameCapture()
+        do {
+            let cgImage = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
+                frameCapture.captureFrame { result in
+                    continuation.resume(with: result)
+                }
+            }
+
+            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            capturedPhoto = nsImage
+
+            // Convert to JPEG data for persistence.
+            if let tiffData = nsImage.tiffRepresentation,
+               let bitmap = NSBitmapImageRep(data: tiffData),
+               let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+            {
+                capturedPhotoData = jpegData
+            }
+        } catch {
+            errorMessage = "Camera capture failed: \(error.localizedDescription)"
+            NSLog("SpeakerEnrollmentView: photo capture failed — %@", error.localizedDescription)
+        }
+
+        isCapturingPhoto = false
+    }
+}
+
+// MARK: - Camera Frame Capture (reusable)
+
+/// Captures a single frame from the default camera with auto-exposure warm-up.
+///
+/// Used by both the enrollment photo step and VisionTools. This class handles
+/// AVCaptureSession setup, waits for the sensor to auto-expose, then delivers
+/// a single CGImage via the completion handler.
+private final class CameraFrameCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private var session: AVCaptureSession?
+    private var completion: ((Result<CGImage, Error>) -> Void)?
+    private var frameCount = 0
+    private static let warmUpFrames = 8
+
+    enum CameraError: Error, LocalizedError {
+        case noCamera
+        case captureSetupFailed
+        case noFrame
+
+        var errorDescription: String? {
+            switch self {
+            case .noCamera: return "No camera available"
+            case .captureSetupFailed: return "Failed to set up camera capture"
+            case .noFrame: return "No frame captured"
+            }
+        }
+    }
+
+    func captureFrame(completion: @escaping (Result<CGImage, Error>) -> Void) {
+        self.completion = completion
+
+        guard let device = AVCaptureDevice.default(for: .video) else {
+            completion(.failure(CameraError.noCamera))
+            return
+        }
+
+        let session = AVCaptureSession()
+        session.sessionPreset = .medium
+
+        do {
+            let input = try AVCaptureDeviceInput(device: device)
+            guard session.canAddInput(input) else {
+                completion(.failure(CameraError.captureSetupFailed))
+                return
+            }
+            session.addInput(input)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        let queue = DispatchQueue(label: "com.saorsalabs.fae.enrollment-photo")
+        output.setSampleBufferDelegate(self, queue: queue)
+        guard session.canAddOutput(output) else {
+            completion(.failure(CameraError.captureSetupFailed))
+            return
+        }
+        session.addOutput(output)
+
+        self.session = session
+        session.startRunning()
+    }
+
+    func captureOutput(
+        _: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from _: AVCaptureConnection
+    ) {
+        frameCount += 1
+        guard frameCount > Self.warmUpFrames else { return }
+
+        session?.stopRunning()
+        session = nil
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            completion?(.failure(CameraError.noFrame))
+            completion = nil
+            return
+        }
+
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            completion?(.failure(CameraError.noFrame))
+            completion = nil
+            return
+        }
+
+        completion?(.success(cgImage))
+        completion = nil
     }
 }

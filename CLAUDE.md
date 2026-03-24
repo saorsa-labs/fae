@@ -90,12 +90,13 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
                        │              │
                        │              ├── Memory (SQLite + ANN + FTS5)
                        │              ├── Tools (37 built-in)
-                       │              ├── Skills (21 built-in)
+                       │              ├── Skills (22 built-in)
                        │              ├── Scheduler (~23 tasks)
                        │              ├── Backup (Git Vault)
                        │              └── Self-Config
                        │
-                       └── Voice Identity (Core ML ECAPA-TDNN)
+                       ├── Voice Identity (Core ML ECAPA-TDNN)
+                       └── Visual Identity (Camera + VLM)
 ```
 
 ### Model stack
@@ -327,6 +328,15 @@ No consent gate — these features are core to what Fae is, not optional add-ons
 `injectProactiveQuery()` with immutable `ProactiveRequestContext`. Per-task tool allowlists in `TrustedActionBroker`.
 `AwarenessThrottle`: battery, thermal, quiet hours (22:00-07:00) gating.
 
+### Progressive identity learning
+
+Both voice and visual identity improve over time without user action:
+
+- **Voice**: `enrollIfBelowMax()` silently adds new speaker embeddings (up to 50) during conversation, strengthening the voice profile as Fae hears the owner in different conditions.
+- **Visual**: Camera presence checks silently observe and remember the owner's appearance via `visual_identity`-tagged memory records. The reference photo (`owner_photo.jpg`) is refreshed every 3 days to capture changes (haircut, glasses, lighting). The `proactive-awareness` skill instructs the VLM to note visual details factually and silently.
+- **Photo capture**: Reference photo captured during onboarding (4th step after voice enrollment). Existing users see a "Complete Setup" banner until they take a photo. Photo stored at `FaeDirectories.ownerPhotoFile`, description in `SpeakerProfile.photoDescription`.
+- **Owner identification**: Camera presence check prompt includes the stored visual description so the VLM can identify whether the person at the desk is the owner.
+
 ## Prompt/identity stack
 
 `PersonalityManager.assemblePrompt()` builds the system prompt in this order:
@@ -443,6 +453,7 @@ Data paths:
 - Directive: `~/Library/Application Support/fae/directive.md`
 - Skills: `~/Library/Application Support/fae/skills/`
 - Speaker profiles: `~/Library/Application Support/fae/speakers.json`
+- Owner photo: `~/Library/Application Support/fae/owner_photo.jpg`
 - Cache: `~/Library/Caches/fae/`
 - Git Vault: `~/.fae-vault/`
 - Forge: `~/.fae-forge/`
@@ -462,7 +473,7 @@ Sources/
 
 All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 
-### Core/ (26 files)
+### Core/ (27 files)
 
 | File | Role |
 |------|------|
@@ -492,6 +503,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `ChannelSettingsStore.swift` | Channel configuration persistence |
 | `SettingsCapabilityManifest.swift` | Settings capability definitions |
 | `ToolToggleStore.swift` | Per-tool enable/disable persistence |
+| `ProgressivePhotoCapture.swift` | Camera frame capture for progressive visual identity updates |
 
 ### ML/ (16 files)
 

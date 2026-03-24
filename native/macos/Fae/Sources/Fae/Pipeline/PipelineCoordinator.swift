@@ -540,6 +540,10 @@ actor PipelineCoordinator {
     /// Called after proactive camera observations to update scheduler presence state.
     private var proactivePresenceHandler: (@Sendable (Bool) async -> Void)?
 
+    /// Called after proactive camera observations when the owner is detected,
+    /// providing the VLM's description text for progressive visual identity updates.
+    private var proactiveVisualUpdateHandler: (@Sendable (String) async -> Void)?
+
     /// Called after proactive screen observations to decide whether to persist context.
     private var proactiveScreenContextHandler: (@Sendable (String) async -> Bool)?
 
@@ -1180,6 +1184,15 @@ actor PipelineCoordinator {
     /// Register a callback fired after proactive camera observations.
     func setProactivePresenceHandler(_ handler: @escaping @Sendable (Bool) async -> Void) {
         proactivePresenceHandler = handler
+    }
+
+    /// Register a callback for progressive visual identity updates.
+    ///
+    /// Called when the camera detects the owner during a presence check,
+    /// providing the VLM's description of what it sees for progressive
+    /// photo and description updates.
+    func setProactiveVisualUpdateHandler(_ handler: @escaping @Sendable (String) async -> Void) {
+        proactiveVisualUpdateHandler = handler
     }
 
     /// Register a callback fired after proactive screen observations.
@@ -6613,6 +6626,11 @@ actor PipelineCoordinator {
             if call.name == "camera", proactiveContext?.taskId == "camera_presence_check", !result.isError {
                 let userPresent = Self.inferUserPresentFromCameraOutput(result.output)
                 await proactivePresenceHandler?(userPresent)
+                // Progressive visual identity: when user is present, provide the
+                // camera description for potential reference photo refresh.
+                if userPresent {
+                    await proactiveVisualUpdateHandler?(result.output)
+                }
             }
             if call.name == "screenshot", proactiveContext?.taskId == "screen_activity_check", !result.isError {
                 let hash = Self.contentHash(result.output)

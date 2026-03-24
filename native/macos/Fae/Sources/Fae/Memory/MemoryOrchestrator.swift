@@ -1172,7 +1172,7 @@ actor MemoryOrchestrator {
             return ProactiveMemorySpec(
                 kind: .event,
                 source: "presence_observation",
-                tags: ["proactive", "presence", "camera"],
+                tags: ["proactive", "presence", "camera", "visual_identity"],
                 importanceScore: 0.55,
                 staleAfterSecs: 86_400,
                 lookbackHours: 24,

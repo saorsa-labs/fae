@@ -32,6 +32,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var toolMode: String = "full"
     @Published var thinkingEnabled: Bool = false
     @Published var thinkingLevel: FaeThinkingLevel = .fast
+    @Published var hasOwnerPhoto: Bool = false
 
     var nativeEnrollmentCaptureManager: AudioCaptureManager { enrollmentCaptureManager }
     var nativeEnrollmentSpeakerEncoder: CoreMLSpeakerEncoder { speakerEncoder }
@@ -154,6 +155,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 hasOwnerSetUp = true
             }
         }
+
+        // Seed owner photo state from disk.
+        hasOwnerPhoto = FileManager.default.fileExists(atPath: FaeDirectories.ownerPhotoFile.path)
 
         observeChannelSettingsUpdates()
     }
@@ -467,6 +471,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         guard userPresent else { return }
                         await sched?.recordUserSeen()
                         await sched?.notifyUserDetectedPostQuietHours()
+                    }
+                    await coordinator.setProactiveVisualUpdateHandler { [weak self] cameraDescription in
+                        await self?.progressivelyUpdateOwnerPhoto(cameraDescription: cameraDescription)
                     }
                     await coordinator.setProactiveScreenContextHandler { [weak sched] hash in
                         await sched?.shouldPersistScreenContext(contentHash: hash) ?? true
@@ -2135,6 +2142,71 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
             await self.pipelineCoordinator?.wake()
             await self.pipelineCoordinator?.speakDirect("Thanks, \(trimmedName). I know your voice now.")
+        }
+    }
+
+    /// Save the owner's reference photo and update visual identity state.
+    ///
+    /// Writes JPEG data to `FaeDirectories.ownerPhotoFile` and stores the path
+    /// (plus an optional VLM description) on the owner's speaker profile.
+    func saveOwnerPhoto(jpegData: Data, description: String?) {
+        let url = FaeDirectories.ownerPhotoFile
+        do {
+            try jpegData.write(to: url, options: .atomic)
+            NSLog("FaeCore: saved owner photo (%d bytes) to %@", jpegData.count, url.path)
+        } catch {
+            NSLog("FaeCore: failed to save owner photo — %@", error.localizedDescription)
+            return
+        }
+
+        hasOwnerPhoto = true
+
+        Task {
+            await speakerProfileStore.setOwnerPhoto(
+                path: url.path,
+                description: description
+            )
+        }
+    }
+
+    /// Progressively update the owner's visual description from a camera observation.
+    ///
+    /// Called by the proactive visual update handler after the camera detects the
+    /// owner during a presence check. Updates the stored description so future
+    /// presence checks can use it for identification. The reference photo itself
+    /// is refreshed at most once every 3 days to capture changing appearance
+    /// (haircut, glasses, lighting conditions).
+    private func progressivelyUpdateOwnerPhoto(cameraDescription: String) async {
+        // Always update the textual description — it's cheap and keeps current.
+        let hasPhoto = await speakerProfileStore.hasOwnerPhoto()
+        if hasPhoto {
+            await speakerProfileStore.setOwnerPhoto(
+                path: FaeDirectories.ownerPhotoFile.path,
+                description: cameraDescription
+            )
+        }
+
+        // Refresh the reference photo at most every 3 days.
+        let isDue = await speakerProfileStore.isOwnerPhotoDueForRefresh(refreshIntervalDays: 3)
+        guard isDue else { return }
+
+        NSLog("FaeCore: progressive visual update — refreshing owner reference photo")
+
+        // Capture a fresh frame from the camera.
+        let frameCapture = ProgressivePhotoCapture()
+        do {
+            let jpegData = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                frameCapture.captureJPEG { result in
+                    continuation.resume(with: result)
+                }
+            }
+
+            await MainActor.run {
+                saveOwnerPhoto(jpegData: jpegData, description: cameraDescription)
+            }
+            NSLog("FaeCore: progressive visual update — reference photo refreshed")
+        } catch {
+            NSLog("FaeCore: progressive visual update — capture failed: %@", error.localizedDescription)
         }
     }
 

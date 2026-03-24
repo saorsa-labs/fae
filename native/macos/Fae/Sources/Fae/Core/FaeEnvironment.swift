@@ -170,6 +170,9 @@ enum FaeDirectories {
     /// `roleplay_voices.json` — roleplay voice assignments.
     static let roleplayVoicesFile: URL = root.appendingPathComponent("roleplay_voices.json")
 
+    /// `owner_photo.jpg` — owner reference photo for visual identity.
+    static let ownerPhotoFile: URL = root.appendingPathComponent("owner_photo.jpg")
+
     // MARK: - Subdirectories
 
     /// `skills/` — user-created and imported skills.

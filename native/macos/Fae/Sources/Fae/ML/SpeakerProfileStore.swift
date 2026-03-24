@@ -40,10 +40,14 @@ actor SpeakerProfileStore {
         var centroid: [Float]
         let enrolledAt: Date
         var lastSeen: Date
+        /// Path to a reference photo for visual identity. Nil if no photo captured.
+        var photoPath: String?
+        /// VLM-generated description of the owner's appearance. Nil if not yet described.
+        var photoDescription: String?
 
         enum CodingKeys: String, CodingKey {
             case id, label, displayName, role, embeddings, embeddingDates
-            case centroid, enrolledAt, lastSeen
+            case centroid, enrolledAt, lastSeen, photoPath, photoDescription
         }
 
         init(
@@ -55,7 +59,9 @@ actor SpeakerProfileStore {
             embeddingDates: [Date]?,
             centroid: [Float],
             enrolledAt: Date,
-            lastSeen: Date
+            lastSeen: Date,
+            photoPath: String? = nil,
+            photoDescription: String? = nil
         ) {
             self.id = id
             self.label = label
@@ -66,6 +72,8 @@ actor SpeakerProfileStore {
             self.centroid = centroid
             self.enrolledAt = enrolledAt
             self.lastSeen = lastSeen
+            self.photoPath = photoPath
+            self.photoDescription = photoDescription
         }
 
         /// Backwards-compatible decoder: legacy profiles without `displayName`/`role`
@@ -83,6 +91,8 @@ actor SpeakerProfileStore {
             centroid = try c.decode([Float].self, forKey: .centroid)
             enrolledAt = try c.decode(Date.self, forKey: .enrolledAt)
             lastSeen = try c.decode(Date.self, forKey: .lastSeen)
+            photoPath = try c.decodeIfPresent(String.self, forKey: .photoPath)
+            photoDescription = try c.decodeIfPresent(String.self, forKey: .photoDescription)
         }
 
         private static func defaultDisplayName(for label: String) -> String {
@@ -222,6 +232,43 @@ actor SpeakerProfileStore {
     /// Display name for the owner profile, if enrolled.
     func ownerDisplayName() -> String? {
         profiles.first(where: { $0.role == .owner })?.displayName
+    }
+
+    /// Whether the owner has a valid reference photo on disk.
+    func hasOwnerPhoto() -> Bool {
+        guard let path = profiles.first(where: { $0.role == .owner })?.photoPath else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// VLM-generated description of the owner's appearance, if available.
+    func ownerPhotoDescription() -> String? {
+        profiles.first(where: { $0.role == .owner })?.photoDescription
+    }
+
+    /// Store a reference photo path and optional description on the owner profile.
+    func setOwnerPhoto(path: String, description: String?) {
+        guard let idx = profiles.firstIndex(where: { $0.role == .owner }) else { return }
+        profiles[idx].photoPath = path
+        profiles[idx].photoDescription = description
+        persist()
+    }
+
+    /// Whether the owner's reference photo is due for a progressive refresh.
+    ///
+    /// Returns true if no photo exists or the current photo is older than
+    /// `refreshIntervalDays`. Used by the camera presence check to silently
+    /// update the reference photo over time.
+    func isOwnerPhotoDueForRefresh(refreshIntervalDays: Int = 3) -> Bool {
+        guard let owner = profiles.first(where: { $0.role == .owner }) else { return false }
+        guard let path = owner.photoPath else { return true }
+
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path),
+              let attrs = try? fm.attributesOfItem(atPath: path),
+              let modified = attrs[.modificationDate] as? Date
+        else { return true }
+
+        return Date().timeIntervalSince(modified) > Double(refreshIntervalDays) * 86_400
     }
 
     /// Display name for a profile by label.

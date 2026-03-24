@@ -13,6 +13,7 @@ struct ContentView: View {
     @EnvironmentObject private var faeCore: FaeCore
     @State private var viewLoaded = false
     @State private var showingNativeEnrollment = false
+    @State private var showingPhotoCapture = false
     @State private var listeningBeforeNativeEnrollment = true
 
     private static var menuHandlersKey: UInt8 = 0
@@ -61,6 +62,7 @@ struct ContentView: View {
         )
         .animation(.easeInOut(duration: 0.5), value: windowState.mode)
         .animation(.easeInOut(duration: 0.4), value: ownerEnrollmentComplete)
+        .animation(.easeInOut(duration: 0.4), value: faeCore.hasOwnerPhoto)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
         .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
         .sheet(isPresented: $showingNativeEnrollment) {
@@ -82,7 +84,22 @@ struct ContentView: View {
                     showingNativeEnrollment = false
                     restoreConversationAfterNativeEnrollment()
                 },
-                initialName: onboarding.userName ?? faeCore.userName ?? ""
+                initialName: onboarding.userName ?? faeCore.userName ?? "",
+                onPhotoCapture: { jpegData in
+                    faeCore.saveOwnerPhoto(jpegData: jpegData, description: nil)
+                }
+            )
+            .preferredColorScheme(nil)
+        }
+        .sheet(isPresented: $showingPhotoCapture) {
+            OwnerPhotoCaptureView(
+                onComplete: { jpegData in
+                    showingPhotoCapture = false
+                    faeCore.saveOwnerPhoto(jpegData: jpegData, description: nil)
+                },
+                onSkip: {
+                    showingPhotoCapture = false
+                }
             )
             .preferredColorScheme(nil)
         }
@@ -146,6 +163,14 @@ struct ContentView: View {
                     EnrollmentInvitationBanner {
                         windowState.transitionToCompact()
                         beginNativeEnrollment()
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                // Photo setup — visible after voice enrollment until a photo is taken.
+                if ownerEnrollmentComplete && !faeCore.hasOwnerPhoto {
+                    PhotoSetupBanner {
+                        showingPhotoCapture = true
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -342,5 +367,248 @@ private struct EnrollmentInvitationBanner: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Photo Setup Banner
+
+/// Shown after voice enrollment until the owner takes a reference photo.
+/// Tapping opens the enrollment flow which now includes a photo step.
+private struct PhotoSetupBanner: View {
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.blue)
+
+                Text("Let Fae see you — tap to take a quick photo")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.blue.opacity(0.35), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Owner Photo Capture View
+
+/// Standalone photo capture sheet for existing users who skipped the photo
+/// during initial enrollment. Shown when tapping the PhotoSetupBanner.
+private struct OwnerPhotoCaptureView: View {
+    let onComplete: (Data) -> Void
+    let onSkip: () -> Void
+
+    @State private var capturedPhoto: NSImage?
+    @State private var capturedPhotoData: Data?
+    @State private var isCapturing = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Let me see you")
+                .font(.title2.weight(.semibold))
+
+            Text("A quick photo helps me recognise you at your desk.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let photo = capturedPhoto {
+                Image(nsImage: photo)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 160, height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.green.opacity(0.6), lineWidth: 2)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.secondary.opacity(0.1))
+                    .frame(width: 160, height: 160)
+                    .overlay {
+                        if isCapturing {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                        } else {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 36))
+                                .foregroundStyle(.secondary.opacity(0.5))
+                        }
+                    }
+            }
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack(spacing: 12) {
+                Button("Not now") { onSkip() }
+                    .keyboardShortcut(.cancelAction)
+
+                if let data = capturedPhotoData {
+                    Button("Retake") {
+                        capturedPhoto = nil
+                        capturedPhotoData = nil
+                        Task { await capturePhoto() }
+                    }
+
+                    Button("Looks good") {
+                        onComplete(data)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Take Photo") {
+                        Task { await capturePhoto() }
+                    }
+                    .disabled(isCapturing)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(32)
+        .frame(width: 380, height: 380)
+    }
+
+    private func capturePhoto() async {
+        isCapturing = true
+        errorMessage = nil
+
+        let frameCapture = OwnerPhotoFrameCapture()
+        do {
+            let cgImage = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
+                frameCapture.captureFrame { result in
+                    continuation.resume(with: result)
+                }
+            }
+
+            let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            capturedPhoto = nsImage
+
+            if let tiffData = nsImage.tiffRepresentation,
+               let bitmap = NSBitmapImageRep(data: tiffData),
+               let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+            {
+                capturedPhotoData = jpegData
+            }
+        } catch {
+            errorMessage = "Camera capture failed: \(error.localizedDescription)"
+        }
+
+        isCapturing = false
+    }
+}
+
+// MARK: - Photo Frame Capture (ContentView-local)
+
+import AVFoundation
+
+/// Captures a single camera frame for the standalone photo capture sheet.
+private final class OwnerPhotoFrameCapture: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private var session: AVCaptureSession?
+    private var completion: ((Result<CGImage, Error>) -> Void)?
+    private var frameCount = 0
+    private static let warmUpFrames = 8
+
+    enum CaptureError: Error, LocalizedError {
+        case noCamera
+        case setupFailed
+        case noFrame
+
+        var errorDescription: String? {
+            switch self {
+            case .noCamera: return "No camera available"
+            case .setupFailed: return "Failed to set up camera"
+            case .noFrame: return "No frame captured"
+            }
+        }
+    }
+
+    func captureFrame(completion: @escaping (Result<CGImage, Error>) -> Void) {
+        self.completion = completion
+
+        guard let device = AVCaptureDevice.default(for: .video) else {
+            completion(.failure(CaptureError.noCamera))
+            return
+        }
+
+        let session = AVCaptureSession()
+        session.sessionPreset = .medium
+
+        do {
+            let input = try AVCaptureDeviceInput(device: device)
+            guard session.canAddInput(input) else {
+                completion(.failure(CaptureError.setupFailed))
+                return
+            }
+            session.addInput(input)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        let queue = DispatchQueue(label: "com.saorsalabs.fae.owner-photo")
+        output.setSampleBufferDelegate(self, queue: queue)
+        guard session.canAddOutput(output) else {
+            completion(.failure(CaptureError.setupFailed))
+            return
+        }
+        session.addOutput(output)
+
+        self.session = session
+        session.startRunning()
+    }
+
+    func captureOutput(
+        _: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from _: AVCaptureConnection
+    ) {
+        frameCount += 1
+        guard frameCount > Self.warmUpFrames else { return }
+
+        session?.stopRunning()
+        session = nil
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            completion?(.failure(CaptureError.noFrame))
+            completion = nil
+            return
+        }
+
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            completion?(.failure(CaptureError.noFrame))
+            completion = nil
+            return
+        }
+
+        completion?(.success(cgImage))
+        completion = nil
     }
 }
