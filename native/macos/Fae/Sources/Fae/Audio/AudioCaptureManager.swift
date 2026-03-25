@@ -154,7 +154,16 @@ actor AudioCaptureManager {
         // The main engine tap stays running — enrollment uses a separate AVAudioEngine.
         let tempEngine = AVAudioEngine()
         let inputNode = tempEngine.inputNode
-        configureVoiceProcessingIfAvailable(on: inputNode)
+        // NEVER enable VP on the temp enrollment engine — two VP-enabled engines
+        // competing for the same mic causes the aggregate audio unit to mute or
+        // severely attenuate input. The main engine already handles VP.
+        do {
+            if inputNode.isVoiceProcessingEnabled {
+                try inputNode.setVoiceProcessingEnabled(false)
+            }
+        } catch {
+            // Ignore — VP wasn't enabled.
+        }
         let nativeFormat = inputNode.outputFormat(forBus: 0)
 
         guard let targetFormat = AVAudioFormat(
