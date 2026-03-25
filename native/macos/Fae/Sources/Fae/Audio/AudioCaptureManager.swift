@@ -188,7 +188,10 @@ actor AudioCaptureManager {
         )
 
         // Speech detection state — wait for speech to start before the timer runs.
-        let speechRMSThreshold: Float = 0.015
+        // Threshold lowered from 0.015 to match the analyzeSegment floor (0.008).
+        // Apple Voice Processing (release builds) attenuates signals, so desk-distance
+        // speech may arrive below 0.015 RMS.
+        let speechRMSThreshold: Float = 0.008
         var speechDetected = false
         var speechStartIndex = 0
         var silenceAfterSpeechFrames = 0
