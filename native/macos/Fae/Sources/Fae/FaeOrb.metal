@@ -96,9 +96,13 @@ static float sdfBlob(
     float r = length(uv);
 
     // 4 harmonics for organic blob shape — cheap (just sin calls).
+    // Scale factor 0.15: OrbSnapshot morphAmplitude values (0.03–0.12) were tuned
+    // for the old NebulaOrb domain-warp shader. In SDF they directly displace
+    // the radius, so we scale down to get subtle organic wobble (~2-8% variation).
     float mf = morphFreq;
     float ms = morphSpeed * speedScale;
-    float distortion = morphAmplitude * (
+    float scaledMorph = morphAmplitude * 0.15;
+    float distortion = scaledMorph * (
         sin(angle * mf + time * ms) * 0.45 +
         sin(angle * (mf + 1.0) + time * ms * 0.7) * 0.28 +
         sin(angle * (mf + 2.7) + time * ms * 1.3) * 0.17 +
@@ -106,16 +110,20 @@ static float sdfBlob(
     );
 
     // Asymmetry: directional lean that slowly rotates.
-    distortion += asymmetry * sin(angle + time * 0.3);
+    distortion += asymmetry * 0.15 * sin(angle + time * 0.3);
 
     // Breathing: slow sinusoidal radius modulation.
-    float breath = breathAmplitude * sin(time * 0.42 * speedScale);
+    // Scale 0.3: breathAmplitude values (0.008–0.018 base, up to 3.5x in thinking)
+    // need damping to avoid the orb pulsing like a balloon.
+    float breath = breathAmplitude * 0.3 * sin(time * 0.42 * speedScale);
 
     // Audio reactivity: subtle radius pulse with speech.
-    float audioPulse = audioRMS * 0.03;
+    float audioPulse = audioRMS * 0.015;
 
     // Base radius + all modulations.
-    float baseR = 0.34 + radiusBias + breath + audioPulse;
+    // radiusBias scaled 0.2: values like +0.1 (delight) / -0.06 (focus) are
+    // too large as direct radius offsets on a 0.34 base.
+    float baseR = 0.34 + radiusBias * 0.2 + breath + audioPulse;
     baseR *= anticipationScale;
 
     return r - (baseR + distortion);
