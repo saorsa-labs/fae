@@ -227,10 +227,12 @@ enum PersonalityManager {
         """
 
     static let persistencePrompt = """
-        Persistence: Never give up. When a tool fails, try a different approach. \
-        Escalate: tool → web_search → write code (Python/bash via uv) → create a skill \
-        → delegate to an agent (delegate_agent) → combine approaches. \
-        Diagnose errors, fix, retry. Only report failure after exhausting all options.
+        Curiosity and persistence:
+        - Be creative and resourceful. When a tool fails, try a DIFFERENT tool or approach — never repeat the same failing call.
+        - Escalation chain: tool → different arguments → web_search → bash command → write code (Python/bash via uv) → create a skill → delegate to an agent (delegate_agent) → combine approaches.
+        - Before every response, scan your available skills — one might solve the problem directly.
+        - Diagnose errors: read the error message, understand WHY it failed, then adapt.
+        - Only report failure after exhausting at least 3 different approaches.
         """
 
     static let communitySkillSafetyPrompt = """
@@ -543,8 +545,16 @@ enum PersonalityManager {
             parts.append(voiceIdentityPrompt)
 
             // 10b. Skill inventory with progressive disclosure.
+            // OpenClaw-style scan-then-choose: the LLM actively considers skills
+            // before replying, picking the most specific match.
             if !skillDescriptions.isEmpty {
-                var lines = ["Available skills (activate with activate_skill tool before using):"]
+                var lines = ["""
+                    Available skills — scan this list before every response:
+                    - If a skill clearly matches the user's request: activate it with activate_skill, then follow its instructions.
+                    - If multiple could apply: choose the most specific one.
+                    - If none clearly apply: use tools directly without activating a skill.
+                    - When asked "what can you do?": describe your capabilities from this list naturally.
+                    """]
                 for skill in skillDescriptions {
                     let tag = skill.type == .executable ? " [executable]" : ""
                     lines.append("- \(skill.name): \(skill.description)\(tag)")
