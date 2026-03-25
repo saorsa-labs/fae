@@ -455,41 +455,22 @@ actor AudioCaptureManager {
     /// In **dev/test builds**: VP is disabled entirely to avoid aggregate device
     /// contention, HALC_ProxyIOContext errors, and signal attenuation that
     /// interferes with debugging audio levels.
+    /// VP is DISABLED in all builds. Enabling it creates a Telephony-mode
+    /// aggregate audio unit that mutes the system mic for ALL apps, breaks
+    /// enrollment, and causes low system volume — persisting until Fae quits.
+    ///
+    /// Fae relies on macOS Voice Isolation (system-level), software noise gate,
+    /// WeSpeaker neural speaker verification, and time-based echo suppression.
     private func configureVoiceProcessingIfAvailable(on inputNode: AVAudioInputNode) {
-        let isRelease = !FaeEnvironment.isDev && !FaeEnvironment.isTesting
-
-        guard isRelease else {
-            // Dev/test: disable VP entirely.
-            do {
-                if inputNode.isVoiceProcessingEnabled {
-                    try inputNode.setVoiceProcessingEnabled(false)
-                    NSLog("AudioCaptureManager: disabled voice processing (dev/test mode)")
-                }
-            } catch {
-                // Ignore — VP wasn't enabled.
-            }
-            NSLog("AudioCaptureManager: voice processing OFF (dev mode — relying on system Voice Isolation + EchoSuppressor)")
-            return
-        }
-
-        // Release: enable VP for noise suppression, AGC, and echo cancellation.
-        // AEC operates without a playback reference (separate engines), so it
-        // may attenuate speech slightly — AGC compensates, and WeSpeaker neural
-        // speaker verification is the primary identity gate regardless.
         do {
-            if !inputNode.isVoiceProcessingEnabled {
-                try inputNode.setVoiceProcessingEnabled(true)
+            if inputNode.isVoiceProcessingEnabled {
+                try inputNode.setVoiceProcessingEnabled(false)
+                NSLog("AudioCaptureManager: disabled stale voice processing")
             }
-            if #available(macOS 14.0, *) {
-                inputNode.isVoiceProcessingAGCEnabled = true
-                inputNode.isVoiceProcessingBypassed = false
-                inputNode.isVoiceProcessingInputMuted = false
-            }
-            NSLog("AudioCaptureManager: voice processing ENABLED (release mode — noise suppression + AGC + AEC active)")
         } catch {
-            NSLog("AudioCaptureManager: failed to enable voice processing: %@ — falling back to software noise gate",
-                  error.localizedDescription)
+            // Ignore — VP wasn't enabled.
         }
+        NSLog("AudioCaptureManager: voice processing OFF (system Voice Isolation + noise gate + EchoSuppressor)")
     }
 
     private func logMicrophoneModeDiagnosticsIfAvailable() {
