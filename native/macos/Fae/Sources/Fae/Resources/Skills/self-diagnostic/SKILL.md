@@ -1,6 +1,6 @@
 ---
 name: self-diagnostic
-description: Deep pipeline diagnostic — lists every model loaded, system specs, audio config, speaker state, and flags anything missing or broken. Activate when asked to diagnose, debug, health check, or troubleshoot.
+description: Deep pipeline diagnostic — every model, system specs, audio config, speaker state. Flags missing or broken components. Use for diagnose, debug, or health check.
 metadata:
   author: fae
   version: "2.0"
