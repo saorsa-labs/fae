@@ -5,7 +5,7 @@ struct SettingsSpeakerTab: View {
     var commandSender: HostCommandSender?
 
     @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
-    @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
+    @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "enforce"
     @AppStorage("voiceIdentityApprovalRequiresMatch") private var approvalRequiresMatch: Bool = false
     @State private var ownerName: String = ""
     @State private var ownerEnrollmentCount: Int = 0

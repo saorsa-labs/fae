@@ -138,20 +138,18 @@ actor AudioCaptureManager {
         NSLog("AudioCaptureManager: stopped")
     }
 
-    /// Record a fixed-length audio segment and return the raw samples.
+    /// Capture audio for enrollment using a temporary AVAudioEngine.
     ///
-    /// Used for on-demand recording during speaker enrollment (not the streaming pipeline).
-    /// Creates a temporary audio engine that records for the specified duration.
-    /// Capture audio for enrollment. Uses the MAIN engine (no concurrency conflict)
-    /// via a temporary tap diversion. Waits for speech to actually start before
-    /// collecting, strips leading/trailing silence, and validates quality.
+    /// Pauses the main engine (if running) so the temp engine gets exclusive mic
+    /// access — two competing AVAudioEngine instances can silence enrollment on
+    /// some hardware. Waits for speech onset, strips silence, validates quality.
     ///
     /// - Parameters:
     ///   - durationSeconds: Maximum recording window (will stop early if enough speech captured).
     /// - Returns: Float32 samples at targetSampleRate with silence trimmed.
     func captureSegment(durationSeconds: Double) async throws -> [Float] {
-        // Use a fresh engine to avoid interfering with the main capture pipeline.
-        // The main engine tap stays running — enrollment uses a separate AVAudioEngine.
+        // Use a fresh engine — the main engine is paused below so the temp engine
+        // gets exclusive mic access. Restarted after capture completes.
         let tempEngine = AVAudioEngine()
         let inputNode = tempEngine.inputNode
         // NEVER enable VP on the temp enrollment engine — two VP-enabled engines
@@ -291,12 +289,16 @@ actor AudioCaptureManager {
                 }
             }
 
+            // Pause main capture while temp engine uses the mic.
+            // When enrollment uses the same AudioCaptureManager as the pipeline,
+            // this stops the pipeline's engine so the temp engine gets exclusive
+            // mic access — preventing two AVAudioEngine instances competing.
+            let mainWasCapturing = self.isCapturing
             do {
-                // Pause main capture while temp engine uses the mic.
-                let mainWasCapturing = self.isCapturing
                 if mainWasCapturing {
                     self.engine.inputNode.removeTap(onBus: 0)
                     self.engine.stop()
+                    self.isCapturing = false
                     NSLog("AudioCaptureManager: paused main capture for enrollment")
                 }
 
@@ -316,6 +318,14 @@ actor AudioCaptureManager {
                 }
             } catch {
                 finished = true
+                // Restart main capture if we paused it — otherwise the pipeline
+                // stays deaf if the user abandons enrollment after this error.
+                if mainWasCapturing {
+                    Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        await self?.restartMainCaptureAfterEnrollment()
+                    }
+                }
                 cont.resume(throwing: error)
             }
         }

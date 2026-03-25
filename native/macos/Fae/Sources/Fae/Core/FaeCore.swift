@@ -34,7 +34,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var thinkingLevel: FaeThinkingLevel = .fast
     @Published var hasOwnerPhoto: Bool = false
 
-    var nativeEnrollmentCaptureManager: AudioCaptureManager { enrollmentCaptureManager }
+    var nativeEnrollmentCaptureManager: AudioCaptureManager { captureManager }
     var nativeEnrollmentSpeakerEncoder: CoreMLSpeakerEncoder { speakerEncoder }
     var nativeEnrollmentSpeakerProfileStore: SpeakerProfileStore { speakerProfileStore }
 
@@ -92,7 +92,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Voice identity settings: UserDefaults is authoritative in normal mode.
         if !FaeEnvironment.isDev && !FaeEnvironment.isTesting {
             loaded.voiceIdentity.enabled = FaeEnvironment.defaults.bool(forKey: "voiceIdentityEnabled")
-            loaded.voiceIdentity.mode = FaeEnvironment.defaults.string(forKey: "voiceIdentityMode") ?? "assist"
+            loaded.voiceIdentity.mode = FaeEnvironment.defaults.string(forKey: "voiceIdentityMode") ?? "enforce"
             loaded.voiceIdentity.approvalRequiresMatch = FaeEnvironment.defaults.bool(forKey: "voiceIdentityApprovalRequiresMatch")
 
             // LLM model preset: UserDefaults is authoritative in normal mode.
@@ -174,7 +174,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let ttsEngine: any TTSEngine = KokoroMLXTTSEngine()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
-    private let enrollmentCaptureManager = AudioCaptureManager()
+    /// Enrollment now uses the pipeline's captureManager directly — see
+    /// nativeEnrollmentCaptureManager. A separate engine caused two AVAudioEngine
+    /// instances to compete for the mic, silencing enrollment on some hardware.
     private let playbackManager = AudioPlaybackManager()
     private let conversationState = ConversationStateTracker()
     private lazy var modelManager = ModelManager(eventBus: eventBus)
@@ -2158,12 +2160,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
         userName = trimmedName
         config.userName = trimmedName
 
-        // Auto-enable voice identity in assist mode after enrollment.
-        // Fae will prefer the owner's voice but won't block unknown speakers.
+        // Enable voice identity in enforce mode — only the owner's voice gets
+        // full access, and liveness detection rejects replayed/TV/video audio.
         config.voiceIdentity.enabled = true
-        config.voiceIdentity.mode = "assist"
+        config.voiceIdentity.mode = "enforce"
         FaeEnvironment.defaults.set(true, forKey: "voiceIdentityEnabled")
-        FaeEnvironment.defaults.set("assist", forKey: "voiceIdentityMode")
+        FaeEnvironment.defaults.set("enforce", forKey: "voiceIdentityMode")
 
         persistConfig(reason: "native_owner_enrollment")
 

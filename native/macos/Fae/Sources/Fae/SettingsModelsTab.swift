@@ -10,7 +10,7 @@ struct SettingsModelsTab: View {
     @AppStorage("visionModelPreset") private var visionModelPreset: String = "auto"
     @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
     @AppStorage("voiceIdentityEnabled") private var voiceIdentityEnabled: Bool = false
-    @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "assist"
+    @AppStorage("voiceIdentityMode") private var voiceIdentityMode: String = "enforce"
     @AppStorage("voiceIdentityApprovalRequiresMatch") private var voiceIdentityApprovalRequiresMatch: Bool = false
     @AppStorage("voiceSpeed") private var voiceSpeed: Double = 1.1
     @AppStorage("ttsVoiceIdentityLock") private var voiceIdentityLock: Bool = true
