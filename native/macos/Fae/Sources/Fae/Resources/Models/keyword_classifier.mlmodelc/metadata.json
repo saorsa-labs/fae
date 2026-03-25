@@ -1,0 +1,69 @@
+[
+  {
+    "shortDescription" : "Audio classifier: interrupt, wake, speech, silence, noise",
+    "metadataOutputVersion" : "3.0",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float16",
+        "formattedType" : "MultiArray (Float16 1 × 5)",
+        "shortDescription" : "",
+        "shape" : "[1, 5]",
+        "name" : "logits",
+        "type" : "MultiArray"
+      }
+    ],
+    "version" : "1.0",
+    "modelParameters" : [
+
+    ],
+    "author" : "Fae (Saorsa Labs)",
+    "specificationVersion" : 8,
+    "storagePrecision" : "Float16",
+    "mlProgramOperationTypeHistogram" : {
+      "Ios16.reduceMean" : 1,
+      "Ios17.sliceByIndex" : 2,
+      "Ios17.conv" : 3,
+      "Ios17.transpose" : 1,
+      "Ios17.linear" : 1,
+      "Ios16.relu" : 3
+    },
+    "computePrecision" : "Mixed (Float16, Int32)",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "14.0",
+      "tvOS" : "17.0",
+      "visionOS" : "1.0",
+      "watchOS" : "10.0",
+      "iOS" : "17.0",
+      "macCatalyst" : "17.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float16",
+        "formattedType" : "MultiArray (Float16 1 × 48 × 128)",
+        "shortDescription" : "",
+        "shape" : "[1, 48, 128]",
+        "name" : "mel_input",
+        "type" : "MultiArray"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.conversion_date" : "2026-03-25",
+      "com.github.apple.coremltools.source" : "torch==2.11.0",
+      "com.github.apple.coremltools.version" : "9.0",
+      "com.github.apple.coremltools.source_dialect" : "TorchScript"
+    },
+    "generatedClassName" : "keyword_classifier",
+    "method" : "predict"
+  }
+]

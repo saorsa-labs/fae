@@ -1,0 +1,26 @@
+{
+  "model_type": "keyword_classifier",
+  "num_classes": 5,
+  "input_features": 128,
+  "target_frames": 48,
+  "sample_rate": 24000,
+  "n_fft": 1024,
+  "hop_length": 256,
+  "n_mels": 128,
+  "label_names": [
+    "interrupt",
+    "wake",
+    "speech",
+    "silence",
+    "noise"
+  ],
+  "num_params": 99269,
+  "validation_accuracy": 0.969061876247505,
+  "per_class_accuracy": {
+    "interrupt": 0.9642857142857143,
+    "wake": 1.0,
+    "speech": 0.9577114427860697,
+    "silence": 1.0,
+    "noise": 1.0
+  }
+}

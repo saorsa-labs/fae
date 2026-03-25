@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["datasets", "numpy", "soundfile", "librosa"]
+# dependencies = ["numpy", "soundfile", "librosa"]
 # ///
 
 """Prepare keyword classification dataset from Google Speech Commands + augmentation.
@@ -195,48 +195,70 @@ def main() -> None:
     max_samples_per_class = params.get("max_samples_per_class", 2000)
     validation_split = params.get("validation_split", 0.2)
 
-    print("Loading Google Speech Commands v0.02...")
-    from datasets import load_dataset
+    import tarfile
+    import tempfile
+    import urllib.request
+    import soundfile as sf
 
-    ds = load_dataset("google/speech_commands", "v0.02", split="train", trust_remote_code=True)
+    ARCHIVE_URL = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_v0.02.tar.gz"
+    cache_dir = os.path.expanduser("~/Library/Caches/fae/speech_commands_v0.02")
+
+    # Download and extract if not cached.
+    if not os.path.isdir(cache_dir) or len(os.listdir(cache_dir)) < 10:
+        print("Downloading Google Speech Commands v0.02 (~2.3 GB)...")
+        os.makedirs(cache_dir, exist_ok=True)
+        archive_path = os.path.join(cache_dir, "archive.tar.gz")
+        if not os.path.exists(archive_path):
+            urllib.request.urlretrieve(ARCHIVE_URL, archive_path)
+        print("Extracting...")
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(cache_dir)
+        os.remove(archive_path)
+        print("Extracted to", cache_dir)
+    else:
+        print("Using cached Speech Commands at", cache_dir)
 
     all_mels: list[np.ndarray] = []
     all_labels: list[int] = []
-
-    # Process Speech Commands dataset.
     label_counts = {i: 0 for i in range(5)}
 
+    # Walk the extracted directory — each subfolder is a word class.
     print("Processing Speech Commands samples...")
-    for sample in ds:
-        audio = np.array(sample["audio"]["array"], dtype=np.float32)
-        sr = sample["audio"]["sampling_rate"]
-        label_str = sample.get("label")
+    for word_dir in sorted(os.listdir(cache_dir)):
+        word_path = os.path.join(cache_dir, word_dir)
+        if not os.path.isdir(word_path):
+            continue
 
-        # Map label names from the dataset.
-        # Speech Commands uses integer labels — need the features to decode.
-        if isinstance(label_str, int):
-            label_name = ds.features["label"].int2str(label_str)
-        else:
-            label_name = str(label_str)
+        word_lower = word_dir.lower()
 
-        # Determine our label.
-        if label_name in SPECIAL_CLASSES or label_name == "_background_noise_":
+        # Map to our label.
+        if word_lower == "_background_noise_":
             our_label = LABEL_NOISE
-        elif label_name == "_silence_" or label_name == "silence":
-            our_label = LABEL_SILENCE
-        elif label_name.lower() in INTERRUPT_WORDS:
+        elif word_lower in INTERRUPT_WORDS:
             our_label = LABEL_INTERRUPT
+        elif word_lower.startswith("_") or word_lower == "silence":
+            our_label = LABEL_SILENCE
         else:
             our_label = LABEL_SPEECH
 
         if label_counts[our_label] >= max_samples_per_class:
             continue
 
-        mel = process_sample(audio, sr)
-        if mel is not None:
-            all_mels.append(mel)
-            all_labels.append(our_label)
-            label_counts[our_label] += 1
+        wav_files = [f for f in os.listdir(word_path) if f.endswith(".wav")]
+        for wav_file in wav_files:
+            if label_counts[our_label] >= max_samples_per_class:
+                break
+
+            wav_path = os.path.join(word_path, wav_file)
+            try:
+                audio, sr = sf.read(wav_path, dtype="float32")
+                mel = process_sample(audio, sr)
+                if mel is not None:
+                    all_mels.append(mel)
+                    all_labels.append(our_label)
+                    label_counts[our_label] += 1
+            except Exception:
+                continue
 
     # Generate synthetic silence samples.
     print("Generating silence samples...")
