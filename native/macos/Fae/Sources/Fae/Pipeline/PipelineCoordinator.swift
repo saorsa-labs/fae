@@ -312,6 +312,12 @@ actor PipelineCoordinator {
     /// Post-VAD speech verifier — rejects music/noise segments.
     private var speechVerifier: MLXSpeechVerifier?
 
+    /// Core ML speech verifier — preferred over MLX (runs on ANE, frees GPU).
+    private var coreMLSpeechVerifier: CoreMLAudioClassifier?
+
+    /// Core ML keyword classifier — preferred over MLX (runs on ANE, frees GPU).
+    private var coreMLKeywordClassifier: CoreMLAudioClassifier?
+
     /// Apple SoundAnalysis classifier — filters speech from music/TV/noise.
     /// Uses Apple's built-in 303-category sound classifier as a pre-filter
     /// before speaker verification.
@@ -730,9 +736,12 @@ actor PipelineCoordinator {
         await rebuildVocabularyCorrections()
 
         // Wire keyword classifier and turn detector from ModelManager (non-critical).
+        // Core ML (ANE) versions are preferred over MLX (GPU) to reduce GPU contention.
         if let mm = modelManager {
+            self.coreMLKeywordClassifier = await mm.coreMLKeywordClassifier
             self.keywordClassifier = await mm.keywordClassifier
             self.turnDetector = await mm.turnDetector
+            self.coreMLSpeechVerifier = await mm.coreMLSpeechVerifier
             self.speechVerifier = await mm.speechVerifier
         }
 
@@ -3714,21 +3723,37 @@ actor PipelineCoordinator {
         // where synthetic speech gets misclassified as noise).
         let speechVerifierDisabled = ProcessInfo.processInfo.environment["FAE_DISABLE_SPEECH_VERIFIER"] == "1"
         if !speechVerifierDisabled {
-            if let verifier = speechVerifier, await verifier.isLoaded {
+            // Prefer Core ML (ANE) over MLX (GPU) for speech verification.
+            var neuralVerified = false
+            if let coreML = coreMLSpeechVerifier, await coreML.isLoaded {
+                neuralVerified = true
+                if let result = try? await coreML.classify(
+                    audio: segment.samples,
+                    sampleRate: segment.sampleRate
+                ), result.labelName != "speech", result.confidence > 0.80 {
+                    NSLog("PipelineCoordinator: dropping %.1fs segment (speech verifier/ANE: %@, conf=%.2f)",
+                          durationSecs, result.labelName, result.confidence)
+                    debugLog(debugConsole, .pipeline,
+                             "Speech verifier (ANE) rejected: \(result.labelName) (conf=\(String(format: "%.2f", result.confidence)))")
+                    return
+                }
+            } else if let verifier = speechVerifier, await verifier.isLoaded {
+                neuralVerified = true
                 if let result = try? await verifier.verify(
                     audio: segment.samples,
                     sampleRate: segment.sampleRate
                 ), result.label != .speech, result.confidence > 0.80 {
-                    NSLog("PipelineCoordinator: dropping %.1fs segment (speech verifier: %@, conf=%.2f)",
+                    NSLog("PipelineCoordinator: dropping %.1fs segment (speech verifier/GPU: %@, conf=%.2f)",
                           durationSecs, result.label.name, result.confidence)
                     debugLog(debugConsole, .pipeline,
-                             "Speech verifier rejected: \(result.label.name) (conf=\(String(format: "%.2f", result.confidence)))")
+                             "Speech verifier (GPU) rejected: \(result.label.name) (conf=\(String(format: "%.2f", result.confidence)))")
                     return
                 }
-            } else if !VoiceActivityDetector.spectralTiltLooksSpeechlike(
+            }
+            // Spectral tilt fallback when no neural verifier available.
+            if !neuralVerified, !VoiceActivityDetector.spectralTiltLooksSpeechlike(
                 samples: segment.samples, sampleRate: segment.sampleRate
             ) {
-                // Fallback: spectral tilt heuristic when neural verifier not available.
                 NSLog("PipelineCoordinator: dropping %.1fs segment (spectral tilt non-speech, rms=%.4f)",
                       durationSecs, rms)
                 debugLog(debugConsole, .pipeline,

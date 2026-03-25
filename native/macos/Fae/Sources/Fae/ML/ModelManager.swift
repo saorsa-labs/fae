@@ -57,6 +57,14 @@ actor ModelManager {
     /// Non-critical: if unavailable, barge-in falls back to acoustic-only decisions.
     private(set) var keywordClassifier: MLXKeywordClassifier?
 
+    /// Core ML speech verifier — runs on ANE, preferred over MLX (GPU).
+    /// Falls back to `speechVerifier` (MLX/GPU) if Core ML model not bundled.
+    private(set) var coreMLSpeechVerifier: CoreMLAudioClassifier?
+
+    /// Core ML keyword classifier — runs on ANE, preferred over MLX (GPU).
+    /// Falls back to `keywordClassifier` (MLX/GPU) if Core ML model not bundled.
+    private(set) var coreMLKeywordClassifier: CoreMLAudioClassifier?
+
     /// Semantic turn detector for adaptive endpointing.
     /// Non-critical: if unavailable, endpointing falls back to rule-based heuristics.
     private(set) var turnDetector: MLXTurnDetector?
@@ -475,19 +483,49 @@ actor ModelManager {
             NSLog("ModelManager: turn detector model not found — using rule-based endpointing")
         }
 
-        // Speech verifier — non-critical, degrades gracefully to spectral tilt filter.
-        if MLXSpeechVerifier.modelExists {
+        // Speech verifier — prefer Core ML (ANE) over MLX (GPU).
+        let svCoreMLURL = Bundle.faeResources.url(forResource: "speech_verifier", withExtension: "mlmodelc", subdirectory: "Models")
+        let svConfigURL = Bundle.faeResources.url(forResource: "speech_verifier_config", withExtension: "json", subdirectory: "Models")
+        if let modelURL = svCoreMLURL, let configURL = svConfigURL {
+            let sv = CoreMLAudioClassifier(name: "SpeechVerifier")
+            do {
+                try await sv.load(modelURL: modelURL, configURL: configURL)
+                self.coreMLSpeechVerifier = sv
+                NSLog("ModelManager: speech verifier loaded (Core ML / ANE)")
+            } catch {
+                NSLog("ModelManager: Core ML speech verifier load failed: %@ — trying MLX fallback",
+                      error.localizedDescription)
+            }
+        }
+        // MLX fallback if Core ML not available.
+        if self.coreMLSpeechVerifier == nil, MLXSpeechVerifier.modelExists {
             let sv = MLXSpeechVerifier()
             do {
                 try await sv.load(modelPath: MLXSpeechVerifier.defaultModelPath)
                 self.speechVerifier = sv
-                NSLog("ModelManager: speech verifier loaded")
+                NSLog("ModelManager: speech verifier loaded (MLX / GPU fallback)")
             } catch {
                 NSLog("ModelManager: speech verifier load failed (spectral tilt fallback): %@",
                       error.localizedDescription)
             }
-        } else {
-            NSLog("ModelManager: speech verifier model not found — using spectral tilt filter only")
+        }
+        if self.coreMLSpeechVerifier == nil, self.speechVerifier == nil {
+            NSLog("ModelManager: speech verifier not available — using spectral tilt filter only")
+        }
+
+        // Keyword classifier — prefer Core ML (ANE) over MLX (GPU).
+        let kwCoreMLURL = Bundle.faeResources.url(forResource: "keyword_classifier", withExtension: "mlmodelc", subdirectory: "Models")
+        let kwConfigURL = Bundle.faeResources.url(forResource: "keyword_classifier_config", withExtension: "json", subdirectory: "Models")
+        if let modelURL = kwCoreMLURL, let configURL = kwConfigURL {
+            let kw = CoreMLAudioClassifier(name: "KeywordClassifier")
+            do {
+                try await kw.load(modelURL: modelURL, configURL: configURL)
+                self.coreMLKeywordClassifier = kw
+                NSLog("ModelManager: keyword classifier loaded (Core ML / ANE)")
+            } catch {
+                NSLog("ModelManager: Core ML keyword classifier load failed: %@ — trying MLX fallback",
+                      error.localizedDescription)
+            }
         }
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))
