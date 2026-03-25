@@ -47,15 +47,9 @@ struct MemoryImportWindowView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    howItWorksSection
+                    Divider()
                     migrationSection
-                    Divider()
-                    pasteSection
-                    Divider()
-                    urlSection
-                    Divider()
-                    fileSection
-                    Divider()
-                    dropFolderSection
                 }
                 .padding(24)
             }
@@ -63,8 +57,43 @@ struct MemoryImportWindowView: View {
             Divider()
             actionBar
         }
-        .frame(minWidth: 520, minHeight: 620)
+        .frame(minWidth: 520, minHeight: 480)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var howItWorksSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("How to Import Memories", systemImage: "brain.head.profile.fill")
+                .font(.system(size: 16, weight: .semibold))
+
+            Text("The best way to give Fae your memories is to paste them directly into the conversation. Just expand Fae's window, type or paste your data into the input bar, and send it. Fae will read, understand, and remember everything in context.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .lineSpacing(3)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Paste into the conversation — Fae remembers what you tell her", systemImage: "1.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                Label("Fae processes it in context and stores it with proper embeddings", systemImage: "2.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                Label("Memories become immediately searchable and recallable", systemImage: "3.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(.primary.opacity(0.8))
+            .padding(.vertical, 4)
+
+            Text("Tip: You can paste large blocks of text. Fae will break it down and store each fact. Say something like \"Remember all of this about me:\" followed by your data.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .italic()
+
+            Button("Open Fae") {
+                focusMainWindow()
+                dismissAction()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Self.heather)
+        }
     }
 
     private var migrationSection: some View {
