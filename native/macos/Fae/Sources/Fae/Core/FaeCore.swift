@@ -560,14 +560,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 if hasOwner {
                     let compatible = await speakerProfileStore.hasCompatibleOwnerProfile(embeddingDim: currentDim)
                     if !compatible {
-                        NSLog("FaeCore: owner profile cleared due to dimension mismatch (encoder=%d)", currentDim)
+                        NSLog("FaeCore: owner profile cleared due to dimension mismatch (encoder=%d) — enrollment banner will appear", currentDim)
                         hasOwner = false
-                        // Notify the user after pipeline warmup completes.
-                        Task { [weak self] in
-                            try? await Task.sleep(nanoseconds: 3_000_000_000)
-                            await self?.pipelineCoordinator?.speakDirect(
-                                "I've had a voice model update and need to relearn your voice. "
-                                + "Please tap the enrollment banner to re-enroll."
+                        // Don't speakDirect here — it conflicts with the enrollment
+                        // flow (gate_set kills playback). The enrollment banner
+                        // appearing in ContentView is the user-facing prompt.
+                        // Expand the window so the banner is visible.
+                        Task { @MainActor in
+                            NotificationCenter.default.post(
+                                name: .faeConversationEngage,
+                                object: nil
                             )
                         }
                     }
