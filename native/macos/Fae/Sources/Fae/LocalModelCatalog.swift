@@ -35,6 +35,12 @@ struct LocalModelCatalog {
             description: "Best balance for Fae: strong tool use, good latency, and enough headroom for on-demand vision."
         ),
         .init(
+            label: "Qwen3.5 9B",
+            value: "qwen3_5_9b",
+            ram: "24+ GB",
+            description: "Sweet spot: 3x faster than 35B, reliable tool use, clean responses. ~5 GB VRAM. Auto-selected for 24-64 GB Macs."
+        ),
+        .init(
             label: "Qwen3.5 35B-A3B (MoE)",
             value: "qwen3_5_35b_a3b",
             ram: "32+ GB",
