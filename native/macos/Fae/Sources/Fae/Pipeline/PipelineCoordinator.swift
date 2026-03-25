@@ -6630,11 +6630,19 @@ actor PipelineCoordinator {
                 // Previously returned a "you already retrieved" notice which
                 // forced the model to hallucinate content.
                 debugLog(debugConsole, .toolCall, "⚠️ Duplicate tool call: \(call.name) — returning cached result")
-                result = cached
-                // If the cached result is an error, this is unrecoverable — the LLM
-                // is looping on the exact same failing call. Flag it so we bail out
-                // instead of burning turns on identical retries.
-                isDuplicateError = result.isError
+                isDuplicateError = cached.isError
+                if isDuplicateError {
+                    // Append guidance so the LLM tries a different approach instead
+                    // of looping on the exact same failing call.
+                    result = .error(
+                        cached.output
+                        + "\n\n[This exact command already failed. Do NOT repeat it."
+                        + " Try a completely different approach, different arguments,"
+                        + " or tell the user what went wrong.]"
+                    )
+                } else {
+                    result = cached
+                }
                 await recordWorkflowPreflightDenied(
                     turnID: currentTurnID,
                     callId: callId,
@@ -6738,13 +6746,13 @@ actor PipelineCoordinator {
         if toolFailureCount > 0 && toolSuccessCount == 0 {
             // Distinguish unrecoverable denials from recoverable tool errors.
             // Preflight denials (tool blocked by mode/policy) can't be retried.
-            // Duplicate errors (exact same call already failed) are also unrecoverable —
-            // the LLM is looping on an identical failing call and won't self-correct.
+            // Duplicate errors get guidance injected ("try a different approach")
+            // so the LLM can be creative, but we still bail after a few turns.
             // Tool execution errors (wrong params, validation) should be fed back
             // to the LLM so it can self-correct with the right arguments.
             let allFailuresAreDenials = preflightDenialCount == toolFailureCount
-            let allFailuresAreDuplicates = duplicateErrorCount == toolFailureCount
-            if allFailuresAreDenials || allFailuresAreDuplicates || turnCount >= 8 {
+            let duplicateLoopExhausted = duplicateErrorCount > 0 && turnCount >= 3
+            if allFailuresAreDenials || duplicateLoopExhausted || turnCount >= 8 {
                 await conversationState.removeMessages(taggedWith: "tilldone_nudge")
                 let reason = firstToolError ?? "the tool call was denied or failed"
                 let msg = "I couldn't complete that because the required tool didn't run: \(reason)"
