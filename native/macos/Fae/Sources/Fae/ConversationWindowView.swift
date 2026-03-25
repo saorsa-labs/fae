@@ -118,7 +118,7 @@ struct ConversationWindowView: View {
             }
             .onChange(of: conversationController.isGenerating) {
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    bubblesOpacity = conversationController.isGenerating ? 0.35 : 1.0
+                    bubblesOpacity = conversationController.isGenerating ? 0.7 : 1.0
                 }
                 scrollToBottom(proxy: proxy)
             }
@@ -239,6 +239,7 @@ private struct StreamingBubble: View {
                     .font(.system(size: 13, weight: .regular, design: .serif))
                     .lineSpacing(4)
                     .foregroundStyle(Color(white: 0.92))
+                    .textSelection(.enabled)
                     .animation(.easeOut(duration: 0.15), value: text)
 
                 // Blinking cursor

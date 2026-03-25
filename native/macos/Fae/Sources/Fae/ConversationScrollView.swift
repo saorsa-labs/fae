@@ -69,7 +69,7 @@ struct ConversationScrollView: View {
             }
             .onChange(of: conversation.isGenerating) {
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    bubblesOpacity = conversation.isGenerating ? 0.35 : 1.0
+                    bubblesOpacity = conversation.isGenerating ? 0.7 : 1.0
                 }
                 scrollToBottom(proxy: proxy)
             }
@@ -125,6 +125,7 @@ struct MessageBubbleView: View {
                 .font(.system(size: 13, weight: .regular, design: .serif))
                 .lineSpacing(4)
                 .foregroundStyle(textColor)
+                .textSelection(.enabled)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
                 .background(backgroundColor)
@@ -198,6 +199,7 @@ struct StreamingBubbleView: View {
                     .font(.system(size: 13, weight: .regular, design: .serif))
                     .lineSpacing(4)
                     .foregroundStyle(Color(white: 0.92))
+                    .textSelection(.enabled)
                     .animation(.easeOut(duration: 0.15), value: text)
 
                 Rectangle()

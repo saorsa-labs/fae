@@ -91,6 +91,7 @@ struct ThinkIconBubble: View {
                 Text(thinkTrace)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.primary.opacity(0.8))
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
             }
