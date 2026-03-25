@@ -101,7 +101,7 @@ static float sdfBlob(
     // the radius, so we scale down to get subtle organic wobble (~2-8% variation).
     float mf = morphFreq;
     float ms = morphSpeed * speedScale;
-    float scaledMorph = morphAmplitude * 0.15;
+    float scaledMorph = morphAmplitude * 0.06;
     float distortion = scaledMorph * (
         sin(angle * mf + time * ms) * 0.45 +
         sin(angle * (mf + 1.0) + time * ms * 0.7) * 0.28 +
@@ -110,7 +110,7 @@ static float sdfBlob(
     );
 
     // Asymmetry: directional lean that slowly rotates.
-    distortion += asymmetry * 0.15 * sin(angle + time * 0.3);
+    distortion += asymmetry * 0.05 * sin(angle + time * 0.3);
 
     // Breathing: slow sinusoidal radius modulation.
     // Scale 0.3: breathAmplitude values (0.008–0.018 base, up to 3.5x in thinking)
@@ -208,18 +208,18 @@ static float sdfBlob(
 
     float dist = length(uv);
 
-    // Soft blob edge (smooth over ~3-4 pixel band at 120px).
-    float edgeSoftness = 2.5 / W;  // ~2.5 pixels
-    half blobMask = half(1.0 - smoothstep(-edgeSoftness, edgeSoftness, sdf));
+    // Soft blob edge — wide feather for a gaseous, non-solid look.
+    float edgeSoftness = 12.0 / W;  // ~12 pixels of soft falloff
+    half blobMask = half(1.0 - smoothstep(-edgeSoftness * 0.3, edgeSoftness, sdf));
 
     // ── Layer 1: Outer Atmosphere ────────────────────────────────────
 
-    // Soft glow that extends beyond the blob boundary.
-    float atmosphereExtent = 0.15;  // How far the glow reaches
-    half atmosphereAlpha = half(outerAlpha) *
+    // Soft glow that extends just beyond the blob boundary.
+    float atmosphereExtent = 0.08;  // Tighter halo
+    half atmosphereAlpha = half(outerAlpha) * 0.5h *
         half(smoothstep(atmosphereExtent, 0.0, max(float(sdf), 0.0)));
     // Fade at far edge using distance from center.
-    atmosphereAlpha *= half(1.0 - smoothstep(0.35, 0.50, dist));
+    atmosphereAlpha *= half(1.0 - smoothstep(0.35, 0.45, dist));
 
     half3 atmosphereColor = mix(color1, color2, half(0.5));
     half4 result = half4(atmosphereColor * atmosphereAlpha, atmosphereAlpha);
@@ -232,22 +232,22 @@ static float sdfBlob(
 
     // ── Layer 3: Internal Gas Texture ────────────────────────────────
 
-    // Flowing plasma from simplex noise.
-    float flowT = time * 0.08 * liquidFlow * speedScale;
-    half2 gasUV = half2(uv * 3.5 + float2(flowT, flowT * 1.3));
+    // Flowing plasma from simplex noise — two octaves for detail.
+    float flowT = time * 0.12 * liquidFlow * speedScale;
+    half2 gasUV = half2(uv * 6.0 + float2(flowT, flowT * 1.3));
     half gasNoise = snoise2D(gasUV) * 0.5h + 0.5h;  // Remap to [0, 1]
 
-    // Secondary slower gas layer for depth.
-    half2 gasUV2 = half2(uv * 2.0 - float2(flowT * 0.6, flowT * 0.4));
+    // Secondary slower, larger-scale gas layer for depth.
+    half2 gasUV2 = half2(uv * 3.0 - float2(flowT * 0.5, flowT * 0.3));
     half gasNoise2 = snoise2D(gasUV2) * 0.5h + 0.5h;
 
-    // Mix gas layers.
-    half gasMix = gasNoise * half(fogDensity) * 0.7h +
-                  gasNoise2 * half(blobAlpha) * 0.5h;
+    // Mix gas layers — visible swirling texture.
+    half gasMix = gasNoise * half(fogDensity) * 0.6h +
+                  gasNoise2 * half(blobAlpha) * 0.4h;
 
-    // Color the gas: primary in dense regions, tertiary in thin regions.
-    half3 gasColor = mix(color2, color0, gasMix);
-    bodyColor = mix(bodyColor, gasColor, gasMix * 0.6h);
+    // Color the gas: secondary in dense regions, primary in thin regions.
+    half3 gasColor = mix(color1, color0, gasMix);
+    bodyColor = mix(bodyColor, gasColor, gasMix * 0.45h);
 
     // ── Layer 4: Core Light ──────────────────────────────────────────
 
@@ -299,9 +299,11 @@ static float sdfBlob(
     // ── Layer 6: Rim Light (Fresnel) ─────────────────────────────────
 
     if (wispAlpha > 0.01) {
-        // Compute rim from SDF: brightest right at the edge.
-        float rimBand = wispSize * 0.3;
-        half rimGlow = half(1.0 - smoothstep(0.0, rimBand, abs(sdf)));
+        // Soft inner rim glow — Fresnel-like, not a hard outline.
+        float rimBand = wispSize * 0.5;
+        half rimGlow = half(smoothstep(rimBand, 0.0, abs(sdf)));
+        // Bias toward the inner side of the edge for a gaseous glow effect.
+        rimGlow *= half(smoothstep(edgeSoftness, -edgeSoftness * 2.0, sdf));
 
         // Add shimmer noise along the rim.
         if (shimmer > 0.01) {
@@ -309,13 +311,13 @@ static float sdfBlob(
             half shimmerNoise = snoise2D(
                 half2(shimmerAngle * 4.0h, half(time * 2.0 * speedScale))
             );
-            rimGlow *= (1.0h + half(shimmer) * shimmerNoise * 3.0h);
+            rimGlow *= (1.0h + half(shimmer) * shimmerNoise * 2.0h);
         }
 
-        half3 rimColor = mix(color0, half3(1.0h), 0.5h);
-        half rimAlpha = rimGlow * half(wispAlpha) * 0.7h;
+        half3 rimColor = mix(color0, half3(1.0h), 0.4h);
+        half rimAlpha = rimGlow * half(wispAlpha) * 0.4h;
         result.rgb = mix(result.rgb, rimColor, rimAlpha);
-        result.a = max(result.a, rimAlpha * 0.6h);
+        result.a = max(result.a, rimAlpha * 0.3h);
     }
 
     // ── Layer 7: External Sparkles (Fireflies) ───────────────────────
