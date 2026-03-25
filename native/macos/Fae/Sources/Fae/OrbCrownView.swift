@@ -41,7 +41,7 @@ struct OrbCrownView: View {
                 endRadius: 200
             )
 
-            // Metal orb — centered, circular, 260x260.
+            // Metal orb — centered, organic SDF blob, 260x260.
             NativeOrbView(
                 orbAnimation: orbAnimation,
                 audioRMS: pipelineAux.audioRMS,
@@ -63,7 +63,6 @@ struct OrbCrownView: View {
                 }
             )
             .frame(width: 260, height: 260)
-            .clipShape(Circle())
 
             // Mood arc — above the orb, arched text with breathing animation.
             moodArc

@@ -130,7 +130,6 @@ struct ContentView: View {
                 showCollapsedContextMenu()
             }
         )
-        .clipShape(Circle())
         .opacity(viewLoaded ? 1 : 0)
     }
 

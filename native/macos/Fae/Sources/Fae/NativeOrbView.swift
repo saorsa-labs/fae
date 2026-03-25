@@ -1,22 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// Pure SwiftUI + Metal view rendering the nebula orb animation.
+/// SDF-based Metal shader rendering the Fae lifeform orb.
 ///
 /// Uses `TimelineView(.animation(minimumInterval:paused:))` with adaptive frame
-/// rate based on orb mode. Idle breathing at ~1fps saves 90%+ CPU compared to
-/// full 120fps rendering, while active states scale up as needed for smooth
-/// interaction and animation.
-///
-/// ## Architecture
-///
-/// ```
-/// TimelineView(.animation(minimumInterval:paused:))
-///   +- GeometryReader               <- provides view size
-///        +- Rectangle.colorEffect()  <- applies Metal fragment shader
-///
-/// OrbClickTarget (overlay)           <- handles mouse clicks & hover
-/// ```
+/// rate based on orb mode. The shader renders an organic blob shape via signed
+/// distance fields with flowing gas texture, bioluminescent sparkles, rim glow,
+/// and atmospheric halo.
 ///
 /// ## Adaptive Frame Rate
 ///
@@ -28,16 +18,10 @@ import SwiftUI
 /// | Speaking  | ~30  | 0.033s   | Audio-reactive with wisp movement      |
 /// | Collapsed | pause| —        | Zero CPU when orb not visible          |
 ///
-/// The shader runs as a single-pass fragment shader applied via
-/// `.colorEffect()`, computing volumetric nebula layers, embers, rim glow,
-/// and grain per-pixel on the GPU.
-///
 /// ## Fallback Behavior
 ///
-/// If the Metal shader is unavailable (GPU family mismatch, driver issue,
-/// missing bundle), a CPU-side radial gradient circle is shown instead.
-/// This ensures the orb is always visible and clickable, even on unsupported
-/// hardware, preventing the "invisible collapsed orb" UX trap.
+/// If the Metal shader is unavailable, a CPU-side radial gradient is shown
+/// underneath, ensuring the orb is always visible and clickable.
 struct NativeOrbView: View {
     @ObservedObject var orbAnimation: OrbAnimationState
     var audioRMS: Double
@@ -45,9 +29,6 @@ struct NativeOrbView: View {
     /// Drop to minimum rendering when true (e.g. during voice enrollment).
     /// Frees GPU/Neural Engine for WeSpeaker speaker embedding inference.
     var reducedRendering: Bool = false
-    /// Use lightweight gradient-based orb instead of Metal shader.
-    /// Default: true (98% less CPU/GPU usage).
-    var useLightweightOrb: Bool = true
 
     var onLoad: (() -> Void)?
     var onOrbClicked: (() -> Void)?
@@ -82,13 +63,7 @@ struct NativeOrbView: View {
 
     var body: some View {
         Group {
-            if useLightweightOrb {
-                // Lightweight gradient-based orb — 98% less CPU/GPU
-                lightweightOrbCanvas
-            } else {
-                // Full Metal shader orb — procedural effects
-                metalShaderCanvas
-            }
+            metalShaderCanvas
         }
         .overlay {
             OrbClickTarget(
@@ -107,22 +82,9 @@ struct NativeOrbView: View {
         }
     }
 
-    // MARK: - Lightweight Orb (Default)
+    // MARK: - Metal Shader Orb
 
-    /// Gradient-based orb using SwiftUI native animations.
-    /// ~2% CPU vs ~25% for Metal shader.
-    @ViewBuilder
-    private var lightweightOrbCanvas: some View {
-        LightweightOrbView(
-            orbAnimation: orbAnimation,
-            audioRMS: audioRMS,
-            windowMode: windowMode
-        )
-    }
-
-    // MARK: - Metal Shader Orb (Premium)
-
-    /// Full procedural Metal shader with volumetric effects.
+    /// SDF-based Metal shader with organic blob shape and flowing gas.
     @ViewBuilder
     private var metalShaderCanvas: some View {
         TimelineView(.animation(minimumInterval: adaptiveInterval, paused: isPaused)) { context in
@@ -176,7 +138,7 @@ struct NativeOrbView: View {
         Rectangle()
             .fill(Color.black.opacity(0.001))
             .colorEffect(
-                Self.shaderLib.nebulaOrb(
+                Self.shaderLib.faeOrb(
                     // Time & geometry
                     .float(time),
                     .float2(Float(size.width), Float(size.height)),

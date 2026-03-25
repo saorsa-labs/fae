@@ -70,8 +70,9 @@ let package = Package(
             path: "Sources/Fae",
             exclude: [
                 // Metal sources are pre-compiled to Resources/default.metallib
-                // via: xcrun metal -c NebulaOrb.metal -o /tmp/NebulaOrb.air
-                //      xcrun metallib /tmp/NebulaOrb.air -o Resources/default.metallib
+                // via: xcrun metal -c FaeOrb.metal -o /tmp/FaeOrb.air
+                //      xcrun metallib /tmp/FaeOrb.air -o Resources/default.metallib
+                "FaeOrb.metal",
                 "FogCloudOrb.metal",
                 "NebulaOrb.metal",
                 "Resources/bin/README.md",
