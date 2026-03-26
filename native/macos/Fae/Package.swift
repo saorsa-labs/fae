@@ -10,6 +10,7 @@ let package = Package(
         .executable(name: "Fae", targets: ["Fae"]),
         .executable(name: "FaeBenchmark", targets: ["FaeBenchmark"]),
         .executable(name: "FaePerceptionBenchmark", targets: ["FaePerceptionBenchmark"]),
+        .executable(name: "FaeEvalServer", targets: ["FaeEvalServer"]),
     ],
     dependencies: [
         // Shared Handoff contract types: FaeHandoffContract, ConversationSnapshot, etc.
@@ -34,6 +35,9 @@ let package = Package(
         // Vendored Kokoro + Misaki packages are forced static to avoid duplicate
         // MLXNN runtime class loading and resource-packaging issues in app bundles.
         .package(path: "Vendor/kokoro-ios"),
+        // MCP (Model Context Protocol) — official Swift SDK for connecting to MCP servers.
+        // Enables Fae to use plugin-provided MCP tools (Slack, Linear, etc.).
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
     ],
     targets: [
         .target(
@@ -66,6 +70,8 @@ let package = Package(
                 .product(name: "SileroVAD", package: "silero-vad-swift"),
                 // Kokoro-82M TTS via MLX — no Python/subprocess dependency.
                 .product(name: "KokoroSwift", package: "kokoro-ios"),
+                // MCP client for plugin-provided tool servers.
+                .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Sources/Fae",
             exclude: [
@@ -114,6 +120,18 @@ let package = Package(
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/FaeBenchmark"
+        ),
+
+        // OpenAI-compatible eval server — same MLXLLMEngine as production Fae.
+        // Bridges the Python eval harness to real Swift MLX inference.
+        // Run: swift run FaeEvalServer --model qwen3.5-27b --port 8234
+        .executableTarget(
+            name: "FaeEvalServer",
+            dependencies: [
+                "FaeInference",
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+            ],
+            path: "Sources/FaeEvalServer"
         ),
 
         .executableTarget(

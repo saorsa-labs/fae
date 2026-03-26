@@ -45,6 +45,9 @@ actor ToolExecutor: ToolExecutorProtocol {
     weak var delegate: (any ToolExecutorDelegate)?
     nonisolated(unsafe) var debugConsole: DebugConsoleController?
 
+    /// Plugin hook runner for PreToolUse / PostToolUse hooks.
+    var pluginHookRunner: PluginHookRunner?
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -89,6 +92,11 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Forward the debug console from the owning coordinator.
     func setDebugConsole(_ console: DebugConsoleController?) {
         debugConsole = console
+    }
+
+    /// Wire plugin hook runner for PreToolUse / PostToolUse hooks.
+    func setPluginHookRunner(_ runner: PluginHookRunner?) {
+        pluginHookRunner = runner
     }
 
     // MARK: - Execute
@@ -565,6 +573,25 @@ actor ToolExecutor: ToolExecutorProtocol {
             executionArguments["enrollment_active"] = context.firstOwnerEnrollmentActive
         }
 
+        // ── 13b. Plugin PreToolUse hooks ──────────────────────────────
+        if let hookRunner = pluginHookRunner {
+            let hookInput = HookInput.preToolUse(
+                toolName: call.name,
+                toolInput: executionArguments
+            )
+            let hookResponse = await hookRunner.runHooks(event: .preToolUse, input: hookInput)
+            if hookResponse.shouldBlock {
+                let blockMsg = hookResponse.systemMessage ?? "Blocked by plugin hook"
+                debugLog(debugConsole, .toolResult, "Plugin hook blocked \(call.name): \(blockMsg)")
+                return ToolExecutorResult(
+                    result: .error(blockMsg),
+                    approvedByUser: nil,
+                    damageControlIntervened: false,
+                    latencyMs: nil
+                )
+            }
+        }
+
         // ── 14. Execute with timeout ────────────────────────────────────
         let timeoutSeconds = Self.toolTimeoutSeconds(for: call.name)
         let startTime = Date()
@@ -613,6 +640,18 @@ actor ToolExecutor: ToolExecutorProtocol {
                 damageControlIntervened: workflowDamageControlIntervened,
                 latencyMs: nil
             )
+        }
+
+        // ── 14b. Plugin PostToolUse hooks ─────────────────────────────
+        if let hookRunner = pluginHookRunner {
+            let hookInput = HookInput.postToolUse(
+                toolName: call.name,
+                toolOutput: String(result.output.prefix(2000))
+            )
+            let hookResponse = await hookRunner.runHooks(event: .postToolUse, input: hookInput)
+            if let msg = hookResponse.systemMessage, !msg.isEmpty {
+                debugLog(debugConsole, .toolResult, "Plugin PostToolUse hook message for \(call.name): \(msg)")
+            }
         }
 
         // ── 15. Post-execution analytics + logging ──────────────────────

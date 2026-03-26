@@ -75,6 +75,11 @@ actor PipelineCoordinator {
         await toolExecutor.setDebugConsole(console)
     }
 
+    /// Wire plugin hook runner into the tool executor for PreToolUse/PostToolUse hooks.
+    func setPluginHookRunner(_ runner: PluginHookRunner?) async {
+        await toolExecutor.setPluginHookRunner(runner)
+    }
+
     // MARK: - Live Config Overrides
 
     /// Live override for reasoning depth — set by FaeCore when the user changes the level.

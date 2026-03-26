@@ -45,6 +45,14 @@ actor SkillManager {
     private var skillCache: [String: SkillMetadata] = [:]
     private var activatedBodies: [String: String] = [:]
 
+    /// Optional plugin manager for discovering plugin-provided skills.
+    private var pluginManager: PluginManager?
+
+    /// Set the plugin manager to enable plugin skill discovery.
+    func setPluginManager(_ manager: PluginManager) {
+        self.pluginManager = manager
+    }
+
     /// Skill directory: ~/Library/Application Support/fae/skills/
     static var skillsDirectory: URL {
                 return FaeDirectories.skillsDirectory
@@ -100,6 +108,11 @@ actor SkillManager {
         ]
     }
 
+    /// Installed plugins directory: ~/.fae-plugins/
+    static var pluginsDirectory: URL {
+        PluginManager.pluginsDirectory
+    }
+
     static func discoveryRoots() -> [(url: URL, tier: SkillTier)] {
         var roots: [(URL, SkillTier)] = [
             (skillsDirectory, .personal),
@@ -122,7 +135,7 @@ actor SkillManager {
 
     // MARK: - Discovery
 
-    /// Discover all skills from built-in and personal directories.
+    /// Discover all skills from built-in, personal, and plugin directories.
     func discoverSkills() -> [SkillMetadata] {
         var merged: [String: SkillMetadata] = [:]
         skillCache.removeAll()
@@ -139,6 +152,11 @@ actor SkillManager {
             merge(scanDirectory(dir, tier: tier), into: &merged)
         }
 
+        // Scan installed plugins for skills and agents.
+        // Plugin skills use the `skills/<name>/SKILL.md` layout (same as Fae).
+        // Plugin agents are converted to instruction skills.
+        scanPluginDirectories(into: &merged)
+
         // Trust-level defaulting: executable skills are disabled unless manifest is valid.
         let all = merged.values
             .map { validatedMetadata(for: $0) }
@@ -150,6 +168,39 @@ actor SkillManager {
             skillCache[skill.name] = skill
         }
         return all
+    }
+
+    /// Scan `~/.fae-plugins/` for Claude Code format plugins and merge their skills.
+    private func scanPluginDirectories(into merged: inout [String: SkillMetadata]) {
+        let fm = FileManager.default
+        let pluginsDir = Self.pluginsDirectory
+
+        guard fm.fileExists(atPath: pluginsDir.path),
+              let contents = try? fm.contentsOfDirectory(
+                  at: pluginsDir,
+                  includingPropertiesForKeys: [.isDirectoryKey]
+              )
+        else { return }
+
+        for pluginDir in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: pluginDir.path, isDirectory: &isDir),
+                  isDir.boolValue,
+                  !pluginDir.lastPathComponent.hasPrefix(".")
+            else { continue }
+
+            // Load plugin and merge its skills.
+            guard let plugin = PluginLoader.load(from: pluginDir), plugin.isEnabled else {
+                continue
+            }
+
+            for skill in plugin.skills {
+                merge([skill.metadata], into: &merged)
+            }
+            for agent in plugin.agents {
+                merge([agent.metadata], into: &merged)
+            }
+        }
     }
 
     /// Return skill descriptions for progressive disclosure in the system prompt.
@@ -949,6 +1000,48 @@ actor SkillManager {
             let skillMd = skillDir.appendingPathComponent("SKILL.md")
             if let metadata = SkillParser.parse(skillURL: skillMd, tier: tier) {
                 return validatedMetadata(for: metadata)
+            }
+        }
+
+        // Search plugin directories for the skill.
+        if let metadata = lookupPluginSkill(named: name) {
+            return metadata
+        }
+
+        return nil
+    }
+
+    /// Search installed plugins for a skill by name.
+    private func lookupPluginSkill(named name: String) -> SkillMetadata? {
+        let fm = FileManager.default
+        let pluginsDir = Self.pluginsDirectory
+
+        guard fm.fileExists(atPath: pluginsDir.path),
+              let contents = try? fm.contentsOfDirectory(
+                  at: pluginsDir,
+                  includingPropertiesForKeys: [.isDirectoryKey]
+              )
+        else { return nil }
+
+        for pluginDir in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: pluginDir.path, isDirectory: &isDir),
+                  isDir.boolValue,
+                  !pluginDir.lastPathComponent.hasPrefix(".")
+            else { continue }
+
+            guard let plugin = PluginLoader.load(from: pluginDir), plugin.isEnabled else {
+                continue
+            }
+
+            // Check skill entries.
+            for skill in plugin.skills where skill.name == name {
+                return validatedMetadata(for: skill.metadata)
+            }
+
+            // Check agent entries.
+            for agent in plugin.agents where agent.name == name {
+                return validatedMetadata(for: agent.metadata)
             }
         }
 

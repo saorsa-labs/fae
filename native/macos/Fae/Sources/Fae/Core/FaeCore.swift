@@ -195,6 +195,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let speakerProfileStore: SpeakerProfileStore
     private let wakeWordProfileStore: WakeWordProfileStore
     private var skillManagerRef: SkillManager?
+    private var pluginManagerRef: PluginManager?
     private var scheduler: FaeScheduler?
     private var channelManager: ChannelManager?
     private var debugConsoleRef: DebugConsoleController?
@@ -374,11 +375,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: rescue mode — tool mode forced to assistant")
                 }
 
+                let pluginManager = PluginManager()
+                self.pluginManagerRef = pluginManager
+                await pluginManager.initialize()
+
                 let skillManager = SkillManager()
+                await skillManager.setPluginManager(pluginManager)
                 self.skillManagerRef = skillManager
                 await activateAlwaysOnSkills(skillManager: skillManager)
                 let registry = ToolRegistry.buildDefault(
                     skillManager: skillManager,
+                    pluginManager: pluginManager,
                     workflowTraceStore: workflowTraceStore,
                     sessionStore: sessionStore,
                     speakerEncoder: speakerEncoder,
@@ -415,6 +422,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 )
                 try await coordinator.start()
                 pipelineCoordinator = coordinator
+
+                // Wire plugin hook runner into tool executor.
+                await coordinator.setPluginHookRunner(pluginManager.hookRunner)
 
                 await coordinator.setPrivacyMode(config.privacy.mode)
 
@@ -622,6 +632,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
             await pipelineCoordinator?.stop()
             pipelineCoordinator = nil
             skillManagerRef = nil
+            await pluginManagerRef?.shutdown()
+            pluginManagerRef = nil
             memoryStore = nil
             sessionStore = nil
             memoryInboxService = nil

@@ -18,6 +18,7 @@ final class ToolRegistry: Sendable {
     /// Build a registry with all built-in tools.
     static func buildDefault(
         skillManager: SkillManager? = nil,
+        pluginManager: PluginManager? = nil,
         workflowTraceStore: WorkflowTraceStore? = nil,
         sessionStore: SessionStore? = nil,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
@@ -29,6 +30,7 @@ final class ToolRegistry: Sendable {
     ) -> ToolRegistry {
         let allTools: [any Tool] = Self.allBuiltinTools(
             skillManager: skillManager,
+            pluginManager: pluginManager,
             workflowTraceStore: workflowTraceStore,
             sessionStore: sessionStore,
             speakerEncoder: speakerEncoder,
@@ -41,9 +43,10 @@ final class ToolRegistry: Sendable {
         return ToolRegistry(tools: allTools)
     }
 
-    /// All built-in tools (core + Apple + scheduler + skills + voice identity).
+    /// All built-in tools (core + Apple + scheduler + skills + plugins + voice identity).
     private static func allBuiltinTools(
         skillManager: SkillManager?,
+        pluginManager: PluginManager? = nil,
         workflowTraceStore: WorkflowTraceStore? = nil,
         sessionStore: SessionStore? = nil,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
@@ -54,6 +57,7 @@ final class ToolRegistry: Sendable {
         wakeWordProfileStore: WakeWordProfileStore? = nil
     ) -> [any Tool] {
         let sm = skillManager ?? SkillManager()
+        let pm = pluginManager ?? PluginManager()
         let tools: [any Tool] = [
             // Core tools
             ReadTool(),
@@ -107,6 +111,8 @@ final class ToolRegistry: Sendable {
                 sttEngine: sttEngine,
                 wakeWordProfileStore: wakeWordProfileStore
             ),
+            // Plugin management
+            PluginTool(pluginManager: pm),
         ]
         return tools
     }
@@ -219,7 +225,7 @@ final class ToolRegistry: Sendable {
     private static let writeTools: Set<String> = [
         "write", "edit", "self_config", "channel_setup",
         "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
-        "manage_skill", "run_skill",
+        "manage_skill", "run_skill", "plugin_manage",
         // Vision & computer use tools require read_write or higher.
         "screenshot", "camera", "read_screen",
         "click", "type_text", "scroll",
