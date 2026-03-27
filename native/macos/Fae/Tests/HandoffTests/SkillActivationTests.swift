@@ -102,12 +102,18 @@ final class SkillActivationTests: XCTestCase {
         XCTAssertTrue(names.contains("channel-hub"))
     }
 
-    /// Prompt metadata descriptions are concise (under 200 chars).
+    /// Prompt metadata descriptions are concise (under 200 chars for built-in skills).
+    /// Plugin-provided skills may have longer descriptions from upstream manifests.
     func testPromptMetadataDescriptionsAreConcise() async {
         let manager = SkillManager()
+        let allSkills = await manager.discoverSkills()
+        let builtinNames = Set(allSkills.filter { $0.tier == .builtin || $0.tier == .personal }.map(\.name))
         let metadata = await manager.promptMetadata()
 
         for entry in metadata {
+            // Only enforce length on built-in/personal skills. Plugin skills (from Claude Code
+            // plugins) have descriptions from upstream manifests we don't control.
+            guard builtinNames.contains(entry.name) else { continue }
             XCTAssertLessThanOrEqual(
                 entry.description.count, 200,
                 "Skill '\(entry.name)' description too long (\(entry.description.count) chars) — will bloat system prompt"

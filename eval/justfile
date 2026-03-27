@@ -1,0 +1,150 @@
+# Fae Eval Harness
+#
+# All commands run from this directory. Uses Fae's real Swift MLXLLMEngine.
+#
+# Quick start:
+#   just serve qwen3.5-27b         # Start MLX eval server (same engine as Fae)
+#   just dashboard                  # Web UI at http://localhost:7654
+#   just run                        # Run 315 scenarios via CLI
+#
+# Or with a HuggingFace model:
+#   just serve mlx-community/Qwen3.5-27B-4bit
+
+swift_project := justfile_directory() + "/../native/macos/Fae"
+server_port := "8234"
+server_url := "http://127.0.0.1:" + server_port
+
+# Show available recipes
+default:
+    @just --list
+
+# ─── Eval Server (Swift MLX — same engine as production Fae) ──────────────
+
+derived_data := swift_project + "/.build/xcode-eval-derived"
+eval_server_bin := derived_data + "/Build/Products/Debug/FaeEvalServer"
+
+# Build FaeEvalServer via xcodebuild (required for Metal shader library)
+build-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{swift_project}}"
+    echo "Building FaeEvalServer..."
+    xcodebuild build \
+        -scheme FaeEvalServer \
+        -destination 'platform=macOS,arch=arm64' \
+        -configuration Debug \
+        -derivedDataPath "{{derived_data}}" \
+        -skipPackagePluginValidation \
+        -quiet 2>&1 | grep -v "^$" || true
+    echo "Build complete."
+
+# Start MLX eval server (model: short name or HuggingFace ID)
+serve model="auto" port=server_port:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BIN="{{eval_server_bin}}"
+    if [ ! -f "$BIN" ]; then
+        echo "Building FaeEvalServer..."
+        just build-server
+    fi
+    "$BIN" --model {{model}} --port {{port}}
+
+# List available model short names
+models:
+    cd {{swift_project}} && swift run FaeEvalServer --help 2>&1 | sed -n '/^Models:/,/^$/p'
+
+# Check if eval server is running
+health:
+    @curl -sf {{server_url}}/health | python3 -m json.tool 2>/dev/null || echo "Server not running at {{server_url}}. Start with: just serve <model>"
+
+# ─── Install ──────────────────────────────────────────────────────────────
+
+# Install Python dependencies
+install:
+    uv sync
+
+# ─── Dashboard ─────────────────────────────────────────────────────────────
+
+# Start web dashboard at http://localhost:7654
+dashboard:
+    uv run uvicorn server:app --host 0.0.0.0 --port 7654 --reload
+
+# ─── Run Evaluations ──────────────────────────────────────────────────────
+
+# Run full eval (315 scenarios). Shows cached results if available.
+run model="auto" *flags="":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} {{flags}}
+
+# Force re-run even if cached results exist
+rerun model="auto":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} --force
+
+# Run tool calling scenarios only
+tools model="auto":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} -d tool_calling
+
+# Run intelligence (MCQ) scenarios only
+intelligence model="auto":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} -d intelligence
+
+# Run freeform scenarios only
+freeform model="auto":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} -d freeform
+
+# Run throughput benchmark only
+throughput model="auto":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} -d throughput
+
+# Run vision (VLM) scenarios with test images
+vision model="auto":
+    @just _check-server
+    uv run python cli.py run --model-url {{server_url}} --model {{model}} -d vision
+
+# Generate test images for VLM eval (run once)
+generate-images:
+    uv run --with Pillow python generate_test_images.py
+
+# ─── Results & Comparison ─────────────────────────────────────────────────
+
+# Show recent results
+results model="all":
+    uv run python cli.py results --model {{model}}
+
+# List all 315 scenarios
+scenarios:
+    uv run python cli.py scenarios
+
+# Detect hardware and show recommended models
+hardware:
+    uv run python cli.py hardware
+
+# ─── Training Pipeline ────────────────────────────────────────────────────
+
+# Prepare training data from Fae's memory database
+train-export:
+    uv run python cli.py train export
+
+# Run LoRA fine-tuning
+train-run preset="light":
+    uv run python cli.py train run --preset {{preset}}
+
+# Evaluate trained checkpoint vs baseline
+train-eval checkpoint="latest":
+    uv run python cli.py train eval --checkpoint {{checkpoint}}
+
+# ─── Cleanup ──────────────────────────────────────────────────────────────
+
+# Clean results database
+clean:
+    rm -f results/fae_eval.db
+
+# ─── Internal ─────────────────────────────────────────────────────────────
+
+_check-server:
+    @curl -sf {{server_url}}/health > /dev/null 2>&1 || (echo ""; echo "  Eval server not running at {{server_url}}"; echo "  Start it first:  just serve <model>"; echo ""; echo "  Examples:"; echo "    just serve qwen3.5-27b"; echo "    just serve qwen3.5-4b"; echo "    just serve mlx-community/Qwen3.5-27B-4bit"; echo ""; exit 1)

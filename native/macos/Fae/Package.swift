@@ -122,13 +122,16 @@ let package = Package(
             path: "Sources/FaeBenchmark"
         ),
 
-        // OpenAI-compatible eval server — same MLXLLMEngine as production Fae.
+        // OpenAI-compatible eval server — same MLXLLMEngine + MLXVLMEngine as production Fae.
         // Bridges the Python eval harness to real Swift MLX inference.
         // Run: swift run FaeEvalServer --model qwen3.5-27b --port 8234
+        // VLM: swift run FaeEvalServer --model smolvlm-256m --port 8234
         .executableTarget(
             name: "FaeEvalServer",
             dependencies: [
                 "FaeInference",
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/FaeEvalServer"

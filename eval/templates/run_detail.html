@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% set active_page = "" %}
+
+{% block title %}Fae Eval — Run {{ run.run_id[:20] if run else "?" }}{% endblock %}
+
+{% block content %}
+{% if not run %}
+<div class="card"><p style="color:var(--red)">Run not found.</p></div>
+{% else %}
+
+<!-- Run header -->
+<div class="card" style="margin-bottom:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+            <h2 style="margin-bottom:4px;">{{ run.model_name or run.model_id }}</h2>
+            <span class="mono" style="color:var(--text-dim);font-size:12px;">{{ run.run_id }}</span>
+        </div>
+        <div style="text-align:right;">
+            <div style="font-size:36px;font-weight:700;color:{% if run.overall_score >= 80 %}var(--green){% elif run.overall_score >= 60 %}var(--yellow){% else %}var(--red){% endif %};">
+                {{ "%.1f"|format(run.overall_score) }}
+            </div>
+            <div style="font-size:12px;color:var(--text-dim);">Overall Score</div>
+        </div>
+    </div>
+    <div style="display:flex;gap:24px;font-size:13px;color:var(--text-dim);">
+        <span>Started: {{ run.started_at[:19] }}</span>
+        {% if run.finished_at %}<span>Finished: {{ run.finished_at[:19] }}</span>{% endif %}
+        <span class="badge {{ run.status }}">{{ run.status }}</span>
+    </div>
+</div>
+
+<!-- Dimension summaries -->
+{% if summaries %}
+<div class="card">
+    <h2>Dimensions</h2>
+    {% for s in summaries %}
+    <div class="dim-row">
+        <span class="name">{{ s.dimension }}</span>
+        <div class="bar-wrap">
+            <div class="progress-bar">
+                <div class="fill {% if s.score >= 80 %}green{% elif s.score >= 60 %}yellow{% else %}red{% endif %}"
+                     style="width:{{ s.score }}%"></div>
+            </div>
+        </div>
+        <span class="score-num" style="color:{% if s.score >= 80 %}var(--green){% elif s.score >= 60 %}var(--yellow){% else %}var(--red){% endif %};">
+            {{ "%.1f"|format(s.score) }}
+        </span>
+        <span style="font-size:12px;color:var(--text-dim);min-width:80px;text-align:right;">
+            {{ s.passed }}/{{ s.total }} pass
+        </span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Scenario results -->
+<div class="card">
+    <h2>Scenario Results ({{ results|length }})</h2>
+    <div style="margin-bottom:12px;">
+        <input type="text" id="filter-input" placeholder="Filter by scenario ID, dimension, or category..." oninput="filterResults()">
+    </div>
+    <table id="results-table">
+        <thead>
+            <tr>
+                <th>Scenario</th>
+                <th>Dimension</th>
+                <th>Category</th>
+                <th>Verdict</th>
+                <th>Latency</th>
+                <th>Checks</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in results %}
+            <tr class="result-row" data-search="{{ r.scenario_id }} {{ r.dimension }} {{ r.category }}">
+                <td class="mono">{{ r.scenario_id }}</td>
+                <td>{{ r.dimension }}</td>
+                <td>{{ r.category }}</td>
+                <td><span class="badge {{ r.verdict }}">{{ r.verdict }}</span></td>
+                <td class="mono">{{ "%.0f"|format(r.latency_ms) }}ms</td>
+                <td style="font-size:12px;">
+                    <span style="color:var(--green);">{{ r.checks_passed_count }} pass</span>
+                    {% if r.checks_failed_count > 0 %}
+                    <span style="color:var(--red);margin-left:6px;">{{ r.checks_failed_count }} fail</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterResults() {
+    const q = document.getElementById('filter-input').value.toLowerCase();
+    document.querySelectorAll('.result-row').forEach(row => {
+        const text = row.dataset.search.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+    });
+}
+</script>
+{% endblock %}

@@ -94,7 +94,7 @@ Implementation in `SchedulerTriggerTool`:
 
 ### Tool Inventory
 
-**Total: 36 tools**
+**Total: 37 tools**
 
 Breakdown by category:
 
@@ -110,7 +110,8 @@ Breakdown by category:
 | Vision | 7 | screenshot, camera, read_screen, click, type_text, scroll, find_element |
 | Voice Identity | 1 | voice_identity |
 | Task Tracking | 1 | till_done |
-| **Total** | **36** | |
+| Plugin | 1 | plugin_manage |
+| **Total** | **37** | |
 
 ### Tool Modes & Filtering
 
@@ -119,7 +120,7 @@ The registry supports 5 permission modes:
 | Mode | Read Tools | Write Tools | Scheduler Mutation | Vision | Bash | Notes |
 |------|-----------|-----------|------------------|--------|------|-------|
 | `assistant` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations (17 tools) |
-| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups (36 tools) |
+| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups (37 tools) |
 
 Legacy modes (`off`, `read_only`, `read_write`, `full`) are silently migrated.
 
@@ -150,10 +151,10 @@ screenshot, camera, read_screen, click, type_text, scroll
 
 ### Testing Checklist
 
-- [ ] **Tool Count**: Verify 36 tools are registered: `ToolRegistry.buildDefault().allTools.count == 36`
+- [ ] **Tool Count**: Verify 37 tools are registered: `ToolRegistry.buildDefault().allTools.count == 37`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
   - `assistant`: 17 tools (no write, no bash)
-  - `full`: 36 tools
+  - `full`: 37 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels

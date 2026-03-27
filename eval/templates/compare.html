@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% set active_page = "compare" %}
+
+{% block title %}Fae Eval — Compare{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h2>Compare Runs</h2>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px;">
+        Select two or more runs to compare side-by-side.
+    </p>
+    <form id="compare-form">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:40px;"></th>
+                    <th>Run</th>
+                    <th>Model</th>
+                    <th>Score</th>
+                    <th>Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td><input type="checkbox" name="run_ids" value="{{ run.run_id }}"></td>
+                    <td class="mono">{{ run.run_id[:20] }}</td>
+                    <td>{{ run.model_name or run.model_id }}</td>
+                    <td style="font-weight:600;color:{% if run.overall_score >= 80 %}var(--green){% elif run.overall_score >= 60 %}var(--yellow){% else %}var(--red){% endif %};">
+                        {{ "%.1f"|format(run.overall_score) }}
+                    </td>
+                    <td class="mono" style="color:var(--text-dim);">{{ run.started_at[:19] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button type="button" class="btn primary" style="margin-top:16px;" onclick="doCompare()">Compare Selected</button>
+    </form>
+</div>
+
+<div class="card" id="compare-results" style="display:none;">
+    <h2>Comparison</h2>
+    <div class="chart-container">
+        <canvas id="compare-chart"></canvas>
+    </div>
+    <div id="compare-table"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function doCompare() {
+    const checked = [...document.querySelectorAll('input[name="run_ids"]:checked')].map(el => el.value);
+    if (checked.length < 2) { alert('Select at least 2 runs'); return; }
+
+    const resp = await fetch('/api/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_ids: checked }),
+    });
+    const data = await resp.json();
+
+    document.getElementById('compare-results').style.display = 'block';
+
+    // Build radar chart
+    const allDims = new Set();
+    data.comparison.forEach(c => c.summaries.forEach(s => allDims.add(s.dimension)));
+    const dims = [...allDims].sort();
+
+    const datasets = data.comparison.map((c, i) => {
+        const colors = ['#7c6ff7', '#34d399', '#fbbf24', '#f87171', '#60a5fa'];
+        const color = colors[i % colors.length];
+        return {
+            label: c.run.model_name || c.run.model_id,
+            data: dims.map(d => {
+                const s = c.summaries.find(s => s.dimension === d);
+                return s ? s.score : 0;
+            }),
+            borderColor: color,
+            backgroundColor: color + '22',
+            pointBackgroundColor: color,
+        };
+    });
+
+    const ctx = document.getElementById('compare-chart').getContext('2d');
+    if (window._compareChart) window._compareChart.destroy();
+    window._compareChart = new Chart(ctx, {
+        type: 'radar',
+        data: { labels: dims, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                r: {
+                    beginAtZero: true,
+                    max: 100,
+                    ticks: { color: '#8b90a0', backdropColor: 'transparent' },
+                    grid: { color: '#2a2e3f' },
+                    pointLabels: { color: '#e1e4ed', font: { size: 12 } },
+                },
+            },
+            plugins: { legend: { labels: { color: '#e1e4ed' } } },
+        },
+    });
+
+    // Build comparison table
+    let html = '<table><thead><tr><th>Dimension</th>';
+    data.comparison.forEach(c => {
+        html += `<th>${c.run.model_name || c.run.model_id}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    dims.forEach(d => {
+        html += `<tr><td>${d}</td>`;
+        data.comparison.forEach(c => {
+            const s = c.summaries.find(s => s.dimension === d);
+            const score = s ? s.score : 0;
+            const color = score >= 80 ? 'var(--green)' : score >= 60 ? 'var(--yellow)' : 'var(--red)';
+            html += `<td style="font-weight:600;color:${color};">${score.toFixed(1)}</td>`;
+        });
+        html += '</tr>';
+    });
+    // Overall row
+    html += '<tr style="border-top:2px solid var(--border);"><td><strong>Overall</strong></td>';
+    data.comparison.forEach(c => {
+        const score = c.run.overall_score;
+        const color = score >= 80 ? 'var(--green)' : score >= 60 ? 'var(--yellow)' : 'var(--red)';
+        html += `<td style="font-weight:700;color:${color};">${score.toFixed(1)}</td>`;
+    });
+    html += '</tr></tbody></table>';
+    document.getElementById('compare-table').innerHTML = html;
+}
+</script>
+{% endblock %}

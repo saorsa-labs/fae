@@ -1,0 +1,118 @@
+[
+  {
+    "id": "tc-rest-greeting",
+    "dimension": "tool_calling",
+    "category": "tool_restraint",
+    "description": "Greeting should NOT trigger any tool",
+    "turns": [{"role": "user", "content": "How are you feeling today?"}],
+    "no_tool_call_expected": true,
+    "checks": [{"kind": "min_words", "value": 3}],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["restraint"]
+  },
+  {
+    "id": "tc-rest-joke",
+    "dimension": "tool_calling",
+    "category": "tool_restraint",
+    "description": "Joke request should NOT trigger any tool",
+    "turns": [{"role": "user", "content": "Tell me a joke about programming"}],
+    "no_tool_call_expected": true,
+    "checks": [{"kind": "min_words", "value": 5}],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["restraint"]
+  },
+  {
+    "id": "tc-rest-opinion",
+    "dimension": "tool_calling",
+    "category": "tool_restraint",
+    "description": "Opinion question should NOT trigger any tool",
+    "turns": [{"role": "user", "content": "What do you think about the weather today?"}],
+    "no_tool_call_expected": true,
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["restraint"]
+  },
+  {
+    "id": "tc-rest-encouragement",
+    "dimension": "tool_calling",
+    "category": "tool_restraint",
+    "description": "Emotional support should NOT trigger any tool",
+    "turns": [{"role": "user", "content": "Tell me something encouraging before my meeting"}],
+    "no_tool_call_expected": true,
+    "checks": [{"kind": "min_words", "value": 5}],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["restraint"]
+  },
+  {
+    "id": "tc-rest-math",
+    "dimension": "tool_calling",
+    "category": "tool_restraint",
+    "description": "Simple math should NOT trigger any tool",
+    "turns": [{"role": "user", "content": "What is 17 times 23?"}],
+    "no_tool_call_expected": true,
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["restraint"]
+  },
+  {
+    "id": "tc-rest-clarify-first",
+    "dimension": "tool_calling",
+    "category": "tool_restraint",
+    "difficulty": "intermediate",
+    "description": "Ambiguous scheduling should clarify, not act",
+    "turns": [{"role": "user", "content": "Schedule lunch with Sam next week"}],
+    "no_tool_call_expected": true,
+    "checks": [
+      {"kind": "requires_question"},
+      {"kind": "contains_any", "value": ["what day", "which day", "what time", "when"]}
+    ],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["restraint", "clarification"]
+  }
+]

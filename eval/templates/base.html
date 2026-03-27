@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Fae Eval{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.3.0/sse.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --bg-card: #1a1d27;
+            --bg-hover: #22263a;
+            --border: #2a2e3f;
+            --text: #e1e4ed;
+            --text-dim: #8b90a0;
+            --accent: #7c6ff7;
+            --accent-glow: rgba(124, 111, 247, 0.15);
+            --green: #34d399;
+            --green-bg: rgba(52, 211, 153, 0.12);
+            --yellow: #fbbf24;
+            --yellow-bg: rgba(251, 191, 36, 0.12);
+            --red: #f87171;
+            --red-bg: rgba(248, 113, 113, 0.12);
+            --blue: #60a5fa;
+            --radius: 10px;
+            --shadow: 0 2px 12px rgba(0,0,0,0.3);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            min-height: 100vh;
+        }
+
+        /* Layout */
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 16px 24px; border-bottom: 1px solid var(--border);
+            background: var(--bg-card);
+        }
+        .header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+        .header .tag {
+            font-size: 11px; padding: 3px 8px; border-radius: 6px;
+            background: var(--accent-glow); color: var(--accent);
+            font-weight: 500;
+        }
+        nav { display: flex; gap: 6px; }
+        nav a {
+            color: var(--text-dim); text-decoration: none; padding: 6px 14px;
+            border-radius: 8px; font-size: 13px; font-weight: 500;
+            transition: all 0.15s;
+        }
+        nav a:hover, nav a.active { color: var(--text); background: var(--bg-hover); }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+            box-shadow: var(--shadow);
+        }
+        .card h2 {
+            font-size: 14px; font-weight: 600; color: var(--text-dim);
+            text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 16px;
+        }
+
+        /* Grid */
+        .grid { display: grid; gap: 16px; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+
+        /* Stats */
+        .stat { text-align: center; }
+        .stat .value { font-size: 32px; font-weight: 700; letter-spacing: -1px; }
+        .stat .label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+        .stat.green .value { color: var(--green); }
+        .stat.yellow .value { color: var(--yellow); }
+        .stat.red .value { color: var(--red); }
+        .stat.accent .value { color: var(--accent); }
+
+        /* Badges */
+        .badge {
+            display: inline-flex; align-items: center; padding: 2px 8px;
+            border-radius: 6px; font-size: 11px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.3px;
+        }
+        .badge.pass { background: var(--green-bg); color: var(--green); }
+        .badge.partial { background: var(--yellow-bg); color: var(--yellow); }
+        .badge.fail { background: var(--red-bg); color: var(--red); }
+        .badge.error { background: var(--red-bg); color: var(--red); }
+        .badge.running { background: var(--accent-glow); color: var(--accent); }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 12px; color: var(--text-dim); font-weight: 500;
+             border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase;
+             letter-spacing: 0.5px; }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        tr:hover td { background: var(--bg-hover); }
+        td.mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+
+        /* Progress bar */
+        .progress-bar {
+            height: 6px; background: var(--border); border-radius: 3px;
+            overflow: hidden; margin-top: 8px;
+        }
+        .progress-bar .fill {
+            height: 100%; border-radius: 3px; transition: width 0.3s ease;
+        }
+        .progress-bar .fill.green { background: var(--green); }
+        .progress-bar .fill.yellow { background: var(--yellow); }
+        .progress-bar .fill.red { background: var(--red); }
+        .progress-bar .fill.accent { background: var(--accent); }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 8px 16px; border-radius: 8px; font-size: 13px;
+            font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+            background: var(--bg-card); color: var(--text);
+            transition: all 0.15s;
+        }
+        .btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+        .btn.primary {
+            background: var(--accent); color: white; border-color: var(--accent);
+        }
+        .btn.primary:hover { filter: brightness(1.1); }
+
+        /* Forms */
+        input, select {
+            background: var(--bg); border: 1px solid var(--border);
+            color: var(--text); padding: 8px 12px; border-radius: 8px;
+            font-size: 13px; width: 100%;
+        }
+        input:focus, select:focus {
+            outline: none; border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+        label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; display: block; }
+
+        /* Chip list */
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .chip {
+            padding: 4px 10px; border-radius: 6px; font-size: 12px;
+            background: var(--bg-hover); border: 1px solid var(--border);
+            cursor: pointer; transition: all 0.15s;
+        }
+        .chip.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+
+        /* Score ring */
+        .score-ring {
+            width: 100px; height: 100px; position: relative;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .score-ring canvas { position: absolute; top: 0; left: 0; }
+        .score-ring .score-value { font-size: 24px; font-weight: 700; z-index: 1; }
+
+        /* Dimension bar */
+        .dim-row {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 0; border-bottom: 1px solid var(--border);
+        }
+        .dim-row:last-child { border-bottom: none; }
+        .dim-row .name { width: 120px; font-size: 13px; font-weight: 500; }
+        .dim-row .bar-wrap { flex: 1; }
+        .dim-row .score-num { width: 50px; text-align: right; font-weight: 600; font-size: 14px; }
+
+        /* SSE live feed */
+        .live-feed {
+            max-height: 400px; overflow-y: auto; font-family: 'SF Mono', monospace;
+            font-size: 12px; padding: 12px; background: var(--bg);
+            border-radius: 8px; border: 1px solid var(--border);
+        }
+        .live-feed .event {
+            padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
+            display: flex; gap: 8px;
+        }
+        .live-feed .event .time { color: var(--text-dim); min-width: 70px; }
+        .live-feed .event .type { min-width: 100px; font-weight: 500; }
+        .live-feed .event .detail { color: var(--text-dim); }
+
+        /* Chart container */
+        .chart-container { position: relative; height: 300px; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <h1>Fae Eval</h1>
+            <span class="tag">v0.1.0</span>
+        </div>
+        <nav>
+            <a href="/" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="/compare" class="{% if active_page == 'compare' %}active{% endif %}">Compare</a>
+        </nav>
+    </div>
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

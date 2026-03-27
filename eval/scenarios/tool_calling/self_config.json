@@ -1,0 +1,167 @@
+[
+  {
+    "id": "tc-sc-01",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Speak faster triggers self_config",
+    "description": "Tests that speed request triggers self_config tool",
+    "turns": [{"role": "user", "content": "Speak faster please"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-02",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Be more creative triggers self_config",
+    "description": "Tests that creativity request triggers temperature change",
+    "turns": [{"role": "user", "content": "Be more creative in your responses"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-03",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Turn off thinking triggers self_config",
+    "description": "Tests that thinking toggle triggers self_config",
+    "turns": [{"role": "user", "content": "Turn off thinking mode"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-04",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Turn off memory is not adjustable",
+    "description": "Tests that memory toggle is rejected (always on)",
+    "turns": [{"role": "user", "content": "Turn off your memory"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-sc-05",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Disable barge-in is always on",
+    "description": "Tests that barge-in cannot be disabled",
+    "turns": [{"role": "user", "content": "Disable barge-in, stop letting me interrupt you"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-sc-06",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Disable awareness is always on",
+    "description": "Tests that awareness cannot be disabled",
+    "turns": [{"role": "user", "content": "Turn off awareness, stop watching my screen"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-sc-07",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Slow down speech triggers self_config",
+    "description": "Tests that slow down request triggers speed change",
+    "turns": [{"role": "user", "content": "Can you slow down a bit? You're talking too fast"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-08",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Check camera interval triggers self_config",
+    "description": "Tests that camera interval adjustment triggers self_config",
+    "turns": [{"role": "user", "content": "Check the camera less often, maybe every two minutes"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-09",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Disable vision is always on",
+    "description": "Tests that vision cannot be disabled",
+    "turns": [{"role": "user", "content": "Turn off your vision completely"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-sc-10",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Enable thinking triggers self_config",
+    "description": "Tests that enabling thinking triggers self_config",
+    "turns": [{"role": "user", "content": "Enable thinking mode, I want you to reason more carefully"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-11",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Be more precise triggers temperature",
+    "description": "Tests that precision request lowers temperature",
+    "turns": [{"role": "user", "content": "Be more precise and less random in your answers"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-12",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Followup window change triggers self_config",
+    "description": "Tests that followup window adjustment triggers self_config",
+    "turns": [{"role": "user", "content": "Wait longer before going back to sleep after I talk to you, like 30 seconds"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-13",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Disable camera is always on",
+    "description": "Tests that camera cannot be fully disabled",
+    "turns": [{"role": "user", "content": "Stop using the camera entirely, I don't want you to see me"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-sc-14",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "Screen check interval triggers self_config",
+    "description": "Tests that screen interval change triggers self_config",
+    "turns": [{"role": "user", "content": "Check my screen every 45 seconds instead"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  },
+  {
+    "id": "tc-sc-15",
+    "dimension": "tool_calling",
+    "category": "self_config",
+    "name": "What's your current speed triggers get",
+    "description": "Tests that checking current setting triggers self_config get",
+    "turns": [{"role": "user", "content": "How fast are you speaking right now?"}],
+    "tools": [{"type": "function", "function": {"name": "self_config", "description": "Adjust Fae settings. Keys: tts.speed (0.8-1.4), llm.temperature (0.3-1.0), llm.thinking_enabled (bool), conversation.direct_address_followup_s (5-60), awareness.camera_interval_seconds (10-120), awareness.screen_interval_seconds (10-60)", "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["get", "set"]}, "key": {"type": "string"}, "value": {"type": "string"}}, "required": ["action", "key"]}}}],
+    "expected_tool_calls": [{"name": "self_config"}],
+    "checks": []
+  }
+]

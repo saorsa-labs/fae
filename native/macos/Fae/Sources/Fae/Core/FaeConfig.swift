@@ -358,7 +358,8 @@ struct FaeConfig: Codable {
     struct VisionConfig: Codable {
         /// Master toggle for vision capabilities (screenshot, camera, read_screen).
         var enabled: Bool = true
-        /// VLM model preset: "auto", "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit".
+        /// Deep VLM model preset: "auto" (SmolVLM2-500M), "smolvlm_500m", "smolvlm_2_2b",
+        /// "qwen3_vl_4b_4bit", "qwen3_vl_4b_8bit". Fast VLM (256M) is always SmolVLM2-256M.
         var modelPreset: String = "auto"
     }
 
@@ -607,10 +608,16 @@ struct FaeConfig: Codable {
 
     // MARK: - VLM Model Selection
 
-    /// Select the appropriate VLM model based on system RAM and preset.
+    /// Select the deep VLM model for detailed screenshot/camera analysis.
     ///
     /// Returns `nil` when insufficient RAM for vision alongside the text LLM + STT + TTS stack.
-    /// VLM loads on-demand (not at startup) so it only uses RAM when vision tools fire.
+    /// Deep VLM loads on-demand (not at startup) — only uses RAM when vision tools fire.
+    ///
+    /// Eval results (2026-03-26, FaeEvalServer, 15 vision scenarios):
+    ///   SmolVLM2-500M: 73% accuracy, 1.8GB, avg 11.4s — best accuracy
+    ///   SmolVLM2-2.2B: 67% accuracy, 5.2GB, avg 3.5s — fastest
+    ///   SmolVLM2-256M: 53% accuracy, <1GB, avg 7.1s — used for fast path
+    ///   Qwen3-VL-4B:   ~2.5GB, slower, legacy
     static func recommendedVLMModel(
         totalMemoryBytes: UInt64? = nil,
         preset: String = "auto"
@@ -619,25 +626,48 @@ struct FaeConfig: Codable {
 
         switch preset.lowercased() {
         case "qwen3_5_35b_a3b_vlm":
-            // Same 35B-A3B MoE model used for text — natively multimodal.
-            // Shares the text LLM container (zero extra RAM) when text LLM is 35B-A3B.
             return ("mlx-community/Qwen3.5-35B-A3B-4bit", 16_384)
         case "qwen3_vl_4b_8bit", "qwen3_vl_8b":
             return ("mlx-community/Qwen3-VL-4B-Instruct-8bit", 16_384)
         case "qwen3_vl_4b_4bit", "qwen3_vl_4b":
             return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
+        case "smolvlm_2_2b":
+            return ("mlx-community/SmolVLM2-2.2B-Instruct-mlx", 4_096)
+        case "smolvlm_500m":
+            return ("mlx-community/SmolVLM2-500M-Video-Instruct-mlx", 4_096)
+        case "smolvlm_256m":
+            return ("mlx-community/SmolVLM2-256M-Video-Instruct-mlx", 4_096)
         default: // "auto"
-            // Vision always uses the lightweight Qwen3-VL-4B for speed.
-            // 35B-A3B is natively multimodal but vision inference through the MoE
-            // is impractically slow (~3 min per screenshot). The text LLM is loaded
-            // as text-only and a separate Qwen3-VL-4B handles vision on-demand.
-            // 16+ GB: Qwen3-VL-4B (4-bit, ~2.5 GB) — fast vision alongside any text LLM.
+            // SmolVLM2-500M scored 73% on Fae vision eval (15 scenarios) — best accuracy
+            // among sub-2GB VLMs. Uses 1.8GB vs Qwen3-VL-4B's 2.5GB.
+            // 16+ GB: SmolVLM2-500M (1.8 GB) — highest accuracy, on-demand deep path.
             // <16 GB: Not enough headroom for a separate VLM.
             if totalGB >= 16 {
-                return ("lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit", 16_384)
+                return ("mlx-community/SmolVLM2-500M-Video-Instruct-mlx", 4_096)
             } else {
                 return nil
             }
+        }
+    }
+
+    /// Select the fast VLM model for always-on proactive awareness.
+    ///
+    /// Loaded at startup alongside STT/LLM/TTS. Used for camera presence detection
+    /// and quick screen triage. Must be <1GB to avoid impacting the main pipeline.
+    ///
+    /// Returns `nil` when insufficient RAM (fast VLM needs ~700MB headroom).
+    static func recommendedFastVLMModel(
+        totalMemoryBytes: UInt64? = nil
+    ) -> (modelId: String, contextSize: Int)? {
+        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        // SmolVLM2-256M: 53% accuracy, <1GB, fast (0.5-2s on passes).
+        // Good enough for: "is someone at the desk?", "is this a terminal or browser?", app identification.
+        // 16+ GB: always load fast VLM for proactive awareness.
+        // <16 GB: skip (not enough headroom).
+        if totalGB >= 16 {
+            return ("mlx-community/SmolVLM2-256M-Video-Instruct-mlx", 4_096)
+        } else {
+            return nil
         }
     }
 

@@ -8290,12 +8290,35 @@ actor PipelineCoordinator {
 extension PipelineCoordinator: ToolExecutorDelegate {
 
     /// Load the VLM engine if vision is enabled and return a provider closure.
+    ///
+    /// Two-tier SmolVLM2 architecture:
+    /// - Fast path (256M, <1GB): always loaded at startup for proactive awareness.
+    ///   Used for camera presence, screen triage, app identification.
+    /// - Deep path (500M, 1.8GB): loaded on-demand for detailed screenshot/camera analysis.
+    ///   Used when user explicitly asks vision questions via tools.
+    ///
+    /// The provider returns the fast VLM for proactive tasks (which set
+    /// `allowedTools` to just ["camera"] or ["screenshot"]). For user-triggered
+    /// tool calls, it loads the deep VLM for higher accuracy.
     func toolExecutorVLMProvider() async -> VLMProvider? {
         guard let mm = modelManager else { return nil }
+
+        // If fast VLM is loaded, return it for proactive use.
+        // For user-triggered vision tools, the deep VLM loads on-demand.
+        let hasFastVLM = await mm.fastVLMEngine != nil
         var vlmConfigMut = config
         vlmConfigMut.vision.enabled = effectiveVisionEnabled()
         let vlmConfig = vlmConfigMut
-        return { try await mm.loadVLMIfNeeded(config: vlmConfig) }
+
+        return {
+            // Prefer fast VLM (always-on, <1s latency) for quick triage.
+            // Falls through to deep VLM if fast VLM isn't loaded.
+            if hasFastVLM, let fast = await mm.fastVLMEngine, await fast.isLoaded {
+                return fast
+            }
+            // Deep VLM — loaded on-demand for detailed analysis (1.8GB).
+            return try await mm.loadVLMIfNeeded(config: vlmConfig)
+        }
     }
 
     /// Speak text directly through the playback pipeline (used for non-manual approval prompts).

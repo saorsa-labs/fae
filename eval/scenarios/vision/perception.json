@@ -1,0 +1,172 @@
+[
+  {
+    "id": "vlm-terminal",
+    "dimension": "vision",
+    "category": "screen_grounding",
+    "description": "Identify build error from terminal screenshot",
+    "image_path": "test_images/terminal_error.png",
+    "turns": [{"role": "user", "content": "What error is shown in this terminal? Answer in one sentence."}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["error", "failed"], ["FooBar", "undeclared", "not found"], ["pipeline", "compile"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-terminal-action",
+    "dimension": "vision",
+    "category": "screen_grounding",
+    "difficulty": "intermediate",
+    "description": "Suggest a fix for the visible error",
+    "image_path": "test_images/terminal_error.png",
+    "turns": [{"role": "user", "content": "What went wrong and how would you fix it?"}],
+    "checks": [
+      {"kind": "contains_any", "value": ["FooBar", "undeclared", "not found", "missing", "import", "define"]}
+    ]
+  },
+  {
+    "id": "vlm-calendar",
+    "dimension": "vision",
+    "category": "screen_grounding",
+    "description": "Summarize calendar events from screenshot",
+    "image_path": "test_images/calendar_day.png",
+    "turns": [{"role": "user", "content": "What events are on this calendar? List them briefly."}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["design review", "design"], ["standup"], ["lunch", "sam"], ["dentist"]], "min_matched": 3}}
+    ]
+  },
+  {
+    "id": "vlm-calendar-free",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "difficulty": "intermediate",
+    "description": "Identify free time in the calendar",
+    "image_path": "test_images/calendar_day.png",
+    "turns": [{"role": "user", "content": "When am I free this afternoon?"}],
+    "checks": [
+      {"kind": "contains_any", "value": ["after dentist", "after 16:30", "after 4:30", "14", "15", "between", "gap", "free"]}
+    ]
+  },
+  {
+    "id": "vlm-code",
+    "dimension": "vision",
+    "category": "screen_context",
+    "description": "Identify what kind of work is on screen",
+    "image_path": "test_images/code_editor.png",
+    "turns": [{"role": "user", "content": "What kind of work is shown? Mention the file or language if you can."}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["swift", "xcode", "code"], ["pipeline", "coordinator", "PipelineCoordinator"], ["programming", "development", "coding"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-code-detail",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "difficulty": "intermediate",
+    "description": "Identify specific code elements visible",
+    "image_path": "test_images/code_editor.png",
+    "turns": [{"role": "user", "content": "What classes or types can you see in the code?"}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["MLXLLMEngine", "engine", "LLM"], ["MLXSTTEngine", "STT", "speech"], ["Kokoro", "TTS"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-email",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "description": "Extract recipient and meeting time from email",
+    "image_path": "test_images/email_compose.png",
+    "turns": [{"role": "user", "content": "Who is this email to, and what meeting time is proposed?"}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["alex", "alex@example.com"], ["thursday", "3 pm", "3pm", "3:00"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-email-sender",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "description": "Identify who is sending the email",
+    "image_path": "test_images/email_compose.png",
+    "turns": [{"role": "user", "content": "Who is writing this email and what are they asking about?"}],
+    "checks": [
+      {"kind": "contains_any", "value": ["david", "sprint", "sync", "review", "meeting"]}
+    ]
+  },
+  {
+    "id": "vlm-todo",
+    "dimension": "vision",
+    "category": "screen_summary",
+    "description": "Summarize to-do list from notes",
+    "image_path": "test_images/todo_notes.png",
+    "turns": [{"role": "user", "content": "What's on this to-do list? Which items are done?"}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["passport", "renew"], ["dentist", "book"], ["beta", "ship", "release"], ["done", "completed", "checked"]], "min_matched": 3}}
+    ]
+  },
+  {
+    "id": "vlm-todo-pending",
+    "dimension": "vision",
+    "category": "screen_summary",
+    "description": "Identify uncompleted items from to-do list",
+    "image_path": "test_images/todo_notes.png",
+    "turns": [{"role": "user", "content": "What still needs to be done?"}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["passport"], ["beta", "ship"], ["groceries", "milk"], ["mum", "call"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-weather",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "description": "Extract weather information",
+    "image_path": "test_images/weather.png",
+    "turns": [{"role": "user", "content": "What's the weather shown? Include the city and temperature."}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["glasgow"], ["14", "degrees", "°"], ["cloudy", "partly"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-weather-forecast",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "difficulty": "intermediate",
+    "description": "Extract forecast details",
+    "image_path": "test_images/weather.png",
+    "turns": [{"role": "user", "content": "What's the forecast for the next few days?"}],
+    "checks": [
+      {"kind": "keyword_groups", "value": {"groups": [["thursday", "thu"], ["friday", "fri", "rain"], ["saturday", "sat"]], "min_matched": 2}}
+    ]
+  },
+  {
+    "id": "vlm-weather-wind",
+    "dimension": "vision",
+    "category": "screen_detail",
+    "difficulty": "intermediate",
+    "description": "Extract wind and humidity details",
+    "image_path": "test_images/weather.png",
+    "turns": [{"role": "user", "content": "What are the wind conditions?"}],
+    "checks": [
+      {"kind": "contains_any", "value": ["12", "mph", "wind", "NW", "northwest"]}
+    ]
+  },
+  {
+    "id": "vlm-app-identify",
+    "dimension": "vision",
+    "category": "screen_context",
+    "description": "Identify which application is shown",
+    "image_path": "test_images/calendar_day.png",
+    "turns": [{"role": "user", "content": "What app is this?"}],
+    "checks": [
+      {"kind": "contains_any", "value": ["calendar"]}
+    ]
+  },
+  {
+    "id": "vlm-app-identify-2",
+    "dimension": "vision",
+    "category": "screen_context",
+    "description": "Identify the notes application",
+    "image_path": "test_images/todo_notes.png",
+    "turns": [{"role": "user", "content": "What app am I looking at?"}],
+    "checks": [
+      {"kind": "contains_any", "value": ["notes", "to-do", "todo", "list"]}
+    ]
+  }
+]

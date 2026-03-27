@@ -106,7 +106,8 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | STT | Qwen3-ASR-1.7B | MLX 4-bit | Speech-to-text |
 | LLM | Qwen3.5 (2B / 4B / 35B-A3B) | MLX 4-bit | Conversation, tool use |
 | TTS | Kokoro-82M (hexgrad) | KokoroSwift/MLX float32 | Text-to-speech (pre-computed voice embeddings, 24 kHz) |
-| VLM | 35B-A3B (shared) or Qwen3-VL-4B | MLXVLM 4-bit | Vision — shared on 32+ GB; separate on 16 GB |
+| VLM (fast) | SmolVLM2-256M | MLXVLM mlx | Always-on vision — presence detection, screen triage (<1GB) |
+| VLM (deep) | SmolVLM2-500M | MLXVLM mlx | On-demand vision — detailed screenshot/camera analysis (1.8GB) |
 | Embedding | Hash-384 | MLX | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML fp16 | Voice identity (1024-dim x-vectors) |
 | Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
@@ -200,6 +201,7 @@ Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 | Computer Use | `click`, `type_text`, `scroll`, `find_element` |
 | Task Tracking | `till_done` |
 | Voice Identity | `voice_identity` |
+| Plugin | `plugin_manage` |
 
 **Tool access model**: Voice identity is the primary gate. Primary user (owner) gets `full` tool access. Guests get no tool access unless explicitly granted by the primary user. Pre-enrollment: no tool calls except voice enrollment.
 

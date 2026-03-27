@@ -1,0 +1,77 @@
+[
+  {
+    "id": "tc-multi-email-contact",
+    "dimension": "tool_calling",
+    "category": "multi_step",
+    "difficulty": "intermediate",
+    "description": "Email task requiring contact lookup first",
+    "turns": [{"role": "user", "content": "Before you email Alex, find his address in contacts"}],
+    "expected_tool_calls": [{"name": "contacts"}],
+    "max_turns": 3,
+    "mock_tool_responses": [
+      {"tool_name": "contacts", "response": {"name": "Alex MacLeod", "email": "alex@example.com", "phone": "+44 7700 900123"}}
+    ],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["multi-step", "apple"]
+  },
+  {
+    "id": "tc-multi-search-then-summarize",
+    "dimension": "tool_calling",
+    "category": "multi_step",
+    "difficulty": "intermediate",
+    "description": "Web search followed by summarization",
+    "turns": [{"role": "user", "content": "Search for the latest news about Glasgow and give me a one-sentence summary"}],
+    "expected_tool_calls": [{"name": "web_search"}],
+    "max_turns": 3,
+    "mock_tool_responses": [
+      {"tool_name": "web_search", "response": {"results": [{"title": "Glasgow rail strike planned for Monday", "snippet": "ScotRail workers to walk out Monday over pay dispute, affecting Argyle and Cathcart lines."}]}}
+    ],
+    "checks": [
+      {"kind": "contains_any", "value": ["glasgow", "rail", "strike", "monday"]}
+    ],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["multi-step"]
+  },
+  {
+    "id": "tc-multi-read-then-act",
+    "dimension": "tool_calling",
+    "category": "multi_step",
+    "difficulty": "advanced",
+    "description": "Read a file and summarize its contents",
+    "turns": [{"role": "user", "content": "Read ~/Documents/todo.txt and summarise it"}],
+    "expected_tool_calls": [{"name": "read"}],
+    "max_turns": 3,
+    "mock_tool_responses": [
+      {"tool_name": "read", "response": {"content": "1. Buy milk\n2. Send invoice to client\n3. Call the vet about Max\n4. Review PR #42\n5. Book dentist appointment"}}
+    ],
+    "checks": [
+      {"kind": "contains_all", "value": ["milk", "invoice", "vet"]}
+    ],
+    "tools": [
+      {"type": "function", "function": {"name": "calendar", "description": "Read or create calendar events", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "range": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "reminders", "description": "Create, list, or complete reminders", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "title": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "contacts", "description": "Search contacts by name", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "mail", "description": "Read, search, or send email", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "notes", "description": "Search or create Apple Notes", "parameters": {"type": "object", "properties": {"action": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for current information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "read", "description": "Read a file from the filesystem", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
+    ],
+    "tags": ["multi-step"]
+  }
+]

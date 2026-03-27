@@ -50,8 +50,14 @@ actor ModelManager {
     /// Conservative fallback for KV bytes/token when no measured value is available.
     private let fallbackKVBytesPerToken = 2048
 
-    /// On-demand VLM engine — loaded only when vision tools are invoked.
+    /// On-demand deep VLM engine — loaded when vision tools need detailed analysis.
+    /// SmolVLM2-500M: 73% accuracy, 1.8GB, best accuracy among sub-2GB VLMs.
     private var vlmEngine: MLXVLMEngine?
+
+    /// Always-on fast VLM engine — loaded at startup for proactive awareness.
+    /// SmolVLM2-256M: 53% accuracy, <1GB, 0.5-2s latency.
+    /// Used for camera presence detection, screen triage, app identification.
+    private(set) var fastVLMEngine: MLXVLMEngine?
 
     /// Keyword classifier for barge-in interrupt detection.
     /// Non-critical: if unavailable, barge-in falls back to acoustic-only decisions.
@@ -142,13 +148,47 @@ actor ModelManager {
         return engine
     }
 
-    /// Unload the VLM engine to reclaim RAM.
+    /// Unload the deep VLM engine to reclaim RAM.
     ///
     /// When using a shared multimodal container, this only drops the VLM reference —
     /// the container stays alive via the LLM engine.
     func unloadVLM() {
         vlmEngine = nil
-        NSLog("ModelManager: VLM unloaded")
+        NSLog("ModelManager: deep VLM unloaded")
+    }
+
+    /// Load the fast VLM (SmolVLM2-256M) for proactive awareness.
+    ///
+    /// Called during startup alongside STT/LLM/TTS. Non-blocking on the main pipeline —
+    /// if download is needed, awareness tasks gracefully degrade until it's ready.
+    func loadFastVLMIfNeeded(config: FaeConfig) async {
+        guard config.vision.enabled else { return }
+        guard fastVLMEngine == nil else { return }
+        guard let (modelId, _) = FaeConfig.recommendedFastVLMModel() else {
+            NSLog("ModelManager: fast VLM not available — insufficient RAM")
+            return
+        }
+
+        let engine = MLXVLMEngine()
+        NSLog("ModelManager: loading fast VLM (%@) for proactive awareness", modelId)
+
+        do {
+            try await engine.load(modelID: modelId) { progress in
+                if progress.fractionCompleted < 1.0 {
+                    let pct = Int(progress.fractionCompleted * 100)
+                    if pct % 25 == 0 {
+                        NSLog("ModelManager: downloading fast VLM %d%%", pct)
+                    }
+                }
+            }
+            await engine.warmup()
+            self.fastVLMEngine = engine
+            eventBus.send(.modelLoaded(engine: "fast_vlm", modelId: modelId))
+            NSLog("ModelManager: fast VLM loaded and warm (%@)", modelId)
+        } catch {
+            NSLog("ModelManager: fast VLM load failed (non-fatal): %@", error.localizedDescription)
+            // Non-fatal — proactive awareness falls back to no-VLM path
+        }
     }
 
     /// Load all pipeline models (STT, LLM, TTS, Speaker) with progress events.
@@ -529,6 +569,12 @@ actor ModelManager {
         }
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))
+
+        // Fast VLM — load SmolVLM2-256M for always-on proactive awareness.
+        // Non-blocking: if download needed, awareness gracefully degrades until ready.
+        // Loads after all critical engines (STT/LLM/TTS/Speaker) to avoid delaying voice.
+        await loadFastVLMIfNeeded(config: config)
+
         eventBus.send(.runtimeProgress(stage: "verify_complete", progress: 0.98))
         eventBus.send(.runtimeProgress(stage: "ready", progress: 1.0))
 

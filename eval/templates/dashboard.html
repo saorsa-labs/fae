@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+{% set active_page = "dashboard" %}
+
+{% block title %}Fae Eval — Dashboard{% endblock %}
+
+{% block content %}
+<!-- Hardware + overview -->
+<div class="grid grid-4" style="margin-bottom:24px;">
+    <div class="card stat accent">
+        <div class="value">{{ scenario_count }}</div>
+        <div class="label">Scenarios</div>
+    </div>
+    <div class="card stat">
+        <div class="value">{{ hardware.ram_gb }}GB</div>
+        <div class="label">{{ hardware.chip[:30] }}</div>
+    </div>
+    <div class="card stat">
+        <div class="value">{{ hardware.gpu_cores }}</div>
+        <div class="label">GPU Cores</div>
+    </div>
+    <div class="card stat {% if hardware.thermal_state == 'nominal' %}green{% elif hardware.thermal_state == 'throttled' %}red{% else %}yellow{% endif %}">
+        <div class="value" style="font-size:20px;">{{ hardware.thermal_state }}</div>
+        <div class="label">Thermal</div>
+    </div>
+</div>
+
+<!-- New Run -->
+<div class="card" id="run-config">
+    <h2>New Evaluation Run</h2>
+    <div class="grid grid-3" style="gap:12px;margin-bottom:16px;">
+        <div>
+            <label>Model Endpoint</label>
+            <input type="text" id="model-url" value="http://127.0.0.1:8234" placeholder="http://127.0.0.1:8234">
+        </div>
+        <div>
+            <label>Model ID</label>
+            <input type="text" id="model-id" value="auto" placeholder="auto (selects by RAM)">
+        </div>
+        <div>
+            <label>API Key (optional)</label>
+            <input type="password" id="api-key" placeholder="sk-...">
+        </div>
+    </div>
+    <div style="margin-bottom:16px;">
+        <label>Dimensions</label>
+        <div class="chips" id="dim-chips">
+            {% for dim in dimensions %}
+            <span class="chip active" data-dim="{{ dim }}" onclick="toggleDim(this)">{{ dim }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    <button class="btn primary" onclick="startRun()">Run Evaluation</button>
+</div>
+
+<!-- Live run area (hidden until run starts) -->
+<div class="card" id="live-area" style="display:none;">
+    <h2>Live Results <span class="badge running" id="run-status">Running</span></h2>
+    <div class="grid grid-2" style="margin-bottom:16px;">
+        <div>
+            <div style="display:flex;gap:16px;margin-bottom:12px;">
+                <div class="stat green"><div class="value" id="live-passed">0</div><div class="label">Passed</div></div>
+                <div class="stat yellow"><div class="value" id="live-partial">0</div><div class="label">Partial</div></div>
+                <div class="stat red"><div class="value" id="live-failed">0</div><div class="label">Failed</div></div>
+            </div>
+            <div class="progress-bar">
+                <div class="fill accent" id="live-progress" style="width:0%"></div>
+            </div>
+            <div style="margin-top:6px;font-size:12px;color:var(--text-dim);">
+                <span id="live-current">0</span> / <span id="live-total">0</span> scenarios
+            </div>
+        </div>
+        <div>
+            <div id="dim-bars"></div>
+        </div>
+    </div>
+    <div class="live-feed" id="live-feed"></div>
+</div>
+
+<!-- Past runs -->
+<div class="card">
+    <h2>Recent Runs</h2>
+    {% if runs %}
+    <table>
+        <thead>
+            <tr>
+                <th>Run</th>
+                <th>Model</th>
+                <th>Score</th>
+                <th>Status</th>
+                <th>Date</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            <tr>
+                <td class="mono">{{ run.run_id[:20] }}</td>
+                <td>{{ run.model_name or run.model_id }}</td>
+                <td>
+                    <span style="font-weight:600;color:{% if run.overall_score >= 80 %}var(--green){% elif run.overall_score >= 60 %}var(--yellow){% else %}var(--red){% endif %}">
+                        {{ "%.1f"|format(run.overall_score) }}
+                    </span>
+                </td>
+                <td><span class="badge {{ run.status }}">{{ run.status }}</span></td>
+                <td class="mono" style="color:var(--text-dim)">{{ run.started_at[:19] }}</td>
+                <td><a href="/run/{{ run.run_id }}" class="btn" style="padding:4px 10px;font-size:12px;">Detail</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-dim);font-size:13px;">No runs yet. Start your first evaluation above.</p>
+    {% endif %}
+</div>
+
+<!-- Recommended models -->
+{% if hardware.recommended_models %}
+<div class="card">
+    <h2>Recommended Models ({{ hardware.ram_gb }}GB RAM)</h2>
+    <div class="chips">
+        {% for model in hardware.recommended_models %}
+        <span class="chip" onclick="document.getElementById('model-id').value='{{ model }}'">{{ model.split('/')[-1] }}</span>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+let activeDims = new Set({{ dimensions | tojson }});
+let liveStats = { passed: 0, partial: 0, failed: 0, total: 0, current: 0, dimScores: {} };
+
+function toggleDim(el) {
+    const dim = el.dataset.dim;
+    if (activeDims.has(dim)) {
+        activeDims.delete(dim);
+        el.classList.remove('active');
+    } else {
+        activeDims.add(dim);
+        el.classList.add('active');
+    }
+}
+
+async function startRun() {
+    const url = document.getElementById('model-url').value;
+    const modelId = document.getElementById('model-id').value;
+    const apiKey = document.getElementById('api-key').value;
+    const dims = [...activeDims];
+
+    document.getElementById('live-area').style.display = 'block';
+    document.getElementById('live-feed').innerHTML = '';
+    liveStats = { passed: 0, partial: 0, failed: 0, total: 0, current: 0, dimScores: {} };
+
+    try {
+        const resp = await fetch('/api/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model_url: url,
+                model_id: modelId,
+                api_key: apiKey,
+                dimensions: dims,
+            }),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            addFeedEvent('error', data.error);
+            return;
+        }
+
+        const es = new EventSource(data.stream_url);
+
+        es.addEventListener('run_start', (e) => {
+            const d = JSON.parse(e.data);
+            liveStats.total = d.total_scenarios;
+            document.getElementById('live-total').textContent = d.total_scenarios;
+            addFeedEvent('start', `Model: ${d.model_name} | ${d.total_scenarios} scenarios`);
+        });
+
+        es.addEventListener('scenario_start', (e) => {
+            const d = JSON.parse(e.data);
+            addFeedEvent('scenario', `[${d.index + 1}/${d.total}] ${d.scenario_id}`);
+        });
+
+        es.addEventListener('scenario_result', (e) => {
+            const d = JSON.parse(e.data);
+            liveStats.current++;
+            if (d.verdict === 'pass') liveStats.passed++;
+            else if (d.verdict === 'partial') liveStats.partial++;
+            else liveStats.failed++;
+            updateLiveUI();
+            const color = d.verdict === 'pass' ? 'var(--green)' : d.verdict === 'partial' ? 'var(--yellow)' : 'var(--red)';
+            addFeedEvent('result', `<span style="color:${color}">${d.verdict.toUpperCase()}</span> ${d.scenario_id} (${d.latency_ms.toFixed(0)}ms)`, true);
+        });
+
+        es.addEventListener('dimension_complete', (e) => {
+            const d = JSON.parse(e.data);
+            liveStats.dimScores[d.dimension] = d.score;
+            updateDimBars();
+            addFeedEvent('dimension', `${d.dimension}: ${d.score.toFixed(1)}/100 (${d.passed}/${d.total} passed)`);
+        });
+
+        es.addEventListener('run_complete', (e) => {
+            const d = JSON.parse(e.data);
+            document.getElementById('run-status').textContent = 'Complete';
+            document.getElementById('run-status').className = 'badge pass';
+            addFeedEvent('complete', `Overall: ${d.overall_score.toFixed(1)}/100`);
+            es.close();
+        });
+
+        es.addEventListener('error', (e) => {
+            if (e.data) {
+                const d = JSON.parse(e.data);
+                addFeedEvent('error', d.message);
+            }
+        });
+
+        es.addEventListener('done', () => { es.close(); });
+
+    } catch (err) {
+        addFeedEvent('error', err.message);
+    }
+}
+
+function updateLiveUI() {
+    document.getElementById('live-passed').textContent = liveStats.passed;
+    document.getElementById('live-partial').textContent = liveStats.partial;
+    document.getElementById('live-failed').textContent = liveStats.failed;
+    document.getElementById('live-current').textContent = liveStats.current;
+    const pct = liveStats.total > 0 ? (liveStats.current / liveStats.total * 100) : 0;
+    document.getElementById('live-progress').style.width = pct + '%';
+}
+
+function updateDimBars() {
+    const container = document.getElementById('dim-bars');
+    let html = '';
+    for (const [dim, score] of Object.entries(liveStats.dimScores)) {
+        const color = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red';
+        html += `<div class="dim-row">
+            <span class="name">${dim}</span>
+            <div class="bar-wrap"><div class="progress-bar"><div class="fill ${color}" style="width:${score}%"></div></div></div>
+            <span class="score-num" style="color:var(--${color})">${score.toFixed(1)}</span>
+        </div>`;
+    }
+    container.innerHTML = html;
+}
+
+function addFeedEvent(type, detail, isHtml = false) {
+    const feed = document.getElementById('live-feed');
+    const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const colors = { start: 'var(--blue)', scenario: 'var(--text-dim)', result: 'var(--text)',
+                     dimension: 'var(--accent)', complete: 'var(--green)', error: 'var(--red)' };
+    const div = document.createElement('div');
+    div.className = 'event';
+    div.innerHTML = `<span class="time">${now}</span><span class="type" style="color:${colors[type] || 'var(--text)'}">${type}</span><span class="detail">${isHtml ? detail : escapeHtml(detail)}</span>`;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+}
+
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+</script>
+{% endblock %}

@@ -56,6 +56,25 @@ test-target target:
 eval-audio:
     swift test --filter EvalTests
 
+# ─── Eval Server ───────────────────────────────────────────────────────────
+
+# Start the eval server (OpenAI-compatible, uses real MLXLLMEngine)
+eval-server model="auto" port="8234":
+    swift run FaeEvalServer --model {{model}} --port {{port}}
+
+# Start eval server + dashboard together
+eval model="auto":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Starting FaeEvalServer (model: {{model}})..."
+    swift run FaeEvalServer --model {{model}} --port 8234 &
+    SERVER_PID=$!
+    trap "kill $SERVER_PID 2>/dev/null" EXIT
+    echo "Waiting for server to load model..."
+    until curl -s http://127.0.0.1:8234/health > /dev/null 2>&1; do sleep 2; done
+    echo "Server ready. Starting dashboard..."
+    cd ../../../eval && uv run uvicorn server:app --host 0.0.0.0 --port 7654 --reload
+
 # ─── Benchmark ──────────────────────────────────────────────────────────────
 
 # Directory for cached benchmark results

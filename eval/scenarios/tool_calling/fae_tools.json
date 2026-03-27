@@ -1,0 +1,257 @@
+[
+  {
+    "id": "tc-ft-01",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Screenshot for screen question",
+    "description": "Tests that screen question triggers screenshot tool",
+    "turns": [{"role": "user", "content": "What's on my screen right now?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "screenshot"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-02",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Camera for visual question",
+    "description": "Tests that Can you see me triggers camera",
+    "turns": [{"role": "user", "content": "Can you see me?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "camera"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-03",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Screenshot for app help",
+    "description": "Tests that help with current app triggers screenshot",
+    "turns": [{"role": "user", "content": "Help me with this app, I'm stuck on this screen"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "screenshot"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-04",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Web search for weather",
+    "description": "Tests that weather question triggers web search",
+    "turns": [{"role": "user", "content": "What's the weather like in Glasgow right now?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "web_search"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-05",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Delegate agent for coding task",
+    "description": "Tests that coding task triggers delegate_agent",
+    "turns": [{"role": "user", "content": "Write me a Python script that processes CSV files and outputs JSON"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "delegate_agent"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-06",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "No tool for casual chat",
+    "description": "Tests that casual chat doesn't trigger tools",
+    "turns": [{"role": "user", "content": "Just chat with me for a bit, I'm bored"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-ft-07",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "No tool for trivia",
+    "description": "Tests that simple trivia doesn't trigger tools",
+    "turns": [{"role": "user", "content": "What's the capital of France?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-ft-08",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Web search for current events",
+    "description": "Tests that current events question triggers web search",
+    "turns": [{"role": "user", "content": "What's the latest news about the Mars mission?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "web_search"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-09",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Camera for what am I wearing",
+    "description": "Tests that appearance question triggers camera",
+    "turns": [{"role": "user", "content": "What colour shirt am I wearing?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "camera"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-10",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "No tool for opinion question",
+    "description": "Tests that opinion questions don't trigger tools",
+    "turns": [{"role": "user", "content": "Do you think pineapple belongs on pizza?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-ft-11",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Screenshot for error on screen",
+    "description": "Tests that error help triggers screenshot",
+    "turns": [{"role": "user", "content": "I'm getting an error message, can you read it?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "screenshot"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-12",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Web search for product price",
+    "description": "Tests that price lookup triggers web search",
+    "turns": [{"role": "user", "content": "How much does the new MacBook Pro cost?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "web_search"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-13",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "No tool for math question",
+    "description": "Tests that simple math doesn't trigger tools",
+    "turns": [{"role": "user", "content": "What's 247 times 38?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "no_tool_call_expected": true,
+    "checks": []
+  },
+  {
+    "id": "tc-ft-14",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "Delegate for file creation task",
+    "description": "Tests that file creation task triggers delegate_agent",
+    "turns": [{"role": "user", "content": "Create a Swift Package for a REST API client with async/await"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "expected_tool_calls": [{"name": "delegate_agent"}],
+    "checks": []
+  },
+  {
+    "id": "tc-ft-15",
+    "dimension": "tool_calling",
+    "category": "fae_tools",
+    "name": "No tool for greeting",
+    "description": "Tests that greeting doesn't trigger any tools",
+    "turns": [{"role": "user", "content": "Hey Fae, how's it going?"}],
+    "tools": [
+      {"type": "function", "function": {"name": "screenshot", "description": "Take a screenshot of the current screen", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "camera", "description": "Take a photo using the camera", "parameters": {"type": "object", "properties": {}, "required": []}}},
+      {"type": "function", "function": {"name": "activate_skill", "description": "Activate a built-in skill by name", "parameters": {"type": "object", "properties": {"skill_name": {"type": "string"}}, "required": ["skill_name"]}}},
+      {"type": "function", "function": {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+      {"type": "function", "function": {"name": "delegate_agent", "description": "Delegate a task to an external agent", "parameters": {"type": "object", "properties": {"task": {"type": "string"}, "context": {"type": "string"}}, "required": ["task"]}}}
+    ],
+    "no_tool_call_expected": true,
+    "checks": []
+  }
+]
