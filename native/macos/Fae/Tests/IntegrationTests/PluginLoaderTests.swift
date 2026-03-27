@@ -2,16 +2,17 @@ import Foundation
 import Testing
 @testable import Fae
 
-@Suite("PluginLoader")
+/// Plugin integration tests — require plugins installed at ~/.fae-plugins/.
+/// Skipped on CI runners where no plugins are present.
+@Suite("PluginLoader", .enabled(if: FileManager.default.fileExists(
+    atPath: NSHomeDirectory() + "/.fae-plugins/feature-dev"
+)))
 struct PluginLoaderTests {
 
     @Test("Load feature-dev plugin with agents")
     func loadFeatureDevPlugin() throws {
         let pluginDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".fae-plugins/feature-dev")
-
-        // Skip if not installed.
-        try #require(FileManager.default.fileExists(atPath: pluginDir.path))
 
         let plugin = PluginLoader.load(from: pluginDir)
         try #require(plugin != nil)
@@ -42,8 +43,6 @@ struct PluginLoaderTests {
         let pluginDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".fae-plugins/frontend-design")
 
-        try #require(FileManager.default.fileExists(atPath: pluginDir.path))
-
         let plugin = PluginLoader.load(from: pluginDir)
         try #require(plugin != nil)
 
@@ -59,8 +58,6 @@ struct PluginLoaderTests {
     func loadHookifyPlugin() throws {
         let pluginDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".fae-plugins/hookify")
-
-        try #require(FileManager.default.fileExists(atPath: pluginDir.path))
 
         let plugin = PluginLoader.load(from: pluginDir)
         try #require(plugin != nil)
@@ -94,8 +91,6 @@ struct PluginLoaderTests {
         let pluginDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".fae-plugins/slack")
 
-        try #require(FileManager.default.fileExists(atPath: pluginDir.path))
-
         let plugin = PluginLoader.load(from: pluginDir)
         try #require(plugin != nil)
 
@@ -124,8 +119,6 @@ struct PluginLoaderTests {
         let pluginDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".fae-plugins/code-review")
 
-        try #require(FileManager.default.fileExists(atPath: pluginDir.path))
-
         let plugin = PluginLoader.load(from: pluginDir)
         try #require(plugin != nil)
 
@@ -140,12 +133,8 @@ struct PluginLoaderTests {
     @Test("PluginManager discovers all installed plugins")
     func pluginManagerDiscovery() async throws {
         let manager = PluginManager()
-
-        // Don't call full initialize() (which starts MCP servers).
-        // Just test discovery.
         let plugins = await manager.discoverPlugins()
 
-        // Should find all 5 installed plugins.
         #expect(plugins.count >= 5)
 
         let names = Set(plugins.map(\.id))
@@ -155,7 +144,6 @@ struct PluginLoaderTests {
         #expect(names.contains("slack"))
         #expect(names.contains("code-review"))
 
-        // All should be enabled by default.
         for plugin in plugins {
             #expect(plugin.isEnabled)
         }
@@ -168,7 +156,6 @@ struct PluginLoaderTests {
 
         let skills = await manager.allPluginSkillMetadata()
 
-        // Should include feature-dev agents + frontend-design skill + hookify skill + hookify agent.
         let skillNames = Set(skills.map(\.name))
         #expect(skillNames.contains("code-explorer"))
         #expect(skillNames.contains("code-architect"))
