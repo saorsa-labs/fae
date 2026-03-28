@@ -3355,13 +3355,15 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .pipeline, "Continuation accepted — resuming buffered response")
                 NSLog("PipelineCoordinator: user accepted continuation")
                 if let buffered = pendingContinuationText, !buffered.isEmpty {
-                    // Reset the soft watchdog timer so the resumed segment gets
-                    // another full window before pausing again.
-                    softWatchdogFiredForCurrentSpeech = false
+                    // Keep softWatchdogFiredForCurrentSpeech = true DURING replay
+                    // so the soft watchdog doesn't re-fire if the buffered segment
+                    // itself exceeds 45s. Reset only AFTER speakDirect returns.
                     pendingContinuationText = nil
                     await speakDirect(buffered)
+                    softWatchdogFiredForCurrentSpeech = false
                 } else {
                     pendingContinuationText = nil
+                    softWatchdogFiredForCurrentSpeech = false
                     await speakDirect("That was actually the end of what I had.")
                 }
             case .stopResponse:
@@ -7076,30 +7078,63 @@ actor PipelineCoordinator {
         case newQuery
     }
 
+    /// Check whether `word` appears in `haystack` at a word boundary
+    /// (not as a substring of a longer word). Multi-word phrases are
+    /// naturally boundary-safe so this is mainly needed for short
+    /// single-word matches like "no", "ok", "more", "sure".
+    private static func containsWord(_ haystack: String, _ word: String) -> Bool {
+        var idx = haystack.startIndex
+        while let range = haystack.range(of: word, range: idx..<haystack.endIndex) {
+            let before = range.lowerBound == haystack.startIndex
+                || !haystack[haystack.index(before: range.lowerBound)].isLetter
+            let after = range.upperBound == haystack.endIndex
+                || !haystack[range.upperBound].isLetter
+            if before && after { return true }
+            idx = range.upperBound
+        }
+        return false
+    }
+
     /// Parse the user's utterance after a continuation prompt.
     ///
     /// Affirmative and negative phrases are matched first; anything that
     /// doesn't match is treated as a new query so the user isn't forced
     /// to explicitly decline before asking something else.
+    ///
+    /// Single-word phrases use word-boundary matching to avoid false
+    /// positives (e.g. "no" inside "know", "ok" inside "look").
     static func parseContinuationResponse(_ text: String) -> ContinuationDecision {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let continuePhrases = [
-            "yes", "yeah", "yep", "yup", "sure", "okay", "ok", "go ahead",
-            "continue", "keep going", "go on", "carry on", "more",
+        // Multi-word phrases checked with .contains (naturally boundary-safe).
+        let continueMultiWord = [
+            "go ahead", "keep going", "go on", "carry on",
             "please continue", "tell me more", "keep talking"
         ]
-        for phrase in continuePhrases {
+        for phrase in continueMultiWord {
             if lower.contains(phrase) { return .continueResponse }
         }
-
-        let stopPhrases = [
-            "no", "nah", "nope", "stop", "that's enough", "enough",
-            "never mind", "nevermind", "i'm good", "that's fine",
-            "don't", "no thanks", "no thank you"
+        // Single-word phrases checked with word-boundary matching.
+        let continueSingleWord = [
+            "yes", "yeah", "yep", "yup", "sure", "okay", "ok",
+            "continue", "more"
         ]
-        for phrase in stopPhrases {
+        for word in continueSingleWord {
+            if containsWord(lower, word) { return .continueResponse }
+        }
+
+        let stopMultiWord = [
+            "that's enough", "never mind", "nevermind", "i'm good",
+            "that's fine", "no thanks", "no thank you"
+        ]
+        for phrase in stopMultiWord {
             if lower.contains(phrase) { return .stopResponse }
+        }
+        let stopSingleWord = [
+            "no", "nah", "nope", "stop", "enough", "don't"
+        ]
+        for word in stopSingleWord {
+            if containsWord(lower, word) { return .stopResponse }
         }
 
         // Anything else is likely a new question or topic change.
@@ -7148,7 +7183,10 @@ actor PipelineCoordinator {
         // Soft watchdog diversion: if the soft watchdog has fired for this
         // speaking session, buffer remaining LLM output instead of sending
         // it to TTS. The user can resume playback via the continuation prompt.
-        if softWatchdogFiredForCurrentSpeech && awaitingContinuation {
+        // Note: only check softWatchdogFiredForCurrentSpeech (not awaitingContinuation)
+        // because there is a yield window between setting the flag and setting
+        // awaitingContinuation where the LLM token loop could slip through.
+        if softWatchdogFiredForCurrentSpeech {
             if pendingContinuationText == nil {
                 pendingContinuationText = text
             } else {
