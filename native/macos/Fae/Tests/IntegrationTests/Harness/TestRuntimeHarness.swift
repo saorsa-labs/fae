@@ -18,11 +18,16 @@ final class TestRuntimeHarness: @unchecked Sendable {
     let schedulerStore: SchedulerPersistenceStore
     let config: FaeConfig
 
-    private let tmpDir: URL
+    /// Real GRDB-backed receipt store for integration tests.
+    let receiptStore: ReceiptStore
+
+    /// Temporary directory (unique per test run, deleted in cleanup()).
+    let tmpDir: URL
 
     init() throws {
-        tmpDir = FileManager.default.temporaryDirectory
+        let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-integration-\(UUID().uuidString)")
+        self.tmpDir = tmpDir
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 
         // Config with memory enabled.
@@ -62,6 +67,11 @@ final class TestRuntimeHarness: @unchecked Sendable {
             memoryStore: memoryStore,
             workflowTraceStore: workflowTraceStore
         )
+
+        // Real receipt store backed by a separate SQLite DB.
+        receiptStore = try ReceiptStore(
+            path: tmpDir.appendingPathComponent("receipts.db").path
+        )
     }
 
     /// Wire up event collector and scheduler persistence.
@@ -81,6 +91,37 @@ final class TestRuntimeHarness: @unchecked Sendable {
             MockTool(name: "bash", riskLevel: .high, requiresApproval: true),
         ])
     }
+
+    /// Build a DefaultTrustedActionBroker with the given owner flag.
+    ///
+    /// The returned broker knows all standard tools and uses the harness config's
+    /// speaker settings. Pass `isOwner: true` to simulate the enrolled primary user.
+    /// Note: `isOwner` flows through `ActionIntent`, not broker construction — this
+    /// parameter is accepted for readability but does not affect the broker itself.
+    func makeBroker(isOwner: Bool = true) -> DefaultTrustedActionBroker {
+        _ = isOwner
+        return DefaultTrustedActionBroker(
+            knownTools: Self.standardKnownTools,
+            speakerConfig: config.speaker
+        )
+    }
+
+    /// All tool names recognized by the default broker policy.
+    static let standardKnownTools: Set<String> = [
+        "read", "write", "edit", "bash", "self_config",
+        "session_search", "web_search", "fetch_url", "input_request",
+        "activate_skill", "run_skill", "manage_skill",
+        "delegate_agent", "agent_session",
+        "channel_setup",
+        "calendar", "reminders", "contacts", "mail", "notes",
+        "scheduler_list", "scheduler_create", "scheduler_update", "scheduler_delete", "scheduler_trigger",
+        "roleplay",
+        "screenshot", "camera", "read_screen",
+        "click", "type_text", "scroll", "find_element",
+        "voice_identity",
+        "till_done", "window_control",
+        "plugin_manage",
+    ]
 
     func cleanup() {
         try? FileManager.default.removeItem(at: tmpDir)

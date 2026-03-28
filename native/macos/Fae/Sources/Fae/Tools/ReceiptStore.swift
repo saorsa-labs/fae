@@ -306,11 +306,37 @@ actor ReceiptStore {
             CREATE INDEX IF NOT EXISTS idx_receipts_undone_at
             ON action_receipts (undone_at)
             """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_receipts_speaker_id
+            ON action_receipts (speaker_id, created_at DESC)
+            """)
+    }
+
+    // MARK: - Pre-State Capture (call BEFORE tool execution)
+
+    /// Capture the pre-execution state for a tool invocation.
+    ///
+    /// **Must be called BEFORE executing the tool** so the file snapshot reflects
+    /// the original content, not the post-mutation content.  Returns `nil` when
+    /// pre-state capture is not applicable (read-only or irreversible tools).
+    ///
+    /// Pass the returned value directly to `createReceipt(preState:...)`.
+    nonisolated func capturePreStateForTool(
+        toolName: String,
+        arguments: [String: Any]
+    ) -> PreStateCaptureResult? {
+        let reversibility = ActionReversibility.classify(toolName: toolName, arguments: arguments)
+        guard reversibility == .reversible else { return nil }
+        return capturePreState(toolName: toolName, arguments: arguments)
     }
 
     // MARK: - Create
 
-    /// Capture pre-state and persist a receipt row.
+    /// Persist a receipt row using a pre-state snapshot captured BEFORE execution.
+    ///
+    /// - Parameter preState: Result from `capturePreStateForTool(_:arguments:)`,
+    ///   called before the tool executed. Pass `nil` for tools that do not support undo.
     ///
     /// Returns the new receipt ID, or `nil` if the operation failed.
     /// Designed to be called fire-and-forget — never throws.
@@ -318,6 +344,7 @@ actor ReceiptStore {
     func createReceipt(
         toolName: String,
         arguments: [String: Any],
+        preState: PreStateCaptureResult?,
         speakerId: String?,
         sessionId: String?,
         turnId: String?
@@ -333,14 +360,10 @@ actor ReceiptStore {
             argumentsJSON = "{}"
         }
 
-        var preStateBlob: Data?
-        var preStatePath: String?
-
-        if reversibility == .reversible {
-            let captureResult = capturePreState(toolName: toolName, arguments: arguments)
-            preStateBlob = captureResult.blob
-            preStatePath = captureResult.path
-        }
+        // Use the externally-captured pre-state (taken before tool execution).
+        // Do NOT re-capture here — the file has already been mutated.
+        let preStateBlob = preState?.blob
+        let preStatePath = preState?.path
 
         do {
             try dbQueue.write { db in
@@ -558,12 +581,12 @@ actor ReceiptStore {
 
     // MARK: - Private Helpers
 
-    private struct PreStateCaptureResult {
+    struct PreStateCaptureResult {
         let blob: Data?
         let path: String?
     }
 
-    private func capturePreState(
+    nonisolated private func capturePreState(
         toolName: String,
         arguments: [String: Any]
     ) -> PreStateCaptureResult {
@@ -590,7 +613,7 @@ actor ReceiptStore {
         }
     }
 
-    private func captureFilePreState(atPath path: String) -> PreStateCaptureResult {
+    nonisolated private func captureFilePreState(atPath path: String) -> PreStateCaptureResult {
         let fm = FileManager.default
         guard fm.fileExists(atPath: path) else {
             return PreStateCaptureResult(blob: nil, path: path)
@@ -610,7 +633,7 @@ actor ReceiptStore {
         return PreStateCaptureResult(blob: blob, path: path)
     }
 
-    private func extractBashOutputPath(command: String) -> String? {
+    nonisolated private func extractBashOutputPath(command: String) -> String? {
         let patterns = [#"\s>>\s*(\S+)\s*$"#, #"\s>\s*(\S+)\s*$"#]
         for pattern in patterns {
             if let regex = try? NSRegularExpression(pattern: pattern),
@@ -635,7 +658,11 @@ actor ReceiptStore {
 
         if let blob = preStateBlob {
             do {
-                try blob.write(to: URL(fileURLWithPath: path))
+                // Ensure the parent directory exists (it may have been deleted).
+                let parentDir = (path as NSString).deletingLastPathComponent
+                try fm.createDirectory(atPath: parentDir, withIntermediateDirectories: true)
+                // Atomic write prevents partial content on power failure.
+                try blob.write(to: URL(fileURLWithPath: path), options: .atomic)
                 return .success(())
             } catch {
                 return .failure(.restoreFailed(error.localizedDescription))
@@ -655,11 +682,28 @@ actor ReceiptStore {
 
     private static func record(from row: Row) -> ActionReceiptRecord? {
         guard let id = row["id"] as? String,
-              let createdAt = row["created_at"] as? Int,
               let toolName = row["tool_name"] as? String,
               let argumentsJSON = row["arguments_json"] as? String,
               let reversibility = row["reversibility"] as? String
         else { return nil }
+
+        // SQLite INTEGER columns are decoded as Int64 by GRDB.
+        // Use Int64 first, then bridge to Int.
+        let createdAt: Int
+        if let v64 = row["created_at"] as? Int64 {
+            createdAt = Int(v64)
+        } else if let vInt = row["created_at"] as? Int {
+            createdAt = vInt
+        } else {
+            return nil
+        }
+
+        let undoneAt: Int?
+        if let v64 = row["undone_at"] as? Int64 {
+            undoneAt = Int(v64)
+        } else {
+            undoneAt = row["undone_at"] as? Int
+        }
 
         return ActionReceiptRecord(
             id: id,
@@ -672,7 +716,7 @@ actor ReceiptStore {
             speakerId: row["speaker_id"] as? String,
             sessionId: row["session_id"] as? String,
             turnId: row["turn_id"] as? String,
-            undoneAt: row["undone_at"] as? Int,
+            undoneAt: undoneAt,
             undoError: row["undo_error"] as? String
         )
     }

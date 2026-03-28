@@ -151,6 +151,133 @@ struct SlowMockTool: Tool {
     }
 }
 
+// MARK: - Mock Receipt Store
+
+/// In-memory mock receipt store for testing. No SQLite, no disk I/O.
+actor MockReceiptStore {
+    struct StoredReceipt: @unchecked Sendable {
+        let id: String
+        let toolName: String
+        let arguments: [String: Any]
+        let preStatePath: String?
+        let preStateBlob: Data?
+        let speakerId: String?
+        let sessionId: String?
+        let turnId: String?
+        var undoneAt: Date?
+        var undoError: String?
+
+        var isUndone: Bool { undoneAt != nil }
+    }
+
+    private(set) var receipts: [String: StoredReceipt] = [:]
+    private(set) var createCallCount: Int = 0
+    private(set) var undoCallCount: Int = 0
+    private(set) var lastReceiptId: String?
+
+    /// Whether to simulate a create failure.
+    var shouldFailCreate: Bool = false
+
+    /// Create a receipt in memory. Returns nil when shouldFailCreate is true.
+    @discardableResult
+    func createReceipt(
+        toolName: String,
+        arguments: [String: Any],
+        preStatePath: String?,
+        preStateBlob: Data?,
+        speakerId: String?,
+        sessionId: String?,
+        turnId: String?
+    ) -> String? {
+        createCallCount += 1
+        guard !shouldFailCreate else { return nil }
+
+        let id = UUID().uuidString
+        let receipt = StoredReceipt(
+            id: id,
+            toolName: toolName,
+            arguments: arguments,
+            preStatePath: preStatePath,
+            preStateBlob: preStateBlob,
+            speakerId: speakerId,
+            sessionId: sessionId,
+            turnId: turnId
+        )
+        receipts[id] = receipt
+        lastReceiptId = id
+        return id
+    }
+
+    /// Undo a receipt by ID. Returns error if not found, already undone, or no pre-state.
+    func undo(receiptId: String) -> Result<Void, ReceiptStoreError> {
+        undoCallCount += 1
+        guard var receipt = receipts[receiptId] else {
+            return .failure(.receiptNotFound)
+        }
+        if receipt.isUndone {
+            return .failure(.alreadyUndone)
+        }
+        // Restore file if pre-state path + blob available.
+        if let path = receipt.preStatePath {
+            let fm = FileManager.default
+            if let blob = receipt.preStateBlob {
+                do {
+                    try blob.write(to: URL(fileURLWithPath: path), options: .atomic)
+                } catch {
+                    receipt.undoError = error.localizedDescription
+                    receipts[receiptId] = receipt
+                    return .failure(.restoreFailed(error.localizedDescription))
+                }
+            } else {
+                // No blob → file was new → delete it
+                if fm.fileExists(atPath: path) {
+                    do {
+                        try fm.removeItem(atPath: path)
+                    } catch {
+                        receipt.undoError = error.localizedDescription
+                        receipts[receiptId] = receipt
+                        return .failure(.restoreFailed(error.localizedDescription))
+                    }
+                }
+            }
+        }
+        receipt.undoneAt = Date()
+        receipts[receiptId] = receipt
+        return .success(())
+    }
+
+    /// All receipt IDs in insertion order (newest last).
+    var allReceiptIds: [String] {
+        receipts.keys.sorted { (receipts[$0]?.id ?? "") < (receipts[$1]?.id ?? "") }
+    }
+
+    func reset() {
+        receipts = [:]
+        createCallCount = 0
+        undoCallCount = 0
+        lastReceiptId = nil
+        shouldFailCreate = false
+    }
+}
+
+// MARK: - Mock Receipt Capturing Tool
+
+/// A write-class mock tool that records receipt metadata after execution.
+/// Used to test receipt creation without hitting a real SQLite store.
+struct MockReceiptCapturingTool: Tool {
+    let name: String
+    let description: String = "A mock write tool that captures receipt metadata"
+    let parametersSchema: String = "{}"
+    let riskLevel: ToolRiskLevel
+    let requiresApproval: Bool
+
+    var resultJSON: String = "{\"result\": \"ok\"}"
+
+    func execute(input: [String: Any]) async throws -> ToolResult {
+        .success(resultJSON)
+    }
+}
+
 // MARK: - Event Collector
 
 /// Subscribes to FaeEventBus and captures events for assertions.
