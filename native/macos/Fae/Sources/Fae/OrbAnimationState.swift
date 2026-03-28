@@ -29,7 +29,7 @@ final class OrbAnimationState: ObservableObject {
 
     /// The current interpolated colours (read every frame).
     private(set) var colors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = (
-        OrbColor.heatherMist, OrbColor.lochGreyGreen, OrbColor.silverMist
+        OrbColor.hotAmber, OrbColor.richAmber, OrbColor.darkAmber
     )
 
     // MARK: - Anticipation State
@@ -65,10 +65,10 @@ final class OrbAnimationState: ObservableObject {
     private var fromSnapshot: OrbSnapshot = OrbSnapshot()
     private var toSnapshot: OrbSnapshot = OrbSnapshot()
     private var fromColors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = (
-        OrbColor.heatherMist, OrbColor.lochGreyGreen, OrbColor.silverMist
+        OrbColor.hotAmber, OrbColor.richAmber, OrbColor.darkAmber
     )
     private var toColors: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = (
-        OrbColor.heatherMist, OrbColor.lochGreyGreen, OrbColor.silverMist
+        OrbColor.hotAmber, OrbColor.richAmber, OrbColor.darkAmber
     )
     private var transitionStart: TimeInterval = 0
     private var isTransitioning = false
