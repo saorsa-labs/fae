@@ -46,7 +46,7 @@ Search HuggingFace Hub for models, datasets, and training resources to improve F
 
 ### evaluate_candidate — Assess compatibility
 ```json
-{"model_id": "mlx-community/Qwen3.5-9B-4bit"}
+{"model_id": "Brooooooklyn/Qwen3.5-9B-unsloth-mlx"}
 ```
 
 Checks: architecture, context length, MLX support, license, downloads, parameter count.

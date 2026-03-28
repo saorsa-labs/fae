@@ -19,8 +19,8 @@ import time
 # Model map — uses Qwen3.5 to match Fae's production LLM stack.
 MODEL_MAP = {
     "tiny": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
-    "small": "mlx-community/Qwen3.5-4B-OptiQ-4bit",
-    "medium": "mlx-community/Qwen3.5-9B-4bit",
+    "small": "mlx-community/Qwen3.5-4B-4bit",
+    "medium": "Brooooooklyn/Qwen3.5-9B-unsloth-mlx",
     "large": "mlx-community/Qwen3.5-35B-A3B-4bit",
 }
 

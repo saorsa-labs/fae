@@ -115,14 +115,15 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 
 **Auto model selection** (single LLM, via `voiceModelPreset: "auto"`):
 
-| System RAM | Model | Context |
-|------------|-------|---------|
-| ≥64 GB | Qwen3.5-35B-A3B MoE (3B active) | 128K |
-| ≥32 GB | Qwen3.5-35B-A3B MoE (3B active) | 32K |
-| ≥16 GB | Qwen3.5-4B | 32K |
-| <16 GB | saorsa-1.1-tiny (fine-tuned 2B) | 32K |
+| System RAM | Model | HuggingFace ID | Context |
+|------------|-------|----------------|---------|
+| ≥16 GB | Qwen3.5-9B Unsloth (mixed-bit) | `Brooooooklyn/Qwen3.5-9B-unsloth-mlx` | 32K |
+| ≥8 GB | Qwen3.5-4B (uniform 4-bit) | `mlx-community/Qwen3.5-4B-4bit` | 32K |
+| <8 GB | Qwen3.5-2B OptiQ | `mlx-community/Qwen3.5-2B-OptiQ-4bit` | 32K |
 
-Presets: `qwen3_5_35b_a3b`, `qwen3_5_4b`, `saorsa_1_1_tiny`. Unknown presets → auto. Legacy presets silently resolve to auto.
+Benchmarked 2026-03-28: 9B Unsloth scores 100% on tool calling, assistant fit, Fae capability, and serialization. 4B OptiQ was catastrophically broken (0% across all evals) — replaced with uniform 4-bit (100% tool calling, 95% assistant fit). 35B-A3B removed from auto-select: 9B Unsloth matches or exceeds it on all Fae-relevant quality metrics at 2x speed and 1/3 memory.
+
+Presets: `qwen3_5_35b_a3b`, `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`. Unknown presets → auto. Legacy presets (`saorsa_1_1_tiny`) silently resolve to `qwen3_5_2b`.
 
 Context scaling: `FaeConfig.recommendedMaxHistory()` = `(contextSize - 5000 - maxTokens) / 400`, clamped [6, 100]. `maxTokens` capped at `contextSize / 2`.
 

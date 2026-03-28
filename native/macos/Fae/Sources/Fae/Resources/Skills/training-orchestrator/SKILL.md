@@ -43,7 +43,7 @@ This skill manages the personal model training pipeline using [mlx-tune](https:/
 |--------|-------|-----------------|
 | tiny | Qwen3.5-2B-4bit | <16 GB |
 | small | Qwen3.5-4B-4bit | ≥16 GB |
-| medium | Qwen3.5-9B-4bit | ≥32 GB |
+| medium | Qwen3.5-9B-unsloth-mlx | ≥32 GB |
 | large | Qwen3.5-35B-A3B-4bit | ≥48 GB |
 
 Auto-selection matches Fae's production LLM model tier.

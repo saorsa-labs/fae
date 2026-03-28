@@ -163,15 +163,15 @@ final class FaeConfigTests: XCTestCase {
             totalMemoryBytes: UInt64(64) * 1024 * 1024 * 1024,
             preset: "qwen3_5_27b"
         )
-        // Falls back to auto → 35B-A3B on 64 GB
-        XCTAssertEqual(legacy27b.modelId, "mlx-community/Qwen3.5-35B-A3B-4bit")
+        // Falls back to auto → 9B Unsloth on 64 GB
+        XCTAssertEqual(legacy27b.modelId, "Brooooooklyn/Qwen3.5-9B-unsloth-mlx")
 
         let legacyTiny = FaeConfig.recommendedModel(
             totalMemoryBytes: UInt64(8) * 1024 * 1024 * 1024,
             preset: "qwen3_5_0_8b"
         )
-        // Falls back to auto → saorsa-1.1-tiny on 8 GB
-        XCTAssertEqual(legacyTiny.modelId, "saorsa-labs/saorsa-1.1-tiny")
+        // Falls back to auto → 4B uniform on 8 GB
+        XCTAssertEqual(legacyTiny.modelId, "mlx-community/Qwen3.5-4B-4bit")
 
     }
 

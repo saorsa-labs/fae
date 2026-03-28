@@ -28,11 +28,16 @@ let models: [ModelEntry] = [
     ModelEntry(shortName: "qwen3-8b", modelID: "mlx-community/Qwen3-8B-4bit"),
     ModelEntry(shortName: "qwen3.5-0.8b", modelID: "mlx-community/Qwen3.5-0.8B-4bit"),
     ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
-    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-OptiQ-4bit"),
-    ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
+    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-4bit"),
+    ModelEntry(shortName: "qwen3.5-9b", modelID: "Brooooooklyn/Qwen3.5-9B-unsloth-mlx"),
+    ModelEntry(shortName: "qwen3.5-9b-unsloth", modelID: "Brooooooklyn/Qwen3.5-9B-unsloth-mlx"),
     // NexVeridian text-only conversions (vision tower stripped).
     // mlx-community versions are VL — incompatible with text-only loading.
     ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "mlx-community/Qwen3.5-35B-A3B-4bit"),
+    // Unsloth Dynamic 2.0 per-tensor mixed-bit quantization (imatrix-calibrated).
+    // Spends bits where they matter: bf16 for o_proj/out_proj, 5-6 bit for attn/embed/lm_head.
+    // See: https://huggingface.co/collections/Brooooooklyn/qwen-35-unsloth-mlx
+    ModelEntry(shortName: "qwen3.5-35b-a3b-unsloth", modelID: "Brooooooklyn/Qwen3.5-35B-A3B-unsloth-mlx"),
     ModelEntry(shortName: "qwen3.5-27b", modelID: "mlx-community/Qwen3.5-27B-4bit"),
     ModelEntry(
         shortName: "qwen3.5-27b-opus-distilled",

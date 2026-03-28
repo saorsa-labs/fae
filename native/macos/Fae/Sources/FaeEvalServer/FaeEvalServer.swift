@@ -41,8 +41,8 @@ let modelRegistry: [ModelEntry] = [
     // LLM models (text-only, via MLXLLMEngine)
     ModelEntry(shortName: "qwen3.5-0.8b", modelID: "mlx-community/Qwen3.5-0.8B-4bit"),
     ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
-    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-OptiQ-4bit"),
-    ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
+    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-4bit"),
+    ModelEntry(shortName: "qwen3.5-9b", modelID: "Brooooooklyn/Qwen3.5-9B-unsloth-mlx"),
     ModelEntry(shortName: "qwen3.5-27b", modelID: "mlx-community/Qwen3.5-27B-4bit"),
     ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "mlx-community/Qwen3.5-35B-A3B-4bit"),
     ModelEntry(shortName: "qwen3.5-27b-opus-distilled", modelID: "mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit"),

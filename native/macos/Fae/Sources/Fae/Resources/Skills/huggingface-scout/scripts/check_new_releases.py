@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from huggingface_hub import HfApi
 
 FAE_MODELS = {"mlx-community/Qwen3.5-0.8B-4bit","mlx-community/Qwen3.5-2B-4bit","mlx-community/Qwen3.5-4B-4bit",
-              "mlx-community/Qwen3.5-9B-4bit","mlx-community/Qwen3.5-27B-4bit","LiquidAI/LFM2-24B-A2B-MLX-4bit"}
-DEFAULT_AUTHORS = ["mlx-community", "Qwen", "LiquidAI", "hexgrad"]
+              "Brooooooklyn/Qwen3.5-9B-unsloth-mlx","mlx-community/Qwen3.5-27B-4bit","LiquidAI/LFM2-24B-A2B-MLX-4bit"}
+DEFAULT_AUTHORS = ["mlx-community", "Qwen", "LiquidAI", "hexgrad", "Brooooooklyn"]
 DEFAULT_FAMILIES = ["Qwen3.5", "Qwen3", "LFM", "Kokoro"]
 
 def main(args: dict) -> dict:

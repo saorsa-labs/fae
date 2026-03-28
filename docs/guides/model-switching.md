@@ -26,26 +26,24 @@ Examples:
 User-facing text model presets:
 
 - `auto`
-- `saorsa_1_1_tiny`
+- `qwen3_5_2b`
 - `qwen3_5_4b`
-- `qwen3_5_35b_a3b` (medium — MoE: 35B total, 3B active per token)
+- `qwen3_5_9b` (default for 16+ GB — Unsloth mixed-bit quantization)
+- `qwen3_5_35b_a3b` (MoE: 35B total, 3B active per token — manual only)
 
 `Auto (Recommended)` resolves by RAM:
 
 | System RAM | Auto text model | Context |
 |---|---|---|
-| `<16 GB` | `saorsa-1.1-tiny` (fine-tuned 2B) | 32K |
-| `16–31 GB` | `Qwen3.5 4B` | 32K |
-| `32–63 GB` | `Qwen3.5 35B-A3B` MoE | 32K |
-| `64+ GB` | `Qwen3.5 35B-A3B` MoE | 128K |
+| `<8 GB` | `Qwen3.5 2B` OptiQ | 32K |
+| `8–15 GB` | `Qwen3.5 4B` (uniform 4-bit) | 32K |
+| `16+ GB` | `Qwen3.5 9B Unsloth` (mixed-bit) | 32K |
 
-The 35B-A3B uses Gated DeltaNet + sparse MoE (256 experts, 8+1 active). Only 3B parameters activate per token, so inference speed is comparable to a 3B dense model despite 35B total knowledge. Natively multimodal (text + vision).
+The 9B Unsloth model uses per-tensor mixed-bit quantization (imatrix-calibrated) from Unsloth Dynamic 2.0. Benchmarked 2026-03-28: 100% tool calling, 100% assistant fit, 100% Fae capability, 100% serialization. Outperforms 35B-A3B on all Fae-relevant quality metrics at 2x speed and 1/3 memory.
 
 Legacy compatibility aliases:
 
-- `qwen3_5_2b` resolves to `saorsa_1_1_tiny`
-- `qwen3_5_9b` resolves to `qwen3_5_4b`
-- `qwen3_5_27b` resolves to `qwen3_5_35b_a3b`
+- `saorsa_1_1_tiny` resolves to `qwen3_5_2b`
 
 ## Supported vision presets
 
@@ -58,12 +56,10 @@ User-facing vision presets:
 
 `Auto` resolves by RAM:
 
-| System RAM | Auto vision model |
-|---|---|
-| `<16 GB` | disabled |
-| `16–31 GB` | `Qwen3-VL-4B (4-bit)` |
-| `32–63 GB` | `Qwen3-VL-4B (8-bit)` |
-| `64+ GB` | `Qwen3.5 35B-A3B` (natively multimodal) |
+| System RAM | Auto deep VLM | Auto fast VLM |
+|---|---|---|
+| `<16 GB` | disabled | disabled |
+| `16+ GB` | `SmolVLM2-500M` (1.8 GB, on-demand) | `SmolVLM2-256M` (<1 GB, always-on) |
 
 ## Persistence
 

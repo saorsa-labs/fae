@@ -288,24 +288,22 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 | Engine | Model | Framework | Precision | Purpose |
 |---|---|---|---|---|
 | STT | Qwen3-ASR-1.7B | MLX | 4-bit | Speech-to-text |
-| LLM | Fae text stack: `saorsa-1.1-tiny` (trained Qwen3.5 2B), `Qwen3.5 4B`, or `Qwen3.5 35B-A3B` via `Auto` | MLX | 4-bit | Main conversation, reasoning, tool use |
+| LLM | Qwen3.5-9B Unsloth (default), Qwen3.5-4B, or Qwen3.5-2B via `Auto` | MLX | mixed-bit | Main conversation, reasoning, tool use |
 | TTS | Kokoro-82M | KokoroSwift / MLX | mixed | Text-to-speech |
-| VLM | Qwen3-VL-4B on-demand (`4-bit` or `8-bit`) | MLXVLM | 4/8-bit | Vision — screen/camera understanding (on-demand) |
+| VLM | SmolVLM2-500M (deep) + SmolVLM2-256M (fast) | MLXVLM | mlx | Vision — screen/camera understanding |
 | Embedding | Hash-384 | MLX | - | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML | fp16 | Voice identity (1024-dim x-vectors) |
 
 Current local default — Fae three-tier text stack:
 - Fae runs a single local text model.
-- `auto` text model selection:
-  - `<16 GB`: `saorsa-1.1-tiny` (fine-tuned Qwen3.5 2B)
-  - `16–31 GB`: `Qwen3.5 4B`
-  - `32–63 GB`: `Qwen3.5 35B-A3B` MoE (32K context) — 35B total, only 3B active per token
-  - `64+ GB`: `Qwen3.5 35B-A3B` MoE (128K context) — frontier intelligence at fast speed
+- `auto` text model selection (benchmarked 2026-03-28 with production MLXLLMEngine):
+  - `<8 GB`: `Qwen3.5 2B` OptiQ mixed-precision
+  - `8–15 GB`: `Qwen3.5 4B` uniform 4-bit — 100% tool calling, 95% assistant fit
+  - `16+ GB`: `Qwen3.5 9B Unsloth` mixed-bit (imatrix-calibrated) — 100% tool calling, 100% assistant fit, 100% Fae capability
+- 35B-A3B removed from auto-select: 9B Unsloth matches or exceeds it on all quality metrics at 2x speed and 1/3 memory. Still available via explicit `qwen3_5_35b_a3b` preset.
 - `auto` vision selection:
   - `<16 GB`: disabled
-  - `16–31 GB`: `Qwen3-VL-4B` `4-bit`
-  - `32–63 GB`: `Qwen3-VL-4B` `8-bit`
-  - `64+ GB`: `Qwen3.5 35B-A3B` (natively multimodal — same model as text LLM)
+  - `16+ GB`: SmolVLM2-500M (deep, on-demand) + SmolVLM2-256M (fast, always-on)
 - the dual-model system has been removed; Fae uses a single-model pipeline
 - canonical local model guide: [Local model strategy](docs/guides/local-model-strategy.md)
 

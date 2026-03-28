@@ -519,27 +519,26 @@ struct FaeConfig: Codable {
             // MoE: 35B total, 3B active per token. ~18 GB 4-bit. Natively multimodal.
             return ("mlx-community/Qwen3.5-35B-A3B-4bit", 131_072)
         case "qwen3_5_9b":
-            // Dense 9B. ~5 GB 4-bit. Sweet spot: better tool use than 4B, much faster than 35B.
-            return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
+            // 9B Unsloth: per-tensor mixed-bit (imatrix-calibrated). ~6 GB.
+            // 100% tool calling, 100% assistant fit, 100% serialization.
+            return ("Brooooooklyn/Qwen3.5-9B-unsloth-mlx", 32_768)
         case "qwen3_5_4b":
-            return ("mlx-community/Qwen3.5-4B-OptiQ-4bit", 32_768)
+            // Uniform 4-bit. OptiQ variant was catastrophically broken (0% tool calling).
+            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
         case "qwen3_5_2b":
             // Qwen3.5-2B with OptiQ mixed-precision. Compact, fast.
             return ("mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768)
         default: // "auto"
-            if totalGB >= 64 {
-                // 35B-A3B MoE: frontier intelligence at 3B activation speed.
-                // 20GB VRAM — needs 64GB+ for comfortable headroom with KV cache + TTS + STT.
-                // Natively multimodal — no separate VLM needed.
-                return ("mlx-community/Qwen3.5-35B-A3B-4bit", 131_072)
-            } else if totalGB >= 24 {
-                // 9B: the sweet spot for most machines.
-                // 3x faster TPS than 35B, follows tool instructions reliably,
-                // no pre-tool hallucination, clean conversational responses.
-                // ~5 GB VRAM + ~3GB for STT/TTS/speaker = ~8GB total pipeline.
-                return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
-            } else if totalGB >= 16 {
-                return ("mlx-community/Qwen3.5-4B-OptiQ-4bit", 32_768)
+            if totalGB >= 16 {
+                // 9B Unsloth: per-tensor mixed-bit quantization (imatrix-calibrated).
+                // Benchmarked 2026-03-28: 100% tool calling, 100% assistant fit,
+                // 100% Fae capability, 100% serialization. Best quality at any size.
+                // ~6 GB VRAM + ~3GB for STT/TTS/speaker = ~9GB total pipeline.
+                return ("Brooooooklyn/Qwen3.5-9B-unsloth-mlx", 32_768)
+            } else if totalGB >= 8 {
+                // 4B uniform: reliable tool calling (100%), 95% assistant fit.
+                // ~2.3 GB VRAM. OptiQ variant was broken — use plain uniform.
+                return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
             } else {
                 // Qwen3.5-2B with OptiQ mixed-precision for low-RAM Macs.
                 return ("mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768)
