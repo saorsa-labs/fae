@@ -441,16 +441,32 @@ struct FaeConfig: Codable {
         return "tiny"
     }
 
+    /// Training preset parameters for mlx-tune SFTTrainer.
+    ///
+    /// Keys match train.py PRESET_MAP: max_steps, batch_size,
+    /// gradient_accumulation_steps, lr, max_seq_length, lora_r, warmup_steps.
     static func trainingPresetParameters(_ preset: String) -> [String: Any] {
         switch preset.lowercased() {
         case "smoke":
-            return ["iters": 10, "batch_size": 1, "num_layers": 4, "learning_rate": 1e-4, "max_seq_length": 512]
+            return [
+                "max_steps": 10, "batch_size": 1, "gradient_accumulation_steps": 1,
+                "lr": 1e-4, "max_seq_length": 512, "lora_r": 8, "warmup_steps": 0,
+            ]
         case "light":
-            return ["iters": 50, "batch_size": 2, "num_layers": 8, "learning_rate": 5e-5, "max_seq_length": 1024]
+            return [
+                "max_steps": 50, "batch_size": 2, "gradient_accumulation_steps": 2,
+                "lr": 5e-5, "max_seq_length": 1024, "lora_r": 16, "warmup_steps": 5,
+            ]
         case "standard":
-            return ["iters": 200, "batch_size": 4, "num_layers": 16, "learning_rate": 2e-5, "max_seq_length": 2048]
+            return [
+                "max_steps": 200, "batch_size": 4, "gradient_accumulation_steps": 4,
+                "lr": 2e-5, "max_seq_length": 2048, "lora_r": 16, "warmup_steps": 10,
+            ]
         case "deep":
-            return ["iters": 500, "batch_size": 4, "num_layers": 32, "learning_rate": 1e-5, "max_seq_length": 2048]
+            return [
+                "max_steps": 500, "batch_size": 4, "gradient_accumulation_steps": 4,
+                "lr": 1e-5, "max_seq_length": 2048, "lora_r": 32, "warmup_steps": 20,
+            ]
         default:
             return trainingPresetParameters("light")
         }

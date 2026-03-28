@@ -159,8 +159,9 @@ actor ModelManager {
 
     /// Load the fast VLM (SmolVLM2-256M) for proactive awareness.
     ///
-    /// Called during startup alongside STT/LLM/TTS. Non-blocking on the main pipeline —
-    /// if download is needed, awareness tasks gracefully degrade until it's ready.
+    /// Called during startup alongside STT/LLM/TTS. Retries once on failure
+    /// (network drops during the ~700MB download are common on first launch).
+    /// Emits `runtimeProgress` events so the orb shows download progress.
     func loadFastVLMIfNeeded(config: FaeConfig) async {
         guard config.vision.enabled else { return }
         guard fastVLMEngine == nil else { return }
@@ -169,25 +170,82 @@ actor ModelManager {
             return
         }
 
-        let engine = MLXVLMEngine()
-        NSLog("ModelManager: loading fast VLM (%@) for proactive awareness", modelId)
+        let maxAttempts = 2
+        for attempt in 1 ... maxAttempts {
+            let engine = MLXVLMEngine()
+            NSLog("ModelManager: loading fast VLM (%@) attempt %d/%d", modelId, attempt, maxAttempts)
+            let bus = self.eventBus
 
+            do {
+                try await engine.load(modelID: modelId) { progress in
+                    let fraction = progress.fractionCompleted
+                    // Map VLM download progress into the 0.90–0.97 range of the overall startup bar.
+                    let mappedProgress = 0.90 + fraction * 0.07
+                    bus.send(.runtimeProgress(stage: "fast_vlm_downloading", progress: mappedProgress))
+                    if fraction < 1.0 {
+                        let pct = Int(fraction * 100)
+                        if pct % 10 == 0 {
+                            NSLog("ModelManager: downloading fast VLM %d%%", pct)
+                        }
+                    }
+                }
+                await engine.warmup()
+                self.fastVLMEngine = engine
+                eventBus.send(.modelLoaded(engine: "fast_vlm", modelId: modelId))
+                NSLog("ModelManager: fast VLM loaded and warm (%@)", modelId)
+                return // Success — exit retry loop.
+            } catch {
+                NSLog(
+                    "ModelManager: fast VLM load failed (attempt %d/%d): %@",
+                    attempt, maxAttempts, error.localizedDescription
+                )
+                if attempt < maxAttempts {
+                    NSLog("ModelManager: retrying fast VLM download in 5s...")
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                }
+                // Final attempt failure — non-fatal, awareness degrades to no-VLM path.
+            }
+        }
+    }
+
+    /// Pre-download the deep VLM model in the background after startup.
+    ///
+    /// On high-RAM systems (≥32GB), eagerly downloads SmolVLM2-500M so it's cached
+    /// locally when the user first uses a vision tool. Does NOT load into memory —
+    /// only ensures the HuggingFace cache is populated. No retry: if the download
+    /// fails the model will be fetched on first use instead.
+    func predownloadDeepVLMIfNeeded(config: FaeConfig) async {
+        guard config.vision.enabled else { return }
+        let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
+        guard totalGB >= 32 else { return }
+        guard let (modelId, _) = FaeConfig.recommendedVLMModel(preset: config.vision.modelPreset) else {
+            return
+        }
+
+        // Check if already loaded (user already triggered a vision tool).
+        if let engine = vlmEngine, await engine.isLoaded { return }
+
+        NSLog("ModelManager: pre-downloading deep VLM (%@) for high-RAM system (%llu GB)", modelId, totalGB)
+
+        // Use a throwaway engine just to trigger the HuggingFace download.
+        // The actual loading into GPU memory happens on-demand via loadVLMIfNeeded().
+        let tempEngine = MLXVLMEngine()
         do {
-            try await engine.load(modelID: modelId) { progress in
+            try await tempEngine.load(modelID: modelId) { progress in
                 if progress.fractionCompleted < 1.0 {
                     let pct = Int(progress.fractionCompleted * 100)
                     if pct % 25 == 0 {
-                        NSLog("ModelManager: downloading fast VLM %d%%", pct)
+                        NSLog("ModelManager: pre-downloading deep VLM %d%%", pct)
                     }
                 }
             }
-            await engine.warmup()
-            self.fastVLMEngine = engine
-            eventBus.send(.modelLoaded(engine: "fast_vlm", modelId: modelId))
-            NSLog("ModelManager: fast VLM loaded and warm (%@)", modelId)
+            NSLog("ModelManager: deep VLM pre-downloaded and cached (%@)", modelId)
+            // Store as the deep VLM engine so it's ready immediately.
+            self.vlmEngine = tempEngine
+            eventBus.send(.modelLoaded(engine: "vlm", modelId: modelId))
         } catch {
-            NSLog("ModelManager: fast VLM load failed (non-fatal): %@", error.localizedDescription)
-            // Non-fatal — proactive awareness falls back to no-VLM path
+            NSLog("ModelManager: deep VLM pre-download failed (non-fatal): %@", error.localizedDescription)
+            // Not a problem — will download on-demand when user first uses vision tool.
         }
     }
 
@@ -571,8 +629,7 @@ actor ModelManager {
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))
 
         // Fast VLM — load SmolVLM2-256M for always-on proactive awareness.
-        // Non-blocking: if download needed, awareness gracefully degrades until ready.
-        // Loads after all critical engines (STT/LLM/TTS/Speaker) to avoid delaying voice.
+        // Retries once on download failure. Progress mapped to 0.90–0.97 range.
         await loadFastVLMIfNeeded(config: config)
 
         eventBus.send(.runtimeProgress(stage: "verify_complete", progress: 0.98))

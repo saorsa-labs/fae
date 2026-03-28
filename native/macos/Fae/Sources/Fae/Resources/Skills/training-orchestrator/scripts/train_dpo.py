@@ -3,11 +3,10 @@
 # dependencies = ["mlx-tune>=0.4.11", "datasets>=2.14.0"]
 # ///
 
-"""Launch LoRA SFT training via mlx-tune as a detached subprocess.
+"""Launch DPO preference training via mlx-tune as a detached subprocess.
 
-Uses mlx-tune's Unsloth-compatible API (FastLanguageModel + SFTTrainer)
-instead of raw mlx_lm.lora for better learning rate scheduling, gradient
-accumulation, and checkpoint management.
+Uses correction pairs extracted by training-data-bridge/extract_corrections.py
+to train the model to prefer corrected responses over rejected ones.
 """
 
 import json
@@ -16,7 +15,7 @@ import subprocess
 import sys
 import time
 
-# Model map — uses Qwen3.5 to match Fae's production LLM stack.
+# Same model map as train.py — Qwen3.5 to match Fae's production stack.
 MODEL_MAP = {
     "tiny": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
     "small": "mlx-community/Qwen3.5-4B-OptiQ-4bit",
@@ -29,61 +28,53 @@ PRESET_MAP = {
         "max_steps": 10,
         "batch_size": 1,
         "gradient_accumulation_steps": 1,
-        "lr": 1e-4,
-        "max_seq_length": 512,
+        "lr": 5e-7,
+        "beta": 0.1,
+        "max_seq_length": 1024,
         "lora_r": 8,
-        "warmup_steps": 0,
     },
     "light": {
-        "max_steps": 50,
-        "batch_size": 2,
+        "max_steps": 30,
+        "batch_size": 1,
         "gradient_accumulation_steps": 2,
-        "lr": 5e-5,
+        "lr": 5e-7,
+        "beta": 0.1,
         "max_seq_length": 1024,
         "lora_r": 16,
-        "warmup_steps": 5,
     },
     "standard": {
-        "max_steps": 200,
-        "batch_size": 4,
+        "max_steps": 100,
+        "batch_size": 2,
         "gradient_accumulation_steps": 4,
-        "lr": 2e-5,
+        "lr": 2e-7,
+        "beta": 0.1,
         "max_seq_length": 2048,
         "lora_r": 16,
-        "warmup_steps": 10,
-    },
-    "deep": {
-        "max_steps": 500,
-        "batch_size": 4,
-        "gradient_accumulation_steps": 4,
-        "lr": 1e-5,
-        "max_seq_length": 2048,
-        "lora_r": 32,
-        "warmup_steps": 20,
     },
 }
 
-# Standalone training script that runs as a detached process.
-TRAIN_SCRIPT = '''
+# Standalone DPO training script.
+DPO_TRAIN_SCRIPT = '''
 # /// script
 # requires-python = ">=3.10"
 # dependencies = ["mlx-tune>=0.4.11", "datasets>=2.14.0"]
 # ///
 
-"""Detached SFT training process — launched by train.py."""
+"""Detached DPO training process — launched by train_dpo.py."""
 
 import json
+import os
 import sys
 import traceback
 
 def main():
     config = json.loads(sys.argv[1])
 
-    from mlx_tune import FastLanguageModel, SFTTrainer, SFTConfig
+    from mlx_tune import FastLanguageModel, DPOTrainer, DPOConfig
     from datasets import load_dataset
 
     model_id = config["model_id"]
-    data_dir = config["data_dir"]
+    dpo_data_path = config["dpo_data_path"]
     adapter_dir = config["adapter_dir"]
     params = config["params"]
 
@@ -99,43 +90,34 @@ def main():
     model = FastLanguageModel.get_peft_model(
         model,
         r=params["lora_r"],
-        lora_alpha=params["lora_r"],  # alpha = r is standard
+        lora_alpha=params["lora_r"],
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         lora_dropout=0.05,
     )
 
-    # Load SFT dataset.
-    data_files = {"train": f"{data_dir}/train.jsonl"}
-    valid_path = f"{data_dir}/valid.jsonl"
-    import os
-    if os.path.exists(valid_path):
-        data_files["validation"] = valid_path
+    # Load DPO dataset — expects {prompt, chosen, rejected} fields.
+    dataset = load_dataset("json", data_files={"train": dpo_data_path})
 
-    dataset = load_dataset("json", data_files=data_files)
-
-    # Configure training.
-    sft_config = SFTConfig(
+    # Configure DPO training.
+    dpo_config = DPOConfig(
         output_dir=adapter_dir,
+        beta=params["beta"],
         per_device_train_batch_size=params["batch_size"],
         gradient_accumulation_steps=params["gradient_accumulation_steps"],
         learning_rate=params["lr"],
-        lr_scheduler_type="cosine",
-        warmup_steps=params["warmup_steps"],
         max_steps=params["max_steps"],
         max_seq_length=params["max_seq_length"],
-        logging_steps=max(1, params["max_steps"] // 20),
-        save_steps=max(10, params["max_steps"] // 5),
+        logging_steps=max(1, params["max_steps"] // 10),
+        save_steps=max(5, params["max_steps"] // 5),
         save_total_limit=2,
-        weight_decay=0.01,
     )
 
-    # Train.
-    trainer = SFTTrainer(
+    # Train with DPO.
+    trainer = DPOTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset["train"],
-        eval_dataset=dataset.get("validation"),
-        args=sft_config,
+        args=dpo_config,
     )
 
     result = trainer.train()
@@ -143,13 +125,14 @@ def main():
     # Save final adapter.
     model.save_pretrained(adapter_dir)
 
-    # Write training metrics for evaluate.py.
+    # Write metrics.
     metrics = {
         "final_loss": getattr(result, "training_loss", None),
         "total_steps": params["max_steps"],
         "model_id": model_id,
+        "mode": "dpo",
+        "beta": params["beta"],
         "lora_r": params["lora_r"],
-        "max_seq_length": params["max_seq_length"],
     }
     with open(os.path.join(adapter_dir, "train_metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
@@ -169,15 +152,6 @@ def main():
     target = params.get("target_model_preset", "auto")
     preset = params.get("training_preset", "light")
     max_iters = params.get("max_iterations", None)
-    mode = params.get("mode", "sft")  # "sft" or "dpo"
-
-    if mode == "dpo":
-        # Delegate to train_dpo.py for DPO training.
-        print(json.dumps({
-            "error": "Use train_dpo script for DPO training.",
-            "hint": "run_skill training-orchestrator train_dpo",
-        }))
-        return
 
     if target == "auto":
         ram_bytes = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]).strip())
@@ -197,34 +171,48 @@ def main():
     if max_iters:
         train_params["max_steps"] = int(max_iters)
 
+    # DPO data comes from training-data-bridge/extract_corrections.py output.
     data_dir = os.path.expanduser("~/Library/Application Support/fae/training/data")
+    dpo_data_path = os.path.join(data_dir, "dpo_pairs.jsonl")
+
+    if not os.path.exists(dpo_data_path):
+        print(json.dumps({
+            "error": "No DPO correction pairs found. Run training-data-bridge extract_corrections first.",
+            "path": dpo_data_path,
+        }))
+        return
+
+    # Check we have enough pairs for meaningful training.
+    with open(dpo_data_path) as f:
+        pair_count = sum(1 for _ in f)
+
+    if pair_count < 5:
+        print(json.dumps({
+            "error": f"Only {pair_count} DPO pairs found — need at least 5 for meaningful training.",
+            "pair_count": pair_count,
+        }))
+        return
+
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    adapter_dir = os.path.expanduser(f"~/Library/Application Support/fae/models/personal/{timestamp}")
+    adapter_dir = os.path.expanduser(f"~/Library/Application Support/fae/models/personal/dpo-{timestamp}")
     run_dir = os.path.expanduser("~/Library/Application Support/fae/training")
     log_path = os.path.join(run_dir, "train.log")
 
     os.makedirs(adapter_dir, exist_ok=True)
     os.makedirs(run_dir, exist_ok=True)
 
-    train_file = os.path.join(data_dir, "train.jsonl")
-    if not os.path.exists(train_file):
-        print(json.dumps({"error": "No training data found. Run export_data first.", "path": train_file}))
-        return
-
-    # Write the detached training script to a temp file.
-    script_path = os.path.join(run_dir, "_train_worker.py")
+    # Write worker script.
+    script_path = os.path.join(run_dir, "_train_dpo_worker.py")
     with open(script_path, "w") as f:
-        f.write(TRAIN_SCRIPT)
+        f.write(DPO_TRAIN_SCRIPT)
 
-    # Build config for the worker.
     worker_config = json.dumps({
         "model_id": model_id,
-        "data_dir": data_dir,
+        "dpo_data_path": dpo_data_path,
         "adapter_dir": adapter_dir,
         "params": train_params,
     })
 
-    # Launch as detached uv process.
     cmd = [sys.executable, script_path, worker_config]
 
     with open(log_path, "w") as log_file:
@@ -240,8 +228,9 @@ def main():
         "adapter_path": adapter_dir,
         "model_id": model_id,
         "preset": preset,
-        "mode": "sft",
+        "mode": "dpo",
         "params": train_params,
+        "dpo_pairs": pair_count,
         "started_at": timestamp,
         "log_path": log_path,
         "engine": "mlx-tune",
@@ -255,7 +244,8 @@ def main():
         "adapter_path": adapter_dir,
         "model_id": model_id,
         "preset": preset,
-        "mode": "sft",
+        "mode": "dpo",
+        "dpo_pairs": pair_count,
         "engine": "mlx-tune",
         "log_path": log_path,
     }))

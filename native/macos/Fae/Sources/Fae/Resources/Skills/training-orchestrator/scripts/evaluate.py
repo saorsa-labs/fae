@@ -3,7 +3,11 @@
 # dependencies = []
 # ///
 
-"""Benchmark candidate adapter against base model."""
+"""Benchmark candidate adapter against base model.
+
+Reads training metrics from mlx-tune's train_metrics.json (preferred)
+or falls back to parsing raw training log output.
+"""
 
 import json
 import os
@@ -36,18 +40,29 @@ def main():
         with open(val_path) as f:
             val_count = sum(1 for _ in f)
 
-    log_path = os.path.expanduser("~/Library/Application Support/fae/training/train.log")
+    # Try structured metrics from mlx-tune first.
     final_loss = None
-    if os.path.exists(log_path):
-        with open(log_path) as f:
-            for line in f:
-                if "loss" in line.lower() and "Iter" in line:
-                    for part in line.split(","):
-                        if "loss" in part.lower():
-                            try:
-                                final_loss = float(part.split()[-1])
-                            except (ValueError, IndexError):
-                                pass
+    mode = "sft"
+    metrics_path = os.path.join(adapter_path, "train_metrics.json")
+
+    if os.path.exists(metrics_path):
+        with open(metrics_path) as f:
+            metrics = json.load(f)
+        final_loss = metrics.get("final_loss")
+        mode = metrics.get("mode", "sft")
+    else:
+        # Fallback: parse training log (legacy mlx_lm.lora format).
+        log_path = os.path.expanduser("~/Library/Application Support/fae/training/train.log")
+        if os.path.exists(log_path):
+            with open(log_path) as f:
+                for line in f:
+                    if "loss" in line.lower() and "Iter" in line:
+                        for part in line.split(","):
+                            if "loss" in part.lower():
+                                try:
+                                    final_loss = float(part.split()[-1])
+                                except (ValueError, IndexError):
+                                    pass
 
     last_score = params.get("last_benchmark_score")
 
@@ -68,6 +83,8 @@ def main():
         "score": score,
         "previous_score": last_score,
         "recommendation": recommendation,
+        "mode": mode,
+        "engine": "mlx-tune" if os.path.exists(metrics_path) else "mlx_lm.lora",
     }))
 
 

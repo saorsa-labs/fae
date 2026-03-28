@@ -599,6 +599,17 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 self.observeEnrollmentComplete()
                 // Listen for mic mute toggle from the UI mic button.
                 self.observeMicMuteToggle()
+
+                // Pre-download deep VLM in background on high-RAM systems (≥32GB).
+                // Downloads SmolVLM2-500M so it's cached for first vision tool use.
+                // Runs after all critical startup is done to avoid contention.
+                let mm = self.modelManager
+                let cfg = runtimeConfig
+                Task.detached(priority: .background) {
+                    // Brief delay so voice pipeline has full GPU bandwidth first.
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    await mm.predownloadDeepVLMIfNeeded(config: cfg)
+                }
             } catch {
                 let errMsg = "FaeCore: failed to start pipeline: \(error.localizedDescription)"
                 NSLog("%@", errMsg)

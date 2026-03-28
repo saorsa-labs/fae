@@ -276,7 +276,7 @@ for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d
 | `toolbox` | Executable | Local tool registry: install, verify, search, uninstall |
 | `mesh` | Executable | Peer discovery + tool sharing via Bonjour/mDNS |
 | `acp-setup` | Executable | Install and manage acpx for ACP agent delegation |
-| `training-orchestrator` | Executable | Personal LoRA fine-tuning pipeline |
+| `training-orchestrator` | Executable | Personal fine-tuning via mlx-tune: SFT, DPO, STT LoRA adapters |
 | `training-data-bridge` | Executable | Extract SFT/DPO training data from memory |
 | `huggingface-scout` | Executable | Search HuggingFace Hub for models/datasets |
 | `self-diagnostic` | Instruction | Comprehensive health check: system, pipeline, memory, tools, speaker |
