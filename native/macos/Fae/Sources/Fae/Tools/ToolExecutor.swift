@@ -601,12 +601,12 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
         }
 
-        // ── 13b. Pre-state capture (BEFORE execution) ────────────────────
+        // ── 13c. Pre-state capture (BEFORE execution) ────────────────────
         // Capture the file state now, before the tool mutates it.
         // This must happen before step 14 — after execution the original content is gone.
         let preState = receiptStore?.capturePreStateForTool(toolName: call.name, arguments: call.arguments)
 
-        // ── 13c. Irreversible countdown ───────────────────────────────────
+        // ── 13d. Irreversible countdown ───────────────────────────────────
         // For high-impact irreversible actions (mail send, agent delegation),
         // present a 5-second countdown so the user can barge in to cancel.
         // Skip for proactive tasks (no user present).
@@ -716,7 +716,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         }
 
         // ── 16. Action receipt ────────────────────────────────────────────
-        // Pre-state (preState) was captured at step 13b, before the tool executed —
+        // Pre-state (preState) was captured at step 13c, before the tool executed —
         // it reflects the original file content, not the post-mutation content.
         var narrationReceiptId: String?
         if !result.isError, let store = receiptStore {
