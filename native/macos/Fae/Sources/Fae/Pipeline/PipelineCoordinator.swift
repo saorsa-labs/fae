@@ -81,9 +81,17 @@ actor PipelineCoordinator {
     }
 
     /// Wire the action receipt store into the tool executor.
+    ///
+    /// Also retains a reference in the coordinator so that barge-in handlers
+    /// can undo the last narrated action when the user interrupts narration.
     func setReceiptStore(_ store: ReceiptStore) async {
+        narrationReceiptStore = store
         await toolExecutor.setReceiptStore(store)
     }
+
+    /// Receipt store retained for narration-time undo.
+    /// Populated by `setReceiptStore(_:)` alongside the tool executor wire.
+    private var narrationReceiptStore: ReceiptStore?
 
     // MARK: - Live Config Overrides
 
@@ -1182,6 +1190,14 @@ actor PipelineCoordinator {
         bargeInState.isSuppressed = true
         defer { bargeInState.isSuppressed = false }
         await speakText(text, isFinal: true, voiceInstruct: voiceInstruct)
+    }
+
+    /// Speak text via TTS while keeping barge-in active.
+    ///
+    /// Unlike `speakDirect`, barge-in is NOT suppressed so the user can interrupt
+    /// mid-narration. Used for post-action narration where interrupting triggers undo.
+    func speakInterruptible(_ text: String) async {
+        await speakText(text, isFinal: true)
     }
 
     /// Set/clear the first-owner enrollment active flag.
@@ -7372,6 +7388,27 @@ actor PipelineCoordinator {
             spokenFraction: 0  // Approximate — exact tracking deferred.
         )
         bargeInState.recordInterruption(outcome: outcome, paused: true)
+
+        // Narration undo: if the user interrupted during post-action narration,
+        // undo the action whose receipt ID was tagged in bargeInState.
+        if let receiptId = bargeInState.pendingNarrationReceiptId {
+            bargeInState.pendingNarrationReceiptId = nil
+            if let store = narrationReceiptStore {
+                Task {
+                    let undoResult = await store.undo(receiptId: receiptId)
+                    switch undoResult {
+                    case .success:
+                        NSLog("PipelineCoordinator: barge-in undo succeeded for receipt %@", receiptId)
+                        await speakDirect("Undone.")
+                    case .failure(let err):
+                        NSLog("PipelineCoordinator: barge-in undo failed for receipt %@: %@",
+                              receiptId, String(describing: err))
+                        // Don't speak an error — the barge-in audio will be processed
+                        // as a new user turn and Fae will respond naturally.
+                    }
+                }
+            }
+        }
     }
 
     private func markGenerationInterrupted(file: String = #file, line: Int = #line) {
@@ -8331,5 +8368,39 @@ extension PipelineCoordinator: ToolExecutorDelegate {
     /// Speak text directly through the playback pipeline (used for non-manual approval prompts).
     func toolExecutorSpeakDirect(_ text: String) async {
         await speakDirect(text)
+    }
+
+    /// Narrate a completed action to the user with barge-in enabled for undo.
+    ///
+    /// Tags `bargeInState.pendingNarrationReceiptId` so that if the user
+    /// interrupts mid-narration, the barge-in handler can undo the action.
+    /// Only called for write-class tools (reversibility != `.notApplicable`).
+    func toolExecutorNarrateAction(_ text: String, receiptId: String?) async {
+        bargeInState.pendingNarrationReceiptId = receiptId
+        defer { bargeInState.pendingNarrationReceiptId = nil }
+        await speakInterruptible(text)
+    }
+
+    /// Present a narrated countdown before executing an irreversible action.
+    ///
+    /// Speaks the announcement then polls for barge-in once per second for 5 seconds.
+    /// Returns `true` if the countdown completes without interruption (proceed),
+    /// or `false` if the user barged in (cancel the action).
+    func toolExecutorCountdownBeforeIrreversible(_ text: String) async -> Bool {
+        // Announce the countdown — non-suppressible so user hears it clearly.
+        await speakDirect(text)
+
+        // Poll for barge-in once per second for 5 seconds.
+        for _ in 0..<5 {
+            // Check whether a barge-in is pending (user is speaking).
+            if bargeInState.pendingBargeIn != nil {
+                await speakDirect("Cancelled.")
+                NSLog("PipelineCoordinator: irreversible countdown cancelled by barge-in")
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if Task.isCancelled { return false }
+        }
+        return true
     }
 }

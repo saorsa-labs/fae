@@ -53,6 +53,16 @@ struct BargeInState {
     /// Buffer of assistant text at the point of interruption (for recovery).
     var lastAssistantTextBuffer: String = ""
 
+    // MARK: - Narration Receipt Tagging
+
+    /// Receipt ID of the most recent action narration in progress.
+    ///
+    /// Set by `PipelineCoordinator.toolExecutorNarrateAction(_:receiptId:)` before
+    /// starting narration TTS so that a barge-in during narration can offer an
+    /// undo of the specific action just described. Cleared when narration ends
+    /// or when the pipeline is reset.
+    var pendingNarrationReceiptId: String?
+
     // MARK: - Path C: Generation Takeover
 
     /// Tracks user speech energy during silent generation. When the user speaks
@@ -107,6 +117,7 @@ struct BargeInState {
         denyCooldownUntil = nil
         generationTakeoverCandidate = nil
         lastAssistantTextBuffer = ""
+        pendingNarrationReceiptId = nil
     }
 }
 

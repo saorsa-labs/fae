@@ -601,6 +601,30 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
         }
 
+        // ── 13b. Pre-state capture (BEFORE execution) ────────────────────
+        // Capture the file state now, before the tool mutates it.
+        // This must happen before step 14 — after execution the original content is gone.
+        let preState = receiptStore?.capturePreStateForTool(toolName: call.name, arguments: call.arguments)
+
+        // ── 13c. Irreversible countdown ───────────────────────────────────
+        // For high-impact irreversible actions (mail send, agent delegation),
+        // present a 5-second countdown so the user can barge in to cancel.
+        // Skip for proactive tasks (no user present).
+        if context.proactiveContext == nil,
+           Self.requiresCountdown(toolName: call.name, arguments: call.arguments)
+        {
+            let countdownText = Self.buildCountdownText(toolName: call.name, arguments: call.arguments)
+            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(countdownText) ?? true
+            if !shouldProceed {
+                return ToolExecutorResult(
+                    result: .error("Action cancelled by user during countdown."),
+                    approvedByUser: false,
+                    damageControlIntervened: false,
+                    latencyMs: nil
+                )
+            }
+        }
+
         // ── 14. Execute with timeout ────────────────────────────────────
         let timeoutSeconds = Self.toolTimeoutSeconds(for: call.name)
         let startTime = Date()
@@ -692,14 +716,33 @@ actor ToolExecutor: ToolExecutorProtocol {
         }
 
         // ── 16. Action receipt ────────────────────────────────────────────
+        // Pre-state (preState) was captured at step 13b, before the tool executed —
+        // it reflects the original file content, not the post-mutation content.
+        var narrationReceiptId: String?
         if !result.isError, let store = receiptStore {
-            await store.createReceipt(
+            narrationReceiptId = await store.createReceipt(
                 toolName: call.name,
                 arguments: call.arguments,
+                preState: preState,
                 speakerId: context.speakerId,
                 sessionId: nil,
                 turnId: context.workflowTurnID
             )
+        }
+
+        // ── 17. Post-action narration ─────────────────────────────────────
+        // Only narrate write-class tools. Read-only tools (reversibility =
+        // .notApplicable) are silent. Narration is interruptible — barge-in
+        // during narration offers undo of the tagged receipt.
+        // Skip narration for proactive tasks (no user present to hear it).
+        let reversibility = ActionReversibility.classify(toolName: call.name, arguments: call.arguments)
+        if !result.isError,
+           reversibility != .notApplicable,
+           context.proactiveContext == nil
+        {
+            if let narrationText = Self.buildNarrationText(toolName: call.name, arguments: call.arguments) {
+                await delegate?.toolExecutorNarrateAction(narrationText, receiptId: narrationReceiptId)
+            }
         }
 
         return ToolExecutorResult(
@@ -989,5 +1032,150 @@ actor ToolExecutor: ToolExecutorProtocol {
             charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
         )
         return trimmed.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    // MARK: - Narration + Countdown Helpers
+
+    /// Build a short human-readable narration for a completed tool action.
+    ///
+    /// Returns `nil` if no natural narration phrase is available for this tool.
+    /// Narration is only called for write-class tools (reversibility != .notApplicable).
+    static func buildNarrationText(toolName: String, arguments: [String: Any]) -> String? {
+        switch toolName {
+        case "write":
+            if let path = arguments["path"] as? String {
+                let filename = URL(fileURLWithPath: path).lastPathComponent
+                return "I've saved that to \(filename)."
+            }
+            return "I've written that file."
+
+        case "edit":
+            if let path = arguments["path"] as? String {
+                let filename = URL(fileURLWithPath: path).lastPathComponent
+                return "I've updated \(filename)."
+            }
+            return "I've made that edit."
+
+        case "bash":
+            // Only reversible bash commands get narration.
+            if let command = arguments["command"] as? String {
+                let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("mkdir ") { return "I've created that folder." }
+                if trimmed.hasPrefix("cp ")    { return "I've copied that file." }
+                if trimmed.hasPrefix("mv ")    { return "I've moved that file." }
+                if trimmed.hasPrefix("touch ") { return "Done." }
+                if trimmed.hasPrefix("echo ")  { return "I've written that." }
+            }
+            return nil
+
+        case "calendar":
+            let action = arguments["action"] as? String ?? ""
+            if action == "create" { return "I've added that to your calendar." }
+            if action == "update" { return "I've updated that calendar event." }
+            if action == "delete" { return "I've removed that calendar event." }
+            return nil
+
+        case "reminders":
+            let action = arguments["action"] as? String ?? ""
+            if action == "create" { return "I've added that reminder." }
+            if action == "update" { return "I've updated that reminder." }
+            if action == "complete" { return "I've marked that reminder done." }
+            if action == "delete" { return "I've deleted that reminder." }
+            return nil
+
+        case "contacts":
+            let action = arguments["action"] as? String ?? ""
+            if action == "create" { return "I've added that contact." }
+            if action == "update" { return "I've updated that contact." }
+            if action == "delete" { return "I've deleted that contact." }
+            return nil
+
+        case "notes":
+            let action = arguments["action"] as? String ?? ""
+            if action == "create" { return "I've created that note." }
+            if action == "update" { return "I've updated that note." }
+            if action == "delete" { return "I've deleted that note." }
+            return nil
+
+        case "self_config":
+            let op = arguments["operation"] as? String ?? ""
+            if op == "set" { return "I've updated that setting." }
+            if op == "set_directive" || op == "append_directive" { return "I've updated your directive." }
+            if op == "clear_directive" { return "I've cleared your directive." }
+            return nil
+
+        case "scheduler_create":
+            return "I've scheduled that task."
+        case "scheduler_update":
+            return "I've updated that scheduled task."
+        case "scheduler_delete":
+            return "I've removed that scheduled task."
+
+        case "manage_skill":
+            let action = arguments["action"] as? String ?? ""
+            if action == "install" || action == "enable" { return "Skill ready." }
+            if action == "disable" || action == "uninstall" { return "Done." }
+            return nil
+
+        case "voice_identity":
+            let action = arguments["action"] as? String ?? ""
+            if action == "enroll" { return "I've enrolled that voice profile." }
+            if action == "delete" { return "I've removed that voice profile." }
+            return nil
+
+        case "channel_setup":
+            return "Channel configured."
+
+        case "plugin_manage":
+            return "Done."
+
+        default:
+            // Irreversible tools (mail, delegate_agent, agent_session, run_skill,
+            // click/type_text/scroll) don't use narration — mail gets a countdown,
+            // delegation tools get a countdown, computer-use is silent.
+            return nil
+        }
+    }
+
+    /// Tools that require a countdown announcement before execution.
+    ///
+    /// Only high-impact irreversible actions that the user should have a
+    /// chance to cancel: mail sends, agent delegation.
+    static func requiresCountdown(toolName: String, arguments: [String: Any]) -> Bool {
+        switch toolName {
+        case "mail":
+            let action = arguments["action"] as? String ?? ""
+            // Sending, replying, and forwarding are irreversible.
+            return action == "send" || action == "reply" || action == "forward"
+
+        case "delegate_agent", "agent_session":
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    /// Build the countdown announcement text for an irreversible action.
+    static func buildCountdownText(toolName: String, arguments: [String: Any]) -> String {
+        switch toolName {
+        case "mail":
+            let action = arguments["action"] as? String ?? "send"
+            if action == "reply" {
+                return "Sending that reply in 5 seconds. Say stop to cancel."
+            } else if action == "forward" {
+                return "Forwarding that in 5 seconds. Say stop to cancel."
+            }
+            return "Sending that email in 5 seconds. Say stop to cancel."
+
+        case "delegate_agent":
+            return "Starting that task in 5 seconds. Say stop to cancel."
+
+        case "agent_session":
+            return "Opening that agent session in 5 seconds. Say stop to cancel."
+
+        default:
+            return "Proceeding in 5 seconds. Say stop to cancel."
+        }
     }
 }

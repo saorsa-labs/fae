@@ -35,4 +35,26 @@ protocol ToolExecutorDelegate: AnyObject, Sendable {
     /// Speak text directly through the audio playback pipeline (used for
     /// non-manual approval prompts).
     func toolExecutorSpeakDirect(_ text: String) async
+
+    /// Narrate a completed action to the user after successful tool execution.
+    ///
+    /// Unlike `toolExecutorSpeakDirect`, narration is **interruptible** — barge-in
+    /// remains active so the user can interrupt and trigger an undo of the
+    /// just-completed action. The `receiptId` is tagged in barge-in state so
+    /// that an interrupt during narration automatically undoes the right receipt.
+    ///
+    /// Called only for write-class tools (reversibility != `.notApplicable`).
+    /// Read-only tools (read, web_search, screenshot, etc.) never trigger narration.
+    func toolExecutorNarrateAction(_ text: String, receiptId: String?) async
+
+    /// Present a narrated countdown before executing an irreversible action.
+    ///
+    /// Speaks the announcement text (e.g. "Sending that email in 5 seconds.
+    /// Say stop to cancel."), then waits up to 5 seconds while monitoring for
+    /// a barge-in interrupt. Returns `true` if the countdown completes without
+    /// interruption (proceed with the action), or `false` if the user interrupted
+    /// (cancel the action).
+    ///
+    /// Called for irreversible actions: mail sends, delegate_agent, agent_session.
+    func toolExecutorCountdownBeforeIrreversible(_ text: String) async -> Bool
 }
