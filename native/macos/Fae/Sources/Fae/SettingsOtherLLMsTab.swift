@@ -101,7 +101,7 @@ struct SettingsOtherLLMsTab: View {
     }
 
     private var setupSection: some View {
-        SettingsCard(title: "Remote provider setup", icon: "slider.horizontal.3", color: .blue) {
+        SettingsCard(title: "Remote provider setup", icon: "slider.horizontal.3", color: FaeDesign.heatherMist) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("We store API keys securely in your macOS Keychain. Non-secret defaults like provider, base URL, and preferred model stay in Fae's config.")
                     .font(.caption)
@@ -248,7 +248,7 @@ struct SettingsOtherLLMsTab: View {
                                 Spacer()
                                 if remoteModel == model {
                                     Image(systemName: "checkmark")
-                                        .foregroundStyle(.green)
+                                        .foregroundStyle(FaeDesign.statusSuccess)
                                 }
                             }
                             .padding(.horizontal, 12)
@@ -280,7 +280,7 @@ struct SettingsOtherLLMsTab: View {
     }
 
     private var privacySection: some View {
-        SettingsCard(title: "Privacy and commercial reality", icon: "lock.shield", color: .purple) {
+        SettingsCard(title: "Privacy and commercial reality", icon: "lock.shield", color: FaeDesign.heatherMist) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Using OpenRouter through Fae can reduce direct exposure because Fae keeps local-only workspace context on this Mac and only forwards shareable prompt context to remote models.")
                     .font(.system(size: 13, weight: .medium, design: .rounded))

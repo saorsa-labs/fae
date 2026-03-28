@@ -31,19 +31,19 @@ struct VoiceHintsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     hintRow(
                         icon: "mic.fill",
-                        color: .green,
+                        color: FaeDesign.glenGreenText,
                         label: "Wake",
                         phrases: "\"Hey Fae\" or \"Hi Fae\""
                     )
                     hintRow(
                         icon: "hand.raised.fill",
-                        color: .orange,
+                        color: FaeDesign.faeGoldText,
                         label: "Silence",
                         phrases: "\"Stop\" \u{2022} \"Be quiet\" \u{2022} \"That\u{2019}s enough\""
                     )
                     hintRow(
                         icon: "moon.fill",
-                        color: .indigo,
+                        color: FaeDesign.heatherMistText,
                         label: "Sleep",
                         phrases: "\"Go to sleep\" \u{2022} \"Goodbye Fae\""
                     )

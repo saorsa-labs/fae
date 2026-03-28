@@ -329,12 +329,12 @@ struct InlineToolCardView: View {
         case .done:
             Image(systemName: sfSymbol)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.green.opacity(0.7))
+                .foregroundStyle(FaeDesign.glenGreen.opacity(0.7))
                 .frame(width: 16, height: 16)
         case .error:
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.red.opacity(0.7))
+                .foregroundStyle(FaeDesign.rowanBerry.opacity(0.7))
                 .frame(width: 16, height: 16)
         }
     }

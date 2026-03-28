@@ -201,9 +201,9 @@ struct ContentView: View {
                                 .padding(.vertical, 6)
                         }
                         .buttonStyle(.plain)
-                        .background(Color.red)
+                        .background(FaeDesign.rowanBerry)
                         .clipShape(Capsule())
-                        .shadow(color: .red.opacity(0.5), radius: 6)
+                        .shadow(color: FaeDesign.rowanBerry.opacity(0.5), radius: 6)
                         .padding(.trailing, 10)
                         .padding(.top, 8)
                     }
@@ -345,7 +345,7 @@ private struct EnrollmentInvitationBanner: View {
             HStack(spacing: 8) {
                 Image(systemName: "waveform.and.person.filled")
                     .font(.system(size: 13))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(FaeDesign.heatherMistText)
 
                 Text("Let me get to know you")
                     .font(.system(size: 13, weight: .medium))
@@ -362,7 +362,7 @@ private struct EnrollmentInvitationBanner: View {
             .background(.ultraThinMaterial)
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.purple.opacity(0.35), lineWidth: 1)
+                    .stroke(FaeDesign.heatherMist.opacity(0.35), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
@@ -384,7 +384,7 @@ private struct PhotoSetupBanner: View {
             HStack(spacing: 8) {
                 Image(systemName: "camera.fill")
                     .font(.system(size: 13))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(FaeDesign.heatherMistText)
 
                 Text("Let Fae see you — tap to take a quick photo")
                     .font(.system(size: 13, weight: .medium))
@@ -401,7 +401,7 @@ private struct PhotoSetupBanner: View {
             .background(.ultraThinMaterial)
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.blue.opacity(0.35), lineWidth: 1)
+                    .stroke(FaeDesign.heatherMist.opacity(0.35), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
@@ -442,7 +442,7 @@ private struct OwnerPhotoCaptureView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.green.opacity(0.6), lineWidth: 2)
+                            .stroke(FaeDesign.glenGreen.opacity(0.6), lineWidth: 2)
                     )
             } else {
                 RoundedRectangle(cornerRadius: 16)
@@ -463,7 +463,7 @@ private struct OwnerPhotoCaptureView: View {
             if let error = errorMessage {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(FaeDesign.statusError)
             }
 
             HStack(spacing: 12) {

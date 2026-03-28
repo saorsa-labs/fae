@@ -81,7 +81,7 @@ struct SettingsDeveloperTab: View {
                 if let dashboardError {
                     Text(dashboardError)
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(FaeDesign.statusError)
                 }
 
                 HStack {

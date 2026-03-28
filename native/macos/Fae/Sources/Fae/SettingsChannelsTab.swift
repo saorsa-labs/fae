@@ -59,7 +59,7 @@ struct SettingsChannelsTab: View {
             if let loadError {
                 Text(loadError)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(FaeDesign.statusError)
             }
 
             let channels = capabilities?.channels ?? []
@@ -141,7 +141,7 @@ struct SettingsChannelsTab: View {
                         disconnectChannel(channel)
                     }
                     .buttonStyle(.bordered)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(FaeDesign.statusError)
                 }
             }
         }
@@ -152,11 +152,11 @@ struct SettingsChannelsTab: View {
     private func statusBadge(for state: SettingsCapabilityManifest.ChannelCapability.State) -> some View {
         let (label, color): (String, Color) = switch state {
         case .configured:
-            ("Configured", .green)
+            ("Configured", FaeDesign.statusSuccess)
         case .missingInput:
-            ("Needs Input", .orange)
+            ("Needs Input", FaeDesign.statusWarning)
         case .skillDisabled:
-            ("Skill Disabled", .red)
+            ("Skill Disabled", FaeDesign.statusError)
         case .globalDisabled:
             ("Channels Off", .secondary)
         }

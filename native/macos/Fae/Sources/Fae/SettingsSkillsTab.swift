@@ -253,9 +253,9 @@ struct SettingsSkillsTab: View {
     @ViewBuilder
     private func tierBadge(_ tier: SkillTier) -> some View {
         let (label, color): (String, Color) = switch tier {
-        case .builtin: ("Built-in", .blue)
-        case .personal: ("Personal", .green)
-        case .community: ("Community", .orange)
+        case .builtin: ("Built-in", FaeDesign.heatherMistText)
+        case .personal: ("Personal", FaeDesign.glenGreenText)
+        case .community: ("Community", FaeDesign.faeGoldText)
         }
         Text(label)
             .font(.caption2.weight(.semibold))
@@ -268,8 +268,8 @@ struct SettingsSkillsTab: View {
     @ViewBuilder
     private func typeBadge(_ type: SkillType) -> some View {
         let (label, color): (String, Color) = switch type {
-        case .instruction: ("Instruction", .purple)
-        case .executable: ("Executable", .teal)
+        case .instruction: ("Instruction", FaeDesign.heatherMistText)
+        case .executable: ("Executable", FaeDesign.lochGreyGreen)
         }
         Text(label)
             .font(.caption2.weight(.semibold))

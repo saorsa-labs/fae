@@ -758,6 +758,16 @@ See `docs/CHANGELOG.md` for detailed milestone history.
 
 Current: v1.4.2 — ACP integration, channel adapters, training pipeline, skill hardening.
 
+## Design System
+
+Always read `DESIGN.md` before making any visual or UI decisions. All font choices, colours, spacing, and aesthetic direction are defined there. Key rules:
+- Use Scottish palette colours, not system `.blue`/`.green`/`.orange`.
+- Use `-text` colour variants for readable text on dark backgrounds (WCAG AA minimum).
+- Use Instrument Serif for display/header text, system serif for conversation bubbles, system sans for UI controls.
+- No emoji in UI headers. No purple-blue gradients. No `SF Pro Rounded` for display text.
+- Do not deviate from DESIGN.md without explicit user approval.
+- In QA mode, flag any code that contradicts DESIGN.md.
+
 ## Web browsing
 
 Use the `/browse` skill from gstack for all web browsing tasks. Do NOT use `mcp__claude-in-chrome__*` tools.

@@ -235,11 +235,11 @@ struct SettingsSchedulesTab: View {
                     Label {
                         Text("\(task.failureStreak) failure\(task.failureStreak == 1 ? "" : "s")")
                             .font(.caption2)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(FaeDesign.statusWarning)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.caption2)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(FaeDesign.statusWarning)
                     }
                 }
             }
@@ -247,7 +247,7 @@ struct SettingsSchedulesTab: View {
             if let err = task.lastError {
                 Text(err)
                     .font(.caption2)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(FaeDesign.statusError)
                     .lineLimit(2)
             }
         }

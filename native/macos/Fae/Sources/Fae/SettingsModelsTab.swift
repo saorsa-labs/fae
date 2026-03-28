@@ -314,7 +314,7 @@ struct SettingsModelsTab: View {
                     Text("Fae reloads the local pipeline automatically for model changes. First-time downloads can take a while.")
                         .font(.footnote)
                 }
-                .foregroundStyle(.orange)
+                .foregroundStyle(FaeDesign.statusWarning)
             }
 
             VStack(alignment: .leading, spacing: 8) {

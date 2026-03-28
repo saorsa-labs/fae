@@ -63,7 +63,7 @@ struct SettingsTrainingTab: View {
                         if !personalAdapterPath.isEmpty {
                             HStack {
                                 Label("Personal learning active", systemImage: "checkmark.seal.fill")
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(FaeDesign.statusSuccess)
                                 Spacer()
                                 Button("Undo") {
                                     commandSender?.sendCommand(

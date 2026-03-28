@@ -70,8 +70,7 @@ actor MLXVLMEngine: VLMEngine {
             let params = GenerateParameters(
                 maxTokens: 1,
                 temperature: 0.0,
-                topP: 1.0,
-                repetitionPenalty: 1.0
+                topP: 1.0
             )
             let stream = try await container.generate(input: lmInput, parameters: params)
             for await _ in stream { break }

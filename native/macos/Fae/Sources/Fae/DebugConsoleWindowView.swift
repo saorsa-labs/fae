@@ -37,7 +37,7 @@ struct DebugConsoleWindowView: View {
             if let copyConfirmation {
                 Text(copyConfirmation)
                     .font(.system(.caption2, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(FaeDesign.statusSuccess)
                     .padding(.leading, 4)
             }
 

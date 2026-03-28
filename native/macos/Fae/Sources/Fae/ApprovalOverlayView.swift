@@ -105,7 +105,7 @@ private struct ApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.bordered)
-                .tint(.red)
+                .tint(FaeDesign.rowanBerryText)
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: { controller.approve() }) {
@@ -115,7 +115,7 @@ private struct ApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .tint(FaeDesign.glenGreenText)
 
                 Button(action: { controller.approveAlways() }) {
                     Text("Always")
@@ -124,7 +124,7 @@ private struct ApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.blue)
+                .tint(FaeDesign.heatherMistText)
             }
         }
         .padding(14)
@@ -180,7 +180,7 @@ private struct BatchApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.bordered)
-                .tint(.red)
+                .tint(FaeDesign.rowanBerryText)
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: { controller.approveBatch() }) {
@@ -190,7 +190,7 @@ private struct BatchApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .tint(FaeDesign.glenGreenText)
             }
         }
         .padding(14)
@@ -251,7 +251,7 @@ private struct GovernanceConfirmationCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .tint(FaeDesign.faeGoldText)
                 .keyboardShortcut(.return, modifiers: [])
             }
         }
@@ -333,7 +333,7 @@ private struct ToolModeCard: View {
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.blue)
+                    .tint(FaeDesign.heatherMistText)
                     .keyboardShortcut(.return, modifiers: [])
                 }
             } else if request.reason.contains("assistant") {
@@ -356,7 +356,7 @@ private struct ToolModeCard: View {
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.green)
+                    .tint(FaeDesign.glenGreenText)
                     .keyboardShortcut(.return, modifiers: [])
                 }
             } else if request.reason.contains("non-owner") {
@@ -411,7 +411,7 @@ private struct ToolModeCard: View {
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.green)
+                    .tint(FaeDesign.glenGreenText)
                     .keyboardShortcut(.return, modifiers: [])
                 }
             }
@@ -463,7 +463,7 @@ private struct ManualApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.bordered)
-                .tint(.red)
+                .tint(FaeDesign.rowanBerryText)
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: { controller.approve() }) {
@@ -473,7 +473,7 @@ private struct ManualApprovalCard: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .tint(FaeDesign.faeGoldText)
             }
         }
         .padding(14)
@@ -489,7 +489,7 @@ private struct ManualApprovalCard: View {
                 .padding(.trailing, 10)
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .orange.opacity(0.15), radius: 8, y: 4)
+        .shadow(color: FaeDesign.faeGold.opacity(0.15), radius: 8, y: 4)
     }
 }
 
@@ -534,7 +534,7 @@ private struct DisasterWarningCard: View {
                         .padding(.vertical, 7)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.green)
+                .tint(FaeDesign.glenGreenText)
                 .keyboardShortcut(.escape, modifiers: [])
 
                 Button(action: { controller.approve() }) {
@@ -544,7 +544,7 @@ private struct DisasterWarningCard: View {
                         .padding(.vertical, 7)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .tint(FaeDesign.rowanBerryText)
             }
         }
         .padding(16)
@@ -555,7 +555,7 @@ private struct DisasterWarningCard: View {
                 .stroke(Color.red.opacity(0.8), lineWidth: 2)
         )
         .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .red.opacity(0.2), radius: 12, y: 6)
+        .shadow(color: FaeDesign.rowanBerry.opacity(0.2), radius: 12, y: 6)
     }
 }
 
@@ -570,7 +570,7 @@ private struct InputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
-    private static let cardFill = Color(NSColor.windowBackgroundColor).opacity(0.96)
+    private static let cardFill = FaeDesign.surfaceCard.opacity(0.96)
     private static let cardStroke = Color.primary.opacity(0.12)
 
     private var field: ApprovalOverlayController.InputField {
@@ -721,7 +721,7 @@ private struct FormInputCard: View {
 
     /// Heather accent colour.
     private static let heather = Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255)
-    private static let cardFill = Color(NSColor.windowBackgroundColor).opacity(0.96)
+    private static let cardFill = FaeDesign.surfaceCard.opacity(0.96)
     private static let cardStroke = Color.primary.opacity(0.12)
 
     private var hasMultilineField: Bool {
@@ -798,7 +798,7 @@ private struct FormInputCard: View {
             if let validationMessage {
                 Text(validationMessage)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(FaeDesign.statusWarning)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 

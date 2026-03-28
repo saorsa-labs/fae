@@ -190,11 +190,11 @@ private struct ActivityCardView: View {
         case .done:
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 14))
-                .foregroundStyle(Color.green.opacity(0.7))
+                .foregroundStyle(FaeDesign.glenGreen.opacity(0.7))
         case .error:
             Image(systemName: "xmark.circle.fill")
                 .font(.system(size: 14))
-                .foregroundStyle(Color.red.opacity(0.7))
+                .foregroundStyle(FaeDesign.rowanBerry.opacity(0.7))
         }
     }
 
@@ -251,13 +251,13 @@ private struct ActivityCardView: View {
         case .toolCall:
             return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.8)
         case .toolResult(_, let isError):
-            return isError ? Color.red.opacity(0.7) : Color.green.opacity(0.7)
+            return isError ? FaeDesign.rowanBerry.opacity(0.7) : FaeDesign.glenGreen.opacity(0.7)
         case .thinking:
-            return Color.yellow.opacity(0.6)
+            return FaeDesign.faeGold.opacity(0.6)
         case .webResult:
-            return Color.blue.opacity(0.7)
+            return FaeDesign.heatherMist.opacity(0.7)
         case .codeBlock:
-            return Color.orange.opacity(0.7)
+            return FaeDesign.faeGold.opacity(0.7)
         }
     }
 
@@ -274,9 +274,9 @@ private struct ActivityCardView: View {
         case .running:
             return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.25)
         case .done:
-            return Color.green.opacity(0.15)
+            return FaeDesign.glenGreen.opacity(0.15)
         case .error:
-            return Color.red.opacity(0.2)
+            return FaeDesign.rowanBerry.opacity(0.2)
         }
     }
 

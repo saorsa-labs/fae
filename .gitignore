@@ -17,3 +17,4 @@ training/
 hf-space/
 scripts/__pycache__/
 native/macos/Fae/Resources/Binaries/
+.gstack/

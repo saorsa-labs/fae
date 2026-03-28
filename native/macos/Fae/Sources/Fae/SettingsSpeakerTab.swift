@@ -83,7 +83,7 @@ struct SettingsSpeakerTab: View {
                 if showTestResult {
                     Text(testResultText)
                         .font(.caption)
-                        .foregroundStyle(testResultText.contains("Match") ? .green : .orange)
+                        .foregroundStyle(testResultText.contains("Match") ? FaeDesign.statusSuccess : FaeDesign.statusWarning)
                         .transition(.opacity)
                 }
             } else {

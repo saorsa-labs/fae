@@ -29,7 +29,7 @@ struct SettingsOverviewTab: View {
                         title: "System RAM",
                         value: "\(systemRAM) GB",
                         icon: "memorychip",
-                        color: .blue
+                        color: FaeDesign.heatherMistText
                     )
 
                     modelStackCard
@@ -38,7 +38,7 @@ struct SettingsOverviewTab: View {
                         title: "Memory Saver",
                         value: kvQuantEnabled ? "On" : "Off",
                         icon: "bolt.fill",
-                        color: kvQuantEnabled ? .green : .orange
+                        color: kvQuantEnabled ? FaeDesign.statusSuccess : FaeDesign.statusWarning
                     )
                 }
 
@@ -72,25 +72,22 @@ struct SettingsOverviewTab: View {
 
     private var headerSection: some View {
         HStack(spacing: 16) {
-            // Fae Icon
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.purple.opacity(0.8), .blue.opacity(0.8)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+            // Fae Orb Icon
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [FaeDesign.cairngormTopaz, FaeDesign.faeGold, FaeDesign.highlandAmber],
+                        center: .init(x: 0.4, y: 0.4),
+                        startRadius: 0,
+                        endRadius: 32
                     )
-                    .frame(width: 64, height: 64)
-
-                Text("🧚")
-                    .font(.system(size: 32))
-            }
+                )
+                .frame(width: 56, height: 56)
+                .shadow(color: FaeDesign.faeGold.opacity(0.3), radius: 12)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Fae Settings")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .font(.system(size: 22, weight: .regular, design: .serif))
 
                 Text("Configure your AI assistant")
                     .font(.system(size: 14))
@@ -102,7 +99,7 @@ struct SettingsOverviewTab: View {
             // Version Badge
             if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                 Text("v\(version)")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
@@ -126,7 +123,7 @@ struct SettingsOverviewTab: View {
             }
 
             Text(value)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(.system(size: 18, weight: .bold))
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -140,7 +137,7 @@ struct SettingsOverviewTab: View {
             HStack(spacing: 6) {
                 Image(systemName: "cpu")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(FaeDesign.heatherMistText)
                 Text("Models")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -163,7 +160,7 @@ struct SettingsOverviewTab: View {
                 .foregroundStyle(.secondary)
 
             Text(value)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: 14, weight: .semibold))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -174,7 +171,7 @@ struct SettingsOverviewTab: View {
     private var quickTogglesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Quick Toggles")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
@@ -182,7 +179,7 @@ struct SettingsOverviewTab: View {
                     title: "Deep Thinking",
                     icon: "brain",
                     isOn: $thinkingEnabled,
-                    color: .orange
+                    color: FaeDesign.faeGold
                 ) {
                     patchConfig("llm.thinking_enabled", value: thinkingEnabled)
                 }
@@ -191,7 +188,7 @@ struct SettingsOverviewTab: View {
                     title: "Memory Saver",
                     icon: "bolt.fill",
                     isOn: $kvQuantEnabled,
-                    color: .green
+                    color: FaeDesign.glenGreenText
                 ) {
                     patchConfig("llm.kv_quant_bits", value: kvQuantEnabled ? 4 : nil)
                 }
@@ -238,7 +235,7 @@ struct SettingsOverviewTab: View {
     private var featureHighlightsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Optimize Your Experience")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 8) {
@@ -284,9 +281,9 @@ struct SettingsOverviewTab: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(FaeDesign.heatherMistText)
                 .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.1))
+                .background(FaeDesign.heatherMist.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 2) {
@@ -317,13 +314,13 @@ struct SettingsOverviewTab: View {
     private var tipsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Tips")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
 
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "lightbulb.fill")
                     .font(.system(size: 14))
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(FaeDesign.faeGoldText)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Memory optimization is on by default")
@@ -336,7 +333,7 @@ struct SettingsOverviewTab: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.yellow.opacity(0.1))
+            .background(FaeDesign.faeGold.opacity(0.1))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }

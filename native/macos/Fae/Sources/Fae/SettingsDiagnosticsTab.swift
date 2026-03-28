@@ -66,12 +66,12 @@ struct SettingsDiagnosticsTab: View {
     private var detectorStatusColor: Color {
         if !acousticWakeEnabled { return .secondary }
         if wakeTemplateCount >= WakeWordAcousticDetector.minTemplateCount {
-            return .green
+            return FaeDesign.statusSuccess
         }
         if wakeTemplateCount == 1 {
-            return .yellow
+            return FaeDesign.statusWarning
         }
-        return .orange
+        return FaeDesign.statusWarning
     }
 
     private var listeningStateText: String {
@@ -185,8 +185,8 @@ struct SettingsDiagnosticsTab: View {
                     LinearGradient(
                         colors: [
                             Color.accentColor.opacity(0.18),
-                            Color.blue.opacity(0.14),
-                            Color.purple.opacity(0.10),
+                            FaeDesign.heatherMist.opacity(0.14),
+                            FaeDesign.heatherMist.opacity(0.10),
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -237,8 +237,8 @@ struct SettingsDiagnosticsTab: View {
                 }
 
                 HStack(spacing: 12) {
-                    heroMetric(title: "Pipeline", value: pipelineAux.isPipelineReady ? "Ready" : "Starting", tint: .blue)
-                    heroMetric(title: "Listening", value: listeningStateText, tint: .cyan)
+                    heroMetric(title: "Pipeline", value: pipelineAux.isPipelineReady ? "Ready" : "Starting", tint: FaeDesign.heatherMist)
+                    heroMetric(title: "Listening", value: listeningStateText, tint: FaeDesign.lochGreyGreen)
                     heroMetric(title: "Wake detector", value: detectorStatusText, tint: detectorStatusColor)
                     heroMetric(title: "Last decision", value: prettify(diagnostics.lastDecision), tint: color(forDecision: diagnostics.lastDecision))
                 }
@@ -248,7 +248,7 @@ struct SettingsDiagnosticsTab: View {
     }
 
     private var pipelineHealthCard: some View {
-        SettingsCard(title: "Live pipeline", icon: "waveform.and.mic", color: .blue) {
+        SettingsCard(title: "Live pipeline", icon: "waveform.and.mic", color: FaeDesign.heatherMist) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     diagnosticMetric("Status", value: pipelineAux.status)
@@ -274,7 +274,7 @@ struct SettingsDiagnosticsTab: View {
                             Capsule()
                                 .fill(
                                     LinearGradient(
-                                        colors: [Color.green, Color.yellow, Color.orange],
+                                        colors: [FaeDesign.glenGreen, FaeDesign.faeGold, FaeDesign.islaySunset],
                                         startPoint: .leading,
                                         endPoint: .trailing
                                     )
@@ -293,14 +293,14 @@ struct SettingsDiagnosticsTab: View {
     }
 
     private var attentionDecisionCard: some View {
-        SettingsCard(title: "Attention decision", icon: "ear.badge.checkmark", color: .green) {
+        SettingsCard(title: "Attention decision", icon: "ear.badge.checkmark", color: FaeDesign.glenGreen) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
                     decisionPill(prettify(diagnostics.lastDecision), color: color(forDecision: diagnostics.lastDecision))
-                    decisionPill(prettify(diagnostics.lastStage), color: .blue)
-                    decisionPill(diagnostics.lastSpeakerRole.capitalized, color: .purple)
+                    decisionPill(prettify(diagnostics.lastStage), color: FaeDesign.heatherMist)
+                    decisionPill(diagnostics.lastSpeakerRole.capitalized, color: FaeDesign.heatherMist)
                     if let semantic = diagnostics.lastSemanticState {
-                        decisionPill(prettify(semantic), color: .orange)
+                        decisionPill(prettify(semantic), color: FaeDesign.faeGold)
                     }
                 }
 
@@ -317,7 +317,7 @@ struct SettingsDiagnosticsTab: View {
     }
 
     private var wakeDetectorCard: some View {
-        SettingsCard(title: "Wake detector", icon: "bell.badge.waveform", color: .orange) {
+        SettingsCard(title: "Wake detector", icon: "bell.badge.waveform", color: FaeDesign.faeGold) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     diagnosticMetric("Acoustic", value: acousticWakeEnabled ? "On" : "Off")
@@ -326,7 +326,7 @@ struct SettingsDiagnosticsTab: View {
                 }
 
                 HStack(spacing: 8) {
-                    decisionPill(diagnostics.lastWakeSource.map(prettify) ?? "Text / none", color: .orange)
+                    decisionPill(diagnostics.lastWakeSource.map(prettify) ?? "Text / none", color: FaeDesign.faeGold)
                     if let score = diagnostics.lastWakeScore {
                         decisionPill(String(format: "score %.3f", score), color: score >= acousticWakeThreshold ? .green : .secondary)
                     } else {
@@ -348,7 +348,7 @@ struct SettingsDiagnosticsTab: View {
     }
 
     private var guidanceCard: some View {
-        SettingsCard(title: "What to look for", icon: "sparkles.rectangle.stack", color: .indigo) {
+        SettingsCard(title: "What to look for", icon: "sparkles.rectangle.stack", color: FaeDesign.heatherMist) {
             VStack(alignment: .leading, spacing: 12) {
                 guidanceRow(
                     icon: "bell.badge.waveform",
@@ -370,7 +370,7 @@ struct SettingsDiagnosticsTab: View {
     }
 
     private var localModelRuntimeCard: some View {
-        SettingsCard(title: "Local model runtime", icon: "cpu.fill", color: .purple) {
+        SettingsCard(title: "Local model runtime", icon: "cpu.fill", color: FaeDesign.heatherMist) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     diagnosticMetric("Model", value: localStack.operatorLoaded ? "Loaded" : "Not loaded")
@@ -397,7 +397,7 @@ struct SettingsDiagnosticsTab: View {
     }
 
     private var recentEventsCard: some View {
-        SettingsCard(title: "Recent attention events", icon: "list.bullet.rectangle", color: .indigo) {
+        SettingsCard(title: "Recent attention events", icon: "list.bullet.rectangle", color: FaeDesign.heatherMist) {
             if recentEvents.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("No voice attention events yet.")
@@ -478,9 +478,9 @@ struct SettingsDiagnosticsTab: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.indigo)
+                .foregroundStyle(FaeDesign.heatherMistText)
                 .frame(width: 24, height: 24)
-                .background(Color.indigo.opacity(0.12))
+                .background(FaeDesign.heatherMist.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: 7))
 
             VStack(alignment: .leading, spacing: 3) {
@@ -501,11 +501,11 @@ struct SettingsDiagnosticsTab: View {
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                decisionPill(prettify(event.stage), color: .blue)
+                decisionPill(prettify(event.stage), color: FaeDesign.heatherMist)
                 decisionPill(prettify(event.decision), color: color(forDecision: event.decision))
 
                 if let source = event.wakeSource {
-                    decisionPill(prettify(source), color: .orange)
+                    decisionPill(prettify(source), color: FaeDesign.faeGold)
                 }
 
                 Spacer()
@@ -539,10 +539,10 @@ struct SettingsDiagnosticsTab: View {
 
     private func color(forDecision decision: String) -> Color {
         switch decision {
-        case "wake", "accepted", "detected": return .green
-        case "held", "merged", "flushed": return .orange
+        case "wake", "accepted", "detected": return FaeDesign.statusSuccess
+        case "held", "merged", "flushed": return FaeDesign.statusWarning
         case let value where value.contains("drop") || value.contains("ignore") || value.contains("ignored"):
-            return .red
+            return FaeDesign.statusError
         default:
             return .secondary
         }
@@ -551,9 +551,9 @@ struct SettingsDiagnosticsTab: View {
     private func color(forMicLevel level: Double) -> Color {
         switch level {
         case ..<0.08: return .secondary
-        case ..<0.35: return .green
-        case ..<0.70: return .orange
-        default: return .red
+        case ..<0.35: return FaeDesign.statusSuccess
+        case ..<0.70: return FaeDesign.statusWarning
+        default: return FaeDesign.statusError
         }
     }
 

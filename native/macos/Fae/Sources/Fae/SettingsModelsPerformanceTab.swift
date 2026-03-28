@@ -144,7 +144,7 @@ struct SettingsModelsPerformanceTab: View {
     private var modelsSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             // Local LLM stack
-            SettingsCard(title: "Local Models", icon: "cpu", color: .blue) {
+            SettingsCard(title: "Local Models", icon: "cpu", color: FaeDesign.heatherMist) {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("Model", selection: $voiceModelPreset) {
                         ForEach(voiceModelOptions, id: \.value) { opt in
@@ -199,7 +199,7 @@ struct SettingsModelsPerformanceTab: View {
             }
 
             // Vision Model
-            SettingsCard(title: "Vision", icon: "eye", color: .purple) {
+            SettingsCard(title: "Vision", icon: "eye", color: FaeDesign.heatherMist) {
                 VStack(alignment: .leading, spacing: 12) {
                     if FaeConfig.recommendedVLMModel() != nil {
                         Text("Vision is always on — Fae can see screenshots, camera, and screen content.")
@@ -227,7 +227,7 @@ struct SettingsModelsPerformanceTab: View {
                                 .font(.caption)
                         } icon: {
                             Image(systemName: "memorychip")
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(FaeDesign.statusWarning)
                         }
                     }
 
@@ -249,7 +249,7 @@ struct SettingsModelsPerformanceTab: View {
     private var performanceSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             // System Status
-            SettingsCard(title: "System Status", icon: "memorychip", color: .green) {
+            SettingsCard(title: "System Status", icon: "memorychip", color: FaeDesign.glenGreen) {
                 HStack(spacing: 24) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("System RAM")
@@ -276,7 +276,7 @@ struct SettingsModelsPerformanceTab: View {
             }
 
             // KV Cache Optimization
-            SettingsCard(title: "Memory Optimization", icon: "bolt.fill", color: .orange) {
+            SettingsCard(title: "Memory Optimization", icon: "bolt.fill", color: FaeDesign.faeGold) {
                 VStack(alignment: .leading, spacing: 16) {
                     // Enable/Disable Toggle
                     HStack {
@@ -291,10 +291,10 @@ struct SettingsModelsPerformanceTab: View {
                         if kvQuantEnabled {
                             Text(estimatedKVSavings + " memory savings")
                                 .font(.caption)
-                                .foregroundStyle(.green)
+                                .foregroundStyle(FaeDesign.statusSuccess)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(Color.green.opacity(0.1))
+                                .background(FaeDesign.glenGreen.opacity(0.1))
                                 .clipShape(Capsule())
                         }
                     }
@@ -326,7 +326,7 @@ struct SettingsModelsPerformanceTab: View {
             }
 
             // Conversation Length
-            SettingsCard(title: "Conversation Length", icon: "arrow.left.arrow.right", color: .cyan) {
+            SettingsCard(title: "Conversation Length", icon: "arrow.left.arrow.right", color: FaeDesign.lochGreyGreen) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Limit conversation memory", isOn: $slidingWindowEnabled)
                         .onChange(of: slidingWindowEnabled) {
@@ -417,7 +417,7 @@ struct SettingsModelsPerformanceTab: View {
     private var voiceSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             // Speaking Speed
-            SettingsCard(title: "Speaking Speed", icon: "gauge.with.needle", color: .indigo) {
+            SettingsCard(title: "Speaking Speed", icon: "gauge.with.needle", color: FaeDesign.heatherMist) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Slider(value: $voiceSpeed, in: 0.8...1.4, step: 0.05)
@@ -445,7 +445,7 @@ struct SettingsModelsPerformanceTab: View {
             }
 
             // Voice Identity
-            SettingsCard(title: "Voice Identity", icon: "person.wave.2", color: .pink) {
+            SettingsCard(title: "Voice Identity", icon: "person.wave.2", color: FaeDesign.rowanBerry) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Always use Fae's default voice", isOn: $voiceIdentityLock)
                         .onChange(of: voiceIdentityLock) {
@@ -461,7 +461,7 @@ struct SettingsModelsPerformanceTab: View {
             }
 
             // Wake Word
-            SettingsCard(title: "Wake Word", icon: "waveform.badge.mic", color: .orange) {
+            SettingsCard(title: "Wake Word", icon: "waveform.badge.mic", color: FaeDesign.faeGold) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Listen for \"Hey Fae\"", isOn: $acousticWakeEnabled)
                         .onChange(of: acousticWakeEnabled) {
@@ -475,7 +475,7 @@ struct SettingsModelsPerformanceTab: View {
                         Spacer()
                         Text("\(wakeTemplateCount)")
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(wakeTemplateCount >= WakeWordAcousticDetector.minTemplateCount ? .green : (wakeTemplateCount == 1 ? .orange : .secondary))
+                            .foregroundStyle(wakeTemplateCount >= WakeWordAcousticDetector.minTemplateCount ? FaeDesign.statusSuccess : (wakeTemplateCount == 1 ? FaeDesign.statusWarning : .secondary))
                     }
 
                     if acousticWakeEnabled {
@@ -521,7 +521,7 @@ struct SettingsModelsPerformanceTab: View {
     private var restartNoticeView: some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.clockwise.circle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(FaeDesign.statusWarning)
                 .font(.title2)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Restart Required")
@@ -533,7 +533,7 @@ struct SettingsModelsPerformanceTab: View {
             Spacer()
         }
         .padding()
-        .background(Color.orange.opacity(0.1))
+        .background(FaeDesign.faeGold.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
@@ -576,7 +576,7 @@ struct SettingsModelsPerformanceTab: View {
     private func cacheStatusView(_ text: String, cached: Bool) -> some View {
         HStack(spacing: 6) {
             Image(systemName: cached ? "internaldrive.fill" : "arrow.down.circle")
-                .foregroundStyle(cached ? .green : .orange)
+                .foregroundStyle(cached ? FaeDesign.statusSuccess : FaeDesign.statusWarning)
             Text(text)
                 .font(.caption)
                 .foregroundStyle(.secondary)
