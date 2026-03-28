@@ -20,25 +20,25 @@ struct LocalModelCatalog {
             label: "Auto (Recommended)",
             value: "auto",
             ram: "8+ GB",
-            description: "Picks the best model for your Mac's RAM: 35B-A3B MoE on 32+ GB, 9B on 24+ GB, 4B on 16+ GB, 2B below."
+            description: "Picks the best model for your Mac's RAM: 9B Unsloth on 16+ GB, 4B on 8–15 GB, 2B below 8 GB."
         ),
         .init(
             label: "Qwen3.5 2B",
             value: "qwen3_5_2b",
-            ram: "8+ GB",
+            ram: "< 8 GB",
             description: "Qwen3.5-2B with OptiQ mixed-precision. Compact, fast inference. Best for Macs with limited RAM."
         ),
         .init(
             label: "Qwen3.5 4B",
             value: "qwen3_5_4b",
-            ram: "16+ GB",
-            description: "Best balance for Fae: strong tool use, good latency, and enough headroom for on-demand vision."
+            ram: "8+ GB",
+            description: "Reliable tool calling (100%), 95% assistant fit. ~2.3 GB VRAM. Auto-selected for 8–15 GB Macs."
         ),
         .init(
             label: "Qwen3.5 9B",
             value: "qwen3_5_9b",
-            ram: "24+ GB",
-            description: "Sweet spot: 3x faster than 35B, reliable tool use, clean responses. ~5 GB VRAM. Auto-selected for 24-64 GB Macs."
+            ram: "16+ GB",
+            description: "Best quality: 100% tool calling, 100% assistant fit, 100% serialization. ~6 GB VRAM. Auto-selected for 16+ GB Macs."
         ),
         .init(
             label: "Qwen3.5 35B-A3B (MoE)",

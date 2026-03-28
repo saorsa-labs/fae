@@ -61,11 +61,10 @@ let modelRegistry: [ModelEntry] = [
 
 func autoSelectModel() -> ModelEntry {
     let ramGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
-    if ramGB >= 32 {
-        return modelRegistry.first { $0.shortName == "qwen3.5-35b-a3b" }!
-    } else if ramGB >= 24 {
+    if ramGB >= 16 {
+        // 9B Unsloth: mirrors FaeConfig.recommendedModel() auto tier.
         return modelRegistry.first { $0.shortName == "qwen3.5-9b" }!
-    } else if ramGB >= 16 {
+    } else if ramGB >= 8 {
         return modelRegistry.first { $0.shortName == "qwen3.5-4b" }!
     } else {
         return modelRegistry.first { $0.shortName == "qwen3.5-2b" }!

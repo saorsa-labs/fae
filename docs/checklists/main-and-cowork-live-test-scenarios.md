@@ -52,7 +52,7 @@ Acceptance:
 - The main surface is visually coherent within 3 seconds.
 - On a true first run, the intro crawl appears after license acceptance and before the live conversation surface unlocks.
 - The active local text model is visible in the runtime or settings and matches expectations.
-- The active local text model matches the current loadable ladder under test: `saorsa-1.1-tiny` (2B), `Qwen3.5-4B`, or `Qwen3.5-35B-A3B`.
+- The active local text model matches the current auto-select ladder: `Qwen3.5-9B-Unsloth` (16+ GB), `Qwen3.5-4B` (8–15 GB), or `Qwen3.5-2B-OptiQ` (< 8 GB).
 - On a clean-install or cache-cleared run, local text-model startup can wait through first-download latency without tripping a worker load timeout.
 - The startup progress bar stays visible through download, model load, verification, and warmup.
 - The default startup path is the single-model Qwen3.5 flow rather than an implicit concierge boot.
