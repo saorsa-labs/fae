@@ -158,6 +158,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let hotkeyManager = GlobalHotkeyManager()
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
+    let receiptsWindow = ReceiptsWindowController()
 
     // Local runtime server for OpenAI-compatible localhost access.
     var localRuntimeServer: FaeLocalRuntimeServer?
@@ -477,6 +478,17 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let url = note.userInfo?["url"] as? String, !url.isEmpty else { return }
             Task { @MainActor [weak self] in
                 self?.showSkillImportPanel(url: url)
+            }
+        }
+
+        // Receipts panel — show "What Fae Changed" floating timeline.
+        NotificationCenter.default.addObserver(
+            forName: .faeShowReceiptsPanel,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.receiptsWindow.show(receiptStore: self?.faeCore.receiptStore)
             }
         }
 

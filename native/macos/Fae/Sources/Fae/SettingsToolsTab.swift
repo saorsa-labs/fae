@@ -1,6 +1,11 @@
 import SwiftUI
 
-/// Tools settings tab: simplified two-mode dropdown + reset approvals.
+/// Tools settings tab: informational capability showcase + Apple permissions.
+///
+/// The tool mode picker is intentionally hidden — Fae operates in full access
+/// for the owner, gated by voice identity, not a settings toggle. This tab
+/// instead educates users about what Fae can do and provides quick access to
+/// the action history panel.
 struct SettingsToolsTab: View {
     @EnvironmentObject private var onboarding: OnboardingController
 
@@ -10,35 +15,66 @@ struct SettingsToolsTab: View {
     @State private var permissionSnapshot = PermissionStatusProvider.current()
     @State private var showResetAlert = false
 
-    private let toolModes: [(label: String, value: String, description: String)] = [
-        ("Read only", "assistant",
-         "Fae can search, read, and recall — she won't modify anything."),
-        ("Everything (with approval)", "full",
-         "Fae can do everything — she'll ask before acting for the first time."),
-    ]
-
     var body: some View {
         Form {
-            Section("Permissions") {
-                Picker("Mode", selection: $toolMode) {
-                    ForEach(toolModes, id: \.value) { mode in
-                        Text(mode.label).tag(mode.value)
+            // MARK: Action History
+            Section("Action History") {
+                Button {
+                    NotificationCenter.default.post(name: .faeShowReceiptsPanel, object: nil)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 14))
+                            .foregroundStyle(FaeDesign.heatherMistText)
+                        Text("View action history\u{2026}")
+                            .font(.system(size: 13))
                     }
                 }
-                .onChange(of: toolMode) {
-                    commandSender?.sendCommand(
-                        name: "config.patch",
-                        payload: ["key": "tool_mode", "value": toolMode]
-                    )
-                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
 
-                if let current = toolModes.first(where: { $0.value == toolMode }) {
-                    Text(current.description)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Every change Fae makes is logged here. Tap any item to undo it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
-                Button("Reset approvals...") {
+            // MARK: What Fae Can Do
+            Section("What Fae Can Do") {
+                capabilityCard(
+                    icon: "doc.badge.plus",
+                    title: "Reads & writes files",
+                    description: "Opens, reads, and saves files anywhere on your Mac."
+                )
+                capabilityCard(
+                    icon: "calendar",
+                    title: "Manages Calendar & Reminders",
+                    description: "Creates, edits, and deletes events and reminders."
+                )
+                capabilityCard(
+                    icon: "magnifyingglass",
+                    title: "Searches the web",
+                    description: "Fetches web pages and searches when you ask."
+                )
+                capabilityCard(
+                    icon: "terminal",
+                    title: "Runs safe shell commands",
+                    description: "Runs echo, cp, mv, mkdir — nothing destructive without your say-so."
+                )
+                capabilityCard(
+                    icon: "person.crop.circle",
+                    title: "Contacts & Notes",
+                    description: "Reads and updates your contacts and Apple Notes."
+                )
+                capabilityCard(
+                    icon: "clock.arrow.circlepath",
+                    title: "Remembers every action",
+                    description: "Logs every change so you can undo it with one tap."
+                )
+            }
+
+            // MARK: Trust & Approvals
+            Section("Trust & Approvals") {
+                Button("Reset approvals\u{2026}") {
                     showResetAlert = true
                 }
                 .buttonStyle(.bordered)
@@ -51,7 +87,7 @@ struct SettingsToolsTab: View {
                         }
                     }
                 } message: {
-                    Text("Fae will ask before acting again — like a fresh start.")
+                    Text("Fae will ask before acting again \u{2014} like a fresh start.")
                 }
 
                 Text("When Fae asks permission, tap Always to build trust over time. Reset clears all remembered approvals.")
@@ -59,6 +95,7 @@ struct SettingsToolsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            // MARK: Apple Tool Permissions
             Section("Apple Tool Permissions") {
                 if !allApplePermissionsGranted {
                     Button("Grant All Apple Permissions") {
@@ -120,12 +157,6 @@ struct SettingsToolsTab: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-
-            Section("About Tools") {
-                Text("Tools give Fae the ability to interact with your system — reading files, managing calendar events, sending emails, and more. In Full access mode, Fae asks before doing anything new. Tap Always to let her remember your choice.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .onAppear {
@@ -144,7 +175,30 @@ struct SettingsToolsTab: View {
         permissionSnapshot.calendar && permissionSnapshot.reminders && permissionSnapshot.contacts
     }
 
-    // MARK: - Helpers
+    // MARK: - Capability Card
+
+    @ViewBuilder
+    private func capabilityCard(icon: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(FaeDesign.heatherMistText)
+                .frame(width: 22, alignment: .center)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Permission Row
 
     @ViewBuilder
     private func permissionRow(

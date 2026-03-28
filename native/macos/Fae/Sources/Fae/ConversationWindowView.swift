@@ -4,9 +4,13 @@ import SwiftUI
 ///
 /// Displays messages from `ConversationController.messages` as chat bubbles,
 /// with auto-scroll and a typing indicator.
+///
+/// Pass `receiptCount` to show a subtle badge on the receipts icon.
+/// Defaults to 0 so existing callers compile without changes.
 struct ConversationWindowView: View {
     @ObservedObject var conversationController: ConversationController
     var onClose: () -> Void
+    var receiptCount: Int = 0
 
     @State private var bubblesOpacity: Double = 1.0
 
@@ -41,6 +45,27 @@ struct ConversationWindowView: View {
             }
 
             Spacer()
+
+            // Receipts icon — opens "What Fae Changed" panel
+            Button {
+                NotificationCenter.default.post(name: .faeShowReceiptsPanel, object: nil)
+            } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.primary.opacity(0.4))
+                    if receiptCount > 0 {
+                        Circle()
+                            .fill(FaeDesign.heatherMistText)
+                            .frame(width: 5, height: 5)
+                            .offset(x: 2, y: -2)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .help("What Fae changed")
+            .padding(.trailing, 6)
+
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
