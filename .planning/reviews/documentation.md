@@ -1,26 +1,17 @@
 # Documentation Review
-**Date**: 2026-03-21
+**Date**: 2026-03-28
+**Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
 ## Findings
-[LOW] native/macos/Fae/autoresearch/asr_accuracy_eval.py:62 - ClassDef 'ClipResult' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_accuracy_eval.py:73 - ClassDef 'ModelResult' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_accuracy_eval.py:85 - ClassDef 'ComparisonResult' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_accuracy_eval.py:426 - FunctionDef 'main' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:70 - ClassDef 'StreamingClipResult' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:84 - ClassDef 'StreamingModelResult' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:98 - ClassDef 'StreamingComparison' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:114 - FunctionDef 'load_qwen_asr' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:122 - FunctionDef 'load_parakeet' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:166 - FunctionDef 'normalise_text' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:292 - FunctionDef 'load_corpus' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:304 - FunctionDef 'run_streaming_eval' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:422 - FunctionDef 'write_results' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_streaming_eval.py:475 - FunctionDef 'main' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_generate_corpus.py:95 - FunctionDef 'main' missing docstring
-[LOW] native/macos/Fae/autoresearch/asr_record_clips.py:94 - FunctionDef 'main' missing docstring
 
-## Assessment
-Module-level docstrings are present in main Python scripts. Function-level coverage is partial.
-STATE.json changes are data-only and don't require documentation.
+- [OK] ReceiptsTimelineView.swift — struct-level doc comment explains grouping logic well
+- [OK] ReceiptsWindowController.swift — class-level doc comment explains wiring contract ("FaeApp creates a single instance and registers for `.faeShowReceiptsPanel`")
+- [OK] SettingsToolsTab.swift — struct-level doc comment explains design intent (mode picker hidden intentionally)
+- [OK] ConversationWindowView.swift — "Pass receiptCount to show a subtle badge" documented at type level
+- [OK] MARK comments used throughout for section navigation
+- [LOW] ReceiptsWindowController:30 — `show(receiptStore:)` public method lacks parameter doc
+- [LOW] ReceiptsWindowController:59 — `performUndo(receiptId:receiptStore:)` lacks parameter doc
+- [LOW] Notification names `faeShowReceiptsPanel` and `faeReceiptUndone` are documented in extension but could benefit from usage examples
 
-## Grade: B
+## Grade: A-

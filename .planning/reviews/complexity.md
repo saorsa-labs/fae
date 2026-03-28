@@ -1,21 +1,16 @@
 # Complexity Review
-**Date**: 2026-03-21
-
-## Statistics — New Python Files
-     138 /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_generate_corpus.py
-     188 /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_record_clips.py
-     202 /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/update_state.py
-     490 /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py
-     511 /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py
-    1529 total
-
-## Complexity Analysis
-[MEDIUM] native/macos/Fae/autoresearch/asr_accuracy_eval.py:212 - run_eval() nesting depth 5
-[MEDIUM] native/macos/Fae/autoresearch/asr_accuracy_eval.py:338 - write_results() nesting depth 4
-[MEDIUM] native/macos/Fae/autoresearch/asr_streaming_eval.py:304 - run_streaming_eval() nesting depth 5
+**Date**: 2026-03-28
+**Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
 ## Findings
-- [INFO] STATE.json changes are data-only (metric accumulation across 6 additional runs)
-- [LOW] asr_streaming_eval.py is largest new file; acceptable for evaluation harness
 
-## Grade: A
+- [LOW] ReceiptsTimelineView.swift — `humanLabel(for:)` is 75 lines with a 13-case switch. Cyclomatic complexity ~14. This is the most complex function in Phase 1.4 but still readable. Could be refactored into a separate file or extension on `ActionReceiptRecord`.
+- [OK] `groupReceipts()` — 30 lines, clear, linear logic with 3 time buckets
+- [OK] ReceiptsWindowController — `openOrFocusPanel()` early-return pattern keeps nesting shallow
+- [OK] SettingsToolsTab — `body` delegates to `capabilityCard()` helper cleanly
+- [OK] ConversationWindowView — receipts icon addition is minimal (10 lines in `panelHeader`)
+- [OK] File sizes are reasonable: ReceiptsTimelineView (296L), ReceiptsWindowController (219L), SettingsToolsTab (185L), ConversationWindowView (308L — existing)
+- [OK] No deeply nested closures or callback pyramids
+
+## Grade: A-

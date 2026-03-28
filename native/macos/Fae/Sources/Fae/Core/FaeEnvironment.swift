@@ -147,6 +147,9 @@ enum FaeDirectories {
     /// `tool_analytics.db` — tool usage analytics.
     static let toolAnalyticsDatabase: URL = root.appendingPathComponent("tool_analytics.db")
 
+    /// `receipts.db` — action receipts for undo/reversibility (separate failure domain from fae.db).
+    static let receiptsDatabase: URL = root.appendingPathComponent("receipts.db")
+
     // MARK: - JSON Stores
 
     /// `speakers.json` — speaker voice profiles.

@@ -1,62 +1,55 @@
-# Task Specification Review
-**Date**: 2026-03-21
-**Phase**: 1.2 — Decode Path Hardening
-**Task**: Review of task diff (autoresearch STATE.json updates + new Python ASR evaluation scripts)
+# Task Assessor Review
+**Date**: 2026-03-28
+**Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
-## GSD State Analysis
-{
-  "version": 1,
-  "project": "parakeet-streaming-asr",
-  "active": true,
-  "milestone": {
-    "number": 1,
-    "name": "Parakeet Streaming ASR — Production Ready"
-  },
-  "phase": {
-    "number": "1.2",
-    "name": "Decode Path Hardening",
-    "plan": null
-  },
-  "progress": {
-    "total_tasks": 0,
-    "completed_tasks": 0,
-    "current_task": null
-  },
-  "review": {
-    "status": "reviewing",
-    "iteration": 2,
-    "last_verdict": null
-  },
-  "status": "reviewing",
-  "last_updated": "2026-03-21T12:05:00Z",
-  "phase_1_1_summary": "Tasks 1,2,4 implemented+committed. modelLoaded event, isCached check, env var gate testable. 7 new tests. Review in progress."
-}
+## Task Completion Assessment
 
-## Diff Assessment
-The task diff contains:
-1. `.planning/STATE.json` — GSD review state update (status: reviewing, iteration++)
-2. `autoresearch/STATE.json` — Autoresearch metrics updated after 6 more evaluation runs (runCount 6→12)
-3. `default.profraw` — Deleted binary profiling artifact (GOOD — should not be committed)
+### Task 1: ReceiptsTimelineView — COMPLETE ✓
+- File exists: `Sources/Fae/ReceiptsTimelineView.swift`
+- Time grouping implemented: "This conversation" (30min), "Earlier today", "This week"
+- Undo button shown for `.reversible` receipts, "Undone" badge for already-undone
+- Tool icon map covers: write/edit, bash, calendar, reminders, contacts, notes, mail, self_config, channel_setup, scheduler_*, manage_skill, plugin_manage, voice_identity, default
+- Human-readable label for all major tools
+- Empty state: "Nothing yet — Fae will log changes here as she works."
+- Zero force unwraps confirmed
 
-New untracked files:
-- `asr_accuracy_eval.py` — ASR accuracy comparison script (Qwen3-ASR vs Parakeet)
-- `asr_corpus/` — Test corpus (24 WAV+TXT pairs)
-- `asr_generate_corpus.py` — Corpus generation script
-- `asr_record_clips.py` — Audio recording script
-- `asr_streaming_eval.py` — Streaming ASR evaluation
+### Task 2: ReceiptsWindowController — COMPLETE ✓
+- File exists: `Sources/Fae/ReceiptsWindowController.swift`
+- `isVisible`, `receipts` as `@Published private(set)`
+- `show()`, `hide()`, `refresh()`, `performUndo()` all implemented
+- Panel: 380x520, dark background, non-activating, floating
+- Panel hosted via `NSHostingController` via `NSHostingView`
+- `receiptStore` optional at init (injected at show time)
 
-## Spec Compliance
-Phase 1.2 (Decode Path Hardening) has no plan yet (plan: null).
-The autoresearch work (ASR evaluation tooling) is complementary research, not task implementation.
+### Task 3: ConversationWindowView receipts icon — COMPLETE ✓
+- `clock.arrow.circlepath` icon added to `panelHeader`
+- Placed between title area and close button (left of close)
+- Font size 14, opacity 0.4 — matches spec
+- On tap: posts `.faeShowReceiptsPanel` notification
+- Badge dot: `Circle().fill(FaeDesign.heatherMistText).frame(width: 5)` when `receiptCount > 0`
+- `receiptCount: Int = 0` default parameter — existing callers unbroken
+- Help tooltip: "What Fae changed"
 
-Key metrics from autoresearch STATE.json:
-- [CONCERN] barge_in score REGRESSED: 71.0 → 42.3 (pass_rate: 7%, latency 5.5s→25.7s)
-- [POSITIVE] tool_execution improved: 23.8 → 41.9 (pass_rate: 13.9% → 69.4%)
-- [POSITIVE] memory improved: 48.5 → 53.6 (pass_rate: 13.3% → 73.3%)
-- [POSITIVE] voice_pipeline improved: 43.7 → 48.6 (pass_rate: 60% → 75%)
+### Task 4: Wire receipts window into FaeApp — COMPLETE ✓
+- `receiptsWindow = ReceiptsWindowController()` declared in `FaeAppDelegate` (line 161)
+- `NotificationCenter.default.addObserver(forName: .faeShowReceiptsPanel)` registered (line 486)
+- On notification: `receiptsWindow.show(receiptStore: faeCore.receiptStore)`
+- **PARTIAL**: Task spec requires `receiptCount` passed to `ConversationWindowView` via timer or notification — not implemented. `ConversationWindowView` is never instantiated from source (appears to be embedded via another mechanism or replaced by inline content view). Badge count wiring is incomplete per spec.
 
-- [x] GSD state updated correctly
-- [x] Profraw artifact deleted
-- [ ] Phase 1.2 plan not yet created (plan: null) — expected pre-task
+### Task 5: SettingsToolsTab — COMPLETE ✓
+- Mode `Picker` removed — no picker in current implementation
+- `@AppStorage("toolMode")` retained for migration (used in `onAppear`)
+- 6 capability cards present: files, calendar, web search, bash, contacts, remember actions
+- "View action history…" button with `faeShowReceiptsPanel`
+- "Trust & Approvals" section with reset approvals button
+- Apple Tool Permissions section preserved
 
-## Grade: B
+### Task 6: Build verification — COMPLETE ✓
+- `swift build` passes with zero new warnings
+
+## Issues
+
+- [MEDIUM] Task 4 partial: `receiptCount` timer/badge wiring not implemented. ConversationWindowView is not instantiated from source — the receipts icon exists but the badge count will always show 0. The plan required "a periodic 60s timer or notification" to drive badge updates.
+
+## Grade: B+ (5.5/6 tasks fully complete)

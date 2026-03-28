@@ -373,6 +373,7 @@ final class JSCDeveloperHarnessTests: XCTestCase {
             requiresApproval: true,
             isOwner: true,
             livenessScore: nil,
+            speakerId: nil,
             explicitUserAuthorization: false,
             hasCapabilityTicket: false,
             argumentSummary: "test",

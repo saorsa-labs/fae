@@ -67,6 +67,9 @@ actor MLXVLMEngine: VLMEngine {
             var userInput = UserInput(chat: chatMessages)
             userInput.additionalContext = ["enable_thinking": false]
             let lmInput = try await container.prepare(input: userInput)
+            // repetitionPenalty intentionally omitted: RepetitionContext triggers an
+            // MLX tensor-shape assertion (where op) during SmolVLM2 single-token inference,
+            // causing a SIGTRAP. Default nil skips the penalty processor entirely.
             let params = GenerateParameters(
                 maxTokens: 1,
                 temperature: 0.0,

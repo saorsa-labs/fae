@@ -1,26 +1,17 @@
 # Quality Patterns Review
-**Date**: 2026-03-21
+**Date**: 2026-03-28
+**Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
-## Good Patterns Found
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:49:from dataclasses import asdict, dataclass, field
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:61:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:72:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:84:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:38:from dataclasses import asdict, dataclass, field
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:59:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:69:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:83:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:97:@dataclass
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:11:from dataclasses import asdict, dataclass, field
-- Uses @dataclass for result types (ClipResult, ModelResult, ComparisonResult) — good
-- Uses PEP 723 inline script dependencies (# /// script) for uv compatibility
-- SSL_CERT_FILE fix for zerobrew Python is a good defensive pattern
-- WER computation via jiwer library (established, correct tool)
-- Proper use of argparse for CLI
+## Findings
 
-## Anti-Patterns Found
-- [LOW] Some broad `except Exception` handlers in evaluation scripts (acceptable for research tools)
-- [LOW] Default.profraw was tracked (deleted in this diff — correct fix)
-- [MEDIUM] barge_in regression in autoresearch metrics (71→42) indicates a real regression in recent commits — warrants investigation
+- [MEDIUM] ReceiptsWindowController.swift:137,173 — Background color `Color(red: 0.06, green: 0.063, blue: 0.075)` used in two places instead of `FaeDesign.surfaceBase`. This deviates from the Scottish design system token pattern used throughout the codebase. Minor numerical discrepancy (0.06 vs 0.059) could cause subtle inconsistency.
+- [LOW] ReceiptsWindowController.swift:72 — `NSLog()` used for error logging. The codebase uses `NSLog` elsewhere for diagnostics; not a deviation, but `debugLog()` from `FaeCore` would route through the debug console.
+- [LOW] ReceiptsWindowController.swift:89-92 — `openOrFocusPanel` focuses existing panel with `makeKeyAndOrderFront` but does not refresh receipts when re-focusing. If the user opens the panel, closes it (without destroying it), then opens it again, they'll see stale data until they manually refresh.
+- [OK] `@ViewBuilder` used correctly throughout Settings tab
+- [OK] `LazyVStack` used in ReceiptsTimelineView for performance with many receipts
+- [OK] `@State private var isUndoing` in ReceiptRowView — correct per-row state isolation
+- [OK] Consistent button style: `.plain` buttonStyle with custom backgrounds matches existing ConversationWindowView patterns
+- [OK] Notification-based decoupling pattern (`.faeShowReceiptsPanel`) consistent with existing codebase notifications
 
-## Grade: B
+## Grade: B+

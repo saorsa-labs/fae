@@ -8393,8 +8393,11 @@ extension PipelineCoordinator: ToolExecutorDelegate {
         // Poll for barge-in once per second for 5 seconds.
         for _ in 0..<5 {
             // Check whether a barge-in is pending (user is speaking).
+            // Do NOT speak "Cancelled." here — the barge-in pipeline is already
+            // processing the user's audio. Speaking simultaneously would interleave
+            // with or override the barge-in handling. Let the barge-in be the
+            // natural cancellation signal; Fae will respond to whatever the user said.
             if bargeInState.pendingBargeIn != nil {
-                await speakDirect("Cancelled.")
                 NSLog("PipelineCoordinator: irreversible countdown cancelled by barge-in")
                 return false
             }

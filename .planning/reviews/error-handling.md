@@ -1,29 +1,16 @@
 # Error Handling Review
-**Date**: 2026-03-21
+**Date**: 2026-03-28
 **Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
 ## Findings
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:291:            except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:388:            except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:354:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:443:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:517:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:347:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:419:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:484:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:573:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:615:    except Exception as e:
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:218:        sys.exit(1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_accuracy_eval.py:465:        sys.exit(1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:313:        sys.exit(1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:486:        sys.exit(1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:594:        sys.exit(1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:644:    sys.exit(0 if failed == 0 else 1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:681:        sys.exit(1)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/voice_pipeline_runner.py:730:    sys.exit(0 if failed == 0 else 1)
 
-## Assessment
-Task diff is primarily STATE.json updates (autoresearch scores) and a deleted profraw file.
-New Python scripts use broad except handlers in some places.
+- [OK] ReceiptsTimelineView.swift — `try?` used appropriately on JSONSerialization (line 198); empty dict fallback `?? [:]` is correct
+- [OK] ReceiptsWindowController.swift — `guard let store = receiptStore` pattern correct (line 60, 80)
+- [OK] ReceiptsWindowController.swift — `guard let contentView = newPanel.contentView else { return }` (line 99) — safe guard
+- [LOW] ReceiptsWindowController.swift:72 — `NSLog(...)` on undo failure. Not an error path problem, but failure is silently swallowed at UI level — user gets no feedback when undo fails
+- [OK] SettingsToolsTab.swift — `try? await Task.sleep` used correctly; error is inconsequential
+- [OK] No `fatalError`, `preconditionFailure`, or `try!` found in any Phase 1.4 files
+- [OK] No force unwraps (`!`) used on optionals in production code
 
-## Grade: B
+## Grade: A

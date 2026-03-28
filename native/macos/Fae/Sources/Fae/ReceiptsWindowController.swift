@@ -22,7 +22,6 @@ final class ReceiptsWindowController: ObservableObject {
     // MARK: - Private
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<AnyView>?
 
     // MARK: - Show
 
@@ -105,20 +104,17 @@ final class ReceiptsWindowController: ObservableObject {
             hosting.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
         ])
 
-        hostingView = hosting
         panel = newPanel
         positionPanel(newPanel)
         newPanel.makeKeyAndOrderFront(nil)
     }
 
-    private func makeContentView(receiptStore: ReceiptStore?) -> AnyView {
-        AnyView(
-            ReceiptsPanelContentView(
-                controller: self,
-                receiptStore: receiptStore
-            )
-            .preferredColorScheme(.dark)
+    private func makeContentView(receiptStore: ReceiptStore?) -> some View {
+        ReceiptsPanelContentView(
+            controller: self,
+            receiptStore: receiptStore
         )
+        .preferredColorScheme(.dark)
     }
 
     private func makePanel() -> NSPanel {
@@ -134,7 +130,7 @@ final class ReceiptsWindowController: ObservableObject {
         p.hidesOnDeactivate = false
         p.isMovableByWindowBackground = true
         p.level = .floating
-        p.backgroundColor = NSColor(red: 0.06, green: 0.063, blue: 0.075, alpha: 0.97)
+        p.backgroundColor = NSColor(FaeDesign.surfaceBase).withAlphaComponent(0.97)
         p.hasShadow = true
         p.minSize = NSSize(width: 300, height: 300)
         return p
@@ -170,7 +166,7 @@ private struct ReceiptsPanelContentView: View {
                 }
             )
         }
-        .background(Color(red: 0.06, green: 0.063, blue: 0.075))
+        .background(FaeDesign.surfaceBase)
         .frame(minWidth: 300, minHeight: 300)
     }
 

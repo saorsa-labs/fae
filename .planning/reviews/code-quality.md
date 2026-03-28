@@ -1,19 +1,17 @@
 # Code Quality Review
-**Date**: 2026-03-21
+**Date**: 2026-03-28
+**Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
 ## Findings
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:201:      Tool→: "id=XXX name=calendar args={...}"
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:204:      Tool←: "id=XXX name=calendar status=ok output=..."
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/runners/inject_runner.py:218:        # Pattern 1: "id=XXX name=calendar args=..."
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:1295 - line too long (138 chars)
-/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/autoresearch/asr_streaming_eval.py:1314 - line too long (139 chars)
 
-## Assessment
-Task diff: autoresearch STATE.json has numeric metric updates (barge_in score dropped 71→42, tool_execution improved 23.8→41.9, memory improved 48.5→53.6).
-The barge_in regression (71→42) is notable — pass_rate dropped to 0.07 and latency spiked 5s→25s.
-New Python scripts (asr_accuracy_eval.py, asr_streaming_eval.py) follow good patterns with dataclasses and type hints.
+- [MEDIUM] ReceiptsWindowController.swift:137,173 — Hardcoded color `Color(red: 0.06, green: 0.063, blue: 0.075)` duplicated in two places. `FaeDesign.surfaceBase` = `Color(red: 0.059, green: 0.063, blue: 0.075)` exists and is the canonical token. Should use `FaeDesign.surfaceBase` for consistency and single source of truth.
+- [LOW] ReceiptsWindowController.swift:25 — `NSHostingView<AnyView>?` stored as property but never read after initial assignment. The `hostingView` property is assigned but unused. AnyView type erasure is also a mild performance concern (prevents SwiftUI diff optimization) — consider a concrete view type or @ViewBuilder wrapper.
+- [LOW] ReceiptsTimelineView.swift:198 — `humanLabel(for:)` is a 70+ line switch function. Consider splitting into an extension on `ActionReceiptRecord` so the label logic is co-located with the model type.
+- [OK] No TODO/FIXME/HACK comments
+- [OK] No `// swiftlint:disable` suppressions
+- [OK] MARK comments used consistently throughout
+- [OK] All methods have appropriate access control (private, internal)
+- [OK] Single responsibility followed well across files
 
-- [MEDIUM] barge_in latency regression visible in STATE.json (avg 5515ms→25689ms) — not a code quality issue per se but worth noting.
-- [LOW] default.profraw deleted (binary profiling artifact, OK to delete)
-
-## Grade: B
+## Grade: B+

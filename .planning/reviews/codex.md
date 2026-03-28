@@ -1,13 +1,15 @@
-CODEX_UNAVAILABLE: npx not found or codex not installed; skipping external Codex review.
+# External Review: Codex
+**Date**: 2026-03-28
+**Mode**: gsd (task)
+**Phase**: 1.4 — Settings + UI
 
-## Manual Analysis (Codex substitute)
+## Findings
 
-Task diff review:
-- .planning/STATE.json: GSD orchestration state update — review iteration increment. No issues.
-- autoresearch/STATE.json: Metric accumulation. Notable: barge_in latency regression (5.5s→25.7s avg), score drop 71→42. tool_execution and memory improved significantly.
-- default.profraw: Binary profiling artifact deleted — correct.
+- [MEDIUM] ReceiptsWindowController — `hostingView` property stored but never read after assignment. Property could be removed or replaced with a local variable in `openOrFocusPanel`. Dead storage is a code smell.
+- [MEDIUM] ReceiptsWindowController — When `show()` is called while the panel is already visible, the panel is focused via `makeKeyAndOrderFront` (correct) but receipts are re-fetched unnecessarily via `refreshReceipts` before focusing. Should check if panel exists first and only refresh if already visible.
+- [MEDIUM] `humanLabel(for:)` in ReceiptsTimelineView — The bash case truncates at 48 chars but doesn't sanitize for display (e.g., newlines in command preview could break layout). Should normalize whitespace.
+- [LOW] ReceiptsTimelineView — `relativeTime(from:)` manually implements time formatting instead of using `RelativeDateTimeFormatter`. The custom implementation handles days/hours/minutes/seconds correctly but `RelativeDateTimeFormatter` would provide localization support.
+- [OK] Architecture is clean and follows existing patterns
+- [OK] Async/await used correctly for undo and refresh operations
 
-New files: ASR evaluation Python scripts using uv/PEP 723 format, standard ML evaluation patterns.
-
-## Grade: A
-## Findings: 0 critical, 0 high, 1 medium (barge_in regression worth tracking)
+## Grade: B+

@@ -18,6 +18,7 @@ struct ActionIntent: Sendable {
     let requiresApproval: Bool
     let isOwner: Bool
     let livenessScore: Float?
+    let speakerId: String?
     let explicitUserAuthorization: Bool
     let hasCapabilityTicket: Bool
     let argumentSummary: String
@@ -32,6 +33,7 @@ struct ActionIntent: Sendable {
         requiresApproval: Bool,
         isOwner: Bool,
         livenessScore: Float?,
+        speakerId: String? = nil,
         explicitUserAuthorization: Bool,
         hasCapabilityTicket: Bool,
         argumentSummary: String,
@@ -45,6 +47,7 @@ struct ActionIntent: Sendable {
         self.requiresApproval = requiresApproval
         self.isOwner = isOwner
         self.livenessScore = livenessScore
+        self.speakerId = speakerId
         self.explicitUserAuthorization = explicitUserAuthorization
         self.hasCapabilityTicket = hasCapabilityTicket
         self.argumentSummary = argumentSummary

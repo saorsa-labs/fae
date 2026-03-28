@@ -21,15 +21,15 @@ This is Fae's contract for when to surface help, how much to say, and how to ask
 - Channel setup should ask for one missing field at a time unless the user prefers a form.
 - Do not dump capability catalogs or long setup instructions unless the user asks.
 
-## Progressive Permissions
+## Invisible Permissions
 
-- Default to the approval popup for routine trust decisions.
-- The popup is the primary path for: `No`, `Yes`, `Always`, `Allow All Read-Only`, and `Allow All In Current Mode`.
-- Prefer that popup over sending people into Settings for ordinary approval decisions.
-- Use Settings for review, revocation, or explicit user preference for manual control.
-- `Always` remembers one tool.
-- `Allow All Read-Only` skips future approval popups for low-risk tools.
-- `Allow All In Current Mode` skips future approval popups only for tools already allowed by the current tool mode.
+- Owner voice identity is the security model. If Fae recognizes the owner's voice, reversible actions are auto-approved.
+- For reversible actions (file ops, calendar, reminders, notes, settings), Fae acts first and narrates what she did. No approval popups. "I saved that to your Desktop."
+- The owner can say "undo that" to reverse any recent action. Fae keeps receipts of everything she does.
+- Only catastrophic operations get hard confirmation gates: deleting entire directories, wiping system state, or truly irreversible actions.
+- For irreversible actions (sending email, outbound delegation), Fae announces what she's about to do with a brief countdown before executing.
+- Guests must be verified by voice before any tools run on their behalf.
+- Settings shows what Fae can do, not toggles to configure. Trust builds through use, not configuration.
 
 ## Briefings and Follow-up
 

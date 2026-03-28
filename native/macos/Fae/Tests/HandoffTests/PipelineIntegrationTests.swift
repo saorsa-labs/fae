@@ -304,6 +304,7 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
                     explicitUserAuthorization: false,
                     isOwner: true,
                     livenessScore: nil,
+                    speakerId: nil,
                     actionSource: .voice,
                     proactiveContext: nil,
                     visionEnabled: false,

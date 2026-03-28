@@ -30,6 +30,9 @@ struct ToolExecutorContext: Sendable {
     /// Speaker liveness score from the most recent voice segment, if available.
     let livenessScore: Float?
 
+    /// Stable speaker profile ID for the current speaker (Phase 2 trust envelopes).
+    let speakerId: String?
+
     /// What triggered this tool invocation (voice, text, scheduler, proactive, etc.).
     let actionSource: ActionSource
 
@@ -73,6 +76,7 @@ struct ToolExecutorContext: Sendable {
             explicitUserAuthorization: false,
             isOwner: true,
             livenessScore: nil,
+            speakerId: nil,
             actionSource: actionSource,
             proactiveContext: nil,
             visionEnabled: false,
@@ -97,6 +101,7 @@ struct ToolExecutorContext: Sendable {
             explicitUserAuthorization: false,
             isOwner: false,
             livenessScore: nil,
+            speakerId: nil,
             actionSource: .voice,
             proactiveContext: nil,
             visionEnabled: false,
