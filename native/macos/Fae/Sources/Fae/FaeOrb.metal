@@ -336,7 +336,7 @@ static float layerGradient(float t, float alpha) {
             bpAlpha *= innerGlow;
             half srcA = half(bpAlpha);
             result.rgb = result.rgb * (1.0h - srcA) + bpColor * srcA;
-            result.a   = max(result.a, srcA);
+            result.a   = srcA + result.a * (1.0h - srcA);
         }
 
         // Tiny bright core — Canvas: 1.5px radius.
@@ -346,7 +346,7 @@ static float layerGradient(float t, float alpha) {
             half srcA = half(coreAlpha);
             half3 coreColor = half3(1.0h, 0.980h, 0.933h);
             result.rgb = result.rgb * (1.0h - srcA) + coreColor * srcA;
-            result.a   = max(result.a, srcA);
+            result.a   = srcA + result.a * (1.0h - srcA);
         }
     }
 
@@ -401,7 +401,8 @@ static float layerGradient(float t, float alpha) {
                     half3 flareColor = mix(color0, color1, 0.2h);
                     half srcA = half(min(flareA, 1.0));
                     result.rgb = result.rgb * (1.0h - srcA) + flareColor * srcA;
-                    result.a   = max(result.a, srcA * 0.5h);
+                    half flareAlphaContrib = srcA * 0.5h;
+                    result.a   = flareAlphaContrib + result.a * (1.0h - flareAlphaContrib);
                 }
             }
         }
@@ -415,7 +416,7 @@ static float layerGradient(float t, float alpha) {
 
             // Deterministic properties seeded by particle index.
             float pAngle0 = hashF(float2(fi * 1.1, 0.0)) * 6.2832;
-            float pRadius = 0.35 + hashF(float2(fi * 1.3, 1.0)) * 0.25;
+            float pRadiusFrac = 0.85 + hashF(float2(fi * 1.3, 1.0)) * 0.60;  // 0.85–1.45 × orbRadius
             float pSpeed  = 0.00006 + hashF(float2(fi * 1.7, 2.0)) * 0.00012;
             float pSz     = (1.5 + hashF(float2(fi * 2.1, 3.0)) * 2.5) / W;
             float pAlpha  = 0.3 + hashF(float2(fi * 2.3, 4.0)) * 0.45;
@@ -428,7 +429,7 @@ static float layerGradient(float t, float alpha) {
             // Radial drift (Canvas: sin(phase) × 0.05).
             float pPhase = pPhase0 + time;
             float drift  = sin(pPhase) * 0.05;
-            float r      = (pRadius + drift) * 0.5;
+            float r      = orbRadius * (pRadiusFrac + drift);
 
             float2 pPos = float2(cos(pAngle) * r, sin(pAngle) * r);
             float pDist = length(uv - pPos);
@@ -451,7 +452,7 @@ static float layerGradient(float t, float alpha) {
 
                 half srcA = half(min(pA, 1.0));
                 result.rgb = result.rgb * (1.0h - srcA) + pColor * srcA;
-                result.a   = max(result.a, srcA);
+                result.a   = srcA + result.a * (1.0h - srcA);
             }
         }
     }

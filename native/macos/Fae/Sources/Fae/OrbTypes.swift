@@ -382,6 +382,9 @@ enum OrbPalette: String, CaseIterable, Identifiable {
 /// Named colour constants as linear RGB SIMD3<Float> values (0–1 range).
 enum OrbColor {
     // ── Benjamin's amber orb palette (exact hex values) ────────────
+    // Full palette defined here for OrbFeeling colour assignments and
+    // future palette expansions. Not all colours are currently referenced
+    // by mode defaults or feelings — the extras are intentional reserves.
 
     // Warm ambers (home base)
     static let hotAmber    = hexToRGB(0xF0A830)
