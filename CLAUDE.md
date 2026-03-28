@@ -118,11 +118,11 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | System RAM | Model | Context |
 |------------|-------|---------|
 | ≥64 GB | Qwen3.5-35B-A3B MoE (3B active) | 128K |
-| ≥32 GB | Qwen3.5-35B-A3B MoE (3B active) | 32K |
-| ≥16 GB | Qwen3.5-4B | 32K |
-| <16 GB | saorsa-1.1-tiny (fine-tuned 2B) | 32K |
+| ≥24 GB | Qwen3.5-9B | 32K |
+| ≥16 GB | Qwen3.5-4B-OptiQ | 32K |
+| <16 GB | Qwen3.5-2B-OptiQ | 32K |
 
-Presets: `qwen3_5_35b_a3b`, `qwen3_5_4b`, `saorsa_1_1_tiny`. Unknown presets → auto. Legacy presets silently resolve to auto.
+Presets: `qwen3_5_35b_a3b`, `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`. Unknown presets → auto. Legacy `saorsa_1_1_tiny` → `qwen3_5_2b`.
 
 Context scaling: `FaeConfig.recommendedMaxHistory()` = `(contextSize - 5000 - maxTokens) / 400`, clamped [6, 100]. `maxTokens` capped at `contextSize / 2`.
 

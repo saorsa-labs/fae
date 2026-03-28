@@ -39,9 +39,9 @@ Canonical local model cache: `~/.cache/huggingface/hub`. The app runtime, traini
 
 Current loadable text-model ladder in the app:
 
-- `Auto`: `saorsa-1.1-tiny` / `Qwen3.5 4B` / `Qwen3.5 35B-A3B` by RAM
-- explicit presets: `saorsa-1.1-tiny`, `Qwen3.5 4B`, `Qwen3.5 35B-A3B`
-- legacy `9B` and `27B` presets are compatibility aliases only
+- `Auto`: `Qwen3.5 2B` / `Qwen3.5 4B` / `Qwen3.5 9B` / `Qwen3.5 35B-A3B` by RAM
+- explicit presets: `qwen3_5_2b`, `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_35b_a3b`
+- legacy `saorsa-1.1-tiny` / `saorsa_1_1_tiny` aliases resolve to `qwen3_5_2b`
 
 ## Notes
 

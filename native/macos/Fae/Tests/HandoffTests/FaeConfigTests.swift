@@ -170,8 +170,8 @@ final class FaeConfigTests: XCTestCase {
             totalMemoryBytes: UInt64(8) * 1024 * 1024 * 1024,
             preset: "qwen3_5_0_8b"
         )
-        // Falls back to auto → saorsa-1.1-tiny on 8 GB
-        XCTAssertEqual(legacyTiny.modelId, "saorsa-labs/saorsa-1.1-tiny")
+        // Falls back to auto → Qwen3.5-2B-OptiQ on 8 GB
+        XCTAssertEqual(legacyTiny.modelId, "mlx-community/Qwen3.5-2B-OptiQ-4bit")
 
     }
 

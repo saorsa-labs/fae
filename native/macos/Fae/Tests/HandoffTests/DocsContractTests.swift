@@ -60,10 +60,10 @@ final class DocsContractTests: XCTestCase {
     func testModelDocsReflectCurrentAutoOperatorPolicy() throws {
         let readme = try loadRepositoryText(relativePath: "README.md")
         let modelSwitchingGuide = try loadRepositoryText(relativePath: "docs/guides/model-switching.md")
-        // Auto policy: <16 GB → saorsa-1.1-tiny, 16–23 GB → 4B, 24–63 GB → 9B, 64+ GB → 35B-A3B@128K
+        // Auto policy: <16 GB → 2B-OptiQ, 16–23 GB → 4B-OptiQ, 24–63 GB → 9B, 64+ GB → 35B-A3B@128K
         let expectations: [(Int, String, Int)] = [
-            (8, "saorsa-labs/saorsa-1.1-tiny", 32_768),
-            (16, "mlx-community/Qwen3.5-4B-4bit", 32_768),
+            (8, "mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768),
+            (16, "mlx-community/Qwen3.5-4B-OptiQ-4bit", 32_768),
             (24, "mlx-community/Qwen3.5-9B-4bit", 32_768),
             (32, "mlx-community/Qwen3.5-9B-4bit", 32_768),
             (64, "mlx-community/Qwen3.5-35B-A3B-4bit", 131_072),
@@ -80,15 +80,15 @@ final class DocsContractTests: XCTestCase {
         }
 
         // Docs may use either 3-tier or 4-tier labeling. Check model names are mentioned.
-        XCTAssertTrue(readme.contains("saorsa-1.1-tiny") || readme.contains("saorsa_1_1_tiny"),
+        XCTAssertTrue(readme.contains("Qwen3.5-2B") || readme.contains("qwen3_5_2b"),
                       "README should mention the 2B model")
         XCTAssertTrue(readme.contains("Qwen3.5") || readme.contains("qwen3_5"),
                       "README should mention Qwen3.5 models")
 
         XCTAssertTrue(modelSwitchingGuide.contains("`Auto (Recommended)` resolves by RAM"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`<16 GB` | `saorsa-1.1-tiny`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`16–31 GB` | `Qwen3.5 4B`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`32–63 GB` | `Qwen3.5 35B-A3B`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`<16 GB` | `Qwen3.5 2B`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`16–23 GB` | `Qwen3.5 4B`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("`24–63 GB` | `Qwen3.5 9B`"))
         XCTAssertTrue(modelSwitchingGuide.contains("`64+ GB` | `Qwen3.5 35B-A3B`"))
         XCTAssertTrue(modelSwitchingGuide.contains("one active Qwen3.5 text model"))
     }

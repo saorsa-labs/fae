@@ -26,26 +26,26 @@ Examples:
 User-facing text model presets:
 
 - `auto`
-- `saorsa_1_1_tiny`
+- `qwen3_5_2b`
 - `qwen3_5_4b`
+- `qwen3_5_9b`
 - `qwen3_5_35b_a3b` (medium — MoE: 35B total, 3B active per token)
 
 `Auto (Recommended)` resolves by RAM:
 
 | System RAM | Auto text model | Context |
 |---|---|---|
-| `<16 GB` | `saorsa-1.1-tiny` (fine-tuned 2B) | 32K |
-| `16–31 GB` | `Qwen3.5 4B` | 32K |
-| `32–63 GB` | `Qwen3.5 35B-A3B` MoE | 32K |
+| `<16 GB` | `Qwen3.5 2B` (OptiQ mixed-precision) | 32K |
+| `16–23 GB` | `Qwen3.5 4B` (OptiQ mixed-precision) | 32K |
+| `24–63 GB` | `Qwen3.5 9B` | 32K |
 | `64+ GB` | `Qwen3.5 35B-A3B` MoE | 128K |
 
 The 35B-A3B uses Gated DeltaNet + sparse MoE (256 experts, 8+1 active). Only 3B parameters activate per token, so inference speed is comparable to a 3B dense model despite 35B total knowledge. Natively multimodal (text + vision).
 
 Legacy compatibility aliases:
 
-- `qwen3_5_2b` resolves to `saorsa_1_1_tiny`
-- `qwen3_5_9b` resolves to `qwen3_5_4b`
-- `qwen3_5_27b` resolves to `qwen3_5_35b_a3b`
+- `saorsa-1.1-tiny` / `saorsa_1_1_tiny` resolves to `qwen3_5_2b`
+- `qwen3_5_27b` and other unknown presets fall back to `auto`
 
 ## Supported vision presets
 
