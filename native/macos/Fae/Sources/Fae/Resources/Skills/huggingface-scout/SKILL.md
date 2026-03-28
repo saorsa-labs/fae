@@ -55,8 +55,9 @@ Checks: architecture, context length, MLX support, license, downloads, parameter
 
 | Role | Model | Params |
 |------|-------|--------|
-| Operator | saorsa-1.1-tiny | 2B 4-bit MLX (fine-tuned Qwen3.5-2B) |
-| Operator | Qwen3.5-4B | 4B 4-bit MLX |
+| Operator | Qwen3.5-2B | 2B 4-bit MLX (OptiQ mixed-precision) |
+| Operator | Qwen3.5-4B | 4B 4-bit MLX (OptiQ mixed-precision) |
+| Operator | Qwen3.5-9B | 9B 4-bit MLX |
 | Operator | Qwen3.5-35B-A3B | 35B total / 3B active per token MoE |
 | STT | Qwen3-ASR-1.7B | 1.7B 4-bit |
 | TTS | Kokoro-82M | 82M float32 |
@@ -65,8 +66,9 @@ Checks: architecture, context length, MLX support, license, downloads, parameter
 
 Fae uses a single local model at a time, selected by RAM tier:
 
-- **saorsa-1.1-tiny**: Any Mac with 8+ GB RAM
+- **Qwen3.5-2B**: Any Mac with 8+ GB RAM
 - **Qwen3.5-4B**: Macs with 16+ GB RAM
+- **Qwen3.5-9B**: Macs with 24+ GB RAM
 - **Qwen3.5-35B-A3B**: Macs with 32+ GB RAM
 
 When evaluating candidate models, prioritise MLX-native quantisations (4-bit, 8-bit) with context windows of 32K+ tokens.

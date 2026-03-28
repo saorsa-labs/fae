@@ -227,83 +227,8 @@ enum PluginLoader {
     // MARK: - Frontmatter Parsing
 
     /// Split markdown content into YAML frontmatter dict and body.
-    /// Reuses the same logic as SkillParser but accessible here.
+    /// Delegates to SkillParser's canonical implementation.
     private static func splitFrontmatter(_ content: String) -> ([String: String]?, String?) {
-        let lines = content.components(separatedBy: .newlines)
-        guard let firstLine = lines.first,
-              firstLine.trimmingCharacters(in: .whitespaces) == "---"
-        else {
-            return (nil, content)
-        }
-
-        var closingIndex: Int?
-        for i in 1 ..< lines.count {
-            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
-                closingIndex = i
-                break
-            }
-        }
-        guard let endIdx = closingIndex else {
-            return (nil, content)
-        }
-
-        let yamlLines = Array(lines[1 ..< endIdx])
-        let bodyLines = Array(lines[(endIdx + 1)...])
-        let body = bodyLines.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        var dict: [String: String] = [:]
-        // Support multi-line description values (pipes).
-        var currentKey: String?
-        var multilineValue: [String] = []
-
-        func flushMultiline() {
-            if let key = currentKey, !multilineValue.isEmpty {
-                dict[key] = multilineValue.joined(separator: " ")
-                    .trimmingCharacters(in: .whitespaces)
-            }
-            currentKey = nil
-            multilineValue = []
-        }
-
-        for line in yamlLines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
-
-            let indent = line.prefix(while: { $0 == " " }).count
-
-            // Continuation of multiline value.
-            if indent >= 2, currentKey != nil {
-                multilineValue.append(trimmed)
-                continue
-            }
-
-            flushMultiline()
-
-            if let colonIdx = trimmed.firstIndex(of: ":") {
-                let key = String(trimmed[trimmed.startIndex ..< colonIdx])
-                    .trimmingCharacters(in: .whitespaces)
-                let value = String(trimmed[trimmed.index(after: colonIdx)...])
-                    .trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-
-                if value.isEmpty || value == "|" || value == ">" {
-                    currentKey = key
-                } else if value.hasPrefix("[") && value.hasSuffix("]") {
-                    // Inline list.
-                    let inner = value.dropFirst().dropLast()
-                    let items = inner.components(separatedBy: ",")
-                        .map { $0.trimmingCharacters(in: .whitespaces)
-                            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) }
-                        .filter { !$0.isEmpty }
-                    dict[key] = items.joined(separator: ",")
-                } else {
-                    dict[key] = value
-                }
-            }
-        }
-
-        flushMultiline()
-        return (dict.isEmpty ? nil : dict, body.isEmpty ? nil : body)
+        SkillParser.splitFrontmatter(content)
     }
 }

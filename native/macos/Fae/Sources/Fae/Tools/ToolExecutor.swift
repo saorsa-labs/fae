@@ -574,7 +574,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         }
 
         // ── 13b. Plugin PreToolUse hooks ──────────────────────────────
-        if let hookRunner = pluginHookRunner {
+        if let hookRunner = pluginHookRunner, await hookRunner.hasHooks(for: .preToolUse) {
             let hookInput = HookInput.preToolUse(
                 toolName: call.name,
                 toolInput: executionArguments
@@ -643,7 +643,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         }
 
         // ── 14b. Plugin PostToolUse hooks ─────────────────────────────
-        if let hookRunner = pluginHookRunner {
+        if let hookRunner = pluginHookRunner, await hookRunner.hasHooks(for: .postToolUse) {
             let hookInput = HookInput.postToolUse(
                 toolName: call.name,
                 toolOutput: String(result.output.prefix(2000))
@@ -693,12 +693,7 @@ actor ToolExecutor: ToolExecutorProtocol {
     // MARK: - Workflow Trace Recording
 
     private static func serializeArguments(_ args: [String: Any]) -> String {
-        if let data = try? JSONSerialization.data(withJSONObject: args),
-           let str = String(data: data, encoding: .utf8)
-        {
-            return str
-        }
-        return "{}"
+        ToolRoutingHelpers.serializeArguments(args)
     }
 
     /// Record a `tool_call` step in the workflow trace.
@@ -969,7 +964,7 @@ actor ToolExecutor: ToolExecutorProtocol {
     static func isSafeSkillName(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if trimmed.contains("/") || trimmed.contains("\\") || trimmed.contains("..") { return false }
+        if trimmed.contains("/") || trimmed.contains("\\") || trimmed.contains("..") || trimmed.contains("~") { return false }
         let allowed = CharacterSet(
             charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
         )

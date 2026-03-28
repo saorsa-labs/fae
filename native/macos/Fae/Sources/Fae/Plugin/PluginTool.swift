@@ -265,7 +265,8 @@ struct PluginTool: Tool {
         // Check for MCP config.
         let mcpConfig = plugin.directoryURL.appendingPathComponent(".mcp.json")
         if FileManager.default.fileExists(atPath: mcpConfig.path) {
-            sections.append("\nMCP Servers: .mcp.json present (MCP bridge not yet implemented)")
+            let toolCount = await pluginManager.mcpToolCount(for: plugin.id)
+            sections.append("\nMCP Servers: .mcp.json present (\(toolCount) tools connected)")
         }
 
         return .success(sections.joined(separator: "\n"))

@@ -27,8 +27,8 @@ let models: [ModelEntry] = [
     ModelEntry(shortName: "qwen3-4b", modelID: "mlx-community/Qwen3-4B-4bit"),
     ModelEntry(shortName: "qwen3-8b", modelID: "mlx-community/Qwen3-8B-4bit"),
     ModelEntry(shortName: "qwen3.5-0.8b", modelID: "mlx-community/Qwen3.5-0.8B-4bit"),
-    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-4bit"),
-    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-4bit"),
+    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
+    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-OptiQ-4bit"),
     ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
     // NexVeridian text-only conversions (vision tower stripped).
     // mlx-community versions are VL — incompatible with text-only loading.

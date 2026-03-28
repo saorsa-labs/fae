@@ -40,10 +40,12 @@ enum SkillParser {
         return SkillRecord(metadata: metadata, fullBody: body)
     }
 
-    // MARK: - Private
+    // MARK: - Frontmatter Parsing
 
     /// Split SKILL.md content into frontmatter dict and body string.
-    private static func splitFrontmatter(_ content: String) -> ([String: String]?, String?) {
+    ///
+    /// Internal visibility so PluginLoader can reuse the same parser.
+    static func splitFrontmatter(_ content: String) -> ([String: String]?, String?) {
         let lines = content.components(separatedBy: .newlines)
         guard let firstLine = lines.first, firstLine.trimmingCharacters(in: .whitespaces) == "---" else {
             return (nil, content)
@@ -87,7 +89,7 @@ enum SkillParser {
     ///   - channel
     ///   - discord
     /// ```
-    private static func parseSimpleYAML(_ lines: [String]) -> [String: String] {
+    static func parseSimpleYAML(_ lines: [String]) -> [String: String] {
         var result: [String: String] = [:]
         var currentParent: String?
         var listItems: [String] = []

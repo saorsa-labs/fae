@@ -150,15 +150,15 @@ struct FaeConfig: Codable {
     /// This reclaims ~1,100 tokens and gives the model more headroom for generation
     /// and conversation history without changing tool availability.
     ///
-    /// Applies to saorsa-1.1-tiny (our fine-tuned 2B). 4B and larger receive the full prompt.
+    /// Applies to Qwen3.5-2B (and legacy saorsa-1.1-tiny). 4B and larger receive the full prompt.
     var isLightweightContext: Bool {
         let preset = FaeConfig.canonicalVoiceModelPreset(llm.voiceModelPreset)
         switch preset {
-        case "saorsa_1_1_tiny":
+        case "qwen3_5_2b":
             return true
         case "auto":
             let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
-            return totalGB < 16  // Auto selects saorsa-1.1-tiny below 16 GB
+            return totalGB < 16  // Auto selects Qwen3.5-2B below 16 GB
         default:
             // Also honour manually configured very small contexts (e.g. developer overrides).
             return llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
@@ -466,8 +466,10 @@ struct FaeConfig: Codable {
             return "qwen3_5_9b"
         case "qwen3_5_4b":
             return "qwen3_5_4b"
+        case "qwen3_5_2b":
+            return "qwen3_5_2b"
         case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
-            return "saorsa_1_1_tiny"
+            return "qwen3_5_2b"  // legacy alias → Qwen3.5-2B-OptiQ
         case "auto":
             return "auto"
         default:
@@ -504,10 +506,10 @@ struct FaeConfig: Codable {
             // Dense 9B. ~5 GB 4-bit. Sweet spot: better tool use than 4B, much faster than 35B.
             return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
         case "qwen3_5_4b":
-            return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
-        case "saorsa_1_1_tiny":
-            // Our fine-tuned Qwen3.5-2B. Compact, fast, good tool use.
-            return ("saorsa-labs/saorsa-1.1-tiny", 32_768)
+            return ("mlx-community/Qwen3.5-4B-OptiQ-4bit", 32_768)
+        case "qwen3_5_2b":
+            // Qwen3.5-2B with OptiQ mixed-precision. Compact, fast.
+            return ("mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768)
         default: // "auto"
             if totalGB >= 64 {
                 // 35B-A3B MoE: frontier intelligence at 3B activation speed.
@@ -521,10 +523,10 @@ struct FaeConfig: Codable {
                 // ~5 GB VRAM + ~3GB for STT/TTS/speaker = ~8GB total pipeline.
                 return ("mlx-community/Qwen3.5-9B-4bit", 32_768)
             } else if totalGB >= 16 {
-                return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
+                return ("mlx-community/Qwen3.5-4B-OptiQ-4bit", 32_768)
             } else {
-                // saorsa-1.1-tiny: our fine-tuned Qwen3.5-2B
-                return ("saorsa-labs/saorsa-1.1-tiny", 32_768)
+                // Qwen3.5-2B with OptiQ mixed-precision for low-RAM Macs.
+                return ("mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768)
             }
         }
     }

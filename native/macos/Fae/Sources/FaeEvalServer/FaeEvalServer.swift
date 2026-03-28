@@ -40,8 +40,8 @@ struct ModelEntry {
 let modelRegistry: [ModelEntry] = [
     // LLM models (text-only, via MLXLLMEngine)
     ModelEntry(shortName: "qwen3.5-0.8b", modelID: "mlx-community/Qwen3.5-0.8B-4bit"),
-    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-4bit"),
-    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-4bit"),
+    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
+    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-OptiQ-4bit"),
     ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
     ModelEntry(shortName: "qwen3.5-27b", modelID: "mlx-community/Qwen3.5-27B-4bit"),
     ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "mlx-community/Qwen3.5-35B-A3B-4bit"),
@@ -61,14 +61,14 @@ let modelRegistry: [ModelEntry] = [
 
 func autoSelectModel() -> ModelEntry {
     let ramGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
-    if ramGB >= 64 {
+    if ramGB >= 32 {
         return modelRegistry.first { $0.shortName == "qwen3.5-35b-a3b" }!
-    } else if ramGB >= 32 {
-        return modelRegistry.first { $0.shortName == "qwen3.5-35b-a3b" }!
+    } else if ramGB >= 24 {
+        return modelRegistry.first { $0.shortName == "qwen3.5-9b" }!
     } else if ramGB >= 16 {
         return modelRegistry.first { $0.shortName == "qwen3.5-4b" }!
     } else {
-        return modelRegistry.first { $0.shortName == "qwen3.5-0.8b" }!
+        return modelRegistry.first { $0.shortName == "qwen3.5-2b" }!
     }
 }
 
@@ -219,7 +219,6 @@ actor EvalServer {
                         .first(where: { $0.lowercased().hasPrefix("content-length:") })
                         .flatMap { Int($0.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) }
                     let bodyStart = headerEnd.upperBound
-                    let bodyReceived = buffer.count - bodyStart.hashValue
 
                     if let cl = contentLength {
                         if buffer.count - buffer.distance(from: buffer.startIndex, to: bodyStart) >= cl {

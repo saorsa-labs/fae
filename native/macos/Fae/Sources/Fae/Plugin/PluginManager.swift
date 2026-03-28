@@ -118,6 +118,11 @@ actor PluginManager {
         Array(installedPlugins.values).sorted { $0.id < $1.id }
     }
 
+    /// Count of MCP tools connected for a specific plugin.
+    func mcpToolCount(for pluginId: String) async -> Int {
+        await mcpBridge.toolCount(for: pluginId)
+    }
+
     // MARK: - Install
 
     /// Install a plugin from a git URL.
@@ -130,7 +135,7 @@ actor PluginManager {
         switch source {
         case .git(let url, let ref):
             // Derive name from URL if not provided.
-            let pluginName = name ?? derivePluginName(from: url)
+            let pluginName = try name ?? derivePluginName(from: url)
 
             let targetDir = pluginsDir.appendingPathComponent(pluginName)
             if fm.fileExists(atPath: targetDir.path) {
@@ -200,6 +205,10 @@ actor PluginManager {
         let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
         defer { try? fm.removeItem(at: tempDir) }
+
+        guard !pluginPath.contains(".."), !pluginPath.hasPrefix("/"), !pluginPath.contains("~") else {
+            throw PluginError.installFailed("Invalid plugin path: '\(pluginPath)'")
+        }
 
         // Sparse clone or full clone + extract.
         try await gitClone(url: repoURL, ref: ref, destination: tempDir)
@@ -336,13 +345,23 @@ actor PluginManager {
         }
     }
 
-    /// Derive a plugin name from a git URL.
-    private func derivePluginName(from url: String) -> String {
+    /// Derive a plugin name from a git URL and validate it is safe for use as a directory name.
+    private func derivePluginName(from url: String) throws -> String {
         let components = url.components(separatedBy: "/")
         let lastComponent = components.last ?? url
-        return lastComponent
+        let name = lastComponent
             .replacingOccurrences(of: ".git", with: "")
             .trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty,
+              !name.contains(".."),
+              !name.contains("/"),
+              !name.contains("\\"),
+              !name.contains("~"),
+              !name.hasPrefix(".")
+        else {
+            throw PluginError.installFailed("Invalid plugin name derived from URL: '\(name)'")
+        }
+        return name
     }
 
     /// Start MCP servers and reload hooks after a plugin is installed or updated.

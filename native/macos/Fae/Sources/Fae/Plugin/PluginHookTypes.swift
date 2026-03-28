@@ -151,9 +151,9 @@ struct PluginHookConfig: Sendable {
                     else { continue }
 
                     let timeout = hookSpec["timeout"] as? Int ?? HookDefinition.defaultTimeout
-                    let expandedCommand = command
-                        .replacingOccurrences(of: "${CLAUDE_PLUGIN_ROOT}", with: pluginPath)
-                        .replacingOccurrences(of: "${FAE_PLUGIN_ROOT}", with: pluginPath)
+                    let expandedCommand = PluginExecutableResolver.substitutePluginRoot(
+                        command, pluginPath: pluginPath
+                    )
 
                     definitions.append(HookDefinition(
                         event: event,

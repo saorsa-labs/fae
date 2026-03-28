@@ -20,13 +20,13 @@ struct LocalModelCatalog {
             label: "Auto (Recommended)",
             value: "auto",
             ram: "8+ GB",
-            description: "Picks the best model for your Mac's RAM: 35B-A3B MoE on 32+ GB, 4B on 16+ GB, saorsa-1.1-tiny below."
+            description: "Picks the best model for your Mac's RAM: 35B-A3B MoE on 32+ GB, 9B on 24+ GB, 4B on 16+ GB, 2B below."
         ),
         .init(
-            label: "saorsa-1.1-tiny (2B)",
-            value: "saorsa_1_1_tiny",
+            label: "Qwen3.5 2B",
+            value: "qwen3_5_2b",
             ram: "8+ GB",
-            description: "Our fine-tuned Qwen3.5-2B. Compact, fast inference, strong tool use. Best for Macs with limited RAM."
+            description: "Qwen3.5-2B with OptiQ mixed-precision. Compact, fast inference. Best for Macs with limited RAM."
         ),
         .init(
             label: "Qwen3.5 4B",

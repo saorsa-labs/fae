@@ -5,9 +5,9 @@ import MLXEmbedders
 // MARK: - Tier
 
 enum EmbeddingModelTier: String, Sendable {
-    case large  = "mlx-community/Qwen3-Embedding-8B-4bit"
-    case medium = "mlx-community/Qwen3-Embedding-4B-4bit"
-    case small  = "mlx-community/Qwen3-Embedding-0.6B-4bit"
+    case large  = "mlx-community/Qwen3-Embedding-8B-4bit-DWQ"
+    case medium = "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
+    case small  = "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
     case hash   = "foundation-hash-384"
 
     var dimension: Int {

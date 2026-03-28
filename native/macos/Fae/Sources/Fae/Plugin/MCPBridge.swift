@@ -97,32 +97,23 @@ actor MCPBridge {
 
     /// Get all MCP tool proxies for registration in ToolRegistry.
     func allToolProxies() -> [MCPToolProxy] {
-        var proxies: [MCPToolProxy] = []
-
-        for (_, mcpTool) in discoveredTools {
-            // Find which server owns this tool.
-            for (faeToolName, routing) in toolRouting {
-                if routing.mcpToolName == mcpTool.name {
-                    let proxy = MCPToolProxy(
-                        mcpTool: mcpTool,
-                        serverName: routing.serverName,
-                        bridge: self
-                    )
-                    // Only add if the name matches (avoids duplicates).
-                    if proxy.name == faeToolName {
-                        proxies.append(proxy)
-                    }
-                    break
-                }
-            }
+        toolRouting.compactMap { (faeToolName, routing) -> MCPToolProxy? in
+            guard let mcpTool = discoveredTools[faeToolName] else { return nil }
+            return MCPToolProxy(mcpTool: mcpTool, serverName: routing.serverName, bridge: self)
         }
-
-        return proxies
     }
 
     /// List all discovered MCP tool names.
     func toolNames() -> [String] {
         Array(toolRouting.keys).sorted()
+    }
+
+    /// Count tools belonging to servers started for a specific plugin.
+    func toolCount(for pluginId: String) -> Int {
+        let pluginServers = Set(
+            connections.filter { $0.value.pluginId == pluginId }.keys
+        )
+        return toolRouting.values.filter { pluginServers.contains($0.serverName) }.count
     }
 
     // MARK: - Tool Execution
@@ -313,12 +304,13 @@ actor MCPBridge {
     /// Extracts text content from `Tool.Content` items. Non-text content
     /// (images, audio, resources) are represented as placeholder strings.
     private func formatToolContent(_ content: [MCP.Tool.Content], isError: Bool?) -> String {
+        let encoder = JSONEncoder()
         var parts: [String] = []
 
         for item in content {
             // Tool.Content is an enum — extract text where possible.
             // Use JSON round-trip for API stability across SDK versions.
-            if let data = try? JSONEncoder().encode(item),
+            if let data = try? encoder.encode(item),
                let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             {
                 if let text = dict["text"] as? String {
@@ -340,20 +332,7 @@ actor MCPBridge {
 
     /// Resolve an executable name to a full path.
     private nonisolated func resolveExecutable(_ name: String) -> URL? {
-        let searchPaths = [
-            "/usr/bin",
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            "/opt/zerobrew/bin",
-        ]
-
-        for dir in searchPaths {
-            let path = "\(dir)/\(name)"
-            if FileManager.default.fileExists(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
-        }
-        return nil
+        PluginExecutableResolver.resolve(name)
     }
 }
 

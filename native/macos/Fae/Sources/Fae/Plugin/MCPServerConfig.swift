@@ -72,6 +72,13 @@ struct MCPServerConfig: Sendable {
                 return nil
             }
 
+            // Block localhost, private IPs, and metadata endpoints.
+            let resolvedURL = substitute(urlString, pluginPath: pluginPath)
+            if let reason = NetworkTargetPolicy.blockedReason(urlString: resolvedURL) {
+                NSLog("MCPServerConfig: blocked HTTP server URL '%@': %@", resolvedURL, reason)
+                return nil
+            }
+
             var oauth: MCPOAuthConfig?
             if let oauthDict = config["oauth"] as? [String: Any],
                let clientId = oauthDict["clientId"] as? String
@@ -106,9 +113,7 @@ struct MCPServerConfig: Sendable {
 
     /// Replace `${CLAUDE_PLUGIN_ROOT}` and `${FAE_PLUGIN_ROOT}` with the actual path.
     private static func substitute(_ value: String, pluginPath: String) -> String {
-        value
-            .replacingOccurrences(of: "${CLAUDE_PLUGIN_ROOT}", with: pluginPath)
-            .replacingOccurrences(of: "${FAE_PLUGIN_ROOT}", with: pluginPath)
+        PluginExecutableResolver.substitutePluginRoot(value, pluginPath: pluginPath)
     }
 }
 

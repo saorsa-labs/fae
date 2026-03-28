@@ -57,8 +57,9 @@ This is the most important part. List EVERY model in the pipeline with its load 
 - **Auto-selection based on RAM**:
   - ≥64 GB → Qwen3.5-35B-A3B MoE (128K context)
   - ≥32 GB → Qwen3.5-35B-A3B MoE (32K context)
+  - ≥24 GB → Qwen3.5-9B (32K context)
   - ≥16 GB → Qwen3.5-4B (32K context)
-  - <16 GB → saorsa-1.1-tiny 2B (32K context)
+  - <16 GB → Qwen3.5-2B OptiQ (32K context)
 - **Purpose**: Conversation, reasoning, tool use
 - Check: If I can respond to questions, LLM is loaded. Report which model.
 - This is the CRITICAL engine — if it fails, nothing works.

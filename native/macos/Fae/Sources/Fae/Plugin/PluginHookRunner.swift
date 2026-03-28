@@ -232,43 +232,7 @@ actor PluginHookRunner {
     }
 
     /// Resolve an executable name to a full path.
-    private func resolveExecutable(_ name: String) -> URL? {
-        let searchPaths = [
-            "/usr/bin",
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            "/opt/zerobrew/bin",
-        ]
-
-        // Also check if `name` is python3, node, bun, etc.
-        for dir in searchPaths {
-            let path = "\(dir)/\(name)"
-            if FileManager.default.fileExists(atPath: path) {
-                return URL(fileURLWithPath: path)
-            }
-        }
-
-        // Try `which` as fallback.
-        let whichProcess = Process()
-        whichProcess.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        whichProcess.arguments = [name]
-        let pipe = Pipe()
-        whichProcess.standardOutput = pipe
-        whichProcess.standardError = FileHandle.nullDevice
-
-        do {
-            try whichProcess.run()
-            whichProcess.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let path, !path.isEmpty {
-                return URL(fileURLWithPath: path)
-            }
-        } catch {
-            // Swallow — just return nil.
-        }
-
-        return nil
+    private nonisolated func resolveExecutable(_ name: String) -> URL? {
+        PluginExecutableResolver.resolve(name)
     }
 }

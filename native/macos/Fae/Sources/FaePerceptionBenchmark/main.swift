@@ -13,8 +13,8 @@ struct ModelEntry {
 let models: [ModelEntry] = [
     ModelEntry(shortName: "qwen3-vl-4b-4bit", modelID: "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit"),
     ModelEntry(shortName: "qwen3-vl-4b-8bit", modelID: "mlx-community/Qwen3-VL-4B-Instruct-8bit"),
-    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-4bit"),
-    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-4bit"),
+    ModelEntry(shortName: "qwen3.5-2b", modelID: "mlx-community/Qwen3.5-2B-OptiQ-4bit"),
+    ModelEntry(shortName: "qwen3.5-4b", modelID: "mlx-community/Qwen3.5-4B-OptiQ-4bit"),
     ModelEntry(shortName: "qwen3.5-9b", modelID: "mlx-community/Qwen3.5-9B-4bit"),
     ModelEntry(shortName: "qwen3.5-27b", modelID: "mlx-community/Qwen3.5-27B-4bit"),
     ModelEntry(shortName: "qwen3.5-35b-a3b", modelID: "mlx-community/Qwen3.5-35B-A3B-4bit"),
