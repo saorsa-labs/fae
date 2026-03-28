@@ -10,10 +10,10 @@ import Combine
 /// fight with. `isMovableByWindowBackground` allows drag-to-move. The context
 /// menu (right-click) provides Close/Hide/Quit actions.
 ///
-/// When the orb collapses due to inactivity, it docks to the top-left corner
-/// of the screen (below the menu bar). When Fae starts speaking (assistant
-/// generating), the window automatically expands back to compact mode and
-/// comes to the front so the user can see the response.
+/// When the orb collapses due to inactivity, it docks to the screen corner
+/// with the least window overlap (defaulting to bottom-left). When Fae starts
+/// speaking (assistant generating), the window automatically expands back to
+/// compact mode and comes to the front so the user can see the response.
 ///
 /// ## Glass Architecture
 ///
@@ -37,6 +37,14 @@ final class WindowStateController: ObservableObject {
         case right
     }
 
+    /// Screen corners ordered by preference (bottom-left first).
+    enum ScreenCorner: CaseIterable {
+        case bottomLeft
+        case bottomRight
+        case topLeft
+        case topRight
+    }
+
     // MARK: - Published State
 
     @Published var mode: Mode = .compact
@@ -46,11 +54,14 @@ final class WindowStateController: ObservableObject {
 
     private let compactWidth: CGFloat = 400
     private let compactHeight: CGFloat = 740
-    private let collapsedSize: CGFloat = 120
+    private let collapsedSize: CGFloat = 72
     private let inactivityDelay: TimeInterval = 300.0
 
-    /// Padding from the left edge and top of the visible frame when collapsed.
+    /// Padding from the screen edge when collapsed.
     private let collapsedEdgePadding: CGFloat = 12
+
+    /// Which corner the orb last docked to (for expand-from-collapsed positioning).
+    private var lastDockedCorner: ScreenCorner = .bottomLeft
 
     // MARK: - Window Reference
 
@@ -108,7 +119,7 @@ final class WindowStateController: ObservableObject {
 
     /// Frame saved before `transitionToCollapsedInPlace()`. Used by
     /// `transitionToCompact()` to return to the pre-canvas position rather
-    /// than the default top-left docking corner.
+    /// than the default docking corner.
     private var frameBeforeInPlaceCollapse: NSRect?
 
     // MARK: - Timer
@@ -131,6 +142,133 @@ final class WindowStateController: ObservableObject {
         }
     }
 
+    // MARK: - Smart Corner Selection
+
+    /// Find the screen corner with the least overlap from other application
+    /// windows. Falls back to `.bottomLeft` on ties.
+    ///
+    /// Uses `CGWindowListCopyWindowInfo` to enumerate on-screen windows, then
+    /// tests intersection area of each candidate corner rect against those
+    /// windows. Fae's own window is excluded by PID.
+    private func bestFreeCorner(on screen: NSScreen) -> ScreenCorner {
+        let visibleFrame = screen.visibleFrame
+        let size = CGSize(width: collapsedSize, height: collapsedSize)
+        let pad = collapsedEdgePadding
+
+        // Candidate rects in Cocoa coordinates (Y=0 at bottom).
+        let candidates: [(ScreenCorner, NSRect)] = [
+            (.bottomLeft,  NSRect(x: visibleFrame.minX + pad,
+                                  y: visibleFrame.minY + pad,
+                                  width: size.width, height: size.height)),
+            (.bottomRight, NSRect(x: visibleFrame.maxX - size.width - pad,
+                                  y: visibleFrame.minY + pad,
+                                  width: size.width, height: size.height)),
+            (.topLeft,     NSRect(x: visibleFrame.minX + pad,
+                                  y: visibleFrame.maxY - size.height - pad,
+                                  width: size.width, height: size.height)),
+            (.topRight,    NSRect(x: visibleFrame.maxX - size.width - pad,
+                                  y: visibleFrame.maxY - size.height - pad,
+                                  width: size.width, height: size.height)),
+        ]
+
+        // Get all on-screen windows, excluding Fae itself and desktop elements.
+        let faePID = ProcessInfo.processInfo.processIdentifier
+        guard let windowInfo = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return .bottomLeft
+        }
+
+        // Primary screen height for CG→Cocoa coordinate conversion.
+        // CG coordinates: Y=0 at top of primary screen.
+        // Cocoa coordinates: Y=0 at bottom of primary screen.
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+
+        // Collect rects of other windows in Cocoa coordinates.
+        var otherRects: [NSRect] = []
+        for item in windowInfo {
+            guard let ownerPID = item[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID != faePID,
+                  let boundsDict = item[kCGWindowBounds as String] as? NSDictionary,
+                  let cgRect = CGRect(dictionaryRepresentation: boundsDict),
+                  cgRect.width > 0, cgRect.height > 0
+            else { continue }
+
+            let alpha = (item[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            guard alpha > 0 else { continue }
+
+            // Convert CG rect (Y-down) to Cocoa rect (Y-up).
+            let cocoaY = primaryHeight - cgRect.origin.y - cgRect.height
+            otherRects.append(NSRect(x: cgRect.origin.x, y: cocoaY,
+                                     width: cgRect.width, height: cgRect.height))
+        }
+
+        // Score each corner by total overlap area. Lower is better.
+        var bestCorner: ScreenCorner = .bottomLeft
+        var bestOverlap: CGFloat = .greatestFiniteMagnitude
+
+        for (corner, rect) in candidates {
+            var totalOverlap: CGFloat = 0
+            for other in otherRects {
+                let intersection = rect.intersection(other)
+                if !intersection.isNull {
+                    totalOverlap += intersection.width * intersection.height
+                }
+            }
+            if totalOverlap < bestOverlap {
+                bestOverlap = totalOverlap
+                bestCorner = corner
+            }
+        }
+
+        return bestCorner
+    }
+
+    /// Compute the collapsed-orb origin for a given corner.
+    private func collapsedOrigin(for corner: ScreenCorner,
+                                 in visibleFrame: NSRect,
+                                 size: NSSize) -> NSPoint {
+        let pad = collapsedEdgePadding
+        switch corner {
+        case .bottomLeft:
+            return NSPoint(x: visibleFrame.minX + pad,
+                           y: visibleFrame.minY + pad)
+        case .bottomRight:
+            return NSPoint(x: visibleFrame.maxX - size.width - pad,
+                           y: visibleFrame.minY + pad)
+        case .topLeft:
+            return NSPoint(x: visibleFrame.minX + pad,
+                           y: visibleFrame.maxY - size.height - pad)
+        case .topRight:
+            return NSPoint(x: visibleFrame.maxX - size.width - pad,
+                           y: visibleFrame.maxY - size.height - pad)
+        }
+    }
+
+    /// Compute the compact-window origin when expanding from a docked corner.
+    /// Anchors the compact window to the same corner so the expansion feels
+    /// natural relative to where the orb was sitting.
+    private func compactOrigin(from corner: ScreenCorner,
+                               in visibleFrame: NSRect,
+                               size: NSSize) -> NSPoint {
+        let pad = collapsedEdgePadding
+        switch corner {
+        case .bottomLeft:
+            return NSPoint(x: visibleFrame.minX + pad,
+                           y: visibleFrame.minY + pad)
+        case .bottomRight:
+            return NSPoint(x: visibleFrame.maxX - size.width - pad,
+                           y: visibleFrame.minY + pad)
+        case .topLeft:
+            return NSPoint(x: visibleFrame.minX + pad,
+                           y: visibleFrame.maxY - size.height - pad)
+        case .topRight:
+            return NSPoint(x: visibleFrame.maxX - size.width - pad,
+                           y: visibleFrame.maxY - size.height - pad)
+        }
+    }
+
     // MARK: - Transitions
 
     func transitionToCollapsed() {
@@ -144,16 +282,17 @@ final class WindowStateController: ObservableObject {
         let visibleFrame = screen.visibleFrame
         let targetSize = NSSize(width: collapsedSize, height: collapsedSize)
 
-        // Dock to top-left of the screen, just below the menu bar.
-        let originX = visibleFrame.minX + collapsedEdgePadding
-        let originY = visibleFrame.maxY - targetSize.height - collapsedEdgePadding
-        let targetFrame = NSRect(origin: NSPoint(x: originX, y: originY), size: targetSize)
+        // Dock to the screen corner with the least window overlap.
+        let corner = bestFreeCorner(on: screen)
+        lastDockedCorner = corner
+        let origin = collapsedOrigin(for: corner, in: visibleFrame, size: targetSize)
+        let targetFrame = NSRect(origin: origin, size: targetSize)
 
         // Float above other windows when collapsed.
         window.level = .floating
 
         // Temporarily allow the window to go below its minSize for the
-        // collapsed orb (80x80 is smaller than the 280x400 minimum).
+        // collapsed orb (72x72 is smaller than the 400x660 minimum).
         window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
 
         // Remove the window shadow in collapsed mode — the shadow appears
@@ -232,16 +371,16 @@ final class WindowStateController: ObservableObject {
 
         if let savedFrame = frameBeforeInPlaceCollapse {
             // Expanding from a canvas-triggered in-place collapse — restore the
-            // exact pre-canvas compact position rather than jumping to top-left.
+            // exact pre-canvas compact position rather than jumping to the docked corner.
             frameBeforeInPlaceCollapse = nil
             originX = max(visibleFrame.minX, min(savedFrame.minX, visibleFrame.maxX - targetSize.width))
             originY = max(visibleFrame.minY, min(savedFrame.minY, visibleFrame.maxY - targetSize.height))
         } else if wasCollapsed {
-            // Expanding from the inactivity-docked top-left orb — position the
-            // compact window anchored at the top-left of the visible frame
-            // so it feels like a natural expansion from the orb's docked position.
-            originX = visibleFrame.minX + collapsedEdgePadding
-            originY = visibleFrame.maxY - targetSize.height - collapsedEdgePadding
+            // Expanding from the docked orb — anchor the compact window to the
+            // same corner so the transition feels natural.
+            let origin = compactOrigin(from: lastDockedCorner, in: visibleFrame, size: targetSize)
+            originX = origin.x
+            originY = origin.y
         } else {
             // Already in compact mode — center on current position, clamped to screen.
             let currentFrame = window.frame

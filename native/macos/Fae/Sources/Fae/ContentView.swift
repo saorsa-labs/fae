@@ -111,7 +111,7 @@ struct ContentView: View {
 
     // MARK: - Collapsed View
 
-    /// Full-window orb for the 120x120 collapsed mode.
+    /// Full-window orb for the 72x72 collapsed mode.
     private var collapsedView: some View {
         NativeOrbView(
             orbAnimation: orbAnimation,
