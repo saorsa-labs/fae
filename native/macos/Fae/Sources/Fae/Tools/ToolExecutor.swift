@@ -48,6 +48,9 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Plugin hook runner for PreToolUse / PostToolUse hooks.
     var pluginHookRunner: PluginHookRunner?
 
+    /// Action receipt store for undo/reversibility. Set after init by FaeCore.
+    var receiptStore: ReceiptStore?
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -97,6 +100,11 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Wire plugin hook runner for PreToolUse / PostToolUse hooks.
     func setPluginHookRunner(_ runner: PluginHookRunner?) {
         pluginHookRunner = runner
+    }
+
+    /// Wire the action receipt store for undo/reversibility tracking.
+    func setReceiptStore(_ store: ReceiptStore) {
+        receiptStore = store
     }
 
     // MARK: - Execute
@@ -264,6 +272,7 @@ actor ToolExecutor: ToolExecutorProtocol {
             requiresApproval: effectiveRequiresApproval,
             isOwner: context.isOwner,
             livenessScore: context.livenessScore,
+            speakerId: context.speakerId,
             explicitUserAuthorization: context.explicitUserAuthorization,
             hasCapabilityTicket: context.hasCapabilityTicketForTool,
             argumentSummary: Self.buildApprovalDescription(
@@ -680,6 +689,17 @@ actor ToolExecutor: ToolExecutorProtocol {
 
         if !result.isError {
             await outboundGuard.recordSuccessfulSend(toolName: call.name, arguments: call.arguments)
+        }
+
+        // ── 16. Action receipt ────────────────────────────────────────────
+        if !result.isError, let store = receiptStore {
+            await store.createReceipt(
+                toolName: call.name,
+                arguments: call.arguments,
+                speakerId: context.speakerId,
+                sessionId: nil,
+                turnId: context.workflowTurnID
+            )
         }
 
         return ToolExecutorResult(

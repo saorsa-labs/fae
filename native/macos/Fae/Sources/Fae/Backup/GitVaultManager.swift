@@ -246,7 +246,7 @@ actor GitVaultManager {
         }
 
         if !configOnly {
-            for dbFile in ["fae.db", "scheduler.db"] {
+            for dbFile in ["fae.db", "scheduler.db", "receipts.db"] {
                 let src = sourceDir.appendingPathComponent(dbFile)
                 let dst = dataURL.appendingPathComponent(dbFile)
                 if fm.fileExists(atPath: src.path) {

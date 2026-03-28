@@ -200,6 +200,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var channelManager: ChannelManager?
     private var debugConsoleRef: DebugConsoleController?
     private var vaultManager: GitVaultManager?
+    private(set) var receiptStore: ReceiptStore?
 
     /// Pending query continuations keyed by command name.
     private var pendingQueries: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
@@ -320,6 +321,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 self.entityLinker = entityLinker
                 self.memoryOrchestrator = orchestrator
 
+                // Initialize action receipt store (separate failure domain from fae.db).
+                let receiptStorePath = FaeDirectories.receiptsDatabase.path
+                let receiptStore = try? ReceiptStore(path: receiptStorePath)
+                if receiptStore == nil {
+                    NSLog("FaeCore: ReceiptStore init failed — undo/reversibility unavailable")
+                }
+                self.receiptStore = receiptStore
+
                 await self.auditSetupConsistency(memoryStore: memoryStore)
 
                 // One-time background backfill of existing person records → entities.
@@ -426,6 +435,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 // Wire plugin hook runner into tool executor.
                 await coordinator.setPluginHookRunner(pluginManager.hookRunner)
 
+                // Wire action receipt store into tool executor.
+                if let store = receiptStore {
+                    await coordinator.setReceiptStore(store)
+                }
+
                 await coordinator.setPrivacyMode(config.privacy.mode)
 
                 // Wire SelfConfigTool's configPatcher to this FaeCore instance.
@@ -464,6 +478,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     }
 
                     await sched.setVaultManager(vault)
+                    if let store = receiptStore {
+                        await sched.setReceiptStore(store)
+                    }
                     await sched.setSpeakHandler { [weak coordinator] text in
                         await coordinator?.speakDirect(text)
                     }

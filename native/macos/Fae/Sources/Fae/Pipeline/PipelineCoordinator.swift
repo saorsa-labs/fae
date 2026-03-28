@@ -80,6 +80,11 @@ actor PipelineCoordinator {
         await toolExecutor.setPluginHookRunner(runner)
     }
 
+    /// Wire the action receipt store into the tool executor.
+    func setReceiptStore(_ store: ReceiptStore) async {
+        await toolExecutor.setReceiptStore(store)
+    }
+
     // MARK: - Live Config Overrides
 
     /// Live override for reasoning depth — set by FaeCore when the user changes the level.
@@ -8011,6 +8016,7 @@ actor PipelineCoordinator {
             explicitUserAuthorization: explicitAuthorization,
             isOwner: speakerGate.currentSpeakerIsOwner,
             livenessScore: livenessScore,
+            speakerId: speakerGate.currentSpeakerLabel,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
             visionEnabled: effectiveVisionEnabled(),
@@ -8180,6 +8186,7 @@ actor PipelineCoordinator {
             explicitUserAuthorization: explicitUserAuthorizationForTurn,
             isOwner: speakerGate.currentSpeakerIsOwner,
             livenessScore: livenessScore,
+            speakerId: speakerGate.currentSpeakerLabel,
             actionSource: proactiveContext?.source ?? effectiveGenerationContext?.actionSource ?? .voice,
             proactiveContext: proactiveContext,
             visionEnabled: effectiveVisionEnabled(),

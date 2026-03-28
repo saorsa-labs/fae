@@ -50,6 +50,9 @@ actor FaeScheduler {
     /// Vault manager for backup tasks — set by FaeCore.
     private var vaultManager: GitVaultManager?
 
+    /// Action receipt store for GC — set by FaeCore.
+    private var receiptStore: ReceiptStore?
+
     /// Daily proactive interjection counter, reset at midnight.
     var proactiveInterjectionCount: Int = 0
     var proactiveDigestEligibleCounts: [String: Int] = [:]
@@ -122,6 +125,11 @@ actor FaeScheduler {
     /// Set the vault manager for backup tasks.
     func setVaultManager(_ manager: GitVaultManager) {
         vaultManager = manager
+    }
+
+    /// Wire the action receipt store for GC during memory_gc.
+    func setReceiptStore(_ store: ReceiptStore) {
+        receiptStore = store
     }
 
     /// Set the proactive query handler (must be called before start for awareness tasks to work).
@@ -379,6 +387,14 @@ actor FaeScheduler {
         let cleaned = await memoryOrchestrator?.garbageCollect(retentionDays: 90) ?? 0
         if cleaned > 0 {
             NSLog("FaeScheduler: memory_gc — cleaned %d records", cleaned)
+        }
+
+        // Prune expired action receipts.
+        if let store = receiptStore {
+            let pruned = await store.pruneExpired()
+            if pruned > 0 {
+                NSLog("FaeScheduler: memory_gc — pruned %d expired receipts", pruned)
+            }
         }
 
         // Prune scheduler run history older than 30 days.

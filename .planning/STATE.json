@@ -1,28 +1,27 @@
 {
   "version": 1,
-  "project": "parakeet-streaming-asr",
-  "active": false,
+  "project": "apprenticeship-trust-phase1",
+  "active": true,
   "milestone": {
     "number": 1,
-    "name": "Parakeet Streaming ASR — Production Ready"
+    "name": "Invisible Permissions (Phase 1)"
   },
   "phase": {
     "number": "1.2",
-    "name": "Decode Path Hardening",
-    "plan": null
+    "name": "ActionReceipts Engine",
+    "plan": ".planning/PLAN-phase-1.2-actionreceipts.md",
+    "status": "reviewing"
   },
-  "progress": {
-    "total_tasks": 0,
-    "completed_tasks": 0,
-    "current_task": null
+  "task": {
+    "current": 10,
+    "total": 10,
+    "name": "Phase 1.2 complete"
   },
   "review": {
-    "status": "passed",
-    "iteration": 2,
-    "last_verdict": "APPROVED"
+    "status": "reviewing",
+    "iteration": 1,
+    "last_verdict": null
   },
-  "status": "blocked",
-  "last_updated": "2026-03-21T12:20:00Z",
-  "blocked_reason": "ARCHITECTURE_DECISION: Benchmark shows Parakeet 7.9% WER vs Qwen3-ASR 1.6% WER. 106ms streaming advantage does not justify 5x accuracy cost. Phase 1.1 complete (model loading, events, tests). Phases 1.2-1.4 deprioritized. Dual-path architecture validated — Qwen3-ASR growing-buffer (362ms first partial) is competitive and far more accurate.",
-  "phase_1_1_summary": "Tasks 1,2,4 complete. Review APPROVED."
+  "status": "reviewing",
+  "last_updated": "2026-03-28T13:30:00Z"
 }
