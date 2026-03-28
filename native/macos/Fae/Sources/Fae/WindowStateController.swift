@@ -172,6 +172,12 @@ final class WindowStateController: ObservableObject {
         ]
 
         // Get all on-screen windows, excluding Fae itself and desktop elements.
+        //
+        // NOTE: CGWindowListCopyWindowInfo is privacy-restricted on macOS 10.15+.
+        // Without the Screen Recording entitlement, only Fae's own windows are
+        // returned; all corner candidates score 0 overlap and bottom-left wins
+        // the tie. This is the intended graceful fallback — smart docking is a
+        // best-effort improvement when the permission is available.
         let faePID = ProcessInfo.processInfo.processIdentifier
         guard let windowInfo = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],
@@ -225,31 +231,11 @@ final class WindowStateController: ObservableObject {
         return bestCorner
     }
 
-    /// Compute the collapsed-orb origin for a given corner.
-    private func collapsedOrigin(for corner: ScreenCorner,
-                                 in visibleFrame: NSRect,
-                                 size: NSSize) -> NSPoint {
-        let pad = collapsedEdgePadding
-        switch corner {
-        case .bottomLeft:
-            return NSPoint(x: visibleFrame.minX + pad,
-                           y: visibleFrame.minY + pad)
-        case .bottomRight:
-            return NSPoint(x: visibleFrame.maxX - size.width - pad,
-                           y: visibleFrame.minY + pad)
-        case .topLeft:
-            return NSPoint(x: visibleFrame.minX + pad,
-                           y: visibleFrame.maxY - size.height - pad)
-        case .topRight:
-            return NSPoint(x: visibleFrame.maxX - size.width - pad,
-                           y: visibleFrame.maxY - size.height - pad)
-        }
-    }
-
-    /// Compute the compact-window origin when expanding from a docked corner.
-    /// Anchors the compact window to the same corner so the expansion feels
-    /// natural relative to where the orb was sitting.
-    private func compactOrigin(from corner: ScreenCorner,
+    /// Returns the frame origin for a given corner, anchored so the window sits
+    /// inside `visibleFrame` with edge padding. Works for both the 72×72 collapsed
+    /// orb and the 400×740 compact window because the caller passes the appropriate
+    /// `size`.
+    private func cornerOrigin(for corner: ScreenCorner,
                                in visibleFrame: NSRect,
                                size: NSSize) -> NSPoint {
         let pad = collapsedEdgePadding
@@ -285,7 +271,7 @@ final class WindowStateController: ObservableObject {
         // Dock to the screen corner with the least window overlap.
         let corner = bestFreeCorner(on: screen)
         lastDockedCorner = corner
-        let origin = collapsedOrigin(for: corner, in: visibleFrame, size: targetSize)
+        let origin = cornerOrigin(for: corner, in: visibleFrame, size: targetSize)
         let targetFrame = NSRect(origin: origin, size: targetSize)
 
         // Float above other windows when collapsed.
@@ -378,7 +364,7 @@ final class WindowStateController: ObservableObject {
         } else if wasCollapsed {
             // Expanding from the docked orb — anchor the compact window to the
             // same corner so the transition feels natural.
-            let origin = compactOrigin(from: lastDockedCorner, in: visibleFrame, size: targetSize)
+            let origin = cornerOrigin(for: lastDockedCorner, in: visibleFrame, size: targetSize)
             originX = origin.x
             originY = origin.y
         } else {
