@@ -63,13 +63,9 @@ actor MLXSTTEngine: STTEngine {
         NSLog("MLXSTTEngine: loading model %@", modelID)
         do {
             model = try await Qwen3ASRModel.fromPretrained(modelID)
-            // Context biasing: inject vocabulary hints into the ASR system prompt.
-            // This nudges the model toward expected words without constraining output.
-            // Dramatically improves accuracy for the assistant's name and common commands.
-            model?.contextBiasing = "Transcribe speech directed at an AI assistant. The assistant's name is Fae (spelled F-A-E). When the speaker says a word that sounds like 'Fae', 'fay', 'hey', or 'they' at the start of a sentence, transcribe it as 'Fae'. Common utterance patterns: 'Fae, check...', 'Fae, tell...', 'Fae, what...', 'Fae, remind...', 'Fae, who...', 'Fae, show...', 'Hey Fae, ...'."
             isLoaded = true
             loadState = .loaded
-            NSLog("MLXSTTEngine: model loaded (context biasing enabled)")
+            NSLog("MLXSTTEngine: model loaded")
         } catch {
             loadState = .failed(error.localizedDescription)
             NSLog("MLXSTTEngine: load failed: %@", error.localizedDescription)

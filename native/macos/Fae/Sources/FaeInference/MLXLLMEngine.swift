@@ -242,7 +242,7 @@ public actor MLXLLMEngine: LLMEngine {
         systemPrompt: String,
         options: GenerationOptions
     ) -> AsyncThrowingStream<LLMStreamEvent, Error> {
-        AsyncThrowingStream { continuation in
+        AsyncThrowingStream<LLMStreamEvent, Error> { (continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation) in
             let producer = Task { [weak self] in
                 guard let self else {
                     continuation.finish()
@@ -428,7 +428,8 @@ public actor MLXLLMEngine: LLMEngine {
                                 cacheBox.value = context.model.newCache(parameters: effectiveParameters)
                             }
 
-                            let ticket = await ticketProvider?(totalPromptTokens, effectiveParameters.maxTokens ?? 0)
+                            // Pre-wire GPU memory for prompt + generation window.
+                            let _ticket = await ticketProvider?(totalPromptTokens, effectiveParameters.maxTokens ?? 0)
                             let iterator = try TokenIterator(
                                 input: input,
                                 model: context.model,
@@ -439,9 +440,9 @@ public actor MLXLLMEngine: LLMEngine {
                                 promptTokenCount: input.text.tokens.size,
                                 modelConfiguration: context.configuration,
                                 tokenizer: context.tokenizer,
-                                iterator: iterator,
-                                wiredMemoryTicket: ticket
+                                iterator: iterator
                             )
+                            _ = _ticket
                             return RawTokenGenerationSetup(
                                 stream: stream,
                                 task: task,
@@ -627,7 +628,7 @@ public actor MLXLLMEngine: LLMEngine {
 
         do {
             let (cache, metadata) = try loadPromptCache(url: url)
-            guard metadata["model"] == modelId, metadata["prompt_hash"] == hash else {
+            guard metadata?["model"] == modelId, metadata?["prompt_hash"] == hash else {
                 NSLog("MLXLLMEngine: prompt cache metadata mismatch — ignoring")
                 try? FileManager.default.removeItem(at: url)
                 return false
