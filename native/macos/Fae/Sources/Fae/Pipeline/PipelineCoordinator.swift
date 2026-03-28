@@ -368,6 +368,25 @@ actor PipelineCoordinator {
     /// Whether the current turn includes explicit user authorization language.
     private var explicitUserAuthorizationForTurn: Bool = false
 
+    // MARK: - Continuation State (soft watchdog)
+
+    /// When true, Fae has paused a long response and asked "Would you like me
+    /// to continue?" — voice input is routed through the continuation gate
+    /// instead of the normal LLM path.
+    private var awaitingContinuation: Bool = false
+
+    /// Buffered LLM text that was not yet sent to TTS when the soft watchdog
+    /// fired. Resumed on affirmative continuation, discarded otherwise.
+    private var pendingContinuationText: String?
+
+    /// Tracks whether the soft watchdog already fired for the current speaking
+    /// session so it doesn't re-trigger after a continuation resume.
+    private var softWatchdogFiredForCurrentSpeech: Bool = false
+
+    /// Soft limit (seconds) — when assistant speech exceeds this duration,
+    /// Fae pauses and asks whether the user wants to continue.
+    private static let speakingSoftLimitSeconds: TimeInterval = 45.0
+
     /// Whether the assistant is currently speaking (TTS playback in progress).
     /// Exposed for the test harness to wait until speech completes.
     var isSpeaking: Bool { assistantSpeaking }
@@ -711,6 +730,9 @@ actor PipelineCoordinator {
             assistantGenerating = false
             interrupted = false
             interruptedGenerationID = nil
+            awaitingContinuation = false
+            pendingContinuationText = nil
+            softWatchdogFiredForCurrentSpeech = false
             ttsState.cancelPending()
             ttsState.resetForNewTurn()
 
@@ -829,6 +851,9 @@ actor PipelineCoordinator {
     func cancel() {
         markGenerationInterrupted()
         pendingGovernanceAction = nil
+        awaitingContinuation = false
+        pendingContinuationText = nil
+        softWatchdogFiredForCurrentSpeech = false
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
         bargeInState.generationTakeoverCandidate = nil
@@ -864,6 +889,9 @@ actor PipelineCoordinator {
         pendingGovernanceAction = nil
         awaitingApproval = false
         manualOnlyApprovalPending = false
+        awaitingContinuation = false
+        pendingContinuationText = nil
+        softWatchdogFiredForCurrentSpeech = false
         computerUseStepCount = 0
         silentGenerationBuffer.removeAll()
         bargeInState.generationTakeoverCandidate = nil
@@ -2941,10 +2969,32 @@ actor PipelineCoordinator {
             vad.setSilenceThresholdMs(silenceThresholdMs)
             if assistantSpeaking {
 
-                // Watchdog: if assistantSpeaking has been true for an unreasonably
+                // Soft watchdog: if assistant has been speaking for longer than
+                // the soft limit, gracefully pause and ask whether the user wants
+                // to hear the rest. This avoids the jarring hard-cut at 60s.
+                if !softWatchdogFiredForCurrentSpeech,
+                   !awaitingContinuation,
+                   let start = lastAssistantStart,
+                   Date().timeIntervalSince(start) > Self.speakingSoftLimitSeconds
+                {
+                    NSLog("PipelineCoordinator: soft watchdog — speaking for >%.0fs, pausing for continuation", Self.speakingSoftLimitSeconds)
+                    debugLog(debugConsole, .pipeline, "⏸ Soft watchdog: pausing long response for user continuation prompt")
+                    softWatchdogFiredForCurrentSpeech = true
+
+                    // Cancel remaining queued TTS chunks so we stop after current playback.
+                    ttsState.cancelPending()
+                    await playback.stop()
+                    markAssistantSpeechEnded(reason: "soft_watchdog_pause")
+
+                    // Ask the user if they want to continue.
+                    awaitingContinuation = true
+                    await speakDirect("Would you like me to continue?")
+                }
+
+                // Hard watchdog: if assistantSpeaking has been true for an unreasonably
                 // long time (>60s), the TTS pipeline is stuck. Force-clear so the
-                // mic isn't permanently dead. No single TTS utterance should take
-                // more than 60 seconds.
+                // mic isn't permanently dead. This now acts as a safety net behind
+                // the soft watchdog.
                 if let start = lastAssistantStart,
                    Date().timeIntervalSince(start) > 60
                 {
@@ -3292,6 +3342,43 @@ actor PipelineCoordinator {
                 }
             }
             return
+        }
+
+        // Continuation gate — when Fae paused a long response and asked
+        // "Would you like me to continue?", route the next utterance through
+        // this handler instead of the LLM.
+        if awaitingContinuation {
+            let decision = Self.parseContinuationResponse(effectiveText)
+            awaitingContinuation = false
+            switch decision {
+            case .continueResponse:
+                debugLog(debugConsole, .pipeline, "Continuation accepted — resuming buffered response")
+                NSLog("PipelineCoordinator: user accepted continuation")
+                if let buffered = pendingContinuationText, !buffered.isEmpty {
+                    // Reset the soft watchdog timer so the resumed segment gets
+                    // another full window before pausing again.
+                    softWatchdogFiredForCurrentSpeech = false
+                    pendingContinuationText = nil
+                    await speakDirect(buffered)
+                } else {
+                    pendingContinuationText = nil
+                    await speakDirect("That was actually the end of what I had.")
+                }
+            case .stopResponse:
+                debugLog(debugConsole, .pipeline, "Continuation declined — discarding buffered response")
+                NSLog("PipelineCoordinator: user declined continuation")
+                pendingContinuationText = nil
+                softWatchdogFiredForCurrentSpeech = false
+                await speakDirect("Alright.")
+            case .newQuery:
+                debugLog(debugConsole, .pipeline, "Continuation interrupted by new query — discarding buffer")
+                NSLog("PipelineCoordinator: new query during continuation — forwarding to LLM")
+                pendingContinuationText = nil
+                softWatchdogFiredForCurrentSpeech = false
+                // Fall through to normal processing below by NOT returning.
+                // The user said something new, so route it to the LLM.
+            }
+            if decision != .newQuery { return }
         }
 
         // Echo detection — if the transcribed text is a fragment of the last
@@ -6977,6 +7064,48 @@ actor PipelineCoordinator {
         #endif
     }
 
+    // MARK: - Continuation Response Parsing
+
+    /// Outcome of parsing the user's response to "Would you like me to continue?"
+    private enum ContinuationDecision {
+        /// User said yes / continue / go on — resume buffered speech.
+        case continueResponse
+        /// User said no / stop / that's enough — discard buffer.
+        case stopResponse
+        /// User said something unrelated — treat as a new query.
+        case newQuery
+    }
+
+    /// Parse the user's utterance after a continuation prompt.
+    ///
+    /// Affirmative and negative phrases are matched first; anything that
+    /// doesn't match is treated as a new query so the user isn't forced
+    /// to explicitly decline before asking something else.
+    static func parseContinuationResponse(_ text: String) -> ContinuationDecision {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let continuePhrases = [
+            "yes", "yeah", "yep", "yup", "sure", "okay", "ok", "go ahead",
+            "continue", "keep going", "go on", "carry on", "more",
+            "please continue", "tell me more", "keep talking"
+        ]
+        for phrase in continuePhrases {
+            if lower.contains(phrase) { return .continueResponse }
+        }
+
+        let stopPhrases = [
+            "no", "nah", "nope", "stop", "that's enough", "enough",
+            "never mind", "nevermind", "i'm good", "that's fine",
+            "don't", "no thanks", "no thank you"
+        ]
+        for phrase in stopPhrases {
+            if lower.contains(phrase) { return .stopResponse }
+        }
+
+        // Anything else is likely a new question or topic change.
+        return .newQuery
+    }
+
     private func markAssistantSpeechStarted() {
         guard !assistantSpeaking else { return }
         assistantSpeaking = true
@@ -7016,6 +7145,19 @@ actor PipelineCoordinator {
     /// Call this from inside the token generation loop. The LLM keeps producing tokens
     /// while TTS runs concurrently on the actor (re-entrant at `await` points).
     private func enqueueTTS(_ text: String, isFinal: Bool, voiceInstruct: String? = nil, generationID: UUID? = nil) {
+        // Soft watchdog diversion: if the soft watchdog has fired for this
+        // speaking session, buffer remaining LLM output instead of sending
+        // it to TTS. The user can resume playback via the continuation prompt.
+        if softWatchdogFiredForCurrentSpeech && awaitingContinuation {
+            if pendingContinuationText == nil {
+                pendingContinuationText = text
+            } else {
+                pendingContinuationText! += " " + text
+            }
+            debugLog(debugConsole, .pipeline, "Buffering text for continuation (\(text.count) chars)")
+            return
+        }
+
         // Track assistant text for false-interruption recovery.
         bargeInState.lastAssistantTextBuffer += text
 
