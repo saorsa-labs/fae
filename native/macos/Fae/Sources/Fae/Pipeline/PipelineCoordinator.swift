@@ -4076,8 +4076,17 @@ actor PipelineCoordinator {
             // that arrive within 5s of Fae's last speech are almost always echo
             // artifacts or ambient noise. Real user interruptions are typically
             // longer ("stop", "wait" are caught by barge-in before STT).
+            //
+            // Bypass when:
+            // - Acoustic wake word was detected during streaming (intentional address)
+            // - Text starts with wake word (direct address)
+            // - Verified owner is in active follow-up (conversation continuity)
             let wordCount = text.split(separator: " ").count
-            if wordCount <= 2 && durationSecs < 2.0 && echoSuppressor.secondsSinceLastSpeech < 5.0 {
+            let hasStreamingWake = speechInputStage.streamingWakeDetection != nil
+            let ownerInFollowup = speakerGate.currentSpeakerIsOwner && (engagedUntil.map { Date() < $0 } ?? false)
+            if wordCount <= 2 && durationSecs < 2.0 && echoSuppressor.secondsSinceLastSpeech < 5.0
+                && !hasStreamingWake && !startsWithWakeWord && !ownerInFollowup
+            {
                 NSLog("PipelineCoordinator: dropping short utterance \"%@\" (echo guard: %d words, %.1fs, %.1fs after speech)", text, wordCount, durationSecs, echoSuppressor.secondsSinceLastSpeech)
                 debugLog(debugConsole, .pipeline, "Short-utterance echo guard: \"\(text)\" (\(wordCount) words)")
                 return

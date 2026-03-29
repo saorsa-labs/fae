@@ -123,13 +123,19 @@ actor AudioPlaybackManager {
 
     /// Signal that no more audio will be enqueued for the current utterance.
     ///
-    /// If no buffers are currently playing, fires `.finished` immediately.
+    /// If no buffer completions are pending, fires `.finished` immediately.
     /// Otherwise sets `pendingFinal` so the next buffer completion fires it.
     func markEnd() {
         pendingFinal = true
-        // No queued buffers left — finish immediately.
-        if !isPlaying && pendingBufferCompletions == 0 {
+        // All buffers already completed — finish immediately.
+        // Race fix: check pendingBufferCompletions, not isPlaying.
+        // When all buffers complete before markEnd() is called, isPlaying
+        // stays true (only cleared by bufferCompleted when pendingFinal is set),
+        // causing a deadlock where .finished never fires and assistantSpeaking
+        // stays true for 60s until the watchdog clears it.
+        if pendingBufferCompletions == 0 {
             pendingFinal = false
+            isPlaying = false
             onEvent?(.finished)
         }
     }
