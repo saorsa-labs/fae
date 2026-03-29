@@ -628,7 +628,7 @@ public actor MLXLLMEngine: LLMEngine {
 
         do {
             let (cache, metadata) = try loadPromptCache(url: url)
-            guard metadata?["model"] == modelId, metadata?["prompt_hash"] == hash else {
+            guard metadata["model"] == modelId, metadata["prompt_hash"] == hash else {
                 NSLog("MLXLLMEngine: prompt cache metadata mismatch — ignoring")
                 try? FileManager.default.removeItem(at: url)
                 return false
