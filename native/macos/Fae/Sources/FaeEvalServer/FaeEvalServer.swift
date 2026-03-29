@@ -49,6 +49,7 @@ let modelRegistry: [ModelEntry] = [
     ModelEntry(shortName: "qwen3-0.6b", modelID: "mlx-community/Qwen3-0.6B-4bit"),
     ModelEntry(shortName: "qwen3-4b", modelID: "mlx-community/Qwen3-4B-4bit"),
     ModelEntry(shortName: "qwen3-8b", modelID: "mlx-community/Qwen3-8B-4bit"),
+    ModelEntry(shortName: "nemotron-cascade-30b-a3b", modelID: "mlx-community/Nemotron-Cascade-2-30B-A3B-4bit"),
 
     // VLM models (vision + text, via MLXVLM VLMModelFactory)
     ModelEntry(shortName: "smolvlm-256m", modelID: "mlx-community/SmolVLM2-256M-Video-Instruct-mlx", kind: .vlm),
