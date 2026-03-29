@@ -678,9 +678,8 @@ struct FaeEvalServerCLI {
         VLM Models (vision, via MLXVLM — same as production Fae):
         \(vlmModels.map { "  \($0.shortName.padding(toLength: 32, withPad: " ", startingAt: 0)) \($0.modelID)" }.joined(separator: "\n"))
 
-        Auto-selection (--model not specified):
-          ≥64GB → qwen3.5-35b-a3b    ≥32GB → qwen3.5-35b-a3b
-          ≥16GB → qwen3.5-4b          <16GB → qwen3.5-0.8b
+        Auto-selection (--model not specified, mirrors FaeConfig):
+          ≥16GB → qwen3.5-9b    8-15GB → qwen3.5-4b    <8GB → qwen3.5-2b
 
         Examples:
           just serve qwen3.5-27b       # LLM eval
