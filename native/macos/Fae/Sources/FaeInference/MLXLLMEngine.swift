@@ -172,6 +172,10 @@ public actor MLXLLMEngine: LLMEngine {
             try await container.perform { context in
                 try context.model.load(adapter: adapter)
             }
+        } catch ModelAdapterError.incompatibleModelType {
+            throw MLEngineError.adapterNotCompatible(
+                "Model does not support LoRA adapters (not a LoRAModel)"
+            )
         } catch {
             throw MLEngineError.adapterLoadFailed(
                 "Failed to apply adapter to model: \(error.localizedDescription)"

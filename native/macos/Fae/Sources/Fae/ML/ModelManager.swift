@@ -325,7 +325,7 @@ actor ModelManager {
                FileManager.default.fileExists(atPath: adapterPath)
             {
                 do {
-                    try await mlxLLM.loadAdapter(from: URL(fileURLWithPath: adapterPath))
+                    try await mlxLLM.loadAdapter(from: URL(fileURLWithPath: adapterPath).standardizedFileURL)
                     NSLog("ModelManager: loaded personal adapter from %@", adapterPath)
                 } catch {
                     NSLog("ModelManager: personal adapter load failed (continuing with base model): %@", error.localizedDescription)

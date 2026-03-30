@@ -99,4 +99,24 @@ final class AdapterLoadingTests: XCTestCase {
         XCTAssertFalse(loaded)
         XCTAssertNil(path)
     }
+
+    // MARK: - Post-Failure State Invariant
+
+    /// After a failed loadAdapter call, adapter state must remain clean (no partial state).
+    ///
+    /// This verifies the invariant: currentAdapter and loadedAdapterPath are only
+    /// set AFTER successful apply — a failed load must leave the engine in "no adapter" state.
+    func testLoadAdapterFailureDoesNotLeavePartialState() async {
+        let engine = MLXLLMEngine()
+        let nonExistentDir = URL(fileURLWithPath: "/tmp/no-such-adapter-\(UUID().uuidString)")
+
+        // Attempt load (will fail — either notLoaded or adapterLoadFailed)
+        try? await engine.loadAdapter(from: nonExistentDir)
+
+        // Regardless of which error fired, adapter state must be clean
+        let loaded = await engine.isAdapterLoaded
+        let path = await engine.loadedAdapterPath
+        XCTAssertFalse(loaded, "Failed loadAdapter must not leave isAdapterLoaded = true")
+        XCTAssertNil(path, "Failed loadAdapter must not leave loadedAdapterPath set")
+    }
 }
