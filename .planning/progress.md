@@ -37,3 +37,4 @@
 
 ### MILESTONE 1: Invisible Permissions — COMPLETE
 All phases 1.1 through 1.5 done.
+- [x] Phase 1.2: Adapter Deployment Mechanism (commit: 4974fcd4)
