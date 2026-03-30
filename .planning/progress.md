@@ -126,4 +126,16 @@ Phases 2.1, 2.2, and 2.3 all done.
 - Commit: fbf4718f
 
 ### Phase 3.2 Complete - Sun Mar 30 21:30:00 BST 2026
-### Phase 3.3 Starting...
+
+### Phase 3.3: Directive-Based Fast Tuning -- COMPLETE
+- [x] Task 1: DirectiveTuner — 4 pattern types, amendment generation, application (16 tests)
+- [x] Task 2: Integrate into ImprovementCycleCoordinator — every 7th cycle runs directive tuning
+- [x] Task 3: Directive rollback — previousDirective in ImprovementState + schema migration
+- [x] Task 4: Build verification + 106 tests passing
+- Commit: c899aa4f
+
+### Phase 3.3 Complete - Sun Mar 30 21:35:00 BST 2026
+
+### MILESTONE 3: Feedback + Verification — COMPLETE
+Phases 3.1, 3.2, and 3.3 all done.
+### Milestone 4: Shadow Eval + Hardening Starting...

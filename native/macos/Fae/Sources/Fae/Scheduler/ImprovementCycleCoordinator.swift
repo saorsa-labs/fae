@@ -94,6 +94,9 @@ actor ImprovementCycleCoordinator {
     /// The review gate that validates adapters before deployment.
     private let reviewGate: ExternalReviewGate
 
+    /// The shadow evaluator for A/B comparing base vs adapter responses.
+    private let shadowEvaluator: ShadowEvaluator
+
     /// Optional callback to apply an adapter path change via FaeCore.patchConfig.
     ///
     /// Set by FaeCore after wiring. Receives the new adapter path (nil = unload).
@@ -115,9 +118,15 @@ actor ImprovementCycleCoordinator {
     /// - Parameters:
     ///   - store: The `ImprovementStore` that persists cycle state and feedback data.
     ///   - reviewGate: The `ExternalReviewGate` used to validate adapters. Defaults to a new instance.
-    init(store: ImprovementStore, reviewGate: ExternalReviewGate = ExternalReviewGate()) {
+    ///   - shadowEvaluator: The `ShadowEvaluator` for A/B comparison. Defaults to a new instance.
+    init(
+        store: ImprovementStore,
+        reviewGate: ExternalReviewGate = ExternalReviewGate(),
+        shadowEvaluator: ShadowEvaluator? = nil
+    ) {
         self.store = store
         self.reviewGate = reviewGate
+        self.shadowEvaluator = shadowEvaluator ?? ShadowEvaluator(store: store)
     }
 
     /// Set the adapter patch callback. Called by FaeCore after wiring.
@@ -253,6 +262,25 @@ actor ImprovementCycleCoordinator {
         state.previousDirective = nil
         try await store.writeState(state)
         NSLog("ImprovementCycleCoordinator: directive rolled back")
+    }
+
+    // MARK: - Shadow Evaluation
+
+    /// Whether the current cycle should run shadow evaluation (alternating nights).
+    ///
+    /// Odd-numbered completed cycles run shadow eval; even-numbered run training.
+    /// Directive tuning (every 7th) takes priority over this alternation.
+    func isShadowEvalNight() async throws -> Bool {
+        let storeState: ImprovementState
+        do {
+            storeState = try await store.readState()
+        } catch {
+            return false
+        }
+        guard storeState.completedCycles > 0 else { return false }
+        // Directive tuning takes priority.
+        if storeState.completedCycles % Self.directiveTuningInterval == 0 { return false }
+        return storeState.completedCycles % 2 == 1
     }
 
     // MARK: - Main Loop
@@ -397,8 +425,41 @@ actor ImprovementCycleCoordinator {
 
             switch reviewResult.verdict {
             case .pass:
-                NSLog("ImprovementCycleCoordinator: review PASS — proceeding to deploy")
+                NSLog("ImprovementCycleCoordinator: review PASS")
                 try await store.resetDeferrals()
+
+                // Run shadow evaluation if this is a shadow eval night.
+                if try await isShadowEvalNight() {
+                    NSLog("ImprovementCycleCoordinator: running shadow evaluation")
+                    do {
+                        let evalResult = try await shadowEvaluator.runEvaluation(ignoreWindow: true)
+                        if !evalResult.promotionGatePassed {
+                            NSLog(
+                                "ImprovementCycleCoordinator: shadow eval gate FAILED (%.1f%% win rate)",
+                                evalResult.adapterWinRate * 100
+                            )
+                            try? await forceIdle(error: "shadow_eval_gate_failed")
+                            return
+                        }
+                        NSLog(
+                            "ImprovementCycleCoordinator: shadow eval gate PASSED (%.1f%% win rate)",
+                            evalResult.adapterWinRate * 100
+                        )
+                    } catch let error as ShadowEvaluatorError {
+                        switch error {
+                        case .noEpisodesAvailable:
+                            // Gracefully skip shadow eval on fresh installs.
+                            NSLog("ImprovementCycleCoordinator: no shadow eval episodes, skipping")
+                        case .responseGeneratorNotSet:
+                            NSLog("ImprovementCycleCoordinator: shadow eval generator not set, skipping")
+                        case .outsideOvernightWindow:
+                            // Should not happen (ignoreWindow: true), but handle gracefully.
+                            NSLog("ImprovementCycleCoordinator: outside overnight window, skipping shadow eval")
+                        }
+                    }
+                }
+
+                NSLog("ImprovementCycleCoordinator: proceeding to deploy")
             case .concern:
                 NSLog("ImprovementCycleCoordinator: review CONCERN — deferring cycle")
                 let newCount = try await store.incrementDeferral()

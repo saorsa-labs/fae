@@ -639,6 +639,145 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(storeState.previousDirective, "Original directive.")
     }
 
+    // MARK: - Shadow Evaluation Integration
+
+    /// isShadowEvalNight returns false when completedCycles is 0.
+    func testShadowEvalNightFalseWhenZeroCycles() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isShadowEvalNight()
+        XCTAssertFalse(result)
+    }
+
+    /// isShadowEvalNight returns true for odd cycles.
+    func testShadowEvalNightTrueForOddCycles() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 3
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isShadowEvalNight()
+        XCTAssertTrue(result, "Odd cycle (3) should be shadow eval night")
+    }
+
+    /// isShadowEvalNight returns false for even cycles.
+    func testShadowEvalNightFalseForEvenCycles() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 4
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isShadowEvalNight()
+        XCTAssertFalse(result, "Even cycle (4) should not be shadow eval night")
+    }
+
+    /// isShadowEvalNight returns false for directive tuning cycles (multiples of 7).
+    func testShadowEvalNightFalseOnDirectiveTuningCycle() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 21 // 21 is both odd and multiple of 7 → directive tuning wins
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isShadowEvalNight()
+        XCTAssertFalse(result, "Directive tuning takes priority over shadow eval")
+    }
+
+    /// Shadow eval failure blocks deployment.
+    func testShadowEvalFailureBlocksDeployment() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 1 // Odd = shadow eval night
+        try await store.writeState(state)
+
+        // Create shadow evaluator with scorer that always returns baseWins.
+        let evaluator = ShadowEvaluator(store: store)
+        await evaluator.setResponseGenerator { _, _ in "response" }
+        await evaluator.setScorer { _, _, _ in .baseWins }
+
+        // Add some episodes to evaluate.
+        for i in 0..<5 {
+            _ = try await store.appendShadowEpisode(ShadowEvalEpisode(
+                id: nil, recordedAt: ISO8601DateFormatter().string(from: Date()),
+                conversationJSON: "[{\"role\":\"user\",\"content\":\"test\"}]",
+                actualResponse: "response \(i)",
+                receptionScore: nil, evaluated: false, evalOutcome: nil
+            ))
+        }
+
+        let coordinator = ImprovementCycleCoordinator(
+            store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
+        )
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "Shadow eval failure should return to idle")
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.lastCycleError, "shadow_eval_gate_failed")
+    }
+
+    /// Shadow eval passes → deployment continues.
+    func testShadowEvalPassAllowsDeployment() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 1 // Odd = shadow eval night
+        try await store.writeState(state)
+
+        let evaluator = ShadowEvaluator(store: store)
+        await evaluator.setResponseGenerator { _, _ in "response" }
+        await evaluator.setScorer { _, _, _ in .adapterWins } // All adapter wins → gate passes
+
+        for i in 0..<5 {
+            _ = try await store.appendShadowEpisode(ShadowEvalEpisode(
+                id: nil, recordedAt: ISO8601DateFormatter().string(from: Date()),
+                conversationJSON: "[{\"role\":\"user\",\"content\":\"test\"}]",
+                actualResponse: "response \(i)",
+                receptionScore: nil, evaluated: false, evalOutcome: nil
+            ))
+        }
+
+        let coordinator = ImprovementCycleCoordinator(
+            store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
+        )
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        // With 0 approved cycles, should pause in proposing (not idle).
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .proposing, "Shadow eval pass should allow cycle to continue to proposing")
+    }
+
+    /// No shadow episodes available → gracefully skips, continues to deploy.
+    func testShadowEvalSkipsGracefullyWhenNoEpisodes() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 1 // Shadow eval night but no episodes
+        try await store.writeState(state)
+
+        let evaluator = ShadowEvaluator(store: store)
+        await evaluator.setResponseGenerator { _, _ in "response" }
+        // No episodes seeded → noEpisodesAvailable will be thrown → skipped gracefully
+
+        let coordinator = ImprovementCycleCoordinator(
+            store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
+        )
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .proposing, "No episodes should be skipped, cycle continues")
+    }
+
     /// rollbackDirective restores the previous directive.
     func testRollbackDirectiveRestoresPrevious() async throws {
         let store = try await makeTempStore()

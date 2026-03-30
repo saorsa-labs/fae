@@ -1,37 +1,39 @@
-# Phase 4.1: Playback Baseline & Timing Improvements
+# Plan: Phase 4.1 — Shadow Evaluation Integration
 
-## Goal
-Improve echo rejection accuracy by adding spectral awareness, output route detection, and stronger fae_self rejection during playback.
+## Context
+ShadowEvaluator.swift already exists with 19 tests: episode replay, heuristic scoring,
+promotion gate (60% win rate), overnight window enforcement. What remains is integrating
+it into ImprovementCycleCoordinator and implementing the alternating-night schedule.
 
 ## Tasks
 
-### Task 1: Audio Output Route Detection
-Add speaker-vs-headphone detection using AVAudioSession/AVAudioEngine output route inspection. When headphones are detected, echo suppression can be more relaxed (no speaker bleedthrough). When speakers are active, use more aggressive windows.
+### Task 1: Add ShadowEvaluator to ImprovementCycleCoordinator
+- Add `shadowEvaluator: ShadowEvaluator` property (injectable, defaults to new instance)
+- Add `isShadowEvalNight()` check: odd completedCycles = shadow eval, even = training
+  (alternates with training nights; directive tuning every 7th takes priority)
+- Tests: shadow eval night detection for various cycle counts
 
-**Files**: `EchoSuppressor.swift`, `AudioPlaybackManager.swift`
+Files: `Sources/Fae/Scheduler/ImprovementCycleCoordinator.swift`
 
-### Task 2: Per-Band Energy Tracking
-Replace single broadband RMS playback baseline with per-frequency-band energy tracking (low/mid/high). Echo from speakers has characteristic spectral shape (attenuated highs, boosted mids). This allows distinguishing user speech (full spectrum) from echo (speaker-colored).
+### Task 2: Integrate shadow eval into the evaluating step
+- In the evaluating step, after running the review gate:
+  - Run `shadowEvaluator.runEvaluation(ignoreWindow: true)` (window already checked at cycle level)
+  - If shadow eval returns `promotionGatePassed == false`, abort: return to idle with error
+  - If passed, continue to proposing
+- If no episodes available (fresh install), skip shadow eval gracefully
+- Tests: shadow eval blocks deployment when gate fails, allows when passes
 
-**Files**: `EchoSuppressor.swift`, `AudioCaptureManager.swift`
+Files: `Sources/Fae/Scheduler/ImprovementCycleCoordinator.swift`, `Tests/HandoffTests/ImprovementCycleCoordinatorTests.swift`
 
-### Task 3: Room Decay Estimation
-Estimate room reverb decay time from the tail of playback segments. Use this to dynamically adjust echoTailMs instead of fixed constants. Shorter decay = shorter tail = faster response.
+### Task 3: Episode capture from conversations
+- Add `captureEpisode()` method to coordinator: captures current conversation as ShadowEvalEpisode
+- Called from runCycle() collecting step: store episodes from the last N conversations
+- For now, capture is a stub that stores placeholder episodes
+- Tests: episode capture stores to ImprovementStore
 
-**Files**: `EchoSuppressor.swift`
+Files: `Sources/Fae/Scheduler/ImprovementCycleCoordinator.swift`
 
-### Task 4: Enhanced fae_self Rejection During Playback
-During active playback window, lower the fae_self speaker embedding similarity threshold. Currently uses unified threshold — during playback, echo is more likely, so accept lower similarity as evidence of echo.
-
-**Files**: `EchoSuppressor.swift`, `PipelineCoordinator.swift`
-
-### Task 5: Tests for Phase 4.1
-Unit tests for all new functionality: output route detection, per-band energy, room decay, enhanced fae_self threshold.
-
-**Files**: `Tests/HandoffTests/EchoHandlingHardeningTests.swift`
-
-## Success Criteria
-- `swift build` zero warnings
-- `swift test` all pass (existing + new)
-- Output route detection correctly identifies headphones vs speakers
-- Per-band energy provides better echo/speech discrimination signal
+### Task 4: Build verification + full test run
+- `swift build` zero errors/warnings
+- All HandoffTests pass
+- Update progress.md
