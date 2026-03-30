@@ -7,6 +7,7 @@
 //   swift run FaeBenchmark --model qwen3.5-35b-a3b
 //   swift run FaeBenchmark --all
 //   swift run FaeBenchmark --model qwen3-8b --throughput --tools
+//   swift run FaeBenchmark --model qwen3.5-9b --adapter /path/to/lora --tools
 //
 // Models auto-download from HuggingFace on first run.
 
@@ -164,6 +165,7 @@ struct SerializationEvalResult: Codable {
 struct ModelBenchmarkResult: Codable {
     let modelID: String
     let modelShort: String
+    let adapterPath: String?
     var idleRAMMB: Double
     var throughputNoThink: [ThroughputResult]
     var throughputThinkOn: [ThroughputResult]
@@ -178,6 +180,7 @@ struct ModelBenchmarkResult: Codable {
     enum CodingKeys: String, CodingKey {
         case modelID = "model_id"
         case modelShort = "model_short"
+        case adapterPath = "adapter_path"
         case idleRAMMB = "idle_ram_mb"
         case throughputNoThink = "throughput_no_think"
         case throughputThinkOn = "throughput_think_on"
@@ -456,11 +459,13 @@ actor BenchmarkEngine {
     private let modelID: String
     private let shortName: String
     private let qwenCalibrated: Bool
+    private let adapterPath: String?
 
-    init(modelID: String, shortName: String, qwenCalibrated: Bool = false) {
+    init(modelID: String, shortName: String, qwenCalibrated: Bool = false, adapterPath: String? = nil) {
         self.modelID = modelID
         self.shortName = shortName
         self.qwenCalibrated = qwenCalibrated
+        self.adapterPath = adapterPath
     }
 
     private var useQwenCalibratedPrompts: Bool {
@@ -474,6 +479,13 @@ actor BenchmarkEngine {
         }
         try await engine.load(modelID: modelID)
         print("  Loaded.")
+
+        if let adapterPath {
+            let adapterURL = URL(fileURLWithPath: adapterPath)
+            print("  Loading LoRA adapter from \(adapterPath)...")
+            try await engine.loadAdapter(from: adapterURL)
+            print("  Adapter loaded.")
+        }
     }
 
     func warmup() async {
@@ -962,6 +974,7 @@ struct CLIArgs {
     var doAssistantFit = false
     var doFreeform = false
     var doSerialization = false
+    var adapterPath: String?
     var contexts: [String] = []
     var outputPath: String?
     var markdownPath: String?
@@ -1007,6 +1020,9 @@ func parseArgs() -> CLIArgs {
             args.doFreeform = true
         case "--serialization", "--formats":
             args.doSerialization = true
+        case "--adapter":
+            i += 1
+            if i < argv.count { args.adapterPath = argv[i] }
         case "--contexts":
             i += 1
             if i < argv.count {
@@ -1062,6 +1078,9 @@ func printUsage() {
       --freeform         Run the comprehensive freeform assistant eval (~250 cases)
       --serialization    Run structured output eval across JSON/XML/YAML (alias: --formats)
       --contexts         Comma-separated context keys: short,200,500,1k,2k,4k,8.5k
+
+    Adapter:
+      --adapter <path>    Load LoRA adapter from directory before running evals
 
     Output:
       --output <path>     JSON output path (default: scripts/mlx_benchmark_results.json)
@@ -1282,18 +1301,23 @@ func benchmarkModel(
     doFreeform: Bool,
     doSerialization: Bool,
     qwenCalibrated: Bool = false,
-    contexts: Set<String> = []
+    contexts: Set<String> = [],
+    adapterPath: String? = nil
 ) async throws -> ModelBenchmarkResult {
     print("\n" + String(repeating: "=", count: 70))
     print("  \(shortName) (\(modelID))")
+    if let adapterPath {
+        print("  Adapter: \(adapterPath)")
+    }
     print(String(repeating: "=", count: 70))
 
-    let engine = BenchmarkEngine(modelID: modelID, shortName: shortName, qwenCalibrated: qwenCalibrated)
+    let engine = BenchmarkEngine(modelID: modelID, shortName: shortName, qwenCalibrated: qwenCalibrated, adapterPath: adapterPath)
     try await engine.load()
 
     var result = ModelBenchmarkResult(
         modelID: modelID,
         modelShort: shortName,
+        adapterPath: adapterPath,
         idleRAMMB: 0,
         throughputNoThink: [],
         throughputThinkOn: [],
@@ -1370,6 +1394,191 @@ func benchmarkModel(
     return result
 }
 
+// MARK: - Adapter Comparison
+
+struct MetricDelta: Codable {
+    let metric: String
+    let base: Double
+    let adapter: Double
+    let delta: Double
+    let deltaPercent: Double
+
+    enum CodingKeys: String, CodingKey {
+        case metric
+        case base
+        case adapter
+        case delta
+        case deltaPercent = "delta_percent"
+    }
+}
+
+struct AdapterComparisonResult: Codable {
+    let modelID: String
+    let modelShort: String
+    let adapterPath: String
+    let deltas: [MetricDelta]
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "model_id"
+        case modelShort = "model_short"
+        case adapterPath = "adapter_path"
+        case deltas
+    }
+}
+
+struct AdapterComparisonOutput: Codable {
+    let hardware: BenchmarkOutput.Hardware
+    let date: String
+    let backend: String
+    let adapterPath: String
+    let comparisons: [AdapterComparisonResult]
+
+    enum CodingKeys: String, CodingKey {
+        case hardware
+        case date
+        case backend
+        case adapterPath = "adapter_path"
+        case comparisons
+    }
+}
+
+func accuracyRate(_ evals: [IntelligenceEvalResult]) -> Double {
+    guard !evals.isEmpty else { return 0 }
+    let correct = evals.filter(\.correct).count
+    return Double(correct) / Double(evals.count) * 100.0
+}
+
+func toolAccuracyRate(_ evals: [ToolCallResult]) -> Double {
+    guard !evals.isEmpty else { return 0 }
+    let correct = evals.filter(\.correct).count
+    return Double(correct) / Double(evals.count) * 100.0
+}
+
+func serializationAccuracyRate(_ evals: [SerializationEvalResult]) -> Double {
+    guard !evals.isEmpty else { return 0 }
+    let correct = evals.filter(\.correct).count
+    return Double(correct) / Double(evals.count) * 100.0
+}
+
+func avgTPS(_ results: [ThroughputResult]) -> Double {
+    guard !results.isEmpty else { return 0 }
+    return results.map(\.tokensPerSecond).reduce(0, +) / Double(results.count)
+}
+
+func makeDelta(metric: String, base: Double, adapter: Double) -> MetricDelta {
+    let delta = adapter - base
+    let deltaPercent = base > 0 ? (delta / base) * 100.0 : 0
+    return MetricDelta(
+        metric: metric,
+        base: (base * 100).rounded() / 100,
+        adapter: (adapter * 100).rounded() / 100,
+        delta: (delta * 100).rounded() / 100,
+        deltaPercent: (deltaPercent * 100).rounded() / 100
+    )
+}
+
+func buildComparison(base: ModelBenchmarkResult, adapter: ModelBenchmarkResult) -> AdapterComparisonResult {
+    var deltas: [MetricDelta] = []
+
+    // Tool calling accuracy
+    if !base.toolCalling.isEmpty || !adapter.toolCalling.isEmpty {
+        deltas.append(makeDelta(
+            metric: "tool_calling_accuracy_%",
+            base: toolAccuracyRate(base.toolCalling),
+            adapter: toolAccuracyRate(adapter.toolCalling)
+        ))
+    }
+
+    // Intelligence eval accuracy
+    if !base.intelligenceEval.isEmpty || !adapter.intelligenceEval.isEmpty {
+        deltas.append(makeDelta(
+            metric: "intelligence_accuracy_%",
+            base: accuracyRate(base.intelligenceEval),
+            adapter: accuracyRate(adapter.intelligenceEval)
+        ))
+    }
+
+    // Fae capability eval accuracy
+    if !base.faeCapabilityEval.isEmpty || !adapter.faeCapabilityEval.isEmpty {
+        deltas.append(makeDelta(
+            metric: "fae_capability_accuracy_%",
+            base: accuracyRate(base.faeCapabilityEval),
+            adapter: accuracyRate(adapter.faeCapabilityEval)
+        ))
+    }
+
+    // Assistant fit eval accuracy
+    if !base.assistantFitEval.isEmpty || !adapter.assistantFitEval.isEmpty {
+        deltas.append(makeDelta(
+            metric: "assistant_fit_accuracy_%",
+            base: accuracyRate(base.assistantFitEval),
+            adapter: accuracyRate(adapter.assistantFitEval)
+        ))
+    }
+
+    // Serialization eval accuracy
+    if !base.serializationEval.isEmpty || !adapter.serializationEval.isEmpty {
+        deltas.append(makeDelta(
+            metric: "serialization_accuracy_%",
+            base: serializationAccuracyRate(base.serializationEval),
+            adapter: serializationAccuracyRate(adapter.serializationEval)
+        ))
+    }
+
+    // Throughput (no_think) avg TPS
+    if !base.throughputNoThink.isEmpty || !adapter.throughputNoThink.isEmpty {
+        deltas.append(makeDelta(
+            metric: "throughput_no_think_avg_tps",
+            base: avgTPS(base.throughputNoThink),
+            adapter: avgTPS(adapter.throughputNoThink)
+        ))
+    }
+
+    // Throughput (think_on) avg TPS
+    if !base.throughputThinkOn.isEmpty || !adapter.throughputThinkOn.isEmpty {
+        deltas.append(makeDelta(
+            metric: "throughput_think_on_avg_tps",
+            base: avgTPS(base.throughputThinkOn),
+            adapter: avgTPS(adapter.throughputThinkOn)
+        ))
+    }
+
+    // RAM delta
+    if base.idleRAMMB > 0 || adapter.idleRAMMB > 0 {
+        deltas.append(makeDelta(
+            metric: "idle_ram_mb",
+            base: base.idleRAMMB,
+            adapter: adapter.idleRAMMB
+        ))
+    }
+
+    return AdapterComparisonResult(
+        modelID: adapter.modelID,
+        modelShort: adapter.modelShort,
+        adapterPath: adapter.adapterPath ?? "",
+        deltas: deltas
+    )
+}
+
+func printComparisonSummary(_ comparisons: [AdapterComparisonResult]) {
+    print("\n" + String(repeating: "=", count: 70))
+    print("ADAPTER COMPARISON SUMMARY")
+    print(String(repeating: "=", count: 70))
+
+    for comparison in comparisons {
+        print("\n  Model: \(comparison.modelShort) (\(comparison.modelID))")
+        print("  Adapter: \(comparison.adapterPath)")
+        print("  " + String(repeating: "-", count: 66))
+        print("  \("Metric".padding(toLength: 35, withPad: " ", startingAt: 0)) \("Base".padding(toLength: 10, withPad: " ", startingAt: 0)) \("Adapter".padding(toLength: 10, withPad: " ", startingAt: 0)) \("Delta".padding(toLength: 10, withPad: " ", startingAt: 0))")
+        print("  " + String(repeating: "-", count: 66))
+        for d in comparison.deltas {
+            let sign = d.delta >= 0 ? "+" : ""
+            print("  \(d.metric.padding(toLength: 35, withPad: " ", startingAt: 0)) \(String(format: "%8.2f", d.base))  \(String(format: "%8.2f", d.adapter))  \(sign)\(String(format: "%.2f", d.delta)) (\(sign)\(String(format: "%.1f", d.deltaPercent))%)")
+        }
+    }
+    print("")
+}
+
 func run() async throws {
     let args = parseArgs()
 
@@ -1419,6 +1628,9 @@ func run() async throws {
     print("Hardware: \(ProcessInfo.processInfo.machineArchitecture), \(systemRAMGB()) GB RAM")
     print("Backend: mlx-swift-lm (native Swift)")
     print("Dimensions: throughput=\(doThroughput), no_think=\(doNoThink), ram=\(doRAM), tools=\(doTools), intelligence=\(doIntelligence), fae_capabilities=\(doFaeCapabilities), assistant_fit=\(doAssistantFit), freeform=\(doFreeform), serialization=\(doSerialization)")
+    if let adapterPath = args.adapterPath {
+        print("Adapter: \(adapterPath)")
+    }
     if args.qwenCalibrated {
         print("Eval profile: temporary Qwen-calibrated prompts enabled")
     }
@@ -1426,27 +1638,84 @@ func run() async throws {
         print("Contexts: \(contextFilter.sorted().joined(separator: ", "))")
     }
 
+    let isComparisonMode = args.adapterPath != nil
+
     var benchmarks: [ModelBenchmarkResult] = []
-    for entry in modelList {
-        do {
-            let result = try await benchmarkModel(
-                modelID: entry.modelID,
-                shortName: entry.shortName,
-                doThroughput: doThroughput,
-                doNoThink: doNoThink,
-                doRAM: doRAM,
-                doTools: doTools,
-                doIntelligence: doIntelligence,
-                doFaeCapabilities: doFaeCapabilities,
-                doAssistantFit: doAssistantFit,
-                doFreeform: doFreeform,
-                doSerialization: doSerialization,
-                qwenCalibrated: args.qwenCalibrated,
-                contexts: contextFilter
-            )
-            benchmarks.append(result)
-        } catch {
-            print("\n  ERROR benchmarking \(entry.shortName): \(error)")
+    var baseBenchmarks: [ModelBenchmarkResult] = []
+
+    if isComparisonMode {
+        // Comparison mode: run base first, then adapter, then compute deltas
+        print("\n--- BASE MODEL RUN (no adapter) ---")
+        for entry in modelList {
+            do {
+                let result = try await benchmarkModel(
+                    modelID: entry.modelID,
+                    shortName: entry.shortName,
+                    doThroughput: doThroughput,
+                    doNoThink: doNoThink,
+                    doRAM: doRAM,
+                    doTools: doTools,
+                    doIntelligence: doIntelligence,
+                    doFaeCapabilities: doFaeCapabilities,
+                    doAssistantFit: doAssistantFit,
+                    doFreeform: doFreeform,
+                    doSerialization: doSerialization,
+                    qwenCalibrated: args.qwenCalibrated,
+                    contexts: contextFilter
+                )
+                baseBenchmarks.append(result)
+            } catch {
+                print("\n  ERROR benchmarking \(entry.shortName) (base): \(error)")
+            }
+        }
+
+        print("\n--- ADAPTER RUN (\(args.adapterPath ?? "")) ---")
+        for entry in modelList {
+            do {
+                let result = try await benchmarkModel(
+                    modelID: entry.modelID,
+                    shortName: entry.shortName,
+                    doThroughput: doThroughput,
+                    doNoThink: doNoThink,
+                    doRAM: doRAM,
+                    doTools: doTools,
+                    doIntelligence: doIntelligence,
+                    doFaeCapabilities: doFaeCapabilities,
+                    doAssistantFit: doAssistantFit,
+                    doFreeform: doFreeform,
+                    doSerialization: doSerialization,
+                    qwenCalibrated: args.qwenCalibrated,
+                    contexts: contextFilter,
+                    adapterPath: args.adapterPath
+                )
+                benchmarks.append(result)
+            } catch {
+                print("\n  ERROR benchmarking \(entry.shortName) (adapter): \(error)")
+            }
+        }
+    } else {
+        // Standard mode: single run
+        for entry in modelList {
+            do {
+                let result = try await benchmarkModel(
+                    modelID: entry.modelID,
+                    shortName: entry.shortName,
+                    doThroughput: doThroughput,
+                    doNoThink: doNoThink,
+                    doRAM: doRAM,
+                    doTools: doTools,
+                    doIntelligence: doIntelligence,
+                    doFaeCapabilities: doFaeCapabilities,
+                    doAssistantFit: doAssistantFit,
+                    doFreeform: doFreeform,
+                    doSerialization: doSerialization,
+                    qwenCalibrated: args.qwenCalibrated,
+                    contexts: contextFilter
+                )
+                benchmarks.append(result)
+            } catch {
+                print("\n  ERROR benchmarking \(entry.shortName): \(error)")
+            }
         }
     }
 
@@ -1458,21 +1727,49 @@ func run() async throws {
     // JSON output
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "yyyy-MM-dd"
-
-    let output = BenchmarkOutput(
-        hardware: .init(arch: ProcessInfo.processInfo.machineArchitecture, ramGB: systemRAMGB()),
-        date: dateFormatter.string(from: Date()),
-        backend: "mlx-swift-lm",
-        models: benchmarks
-    )
-
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    let jsonData = try encoder.encode(output)
 
-    let outputPath = args.outputPath ?? "scripts/mlx_benchmark_results.json"
-    try jsonData.write(to: URL(fileURLWithPath: outputPath))
-    print("\nJSON results saved to: \(outputPath)")
+    if isComparisonMode, !baseBenchmarks.isEmpty {
+        // Build comparison output
+        var comparisons: [AdapterComparisonResult] = []
+        for adapterResult in benchmarks {
+            if let baseResult = baseBenchmarks.first(where: { $0.modelID == adapterResult.modelID }) {
+                comparisons.append(buildComparison(base: baseResult, adapter: adapterResult))
+            }
+        }
+
+        let comparisonOutput = AdapterComparisonOutput(
+            hardware: BenchmarkOutput.Hardware(
+                arch: ProcessInfo.processInfo.machineArchitecture,
+                ramGB: systemRAMGB()
+            ),
+            date: dateFormatter.string(from: Date()),
+            backend: "mlx-swift-lm",
+            adapterPath: args.adapterPath ?? "",
+            comparisons: comparisons
+        )
+
+        let jsonData = try encoder.encode(comparisonOutput)
+        let outputPath = args.outputPath ?? "scripts/mlx_adapter_comparison.json"
+        try jsonData.write(to: URL(fileURLWithPath: outputPath))
+        print("\nComparison JSON saved to: \(outputPath)")
+
+        // Print comparison summary
+        printComparisonSummary(comparisons)
+    } else {
+        let output = BenchmarkOutput(
+            hardware: .init(arch: ProcessInfo.processInfo.machineArchitecture, ramGB: systemRAMGB()),
+            date: dateFormatter.string(from: Date()),
+            backend: "mlx-swift-lm",
+            models: benchmarks
+        )
+
+        let jsonData = try encoder.encode(output)
+        let outputPath = args.outputPath ?? "scripts/mlx_benchmark_results.json"
+        try jsonData.write(to: URL(fileURLWithPath: outputPath))
+        print("\nJSON results saved to: \(outputPath)")
+    }
 
     // Markdown output
     let md = resultsToMarkdown(benchmarks)

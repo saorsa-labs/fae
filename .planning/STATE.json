@@ -3,25 +3,25 @@
   "project": "autonomous-self-improvement-loop",
   "active": true,
   "milestone": {
-    "number": 1,
-    "name": "Adapter Infrastructure"
+    "number": 2,
+    "name": "Improvement Loop Core"
   },
   "phase": {
-    "number": "1.3",
-    "name": "FaeBenchmark --adapter Flag",
+    "number": "2.1",
+    "name": "ImprovementStore (improvement.db)",
     "plan": null,
-    "status": "complete"
+    "status": "pending"
   },
   "task": {
-    "current": 4,
-    "total": 4,
-    "name": "FaeBenchmark --adapter already implemented in commit 4974fcd4"
+    "current": 0,
+    "total": 0,
+    "name": null
   },
   "review": {
-    "status": "passed",
+    "status": "pending",
     "iteration": 0,
-    "last_verdict": "PASS"
+    "last_verdict": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-30T20:30:00Z"
+  "status": "phase_transition",
+  "last_updated": "2026-03-30T20:35:00Z"
 }
