@@ -237,9 +237,12 @@ struct SelfConfigTool: Tool {
                 return nil
             case .string(let allowed):
                 guard let s = coerceString(value) else {
-                    return "Expected one of: \(allowed.joined(separator: ", "))"
+                    return allowed.isEmpty
+                        ? "Expected a non-empty string"
+                        : "Expected one of: \(allowed.joined(separator: ", "))"
                 }
-                guard allowed.contains(s) else {
+                // Empty allowed list means any non-empty string is valid.
+                guard allowed.isEmpty || allowed.contains(s) else {
                     return "Invalid value '\(s)'. Allowed: \(allowed.joined(separator: ", "))"
                 }
                 return nil
@@ -332,6 +335,15 @@ struct SelfConfigTool: Tool {
         "awareness.pause_on_thermal_pressure": SettingSpec(
             valueType: .bool,
             description: "Pause proactive observations under high thermal pressure"
+        ),
+        // Personal LoRA adapter deployment.
+        "training.personal_adapter_path": SettingSpec(
+            valueType: .string(allowed: []),
+            description: "Path to personal LoRA adapter directory. Hot-swaps adapter on running LLM engine. Set to empty string to unload."
+        ),
+        "training.adapter_auto_load_enabled": SettingSpec(
+            valueType: .bool,
+            description: "Auto-load personal adapter when LLM engine starts up"
         ),
     ]
 

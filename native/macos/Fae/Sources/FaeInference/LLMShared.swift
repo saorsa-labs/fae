@@ -293,6 +293,10 @@ public protocol LLMEngine: Actor {
     func shutdown() async
     var isLoaded: Bool { get }
     var loadState: MLEngineLoadState { get }
+    /// Hot-swap the personal LoRA adapter overlay on the running model.
+    /// Pass `nil` to unload any currently active adapter and revert to base weights.
+    /// Engines that do not support adapters may implement this as a no-op.
+    func swapAdapter(to directory: URL?) async throws
 }
 
 public extension LLMEngine {
@@ -309,4 +313,8 @@ public extension LLMEngine {
     ) async throws {}
 
     func shutdown() async {}
+
+    func swapAdapter(to directory: URL?) async throws {
+        // Default no-op for engines without adapter support.
+    }
 }

@@ -2093,6 +2093,27 @@ final class FaeCore: ObservableObject, HostCommandSender {
             config.training.maxIterationsPerRun = iters
             persistConfig(reason: "config.patch.training.max_iterations")
 
+        case "training.personal_adapter_path":
+            // Accept a non-empty String path, or nil/empty to unload the adapter.
+            let newPath: String?
+            if let s = value as? String, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                newPath = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                newPath = nil
+            }
+            config.training.personalAdapterPath = newPath
+            persistConfig(reason: "config.patch.training.personal_adapter_path")
+            // Hot-swap adapter on the running pipeline (no restart required).
+            Task { [weak self] in
+                await self?.pipelineCoordinator?.applyAdapterChange(path: newPath)
+            }
+            NSLog("FaeCore: adapter path patched → %@", newPath ?? "<unload>")
+
+        case "training.adapter_auto_load_enabled":
+            guard let enabled = value as? Bool else { return }
+            config.training.adapterAutoLoadEnabled = enabled
+            persistConfig(reason: "config.patch.training.adapter_auto_load_enabled")
+
         default:
             NSLog("FaeCore: ignoring unknown config key '%@'", key)
         }

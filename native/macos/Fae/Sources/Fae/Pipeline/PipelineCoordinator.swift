@@ -911,6 +911,30 @@ actor PipelineCoordinator {
         NSLog("PipelineCoordinator: cancelAndWait complete")
     }
 
+    /// Hot-swap the personal LoRA adapter overlay on the running LLM engine.
+    ///
+    /// Called by `FaeCore.patchConfig` when `training.personal_adapter_path` changes.
+    /// Safe during idle; if generation is in progress the adapter swap runs immediately
+    /// (MLXLLMEngine resets the KV cache after the swap, which has no effect on the
+    /// current turn — the new adapter applies from the next turn onwards).
+    ///
+    /// - Parameter path: Filesystem path to the adapter directory, or `nil` to unload.
+    func applyAdapterChange(path: String?) async {
+        let url = path.map { URL(fileURLWithPath: $0) }
+        do {
+            try await llmEngine.swapAdapter(to: url)
+            if let path {
+                NSLog("PipelineCoordinator: personal adapter loaded from '%@'", path)
+            } else {
+                NSLog("PipelineCoordinator: personal adapter unloaded — base model active")
+            }
+            eventBus.send(.runtimeProgress(stage: "adapter_changed", progress: 1.0))
+        } catch {
+            NSLog("PipelineCoordinator: adapter swap failed — %@", error.localizedDescription)
+            eventBus.send(.runtimeProgress(stage: "adapter_change_failed", progress: 0.0))
+        }
+    }
+
     private func cancelDeferredToolJobs() {
         for (_, task) in deferredToolTasks {
             task.cancel()
