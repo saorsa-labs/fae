@@ -76,4 +76,16 @@ Phases 1.1, 1.2, and 1.3 all done.
 - Commit: 840abb12
 
 ### Phase 2.1 Complete - Sun Mar 30 21:35:00 BST 2026
-### Phase 2.2 Starting...
+
+### Phase 2.2: ImprovementCycleCoordinator -- COMPLETE
+- [x] CycleState enum with valid successor enforcement
+- [x] ImprovementCycleCoordinator actor (state machine + runCycle)
+- [x] Stuck detection (2h timeout → force reset to idle)
+- [x] Minimum data thresholds (20 events, 5 corrections)
+- [x] Scheduler integration (daily 03:00, lazy store open)
+- [x] TrustedActionBroker allowlist for improvement_cycle
+- [x] ImprovementCycleCoordinatorTests: 11 tests (all pass)
+- Commit: 156e3260
+
+### Phase 2.2 Complete - Sun Mar 30 21:44:00 BST 2026
+### Phase 2.3 Starting...
