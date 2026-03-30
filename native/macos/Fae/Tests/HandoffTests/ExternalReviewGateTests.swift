@@ -186,6 +186,94 @@ final class ExternalReviewGateTests: XCTestCase {
         XCTAssertEqual(ReviewProvider.internalSelfReview.rawValue, "internalSelfReview")
     }
 
+    // MARK: - SecurityEventLogger Integration
+
+    func testSecurityLogClosureCalledOnReview() async throws {
+        let gate = makeGate()
+        var loggedEvent: String?
+        var loggedTool: String?
+        var loggedDecision: String?
+        var loggedApproved: Bool?
+        var loggedSummary: String?
+
+        await gate.setSecurityLogClosure { event, toolName, decision, _, approved, summary in
+            loggedEvent = event
+            loggedTool = toolName
+            loggedDecision = decision
+            loggedApproved = approved
+            loggedSummary = summary
+        }
+
+        // No delegate runner → falls through to internal review.
+        let result = try await gate.review(
+            evalDelta: makeEvalDelta(toolCalling: 2.0, faeCapability: 1.0, assistantFit: 3.0, serialization: 0.5),
+            currentDeferralCount: 0
+        )
+        XCTAssertEqual(result.verdict, .pass)
+        XCTAssertEqual(loggedEvent, "external_review_gate")
+        XCTAssertEqual(loggedTool, "internalSelfReview")
+        XCTAssertEqual(loggedDecision, "pass")
+        XCTAssertEqual(loggedApproved, true)
+        XCTAssertNotNil(loggedSummary)
+    }
+
+    func testSecurityLogClosureRecordsFailVerdict() async throws {
+        let gate = makeGate()
+        var loggedDecision: String?
+        var loggedApproved: Bool?
+
+        await gate.setSecurityLogClosure { _, _, decision, _, approved, _ in
+            loggedDecision = decision
+            loggedApproved = approved
+        }
+
+        let result = try await gate.review(
+            evalDelta: makeEvalDelta(toolCalling: -10.0),
+            currentDeferralCount: 0
+        )
+        XCTAssertEqual(result.verdict, .fail)
+        XCTAssertEqual(loggedDecision, "fail")
+        XCTAssertEqual(loggedApproved, false)
+    }
+
+    func testSecurityLogClosureRecordsConcernVerdict() async throws {
+        let gate = makeGate()
+        var loggedDecision: String?
+        var loggedApproved: Bool?
+
+        await gate.setSecurityLogClosure { _, _, decision, _, approved, _ in
+            loggedDecision = decision
+            loggedApproved = approved
+        }
+
+        let result = try await gate.review(
+            evalDelta: makeEvalDelta(toolCalling: -2.0),
+            currentDeferralCount: 0
+        )
+        XCTAssertEqual(result.verdict, .concern)
+        XCTAssertEqual(loggedDecision, "concern")
+        XCTAssertEqual(loggedApproved, false)
+    }
+
+    func testSecurityLogClosureCalledForDelegateProvider() async throws {
+        let gate = makeGate()
+        var loggedTool: String?
+
+        await gate.setDelegateAgentRunner { _ in
+            "PASS: All good"
+        }
+        await gate.setSecurityLogClosure { _, toolName, _, _, _, _ in
+            loggedTool = toolName
+        }
+
+        let result = try await gate.review(
+            evalDelta: makeEvalDelta(),
+            currentDeferralCount: 0
+        )
+        XCTAssertEqual(result.provider, .codex)
+        XCTAssertEqual(loggedTool, "codex")
+    }
+
     // MARK: - EvalDelta
 
     func testEvalDeltaAllNilNoRegression() async throws {

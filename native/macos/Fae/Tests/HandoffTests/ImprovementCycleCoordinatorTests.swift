@@ -424,4 +424,130 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let finalState = try await coordinator.currentState()
         XCTAssertEqual(finalState, .idle, "Auto-deploy should return to idle without user input")
     }
+
+    // MARK: - External Review Gate Integration
+
+    /// When the review gate returns CONCERN, the cycle defers and returns to idle.
+    func testRunCycleDeferOnConcernVerdict() async throws {
+        let store = try await makeTempStore()
+        let gate = ExternalReviewGate()
+        // Mock delegate returns CONCERN
+        await gate.setDelegateAgentRunner { _ in
+            "CONCERN: Minor regression in tool calling. Recommend human review."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        // Should return to idle with deferral incremented.
+        let state = try await coordinator.currentState()
+        XCTAssertEqual(state, .idle, "Concern should return to idle")
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.deferralCount, 1, "Deferral count should be 1 after CONCERN")
+        XCTAssertEqual(storeState.lastCycleError, "review_concern_deferred")
+    }
+
+    /// When the review gate returns FAIL, the cycle aborts and returns to idle.
+    func testRunCycleAbortsOnFailVerdict() async throws {
+        let store = try await makeTempStore()
+        let gate = ExternalReviewGate()
+        await gate.setDelegateAgentRunner { _ in
+            "FAIL: Significant regression in tool calling (-15%)."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        let state = try await coordinator.currentState()
+        XCTAssertEqual(state, .idle, "Fail should return to idle")
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.deferralCount, 0, "Deferrals should be reset on FAIL")
+        XCTAssertTrue(
+            storeState.lastCycleError?.starts(with: "review_failed") ?? false,
+            "Error should start with review_failed"
+        )
+    }
+
+    /// When the review gate returns PASS, the cycle continues to proposing.
+    func testRunCycleContinuesOnPassVerdict() async throws {
+        let store = try await makeTempStore()
+        let gate = ExternalReviewGate()
+        await gate.setDelegateAgentRunner { _ in
+            "PASS: All metrics improved, no regressions detected."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        // With 0 user-approved cycles, should pause in proposing.
+        let state = try await coordinator.currentState()
+        XCTAssertEqual(state, .proposing, "PASS should continue to proposing")
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.deferralCount, 0, "Deferrals should be reset on PASS")
+    }
+
+    /// Multiple CONCERN deferrals accumulate until max is reached.
+    func testDeferralsAccumulateAcrossCycles() async throws {
+        let store = try await makeTempStore()
+        let gate = ExternalReviewGate()
+        await gate.setDelegateAgentRunner { _ in
+            "CONCERN: Minor issue detected."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+
+        // Run 3 cycles, each should defer.
+        for i in 1...3 {
+            try await seedSufficientData(store: store)
+            try await coordinator.runCycle()
+
+            let storeState = try await store.readState()
+            XCTAssertEqual(storeState.deferralCount, i, "Deferral count should be \(i) after cycle \(i)")
+            XCTAssertEqual(storeState.cycleState, "idle")
+        }
+    }
+
+    /// When max deferrals reached, cycle aborts and resets deferrals.
+    func testMaxDeferralsReachedAbortsAndResets() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let gate = ExternalReviewGate()
+        // No delegate runner → falls through to internal review with neutral deltas → PASS.
+        // But first we set deferralCount to 3 (the max) to trigger maxDeferralsReached.
+        var storeState = try await store.readState()
+        storeState.deferralCount = ExternalReviewGate.maxDeferrals
+        try await store.writeState(storeState)
+
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "Max deferrals should abort to idle")
+
+        let finalStoreState = try await store.readState()
+        XCTAssertEqual(finalStoreState.deferralCount, 0, "Deferrals should be reset after max reached")
+        XCTAssertEqual(finalStoreState.lastCycleError, "max_deferrals_reached")
+    }
+
+    /// SecurityEventLogger closure is wired through the gate when used from coordinator.
+    func testSecurityLogClosureWiredInGate() async throws {
+        let store = try await makeTempStore()
+        let gate = ExternalReviewGate()
+        var logCalled = false
+        await gate.setSecurityLogClosure { _, _, _, _, _, _ in
+            logCalled = true
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        XCTAssertTrue(logCalled, "SecurityEventLogger closure should be called during cycle review")
+    }
 }

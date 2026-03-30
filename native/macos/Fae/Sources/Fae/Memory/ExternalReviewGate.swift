@@ -91,11 +91,21 @@ actor ExternalReviewGate {
     /// Called to run a delegate_agent tool call. Injected to allow testing.
     var delegateAgentRunner: ((_ prompt: String) async throws -> String)?
 
+    /// Called to log a security event for audit. Injected to decouple from SecurityEventLogger.
+    ///
+    /// Parameters: (event, toolName, decision, reasonCode, approved, summary)
+    var securityLogClosure: ((_ event: String, _ toolName: String, _ decision: String, _ reasonCode: String?, _ approved: Bool, _ summary: String) -> Void)?
+
     // MARK: - Init / Configuration
 
     /// Set the delegate agent runner closure. Called by tests or FaeCore.
     func setDelegateAgentRunner(_ runner: @escaping (_ prompt: String) async throws -> String) {
         delegateAgentRunner = runner
+    }
+
+    /// Set the security logging closure. In production, this calls SecurityEventLogger.shared.
+    func setSecurityLogClosure(_ closure: @escaping (_ event: String, _ toolName: String, _ decision: String, _ reasonCode: String?, _ approved: Bool, _ summary: String) -> Void) {
+        securityLogClosure = closure
     }
 
     // MARK: - Review Entry Point
@@ -288,10 +298,16 @@ actor ExternalReviewGate {
             result.verdict.rawValue,
             result.reviewedAt
         )
-        // In production, this will also call SecurityEventLogger.
-        // SecurityEventLogger is in the Tools/ folder and we avoid circular imports
-        // by keeping the log call here as a stub. Phase 3.2 integration wires the
-        // real SecurityEventLogger via a closure injected into the gate.
+
+        let approved = result.verdict == .pass
+        securityLogClosure?(
+            "external_review_gate",
+            result.provider.rawValue,
+            result.verdict.rawValue,
+            nil,
+            approved,
+            result.summary
+        )
     }
 }
 

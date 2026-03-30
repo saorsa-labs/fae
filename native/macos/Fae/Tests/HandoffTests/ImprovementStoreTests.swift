@@ -393,4 +393,42 @@ final class ImprovementStoreTests: XCTestCase {
         XCTAssertEqual(counts.adapterWins, 0)
         XCTAssertEqual(counts.ties, 0)
     }
+
+    // MARK: - Deferral Count
+
+    func testDeferralCountDefaultsToZero() async throws {
+        let (store, _) = try await makeTempStore()
+        try await store.ensureStateRow()
+        let state = try await store.readState()
+        XCTAssertEqual(state.deferralCount, 0)
+    }
+
+    func testIncrementDeferralIncrementsAndReturnsNewValue() async throws {
+        let (store, _) = try await makeTempStore()
+        try await store.ensureStateRow()
+        let first = try await store.incrementDeferral()
+        XCTAssertEqual(first, 1)
+        let second = try await store.incrementDeferral()
+        XCTAssertEqual(second, 2)
+    }
+
+    func testResetDeferralsSetsCountToZero() async throws {
+        let (store, _) = try await makeTempStore()
+        try await store.ensureStateRow()
+        _ = try await store.incrementDeferral()
+        _ = try await store.incrementDeferral()
+        try await store.resetDeferrals()
+        let state = try await store.readState()
+        XCTAssertEqual(state.deferralCount, 0)
+    }
+
+    func testDeferralCountPersistedThroughWriteState() async throws {
+        let (store, _) = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.deferralCount = 5
+        try await store.writeState(state)
+        let reread = try await store.readState()
+        XCTAssertEqual(reread.deferralCount, 5)
+    }
 }

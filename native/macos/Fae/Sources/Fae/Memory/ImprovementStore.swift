@@ -61,6 +61,8 @@ struct ImprovementState: Sendable {
     var previousAdapterPath: String?
     var trainingStartedAt: String?
     var lastCycleError: String?
+    /// Number of consecutive CONCERN deferrals in the current review sequence.
+    var deferralCount: Int
 }
 
 /// A detected gap between current Fae capabilities and desired behaviour.
@@ -199,9 +201,16 @@ actor ImprovementStore {
                 current_adapter_path  TEXT,
                 previous_adapter_path TEXT,
                 training_started_at   TEXT,
-                last_cycle_error      TEXT
+                last_cycle_error      TEXT,
+                deferral_count        INTEGER NOT NULL DEFAULT 0
             )
         """)
+        // Migration: add deferral_count to existing databases that lack the column.
+        let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(improvement_state)")
+        let columnNames = columns.compactMap { $0["name"] as? String }
+        if !columnNames.contains("deferral_count") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN deferral_count INTEGER NOT NULL DEFAULT 0")
+        }
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS capability_gaps (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,8 +247,8 @@ actor ImprovementStore {
             if count == 0 {
                 try db.execute(sql: """
                     INSERT INTO improvement_state
-                        (cycle_state, completed_cycles, user_approved_cycles)
-                    VALUES ('idle', 0, 0)
+                        (cycle_state, completed_cycles, user_approved_cycles, deferral_count)
+                    VALUES ('idle', 0, 0, 0)
                 """)
             }
         }
@@ -380,7 +389,8 @@ actor ImprovementStore {
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT id, cycle_state, last_cycle_at, completed_cycles,
                        user_approved_cycles, current_adapter_path,
-                       previous_adapter_path, training_started_at, last_cycle_error
+                       previous_adapter_path, training_started_at, last_cycle_error,
+                       deferral_count
                 FROM improvement_state LIMIT 1
             """) else {
                 throw ImprovementStoreError.stateNotInitialised
@@ -400,7 +410,7 @@ actor ImprovementStore {
                             cycle_state = ?, last_cycle_at = ?, completed_cycles = ?,
                             user_approved_cycles = ?, current_adapter_path = ?,
                             previous_adapter_path = ?, training_started_at = ?,
-                            last_cycle_error = ?
+                            last_cycle_error = ?, deferral_count = ?
                         WHERE id = ?
                     """,
                     arguments: [
@@ -408,7 +418,7 @@ actor ImprovementStore {
                         state.completedCycles, state.userApprovedCycles,
                         state.currentAdapterPath, state.previousAdapterPath,
                         state.trainingStartedAt, state.lastCycleError,
-                        id,
+                        state.deferralCount, id,
                     ]
                 )
             } else {
@@ -417,17 +427,37 @@ actor ImprovementStore {
                         INSERT INTO improvement_state
                             (cycle_state, last_cycle_at, completed_cycles,
                              user_approved_cycles, current_adapter_path,
-                             previous_adapter_path, training_started_at, last_cycle_error)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             previous_adapter_path, training_started_at, last_cycle_error,
+                             deferral_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         state.cycleState, state.lastCycleAt,
                         state.completedCycles, state.userApprovedCycles,
                         state.currentAdapterPath, state.previousAdapterPath,
                         state.trainingStartedAt, state.lastCycleError,
+                        state.deferralCount,
                     ]
                 )
             }
+        }
+    }
+
+    /// Increment the deferral counter by 1 and return the new value.
+    @discardableResult
+    func incrementDeferral() throws -> Int {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.write { db in
+            try db.execute(sql: "UPDATE improvement_state SET deferral_count = deferral_count + 1")
+            return try Int.fetchOne(db, sql: "SELECT deferral_count FROM improvement_state LIMIT 1") ?? 0
+        }
+    }
+
+    /// Reset the deferral counter to 0.
+    func resetDeferrals() throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in
+            try db.execute(sql: "UPDATE improvement_state SET deferral_count = 0")
         }
     }
 
@@ -598,7 +628,8 @@ actor ImprovementStore {
             currentAdapterPath: row["current_adapter_path"],
             previousAdapterPath: row["previous_adapter_path"],
             trainingStartedAt: row["training_started_at"],
-            lastCycleError: row["last_cycle_error"]
+            lastCycleError: row["last_cycle_error"],
+            deferralCount: Int(row["deferral_count"] as? Int64 ?? 0)
         )
     }
 

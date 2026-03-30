@@ -88,6 +88,9 @@ actor ImprovementCycleCoordinator {
 
     private let store: ImprovementStore
 
+    /// The review gate that validates adapters before deployment.
+    private let reviewGate: ExternalReviewGate
+
     /// Optional callback to apply an adapter path change via FaeCore.patchConfig.
     ///
     /// Set by FaeCore after wiring. Receives the new adapter path (nil = unload).
@@ -98,9 +101,12 @@ actor ImprovementCycleCoordinator {
 
     /// Create a coordinator backed by the given improvement store.
     ///
-    /// - Parameter store: The `ImprovementStore` that persists cycle state and feedback data.
-    init(store: ImprovementStore) {
+    /// - Parameters:
+    ///   - store: The `ImprovementStore` that persists cycle state and feedback data.
+    ///   - reviewGate: The `ExternalReviewGate` used to validate adapters. Defaults to a new instance.
+    init(store: ImprovementStore, reviewGate: ExternalReviewGate = ExternalReviewGate()) {
         self.store = store
+        self.reviewGate = reviewGate
     }
 
     /// Set the adapter patch callback. Called by FaeCore after wiring.
@@ -259,11 +265,54 @@ actor ImprovementCycleCoordinator {
             return
         }
 
-        // Step 6: EVALUATING — run eval benchmark.
+        // Step 6: EVALUATING — run eval benchmark + external review gate.
         do {
             try await transition(to: .evaluating)
-            NSLog("ImprovementCycleCoordinator: evaluating phase (stub)")
-            // TODO: run FaeBenchmark --adapter comparison
+            NSLog("ImprovementCycleCoordinator: evaluating phase")
+
+            // Build eval delta stub (real eval integration in Phase 4).
+            let evalDelta = EvalDelta(
+                toolCallingDelta: 0.0,
+                faeCapabilityDelta: 0.0,
+                assistantFitDelta: 0.0,
+                serializationDelta: 0.0,
+                throughputDelta: nil
+            )
+
+            // Run external review gate.
+            let stateForReview = try await store.readState()
+            let reviewResult: ReviewResult
+            do {
+                reviewResult = try await reviewGate.review(
+                    evalDelta: evalDelta,
+                    currentDeferralCount: stateForReview.deferralCount
+                )
+            } catch let error as ExternalReviewGateError {
+                if case .maxDeferralsReached = error {
+                    NSLog("ImprovementCycleCoordinator: max deferrals reached, aborting cycle")
+                    try await store.resetDeferrals()
+                    try? await forceIdle(error: "max_deferrals_reached")
+                    return
+                }
+                throw error
+            }
+
+            switch reviewResult.verdict {
+            case .pass:
+                NSLog("ImprovementCycleCoordinator: review PASS — proceeding to deploy")
+                try await store.resetDeferrals()
+            case .concern:
+                NSLog("ImprovementCycleCoordinator: review CONCERN — deferring cycle")
+                let newCount = try await store.incrementDeferral()
+                NSLog("ImprovementCycleCoordinator: deferral count now %d", newCount)
+                try? await forceIdle(error: "review_concern_deferred")
+                return
+            case .fail:
+                NSLog("ImprovementCycleCoordinator: review FAIL — aborting cycle")
+                try await store.resetDeferrals()
+                try? await forceIdle(error: "review_failed: \(reviewResult.summary)")
+                return
+            }
         } catch {
             NSLog("ImprovementCycleCoordinator: evaluating failed: %@", error.localizedDescription)
             try? await forceIdle(error: "evaluating_failed: \(error.localizedDescription)")
@@ -275,7 +324,8 @@ actor ImprovementCycleCoordinator {
             id: nil, cycleState: "proposing", lastCycleAt: nil,
             completedCycles: 0, userApprovedCycles: 0,
             currentAdapterPath: nil, previousAdapterPath: nil,
-            trainingStartedAt: nil, lastCycleError: nil
+            trainingStartedAt: nil, lastCycleError: nil,
+            deferralCount: 0
         )
         let approved = storeStateForPropose.userApprovedCycles >= Self.minCyclesForAutoDeploy
 
