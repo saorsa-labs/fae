@@ -7,8 +7,8 @@
     "name": "Feedback + Verification"
   },
   "phase": {
-    "number": "3.1",
-    "name": "ImplicitFeedbackDetector",
+    "number": "3.2",
+    "name": "External Agent Review Gate",
     "plan": null,
     "status": "pending"
   },

@@ -104,3 +104,13 @@ Phases 1.1, 1.2, and 1.3 all done.
 ### MILESTONE 2: Improvement Loop Core — COMPLETE
 Phases 2.1, 2.2, and 2.3 all done.
 ### Milestone 3: Feedback + Verification Starting...
+
+### Phase 3.1: ImplicitFeedbackDetector -- COMPLETE
+- [x] ImplicitFeedbackDetector: 7 signal types (re_ask, abandonment, follow_through, interruption, praise, topic_change, silence_acceptance)
+- [x] FeedbackAnalysisTurn type for lightweight conversation analysis
+- [x] Jaccard bigram text similarity for word-level comparison
+- [x] ImplicitFeedbackDetectorTests: 22 tests (all pass)
+- Commits: 1ff32287, 0aad24a4
+
+### Phase 3.1 Complete - Sun Mar 30 21:55:00 BST 2026
+### Phase 3.2 Starting...
