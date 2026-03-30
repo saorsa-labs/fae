@@ -148,7 +148,13 @@ enum TurnHelpers {
             : []
         let requestedTools = explicitMentions.isEmpty ? inferredMentions : explicitMentions
 
-        if isConversationContinuation && requestedTools.isEmpty && proactiveAllowedTools == nil {
+        // In a conversation continuation (within 45s of last assistant message),
+        // show all tools unless this is a proactive task with a specific allowlist.
+        // Keyword-based narrowing is unreliable for continuation turns where the
+        // user is responding to a previous prompt (e.g. providing an API key that
+        // was requested by input_request — the text "api key" would incorrectly
+        // narrow visible tools to just input_request).
+        if isConversationContinuation && proactiveAllowedTools == nil {
             return nil
         }
 

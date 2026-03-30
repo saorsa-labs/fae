@@ -985,11 +985,11 @@ enum ToolRoutingHelpers {
         case "calendar", "reminders", "contacts", "mail", "notes":
             return trimmed
 
-        case "screenshot":
-            return stripScreenshotEnvelope(from: trimmed)
-
-        case "camera":
-            return stripSimpleToolPrefix("Camera capture:\n", from: trimmed)
+        // Vision tools (camera, screenshot) must NOT use direct reply.
+        // Their output is a raw VLM description that should flow back to
+        // the LLM for interpretation — the model decides whether to greet
+        // the user, comment on screen content, or stay silent.
+        // Direct reply would speak "The man is sitting in a chair" verbatim.
 
         default:
             return nil
@@ -1005,19 +1005,6 @@ enum ToolRoutingHelpers {
         return "{}"
     }
 
-    static func stripScreenshotEnvelope(from output: String) -> String {
-        guard output.hasPrefix("Screenshot ("),
-              let newline = output.firstIndex(of: "\n")
-        else {
-            return output
-        }
-        return String(output[output.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    static func stripSimpleToolPrefix(_ prefix: String, from output: String) -> String {
-        guard output.hasPrefix(prefix) else { return output }
-        return String(output.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 
     /// Extract an audio file path from skill output JSON (looks for "audio_file" key).
     static func extractAudioFilePath(from output: String) -> String? {

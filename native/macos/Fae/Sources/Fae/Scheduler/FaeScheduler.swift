@@ -1406,7 +1406,7 @@ actor FaeScheduler {
         }
         lastScreenCheckAt = Date()
 
-        let prompt = "[PROACTIVE SCREEN OBSERVATION] Take a screenshot and note the current screen context. Follow the screen-awareness skill instructions."
+        let prompt = "[PROACTIVE SCREEN OBSERVATION] You MUST use the `screenshot` tool to capture the screen right now. Do NOT respond without taking the screenshot first. Follow the screen-awareness skill instructions."
         _ = await dispatchProactiveTask(
             taskId: "screen_activity_check",
             prompt: prompt,
