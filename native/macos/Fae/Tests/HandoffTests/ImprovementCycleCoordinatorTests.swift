@@ -171,16 +171,11 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
 
         try await coordinator.runCycle()
 
-        // Should be back to idle after completing the cycle.
+        // With 0 prior approved cycles, runCycle pauses in PROPOSING awaiting user approval.
         let state = try await coordinator.currentState()
-        XCTAssertEqual(state, .idle)
+        XCTAssertEqual(state, .proposing, "runCycle should pause in proposing before 5 approvals earned")
 
-        // Completed cycles should be incremented.
-        let storeState = try await store.readState()
-        XCTAssertEqual(storeState.completedCycles, 1)
-        XCTAssertNotNil(storeState.lastCycleAt)
-
-        // Events should be consumed.
+        // Events should be consumed (collected at start of cycle).
         let pendingCount = try await store.pendingFeedbackCount()
         XCTAssertEqual(pendingCount, 0)
     }
@@ -251,5 +246,182 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
 
         let storeState = try await store.readState()
         XCTAssertNotNil(storeState.trainingStartedAt)
+    }
+
+    // MARK: - Approval Flow (Phase 2.3)
+
+    /// approveDeployment() increments userApprovedCycles and returns to idle.
+    func testApproveDeploymentIncrementsApprovedCycles() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        // Manually drive to proposing state (simulates end of runCycle).
+        for state in [CycleState.collecting, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: state)
+        }
+        let preApproveState = try await coordinator.currentState()
+        XCTAssertEqual(preApproveState, .proposing)
+
+        try await coordinator.approveDeployment()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle)
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.userApprovedCycles, 1)
+        XCTAssertEqual(storeState.completedCycles, 1)
+        XCTAssertNotNil(storeState.lastCycleAt)
+    }
+
+    /// rejectDeployment() returns to idle without incrementing userApprovedCycles.
+    func testRejectDeploymentReturnsToIdleWithoutApproval() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        for state in [CycleState.collecting, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: state)
+        }
+
+        try await coordinator.rejectDeployment()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle)
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.userApprovedCycles, 0, "Rejection must not increment userApprovedCycles")
+        XCTAssertEqual(storeState.completedCycles, 1, "completedCycles should still increment")
+    }
+
+    /// approveDeployment() throws invalidTransition when not in proposing state.
+    func testApproveDeploymentFromNonProposingStateThrows() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("Expected invalidTransition")
+        } catch let error as ImprovementCycleError {
+            if case .invalidTransition(let from, let to) = error {
+                XCTAssertEqual(from, .idle)
+                XCTAssertEqual(to, .deploying)
+            } else {
+                XCTFail("Expected invalidTransition, got \(error)")
+            }
+        }
+    }
+
+    /// rejectDeployment() throws invalidTransition when not in proposing state.
+    func testRejectDeploymentFromNonProposingStateThrows() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        do {
+            try await coordinator.rejectDeployment()
+            XCTFail("Expected invalidTransition")
+        } catch let error as ImprovementCycleError {
+            if case .invalidTransition = error {
+                // Expected.
+            } else {
+                XCTFail("Expected invalidTransition, got \(error)")
+            }
+        }
+    }
+
+    // MARK: - Rollback (Phase 2.3)
+
+    /// rollback() swaps currentAdapterPath and previousAdapterPath.
+    func testRollbackSwapsAdapterPaths() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        // Seed paths.
+        var state = try await store.readState()
+        state.currentAdapterPath = "/adapters/cycle-2"
+        state.previousAdapterPath = "/adapters/cycle-1"
+        try await store.writeState(state)
+
+        try await coordinator.rollback()
+
+        let afterRollback = try await store.readState()
+        XCTAssertEqual(afterRollback.currentAdapterPath, "/adapters/cycle-1")
+        XCTAssertEqual(afterRollback.previousAdapterPath, "/adapters/cycle-2")
+    }
+
+    /// rollback() with nil previousAdapterPath unloads the adapter.
+    func testRollbackWithNilPreviousPathUnloads() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        var state = try await store.readState()
+        state.currentAdapterPath = "/adapters/cycle-1"
+        state.previousAdapterPath = nil
+        try await store.writeState(state)
+
+        try await coordinator.rollback()
+
+        let afterRollback = try await store.readState()
+        XCTAssertNil(afterRollback.currentAdapterPath, "Rollback to nil should unload the adapter")
+        XCTAssertEqual(afterRollback.previousAdapterPath, "/adapters/cycle-1")
+    }
+
+    /// rollback() invokes adapterPatchCallback with the previous path.
+    func testRollbackInvokesAdapterPatchCallback() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        var state = try await store.readState()
+        state.currentAdapterPath = "/adapters/cycle-2"
+        state.previousAdapterPath = "/adapters/cycle-1"
+        try await store.writeState(state)
+
+        // Capture patcher call.
+        final class Capture: @unchecked Sendable { var path: String? = "uninvoked" }
+        let capture = Capture()
+        await coordinator.setAdapterPatchCallback { path in capture.path = path }
+
+        try await coordinator.rollback()
+
+        XCTAssertEqual(capture.path, "/adapters/cycle-1")
+    }
+
+    // MARK: - Auto-Deploy After 5 Approved Cycles (Phase 2.3)
+
+    /// runCycle() pauses in proposing when userApprovedCycles < 5.
+    func testRunCyclePausesInProposingBeforeEarningAutoDeploy() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        // Should be paused in proposing (needs user approval).
+        let state = try await coordinator.currentState()
+        XCTAssertEqual(state, .proposing, "Cycle should pause in proposing until 5 approvals earned")
+    }
+
+    /// runCycle() auto-deploys when userApprovedCycles >= 5.
+    func testRunCycleAutoDeploysAfterFiveApprovedCycles() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+
+        // Seed 5 prior approved cycles to earn auto-deploy.
+        var state = try await store.readState()
+        state.userApprovedCycles = 5
+        try await store.writeState(state)
+
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        // Should complete without pausing in proposing.
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "Auto-deploy should return to idle without user input")
     }
 }

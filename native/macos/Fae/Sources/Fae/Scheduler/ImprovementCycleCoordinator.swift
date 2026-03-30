@@ -81,9 +81,18 @@ actor ImprovementCycleCoordinator {
     /// Maximum duration (in seconds) before a training cycle is considered stuck.
     static let maxTrainingDurationSeconds: TimeInterval = 2 * 3600 // 2 hours
 
+    /// Number of user-approved cycles required before auto-deploy is earned.
+    static let minCyclesForAutoDeploy = 5
+
     // MARK: - Dependencies
 
     private let store: ImprovementStore
+
+    /// Optional callback to apply an adapter path change via FaeCore.patchConfig.
+    ///
+    /// Set by FaeCore after wiring. Receives the new adapter path (nil = unload).
+    /// Left nil in tests unless specific patcher behaviour is needed.
+    var adapterPatchCallback: ((String?) -> Void)?
 
     // MARK: - Init
 
@@ -92,6 +101,11 @@ actor ImprovementCycleCoordinator {
     /// - Parameter store: The `ImprovementStore` that persists cycle state and feedback data.
     init(store: ImprovementStore) {
         self.store = store
+    }
+
+    /// Set the adapter patch callback. Called by FaeCore after wiring.
+    func setAdapterPatchCallback(_ callback: @escaping (String?) -> Void) {
+        adapterPatchCallback = callback
     }
 
     // MARK: - State Machine
@@ -256,31 +270,133 @@ actor ImprovementCycleCoordinator {
             return
         }
 
-        // Step 7: PROPOSING — generate proposal for user.
-        do {
-            try await transition(to: .proposing)
-            NSLog("ImprovementCycleCoordinator: proposing phase (stub)")
-            // TODO: generate morning proposal message
-        } catch {
-            NSLog("ImprovementCycleCoordinator: proposing failed: %@", error.localizedDescription)
-            try? await forceIdle(error: "proposing_failed: \(error.localizedDescription)")
+        // Step 7: PROPOSING or AUTO-DEPLOY — check earned autonomy.
+        let storeStateForPropose = (try? await store.readState()) ?? ImprovementState(
+            id: nil, cycleState: "proposing", lastCycleAt: nil,
+            completedCycles: 0, userApprovedCycles: 0,
+            currentAdapterPath: nil, previousAdapterPath: nil,
+            trainingStartedAt: nil, lastCycleError: nil
+        )
+        let approved = storeStateForPropose.userApprovedCycles >= Self.minCyclesForAutoDeploy
+
+        if approved {
+            // Earned autonomy: skip the user-approval pause.
+            NSLog(
+                "ImprovementCycleCoordinator: earned auto-deploy (%d approved cycles)",
+                storeStateForPropose.userApprovedCycles
+            )
+            do {
+                try await transition(to: .deploying)
+                try await performDeploy(approved: true)
+            } catch {
+                NSLog("ImprovementCycleCoordinator: auto-deploy failed: %@", error.localizedDescription)
+                try? await forceIdle(error: "auto_deploy_failed: \(error.localizedDescription)")
+                return
+            }
+        } else {
+            // Needs user approval — pause in PROPOSING state.
+            do {
+                try await transition(to: .proposing)
+                NSLog("ImprovementCycleCoordinator: paused in proposing — awaiting user approval")
+                // runCycle() returns here. approveDeployment() / rejectDeployment() resume it.
+            } catch {
+                NSLog("ImprovementCycleCoordinator: proposing failed: %@", error.localizedDescription)
+                try? await forceIdle(error: "proposing_failed: \(error.localizedDescription)")
+            }
             return
         }
 
-        // Step 8: DEPLOYING — apply adapter (or defer to user approval).
-        do {
-            try await transition(to: .deploying)
-            NSLog("ImprovementCycleCoordinator: deploying phase (stub)")
-            // TODO: apply adapter via SelfConfigTool or defer to user approval
-        } catch {
-            NSLog("ImprovementCycleCoordinator: deploying failed: %@", error.localizedDescription)
-            try? await forceIdle(error: "deploying_failed: \(error.localizedDescription)")
-            return
-        }
-
-        // Step 9: Return to IDLE (cycle complete).
+        // Step 9: Return to IDLE (only reached via auto-deploy path).
         try await transition(to: .idle)
-        NSLog("ImprovementCycleCoordinator: cycle complete")
+        NSLog("ImprovementCycleCoordinator: cycle complete (auto-deploy)")
+    }
+
+    // MARK: - User Approval API
+
+    /// Approve the pending adapter deployment.
+    ///
+    /// Must be called while the coordinator is in `proposing` state. Transitions
+    /// through `deploying` → `idle`, increments `userApprovedCycles`, and tracks
+    /// the rollback path.
+    ///
+    /// - Throws: `ImprovementCycleError.invalidTransition` if not in `proposing` state.
+    func approveDeployment() async throws {
+        let current = try await currentState()
+        guard current == .proposing else {
+            throw ImprovementCycleError.invalidTransition(from: current, to: .deploying)
+        }
+        try await transition(to: .deploying)
+        try await performDeploy(approved: true)
+        try await transition(to: .idle)
+        NSLog("ImprovementCycleCoordinator: deployment approved — cycle complete")
+    }
+
+    /// Reject the pending adapter deployment.
+    ///
+    /// Must be called while the coordinator is in `proposing` state. Transitions
+    /// directly to `idle` without deploying. The adapter candidate is discarded.
+    ///
+    /// - Throws: `ImprovementCycleError.invalidTransition` if not in `proposing` state.
+    func rejectDeployment() async throws {
+        let current = try await currentState()
+        guard current == .proposing else {
+            throw ImprovementCycleError.invalidTransition(from: current, to: .idle)
+        }
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.cycleState = CycleState.idle.rawValue
+        state.completedCycles += 1
+        state.lastCycleAt = ISO8601DateFormatter().string(from: Date())
+        state.trainingStartedAt = nil
+        try await store.writeState(state)
+        NSLog("ImprovementCycleCoordinator: deployment rejected — returned to idle")
+    }
+
+    /// Roll back the current adapter to the previous one.
+    ///
+    /// Swaps `currentAdapterPath` and `previousAdapterPath` in the store.
+    /// Emits `adapter_rolled_back` via the `adapterPatchCallback`.
+    ///
+    /// - Throws: `ImprovementCycleError.storeNotAvailable` if store is unavailable.
+    func rollback() async throws {
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        let previous = state.previousAdapterPath
+        state.previousAdapterPath = state.currentAdapterPath
+        state.currentAdapterPath = previous
+        try await store.writeState(state)
+        adapterPatchCallback?(previous)
+        NSLog(
+            "ImprovementCycleCoordinator: rollback — adapter → %@",
+            previous ?? "<base model>"
+        )
+    }
+
+    // MARK: - Internal Deploy Helper
+
+    /// Perform the actual adapter deployment: track rollback path, increment approved counter,
+    /// and invoke the adapter patch callback.
+    ///
+    /// Note: `completedCycles` and `lastCycleAt` are managed by `transition(to: .idle)`;
+    /// this method only handles the deployment-specific bookkeeping.
+    private func performDeploy(approved: Bool) async throws {
+        guard approved else { return }
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+
+        // Track rollback path: current → previous before updating.
+        let newPath = state.currentAdapterPath // stub: Phase 3 will set real path from training
+        state.previousAdapterPath = state.currentAdapterPath
+        state.currentAdapterPath = newPath
+        state.userApprovedCycles += 1
+        try await store.writeState(state)
+
+        // Notify pipeline — nil until FaeCore wires it in.
+        adapterPatchCallback?(state.currentAdapterPath)
+        NSLog(
+            "ImprovementCycleCoordinator: adapter deployed (userApprovedCycles=%d)",
+            state.userApprovedCycles
+        )
     }
 
     // MARK: - Recovery
