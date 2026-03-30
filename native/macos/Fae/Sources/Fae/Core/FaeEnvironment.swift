@@ -150,6 +150,11 @@ enum FaeDirectories {
     /// `receipts.db` — action receipts for undo/reversibility (separate failure domain from fae.db).
     static let receiptsDatabase: URL = root.appendingPathComponent("receipts.db")
 
+    /// `improvement.db` — autonomous self-improvement loop data: feedback events, baselines,
+    /// capability gaps, shadow eval episodes, and cycle state. Separate from fae.db so that
+    /// schema migrations here cannot affect the main memory database.
+    static let improvementDatabase: URL = root.appendingPathComponent("improvement.db")
+
     // MARK: - JSON Stores
 
     /// `speakers.json` — speaker voice profiles.

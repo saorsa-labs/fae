@@ -57,3 +57,7 @@ All phases 1.1 through 1.5 done.
 
 ### MILESTONE 1: Adapter Infrastructure — COMPLETE
 Phases 1.1, 1.2, and 1.3 all done.
+- [x] Phase 1.3: FaeBenchmark --adapter Flag (commit: 0afac0fd)
+
+### Milestone 1: Adapter Infrastructure COMPLETE - Mon Mar 30 20:25:25 BST 2026
+### Milestone 2: Improvement Loop Core Starting...

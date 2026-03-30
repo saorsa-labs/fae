@@ -9,19 +9,19 @@
   "phase": {
     "number": "2.1",
     "name": "ImprovementStore (improvement.db)",
-    "plan": null,
-    "status": "pending"
+    "plan": "PLAN-phase-2.1.md",
+    "status": "executing"
   },
   "task": {
-    "current": 0,
-    "total": 0,
-    "name": null
+    "current": 5,
+    "total": 5,
+    "name": "Build verification"
   },
   "review": {
     "status": "pending",
     "iteration": 0,
     "last_verdict": null
   },
-  "status": "phase_transition",
-  "last_updated": "2026-03-30T20:35:00Z"
+  "status": "reviewing",
+  "last_updated": "2026-03-30T21:35:00Z"
 }
