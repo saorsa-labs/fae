@@ -599,13 +599,15 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         )
     }
 
-    func testDirectToolReplyTextStripsScreenshotEnvelope() {
+    func testDirectToolReplyTextDoesNotUseDiretReplyForScreenshot() {
+        // Vision tools (screenshot, camera) must NOT use direct reply — the VLM description
+        // should flow back to the LLM for interpretation, not be spoken verbatim.
         let call = ToolCall(name: "screenshot", arguments: [:])
         let result = ToolResult.success("Screenshot (1920x1080):\nFAE Vision Test 7321")
 
-        XCTAssertEqual(
+        XCTAssertNil(
             PipelineCoordinator.directToolReplyText(for: call, result: result),
-            "FAE Vision Test 7321"
+            "Screenshot results must not use direct reply — route through LLM"
         )
     }
 
