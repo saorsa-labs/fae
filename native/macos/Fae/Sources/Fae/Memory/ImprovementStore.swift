@@ -63,6 +63,8 @@ struct ImprovementState: Sendable {
     var lastCycleError: String?
     /// Number of consecutive CONCERN deferrals in the current review sequence.
     var deferralCount: Int
+    /// The directive text before the last directive-tuning amendment, for rollback.
+    var previousDirective: String?
 }
 
 /// A detected gap between current Fae capabilities and desired behaviour.
@@ -202,14 +204,18 @@ actor ImprovementStore {
                 previous_adapter_path TEXT,
                 training_started_at   TEXT,
                 last_cycle_error      TEXT,
-                deferral_count        INTEGER NOT NULL DEFAULT 0
+                deferral_count        INTEGER NOT NULL DEFAULT 0,
+                previous_directive    TEXT
             )
         """)
-        // Migration: add deferral_count to existing databases that lack the column.
+        // Migration: add columns to existing databases that lack them.
         let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(improvement_state)")
         let columnNames = columns.compactMap { $0["name"] as? String }
         if !columnNames.contains("deferral_count") {
             try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN deferral_count INTEGER NOT NULL DEFAULT 0")
+        }
+        if !columnNames.contains("previous_directive") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN previous_directive TEXT")
         }
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS capability_gaps (
@@ -390,7 +396,7 @@ actor ImprovementStore {
                 SELECT id, cycle_state, last_cycle_at, completed_cycles,
                        user_approved_cycles, current_adapter_path,
                        previous_adapter_path, training_started_at, last_cycle_error,
-                       deferral_count
+                       deferral_count, previous_directive
                 FROM improvement_state LIMIT 1
             """) else {
                 throw ImprovementStoreError.stateNotInitialised
@@ -410,7 +416,8 @@ actor ImprovementStore {
                             cycle_state = ?, last_cycle_at = ?, completed_cycles = ?,
                             user_approved_cycles = ?, current_adapter_path = ?,
                             previous_adapter_path = ?, training_started_at = ?,
-                            last_cycle_error = ?, deferral_count = ?
+                            last_cycle_error = ?, deferral_count = ?,
+                            previous_directive = ?
                         WHERE id = ?
                     """,
                     arguments: [
@@ -418,7 +425,7 @@ actor ImprovementStore {
                         state.completedCycles, state.userApprovedCycles,
                         state.currentAdapterPath, state.previousAdapterPath,
                         state.trainingStartedAt, state.lastCycleError,
-                        state.deferralCount, id,
+                        state.deferralCount, state.previousDirective, id,
                     ]
                 )
             } else {
@@ -428,15 +435,15 @@ actor ImprovementStore {
                             (cycle_state, last_cycle_at, completed_cycles,
                              user_approved_cycles, current_adapter_path,
                              previous_adapter_path, training_started_at, last_cycle_error,
-                             deferral_count)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             deferral_count, previous_directive)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         state.cycleState, state.lastCycleAt,
                         state.completedCycles, state.userApprovedCycles,
                         state.currentAdapterPath, state.previousAdapterPath,
                         state.trainingStartedAt, state.lastCycleError,
-                        state.deferralCount,
+                        state.deferralCount, state.previousDirective,
                     ]
                 )
             }
@@ -629,7 +636,8 @@ actor ImprovementStore {
             previousAdapterPath: row["previous_adapter_path"],
             trainingStartedAt: row["training_started_at"],
             lastCycleError: row["last_cycle_error"],
-            deferralCount: Int(row["deferral_count"] as? Int64 ?? 0)
+            deferralCount: Int(row["deferral_count"] as? Int64 ?? 0),
+            previousDirective: row["previous_directive"]
         )
     }
 

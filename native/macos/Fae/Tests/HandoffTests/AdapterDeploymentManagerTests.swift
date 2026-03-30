@@ -62,7 +62,8 @@ final class AdapterDeploymentManagerTests: XCTestCase {
             previousAdapterPath: nil,
             trainingStartedAt: nil,
             lastCycleError: nil,
-            deferralCount: 0
+            deferralCount: 0,
+            previousDirective: nil
         )
         XCTAssertFalse(AdapterDeploymentManager.shouldAutoDeploy(state: state))
     }
@@ -78,7 +79,8 @@ final class AdapterDeploymentManagerTests: XCTestCase {
             previousAdapterPath: nil,
             trainingStartedAt: nil,
             lastCycleError: nil,
-            deferralCount: 0
+            deferralCount: 0,
+            previousDirective: nil
         )
         XCTAssertTrue(AdapterDeploymentManager.shouldAutoDeploy(state: state))
     }
@@ -94,7 +96,8 @@ final class AdapterDeploymentManagerTests: XCTestCase {
             previousAdapterPath: nil,
             trainingStartedAt: nil,
             lastCycleError: nil,
-            deferralCount: 0
+            deferralCount: 0,
+            previousDirective: nil
         )
         XCTAssertTrue(AdapterDeploymentManager.shouldAutoDeploy(state: state))
     }

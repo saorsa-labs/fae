@@ -535,6 +535,129 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(finalStoreState.lastCycleError, "max_deferrals_reached")
     }
 
+    // MARK: - Directive Tuning Integration
+
+    /// isDirectiveTuningCycle returns false when completedCycles is 0.
+    func testDirectiveTuningCycleFalseWhenZeroCycles() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isDirectiveTuningCycle()
+        XCTAssertFalse(result, "Zero completed cycles should not be a directive cycle")
+    }
+
+    /// isDirectiveTuningCycle returns true every 7th completed cycle.
+    func testDirectiveTuningCycleTrueOnSeventhCycle() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 7
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isDirectiveTuningCycle()
+        XCTAssertTrue(result, "7th cycle should be a directive tuning cycle")
+    }
+
+    /// isDirectiveTuningCycle returns false for non-multiples of 7.
+    func testDirectiveTuningCycleFalseOnNonSeventh() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 5
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        let result = try await coordinator.isDirectiveTuningCycle()
+        XCTAssertFalse(result, "5th cycle should not be directive tuning")
+    }
+
+    /// On a directive tuning cycle, runCycle applies amendment and returns to idle.
+    func testDirectiveTuningCycleAppliesAmendmentAndReturnsToIdle() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+
+        // Set completedCycles = 7 to trigger directive tuning.
+        var state = try await store.readState()
+        state.completedCycles = 7
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+
+        // Wire up directive reader/writer.
+        var writtenDirective: String?
+        await coordinator.setDirectiveReader { "Existing directive." }
+        await coordinator.setDirectiveWriter { text in writtenDirective = text }
+
+        // Seed data with enough corrections to form a pattern.
+        for i in 0..<15 {
+            _ = try await store.appendFeedbackEvent(makeEvent(
+                signalType: "correction", fingerprint: "same-correction"
+            ))
+        }
+        for i in 0..<10 {
+            _ = try await store.appendFeedbackEvent(makeEvent(
+                signalType: "re_ask", fingerprint: "reask-\(i)"
+            ))
+        }
+
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "Directive tuning should return to idle")
+
+        // Directive should have been amended.
+        XCTAssertNotNil(writtenDirective, "Directive writer should have been called")
+        XCTAssertTrue(writtenDirective?.contains("Auto-tuned") ?? false)
+    }
+
+    /// On a directive tuning cycle, previous directive is stored for rollback.
+    func testDirectiveTuningStoresPreviousDirectiveForRollback() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 7
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        await coordinator.setDirectiveReader { "Original directive." }
+        await coordinator.setDirectiveWriter { _ in }
+
+        for _ in 0..<15 {
+            _ = try await store.appendFeedbackEvent(makeEvent(
+                signalType: "correction", fingerprint: "same-fix"
+            ))
+        }
+        for i in 0..<10 {
+            _ = try await store.appendFeedbackEvent(makeEvent(
+                signalType: "re_ask", fingerprint: "r-\(i)"
+            ))
+        }
+
+        try await coordinator.runCycle()
+
+        let storeState = try await store.readState()
+        XCTAssertEqual(storeState.previousDirective, "Original directive.")
+    }
+
+    /// rollbackDirective restores the previous directive.
+    func testRollbackDirectiveRestoresPrevious() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.previousDirective = "Before amendment."
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        var writtenDirective: String?
+        await coordinator.setDirectiveWriter { text in writtenDirective = text }
+
+        try await coordinator.rollbackDirective()
+
+        XCTAssertEqual(writtenDirective, "Before amendment.")
+        let storeState = try await store.readState()
+        XCTAssertNil(storeState.previousDirective, "Previous directive cleared after rollback")
+    }
+
     /// SecurityEventLogger closure is wired through the gate when used from coordinator.
     func testSecurityLogClosureWiredInGate() async throws {
         let store = try await makeTempStore()

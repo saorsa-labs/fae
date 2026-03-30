@@ -113,4 +113,17 @@ Phases 2.1, 2.2, and 2.3 all done.
 - Commits: 1ff32287, 0aad24a4
 
 ### Phase 3.1 Complete - Sun Mar 30 21:55:00 BST 2026
-### Phase 3.2 Starting...
+
+### Phase 3.2: External Agent Review Gate (Integration) -- COMPLETE
+- [x] Task 1: Wire SecurityEventLogger into ExternalReviewGate via closure injection (4 new tests)
+- [x] Task 2: Add deferralCount to ImprovementState + ImprovementStore schema migration (4 new tests)
+- [x] Task 3: Integrate ExternalReviewGate into ImprovementCycleCoordinator evaluating step (6 new tests)
+  - PASS → continue to proposing, reset deferrals
+  - CONCERN → increment deferral, return to idle
+  - FAIL → abort cycle, reset deferrals
+  - maxDeferralsReached → abort + reset deferrals
+- [x] Task 4: Build verification + 84 tests passing across 4 test suites
+- Commit: fbf4718f
+
+### Phase 3.2 Complete - Sun Mar 30 21:30:00 BST 2026
+### Phase 3.3 Starting...

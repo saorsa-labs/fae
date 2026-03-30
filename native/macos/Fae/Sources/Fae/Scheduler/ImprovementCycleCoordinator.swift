@@ -84,6 +84,9 @@ actor ImprovementCycleCoordinator {
     /// Number of user-approved cycles required before auto-deploy is earned.
     static let minCyclesForAutoDeploy = 5
 
+    /// Run directive-based fast tuning every N completed cycles.
+    static let directiveTuningInterval = 7
+
     // MARK: - Dependencies
 
     private let store: ImprovementStore
@@ -96,6 +99,14 @@ actor ImprovementCycleCoordinator {
     /// Set by FaeCore after wiring. Receives the new adapter path (nil = unload).
     /// Left nil in tests unless specific patcher behaviour is needed.
     var adapterPatchCallback: ((String?) -> Void)?
+
+    /// Closure to read the current directive text. Returns `nil` if no directive set.
+    /// Injected to decouple from the file system.
+    var directiveReader: (() throws -> String?)?
+
+    /// Closure to write a new directive text.
+    /// Injected to decouple from the file system.
+    var directiveWriter: ((_ text: String) throws -> Void)?
 
     // MARK: - Init
 
@@ -112,6 +123,16 @@ actor ImprovementCycleCoordinator {
     /// Set the adapter patch callback. Called by FaeCore after wiring.
     func setAdapterPatchCallback(_ callback: @escaping (String?) -> Void) {
         adapterPatchCallback = callback
+    }
+
+    /// Set the directive reader closure. Called by FaeCore or tests.
+    func setDirectiveReader(_ reader: @escaping () throws -> String?) {
+        directiveReader = reader
+    }
+
+    /// Set the directive writer closure. Called by FaeCore or tests.
+    func setDirectiveWriter(_ writer: @escaping (_ text: String) throws -> Void) {
+        directiveWriter = writer
     }
 
     // MARK: - State Machine
@@ -172,6 +193,66 @@ actor ImprovementCycleCoordinator {
         guard let startedStr = storeState.trainingStartedAt else { return false }
         guard let started = ISO8601DateFormatter().date(from: startedStr) else { return false }
         return Date().timeIntervalSince(started) > Self.maxTrainingDurationSeconds
+    }
+
+    // MARK: - Directive Tuning
+
+    /// Whether the next cycle should be a directive-tuning cycle instead of adapter training.
+    ///
+    /// Returns `true` every `directiveTuningInterval`th completed cycle.
+    func isDirectiveTuningCycle() async throws -> Bool {
+        let storeState: ImprovementState
+        do {
+            storeState = try await store.readState()
+        } catch {
+            return false
+        }
+        guard storeState.completedCycles > 0 else { return false }
+        return storeState.completedCycles % Self.directiveTuningInterval == 0
+    }
+
+    /// Run the directive-tuning sub-cycle: detect patterns and apply amendments.
+    ///
+    /// - Parameter events: The collected feedback events for this cycle.
+    /// - Returns: `true` if an amendment was applied, `false` otherwise.
+    private func runDirectiveTuning(events: [FeedbackEvent]) async throws -> Bool {
+        let patterns = DirectiveTuner.detectPatterns(events: events)
+        guard let amendment = DirectiveTuner.generateAmendment(patterns: patterns) else {
+            NSLog("ImprovementCycleCoordinator: directive tuning — no strong patterns found")
+            return false
+        }
+
+        let currentDirective = try? directiveReader?()
+        let updated = DirectiveTuner.applyAmendment(
+            amendment: amendment,
+            currentDirective: currentDirective
+        )
+
+        // Store previous directive for rollback.
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.previousDirective = currentDirective
+        try await store.writeState(state)
+
+        try directiveWriter?(updated)
+        NSLog("ImprovementCycleCoordinator: directive tuning — amendment applied (%d patterns)", patterns.count)
+        return true
+    }
+
+    /// Roll back the directive to the version before the last tuning amendment.
+    ///
+    /// Reads `previousDirective` from the improvement state and writes it back to the directive.
+    /// Clears `previousDirective` after rollback.
+    ///
+    /// - Throws: If the store is unavailable or directive writing fails.
+    func rollbackDirective() async throws {
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        let previous = state.previousDirective
+        try directiveWriter?(previous ?? "")
+        state.previousDirective = nil
+        try await store.writeState(state)
+        NSLog("ImprovementCycleCoordinator: directive rolled back")
     }
 
     // MARK: - Main Loop
@@ -253,6 +334,23 @@ actor ImprovementCycleCoordinator {
             return
         }
 
+        // Step 4b: DIRECTIVE TUNING — every 7th cycle, apply directive amendments instead of training.
+        if try await isDirectiveTuningCycle() {
+            NSLog("ImprovementCycleCoordinator: directive tuning cycle (every %d cycles)", Self.directiveTuningInterval)
+            do {
+                let applied = try await runDirectiveTuning(events: pendingEvents)
+                NSLog(
+                    "ImprovementCycleCoordinator: directive tuning %@ — returning to idle",
+                    applied ? "applied" : "skipped (no patterns)"
+                )
+            } catch {
+                NSLog("ImprovementCycleCoordinator: directive tuning failed: %@", error.localizedDescription)
+            }
+            // Directive tuning cycles skip training/eval/deploy entirely.
+            try await transition(to: .idle)
+            return
+        }
+
         // Step 5: TRAINING — delegate to training skill.
         // (Actual training integration deferred to Phase 2.3+; this establishes the state flow.)
         do {
@@ -325,7 +423,8 @@ actor ImprovementCycleCoordinator {
             completedCycles: 0, userApprovedCycles: 0,
             currentAdapterPath: nil, previousAdapterPath: nil,
             trainingStartedAt: nil, lastCycleError: nil,
-            deferralCount: 0
+            deferralCount: 0,
+            previousDirective: nil
         )
         let approved = storeStateForPropose.userApprovedCycles >= Self.minCyclesForAutoDeploy
 
