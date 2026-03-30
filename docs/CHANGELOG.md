@@ -2,6 +2,29 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## v0.8.183 — Autonomous Self-Improvement Loop (2026-03-30)
+
+### New Features
+- **Autonomous self-improvement loop**: Fae can now train, evaluate, and deploy LoRA adapters overnight without human intervention. Collects conversation corrections during the day, trains via mlx-tune, evaluates with FaeBenchmark (pure Swift), gets external agent review, and proposes improvements next morning.
+- **LoRA adapter loading**: MLXLLMEngine gains `loadAdapter(from:)`, `unloadAdapter()`, and `swapAdapter(to:)` methods via mlx-swift-lm's built-in LoRA support. Supports hot-swap without app restart.
+- **Adapter deployment via SelfConfigTool**: New `training.personal_adapter_path` and `training.adapter_auto_load_enabled` adjustable settings. FaeCore.patchConfig hot-swaps adapters on the running pipeline.
+- **FaeBenchmark --adapter flag**: Benchmark a LoRA adapter against the base model with per-metric comparison JSON output. Pre-flight path validation.
+- **ImprovementStore**: New `improvement.db` SQLite database (separate from fae.db and scheduler.db) with 5 tables: feedback_events, improvement_baselines, improvement_state, capability_gaps, shadow_eval.
+- **ImprovementCycleCoordinator**: Deterministic state machine actor (IDLE -> COLLECTING -> TRAINING -> EVALUATING -> PROPOSING -> DEPLOYING) with scheduler integration at 03:00 daily. Minimum data thresholds prevent overfitting on sparse data.
+- **Semi-automatic deployment**: Morning proposals tell the user specifically what improved. After 5 user-approved cycles, earns fully automatic deployment. Adapter rollback via current/previous path tracking.
+- **ImplicitFeedbackDetector**: 7 signal types captured from every conversation turn: re-ask, abandonment, follow-through, interruption, praise, topic change, silence acceptance. Feeds into ImprovementStore for DPO pair generation.
+- **ExternalReviewGate**: 3-provider fallback chain (Codex -> Claude Code -> internal self-review) with PASS/FAIL/CONCERN gate and 3-deferral maximum before force-deploy.
+- **DirectiveFastTuner**: Pattern-based directive amendments (every 7th cycle). Detects repeated corrections, persistent re-asks, abandonment clusters, and style preferences. Reversible via Git Vault.
+- **ShadowEvaluator**: Overnight-only replay on alternate nights from training. Compares base vs adapter responses. Promotion gate at 60% adapter win rate.
+- **ImprovementHealthReporter**: Self-diagnostic integration reports improvement loop health (last cycle, adapter version, eval scores, failed cycles).
+- **Git Vault backup**: improvement.db and trained adapter directory added to vault backup manifest.
+
+### Tests
+- 168 new improvement-related tests across 8 test suites
+- Integration tests covering full feedback -> training -> eval -> deploy round-trip
+
+---
+
 ## v0.8.181 — ASR Resilience + Self-Healing Skills + ACP Delegation (2026-03-30)
 
 ### Bug fixes

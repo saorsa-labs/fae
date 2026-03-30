@@ -185,6 +185,31 @@ Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 
 **Proactive tasks** (via `proactiveQueryHandler`): `overnight_work` (22:00-06:00), `enhanced_morning_briefing` (deferred until user detected after 07:00), `training_data_export`, `training_cycle`.
 
+**Improvement cycle** (via `ImprovementCycleCoordinator`): `improvement_cycle` runs nightly at 03:00 after backups complete. Alternates between training nights and shadow eval nights. Minimum data thresholds: 20 feedback events or 5 corrections required before training triggers.
+
+## Autonomous Self-Improvement Loop
+
+Fae autonomously improves via a deterministic overnight loop. No human intervention for routine improvement.
+
+```
+Collect corrections → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
+    → Evaluate (FaeBenchmark, pure Swift) → External review (Codex/Claude)
+    → Propose next morning → Deploy after approval
+```
+
+**Key components:**
+- `ImprovementCycleCoordinator` (actor): State machine IDLE -> COLLECTING -> TRAINING -> EVALUATING -> PROPOSING -> DEPLOYING with rollback
+- `ImprovementStore` (improvement.db): Separate SQLite database with 5 tables (feedback_events, improvement_baselines, improvement_state, capability_gaps, shadow_eval)
+- `ImplicitFeedbackDetector`: 7 signal types captured after each turn (re-ask, abandonment, follow-through, interruption, praise, topic_change, silence_acceptance)
+- `ExternalReviewGate`: 3-provider fallback (Codex -> Claude -> internal), PASS/FAIL/CONCERN with 3-deferral max
+- `DirectiveFastTuner`: Pattern-based directive amendments every 7th cycle (faster than model training)
+- `ShadowEvaluator`: Overnight replay on alternate nights, 60% win rate promotion gate
+- `AdapterDeploymentManager`: Semi-automatic mode (morning proposals), earned auto-deploy after 5 approved cycles
+
+**LoRA adapter loading:** MLXLLMEngine.loadAdapter(from:), unloadAdapter(), swapAdapter(to:). Uses mlx-swift-lm's built-in LoRAContainer. Hot-swap via SelfConfigTool `training.personal_adapter_path`.
+
+**Scheduler allowlist:** `improvement_cycle: ["activate_skill", "run_skill", "delegate_agent", "self_config"]`
+
 ## Tool system
 
 37 tools registered in `ToolRegistry.buildDefault()`:
@@ -553,6 +578,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `WakeWordAcousticDetector.swift` | Acoustic wake word detection |
 | `VoiceConversationPolicy.swift` | Voice conversation gating policy |
 | `VoiceTagParser.swift` | `<voice>` tag parser for multi-voice roleplay |
+| `ImplicitFeedbackDetector.swift` | 7 implicit feedback signal types (re-ask, abandonment, praise, etc.) |
 | `ConversationState.swift` | History management; `removeMessages(taggedWith:)` |
 | `TextProcessing.swift` | ThinkTagStripper, text cleanup utilities |
 
@@ -611,7 +637,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `ToolAnalytics.swift` | Tool usage analytics |
 | `ApprovedToolsStore.swift` | Persisted tool approval state |
 
-### Memory/ (13 files)
+### Memory/ (17 files)
 
 | File | Role |
 |------|------|
@@ -628,8 +654,12 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `EntityContextFormatter.swift` | Format entity profiles with relationship edges |
 | `MemoryDigestService.swift` | Memory digest generation |
 | `MemoryInboxService.swift` | Memory inbox file ingestion |
+| `ImprovementStore.swift` | improvement.db: feedback_events, baselines, state, gaps, shadow_eval |
+| `ExternalReviewGate.swift` | 3-provider fallback review chain (Codex/Claude/internal) |
+| `DirectiveFastTuner.swift` | Pattern-based directive amendments from feedback analysis |
+| `ShadowEvaluator.swift` | Overnight shadow eval with 60% win rate promotion gate |
 
-### Scheduler/ (7 files)
+### Scheduler/ (10 files)
 
 | File | Role |
 |------|------|
@@ -640,6 +670,9 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `ProactivePolicyEngine.swift` | Proactive dispatch policy |
 | `SchedulerPersistenceStore.swift` | Scheduler state persistence |
 | `TaskRunLedger.swift` | Task idempotency and run tracking |
+| `ImprovementCycleCoordinator.swift` | Deterministic state machine for autonomous improvement loop |
+| `AdapterDeploymentManager.swift` | Semi-auto deploy with earned auto-deploy after 5 cycles |
+| `ImprovementHealthReporter.swift` | Self-diagnostic integration for improvement loop health |
 
 ### Skills/ (7 files)
 
@@ -757,7 +790,7 @@ Known blockers: dependency fetch requires network; first app run blocks on model
 
 See `docs/CHANGELOG.md` for detailed milestone history.
 
-Current: v1.4.2 — ACP integration, channel adapters, training pipeline, skill hardening.
+Current: v0.8.183 — Autonomous self-improvement loop, LoRA adapter loading, implicit feedback, shadow eval.
 
 ## Design System
 
