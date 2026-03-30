@@ -286,6 +286,8 @@ actor ImprovementCycleCoordinator {
                 storeStateForPropose.userApprovedCycles
             )
             do {
+                // Must go evaluating → proposing → deploying (state machine rules).
+                try await transition(to: .proposing)
                 try await transition(to: .deploying)
                 try await performDeploy(approved: true)
             } catch {
