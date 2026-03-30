@@ -171,55 +171,6 @@ final class HostCommandBridge: ObservableObject {
         )
         observations.append(
             center.addObserver(
-                forName: .faeApprovalRespond,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                guard let requestId = notification.userInfo?["request_id"],
-                      let approved = notification.userInfo?["approved"] as? Bool
-                else { return }
-                var payload: [String: Any] = ["request_id": requestId, "approved": approved]
-                if let decision = notification.userInfo?["decision"] as? String {
-                    payload["decision"] = decision
-                }
-                if let toolName = notification.userInfo?["tool_name"] as? String {
-                    payload["tool_name"] = toolName
-                }
-                NSLog(
-                    "HostCommandBridge: approval.respond request_id=%@ approved=%@ decision=%@ tool=%@",
-                    String(describing: requestId),
-                    String(describing: approved),
-                    String(describing: payload["decision"]),
-                    String(describing: payload["tool_name"])
-                )
-                Task { @MainActor in
-                    self?.dispatch("approval.respond", payload: payload)
-                }
-            }
-        )
-        observations.append(
-            center.addObserver(
-                forName: .faeBatchApprovalRespond,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                guard let batchId = notification.userInfo?["batch_id"] as? String,
-                      let approved = notification.userInfo?["approved"] as? Bool
-                else { return }
-                NSLog(
-                    "HostCommandBridge: approval.batch_respond batch_id=%@ approved=%@",
-                    batchId, String(describing: approved)
-                )
-                Task { @MainActor in
-                    self?.dispatch("approval.batch_respond", payload: [
-                        "batch_id": batchId,
-                        "approved": approved,
-                    ])
-                }
-            }
-        )
-        observations.append(
-            center.addObserver(
                 forName: .faeGovernanceActionRequested,
                 object: nil,
                 queue: .main

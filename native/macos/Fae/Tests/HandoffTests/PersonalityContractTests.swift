@@ -152,11 +152,11 @@ final class PersonalityContractTests: XCTestCase {
 
     func testVisibleSkillAndApprovalCopyPreservesProgressiveDisclosure() throws {
         let skillsTab = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsSkillsTab.swift")
-        let approvalOverlay = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ApprovalOverlayView.swift")
+        let inputOverlay = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputOverlayView.swift")
 
         XCTAssertTrue(skillsTab.contains("Personal skills are first-class here: create, edit, import, and remove them directly."))
         XCTAssertTrue(skillsTab.contains("Built-in and Apple integrations are still available, but tucked away so the screen stays focused."))
-        XCTAssertTrue(approvalOverlay.contains("Use the popup to confirm. Settings are for review and revocation."))
+        XCTAssertTrue(inputOverlay.contains("Use the popup to confirm. Settings are for review and revocation."))
     }
 
     private func loadRepositoryText(relativePath: String) throws -> String {

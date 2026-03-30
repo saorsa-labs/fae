@@ -39,7 +39,7 @@ final class TestServer {
     private weak var faeCore: FaeCore?
     private weak var debugConsole: DebugConsoleController?
     private weak var conversation: ConversationController?
-    private weak var approvalOverlay: ApprovalOverlayController?
+    private weak var inputOverlay: InputOverlayController?
     private weak var auxiliaryWindows: AuxiliaryWindowManager?
     private weak var coworkWindow: CoworkWindowController?
     private var injectedTurnMuteDepth: Int = 0
@@ -51,14 +51,14 @@ final class TestServer {
         faeCore: FaeCore,
         debugConsole: DebugConsoleController,
         conversation: ConversationController,
-        approvalOverlay: ApprovalOverlayController,
+        inputOverlay: InputOverlayController,
         auxiliaryWindows: AuxiliaryWindowManager,
         coworkWindow: CoworkWindowController
     ) {
         self.faeCore = faeCore
         self.debugConsole = debugConsole
         self.conversation = conversation
-        self.approvalOverlay = approvalOverlay
+        self.inputOverlay = inputOverlay
         self.auxiliaryWindows = auxiliaryWindows
         self.coworkWindow = coworkWindow
     }
@@ -298,8 +298,6 @@ final class TestServer {
         let hasOwnerSetUp = faeCore?.hasOwnerSetUp ?? false
         let isListening = conversation?.isListening ?? false
         let approvalVisible = auxiliaryWindows?.isApprovalVisible ?? false
-        let approvalToolName = approvalOverlay?.activeApproval?.toolName
-        let approvalRequestID = approvalOverlay?.activeApproval?.id
 
         // Derive policy profile label from tool mode.
         let policyProfile: String
@@ -319,8 +317,6 @@ final class TestServer {
             "hasOwnerSetUp": hasOwnerSetUp,
             "isListening": isListening,
             "approvalVisible": approvalVisible,
-            "approvalToolName": approvalToolName as Any,
-            "approvalRequestId": approvalRequestID as Any,
             "policyProfile": policyProfile,
             "operatorLoaded": FaeEnvironment.defaults.bool(forKey: "fae.runtime.operator_loaded"),
         ])
@@ -380,7 +376,7 @@ final class TestServer {
         Task { @MainActor [weak self] in
             let isSpeaking = await self?.faeCore?.isSpeaking() ?? false
             let hasDeferredTools = await self?.faeCore?.hasPendingDeferredTools() ?? false
-            let activeInput = self?.approvalOverlay?.activeInput
+            let activeInput = self?.inputOverlay?.activeInput
             self?.sendResponse(connection: connection, status: 200, body: [
                 "messages": serialized,
                 "isGenerating": isGenerating,
@@ -594,7 +590,7 @@ final class TestServer {
     }
 
     private func handleInputs(connection: NWConnection) {
-        let pending = approvalOverlay?.activeInput.map(Self.serializeInputRequest(_:)).map { [$0] } ?? []
+        let pending = inputOverlay?.activeInput.map(Self.serializeInputRequest(_:)).map { [$0] } ?? []
         sendResponse(connection: connection, status: 200, body: [
             "pending": pending,
         ])
@@ -623,7 +619,7 @@ final class TestServer {
             await self.faeCore?.clearPendingApprovalsForTest()
             await self.faeCore?.clearAllToolApprovalsForTest()
             await self.faeCore?.clearUserSchedulerTasksForTest()
-            self.approvalOverlay?.cancelInput()
+            self.inputOverlay?.cancelInput()
 
             self.sendResponse(connection: connection, status: 200, body: [
                 "ok": true,
@@ -816,7 +812,7 @@ final class TestServer {
     }
 
     private func handleInputResponse(body: Data?, connection: NWConnection) {
-        guard let request = approvalOverlay?.activeInput else {
+        guard let request = inputOverlay?.activeInput else {
             sendResponse(connection: connection, status: 404, body: ["error": "no active input request"])
             return
         }
@@ -832,7 +828,7 @@ final class TestServer {
             let values = rawFormValues.reduce(into: [String: String]()) { partial, entry in
                 partial[entry.key] = "\(entry.value)"
             }
-            approvalOverlay?.submitForm(values: values)
+            inputOverlay?.submitForm(values: values)
             sendResponse(connection: connection, status: 200, body: [
                 "ok": true,
                 "request_id": requestID,
@@ -844,7 +840,7 @@ final class TestServer {
 
         let text = json["text"] as? String ?? ""
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            approvalOverlay?.cancelInput()
+            inputOverlay?.cancelInput()
             sendResponse(connection: connection, status: 200, body: [
                 "ok": true,
                 "request_id": requestID,
@@ -855,7 +851,7 @@ final class TestServer {
             return
         }
 
-        approvalOverlay?.submitInput(text: text)
+        inputOverlay?.submitInput(text: text)
         sendResponse(connection: connection, status: 200, body: [
             "ok": true,
             "request_id": requestID,
@@ -1141,7 +1137,7 @@ final class TestServer {
         return ids.count
     }
 
-    private static func serializeInputRequest(_ request: ApprovalOverlayController.InputRequest) -> [String: Any] {
+    private static func serializeInputRequest(_ request: InputOverlayController.InputRequest) -> [String: Any] {
         let fields: [[String: Any]] = request.fields.map { field in
             var payload: [String: Any] = [
                 "id": field.id,

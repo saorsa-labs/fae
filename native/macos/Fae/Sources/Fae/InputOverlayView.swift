@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Compact floating card displayed near the orb for approvals and input requests.
-struct ApprovalOverlayView: View {
-    @ObservedObject var controller: ApprovalOverlayController
+/// Compact floating card displayed near the orb for input requests, tool-mode prompts,
+/// and governance confirmations.
+struct InputOverlayView: View {
+    @ObservedObject var controller: InputOverlayController
 
     var body: some View {
         VStack(spacing: 8) {
@@ -30,30 +31,8 @@ struct ApprovalOverlayView: View {
                         insertion: .move(edge: .bottom).combined(with: .opacity),
                         removal: .opacity
                     ))
-            } else if let request = controller.activeBatchApproval {
-                BatchApprovalCard(request: request, controller: controller)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .opacity
-                    ))
-            } else if let request = controller.activeApproval {
-                Group {
-                    if request.isDisasterLevel {
-                        DisasterWarningCard(request: request, controller: controller)
-                    } else if request.manualOnly {
-                        ManualApprovalCard(request: request, controller: controller)
-                    } else {
-                        ApprovalCard(request: request, controller: controller)
-                    }
-                }
-                .transition(.asymmetric(
-                    insertion: .move(edge: .bottom).combined(with: .opacity),
-                    removal: .opacity
-                ))
             }
         }
-        .animation(.spring(duration: 0.3), value: controller.activeApproval?.id)
-        .animation(.spring(duration: 0.3), value: controller.activeBatchApproval?.id)
         .animation(.spring(duration: 0.3), value: controller.activeInput?.id)
         .animation(.spring(duration: 0.3), value: controller.activeToolModeRequest?.id)
         .animation(.spring(duration: 0.3), value: controller.activeGovernanceConfirmation?.id)
@@ -74,147 +53,11 @@ private struct DismissOverlayButton: View {
     }
 }
 
-// MARK: - Approval Card
-
-private struct ApprovalCard: View {
-    let request: ApprovalOverlayController.ApprovalRequest
-    let controller: ApprovalOverlayController
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Text("Permission Required")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
-
-            Text(request.description)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.primary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            Text("Say no, yes, or always.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 8) {
-                Button(action: { controller.deny() }) {
-                    Text("No")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.bordered)
-                .tint(FaeDesign.rowanBerryText)
-                .keyboardShortcut(.escape, modifiers: [])
-
-                Button(action: { controller.approve() }) {
-                    Text("Yes")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(FaeDesign.glenGreenText)
-
-                Button(action: { controller.approveAlways() }) {
-                    Text("Always")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(FaeDesign.heatherMistText)
-            }
-        }
-        .padding(14)
-        .frame(width: 300)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .topTrailing) {
-            DismissOverlayButton(action: controller.deny)
-                .padding(.top, 10)
-                .padding(.trailing, 10)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-    }
-}
-
-// MARK: - Batch Approval Card
-
-/// Grouped approval card for scripts that invoke the same tool multiple times.
-/// Shows the tool name and count, with Allow All / Deny All buttons.
-/// Never used for manual-only or disaster-level requests.
-private struct BatchApprovalCard: View {
-    let request: ApprovalOverlayController.BatchApprovalDisplayRequest
-    let controller: ApprovalOverlayController
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Text("Batch Permission Required")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
-
-            Text("\(request.toolName) wants to run \(request.count) times")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.primary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            Text(request.description)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            Text("Say no or yes, or press a button.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-
-            HStack(spacing: 8) {
-                Button(action: { controller.denyBatch() }) {
-                    Text("Deny All")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.bordered)
-                .tint(FaeDesign.rowanBerryText)
-                .keyboardShortcut(.escape, modifiers: [])
-
-                Button(action: { controller.approveBatch() }) {
-                    Text("Allow All (\(request.count))")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(FaeDesign.glenGreenText)
-            }
-        }
-        .padding(14)
-        .frame(width: 320)
-        .background(.ultraThinMaterial)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.blue.opacity(0.4), lineWidth: 1)
-        )
-        .overlay(alignment: .topTrailing) {
-            DismissOverlayButton(action: controller.denyBatch)
-                .padding(.top, 10)
-                .padding(.trailing, 10)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
-    }
-}
-
 // MARK: - Governance Confirmation Card
 
 private struct GovernanceConfirmationCard: View {
-    let request: ApprovalOverlayController.GovernanceConfirmationRequest
-    let controller: ApprovalOverlayController
+    let request: InputOverlayController.GovernanceConfirmationRequest
+    let controller: InputOverlayController
 
     var body: some View {
         VStack(spacing: 10) {
@@ -271,8 +114,8 @@ private struct GovernanceConfirmationCard: View {
 // MARK: - Tool Mode Card
 
 private struct ToolModeCard: View {
-    let request: ApprovalOverlayController.ToolModeRequest
-    let controller: ApprovalOverlayController
+    let request: InputOverlayController.ToolModeRequest
+    let controller: InputOverlayController
 
     private var title: String {
         if request.reason.contains("owner_enrollment_required") {
@@ -429,141 +272,11 @@ private struct ToolModeCard: View {
     }
 }
 
-// MARK: - Manual Approval Card (damage-control confirm_manual tier)
-
-/// Standard manual-only confirmation. No voice hint, no "Always" / "Allow All".
-/// Used when the operation is dangerous but has legitimate uses (sudo delete, pipe-shell, etc.).
-private struct ManualApprovalCard: View {
-    let request: ApprovalOverlayController.ApprovalRequest
-    let controller: ApprovalOverlayController
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Text("Manual Approval Required")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.orange)
-
-            Text(request.description)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.primary)
-                .lineLimit(3)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            Text("This operation requires a deliberate button press. Voice approval is not accepted.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
-            HStack(spacing: 8) {
-                Button(action: { controller.deny() }) {
-                    Text("No")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.bordered)
-                .tint(FaeDesign.rowanBerryText)
-                .keyboardShortcut(.escape, modifiers: [])
-
-                Button(action: { controller.approve() }) {
-                    Text("Proceed")
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(FaeDesign.faeGoldText)
-            }
-        }
-        .padding(14)
-        .frame(width: 320)
-        .background(.ultraThinMaterial)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.orange.opacity(0.6), lineWidth: 1.5)
-        )
-        .overlay(alignment: .topTrailing) {
-            DismissOverlayButton(action: controller.deny)
-                .padding(.top, 10)
-                .padding(.trailing, 10)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: FaeDesign.faeGold.opacity(0.15), radius: 8, y: 4)
-    }
-}
-
-// MARK: - Disaster Warning Card (damage-control disaster tier)
-
-/// Extreme manual-only overlay for catastrophic, irreversible operations.
-/// Red border, bold DISASTER WARNING header. No voice, no "Always", no timeout.
-/// Only a deliberate physical click on "Proceed Anyway" can approve.
-private struct DisasterWarningCard: View {
-    let request: ApprovalOverlayController.ApprovalRequest
-    let controller: ApprovalOverlayController
-
-    var body: some View {
-        VStack(spacing: 12) {
-            VStack(spacing: 4) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 22))
-                    .foregroundColor(.red)
-
-                Text("DISASTER WARNING")
-                    .font(.system(size: 13, weight: .heavy))
-                    .foregroundColor(.red)
-            }
-
-            Text(request.description)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.primary)
-                .lineLimit(4)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            Text("This operation is IRREVERSIBLE. Voice approval is not accepted.\nOnly click \"Proceed Anyway\" if you are absolutely certain.")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.red.opacity(0.85))
-                .multilineTextAlignment(.center)
-
-            HStack(spacing: 8) {
-                Button(action: { controller.deny() }) {
-                    Text("Cancel")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(FaeDesign.glenGreenText)
-                .keyboardShortcut(.escape, modifiers: [])
-
-                Button(action: { controller.approve() }) {
-                    Text("Proceed Anyway")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(FaeDesign.rowanBerryText)
-            }
-        }
-        .padding(16)
-        .frame(width: 360)
-        .background(.ultraThinMaterial)
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.red.opacity(0.8), lineWidth: 2)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(color: FaeDesign.rowanBerry.opacity(0.2), radius: 12, y: 6)
-    }
-}
-
 // MARK: - Input Card
 
 private struct InputCard: View {
-    let request: ApprovalOverlayController.InputRequest
-    let controller: ApprovalOverlayController
+    let request: InputOverlayController.InputRequest
+    let controller: InputOverlayController
 
     @State private var inputText: String = ""
     @FocusState private var isFocused: Bool
@@ -573,7 +286,7 @@ private struct InputCard: View {
     private static let cardFill = FaeDesign.surfaceCard.opacity(0.96)
     private static let cardStroke = Color.primary.opacity(0.12)
 
-    private var field: ApprovalOverlayController.InputField {
+    private var field: InputOverlayController.InputField {
         request.fields.first ?? .init(
             id: "text",
             label: "Value",
@@ -608,7 +321,7 @@ private struct InputCard: View {
             Group {
                 if field.isSecure {
                     SecureField(
-                        field.placeholder.isEmpty ? "Enter value…" : field.placeholder,
+                        field.placeholder.isEmpty ? "Enter value..." : field.placeholder,
                         text: $inputText
                     )
                     .textFieldStyle(.plain)
@@ -617,7 +330,7 @@ private struct InputCard: View {
                 } else if field.isMultiline {
                     ZStack(alignment: .topLeading) {
                         if inputText.isEmpty {
-                            Text(field.placeholder.isEmpty ? "Paste or type here…" : field.placeholder)
+                            Text(field.placeholder.isEmpty ? "Paste or type here..." : field.placeholder)
                                 .font(.system(size: 13, design: .monospaced))
                                 .foregroundColor(.secondary.opacity(0.5))
                                 .padding(.horizontal, 6)
@@ -631,7 +344,7 @@ private struct InputCard: View {
                     .frame(height: 100)
                 } else {
                     TextField(
-                        field.placeholder.isEmpty ? "Enter value…" : field.placeholder,
+                        field.placeholder.isEmpty ? "Enter value..." : field.placeholder,
                         text: $inputText
                     )
                     .textFieldStyle(.plain)
@@ -679,7 +392,7 @@ private struct InputCard: View {
             }
 
             if field.isMultiline {
-                Text("⌘Return to submit")
+                Text("Cmd+Return to submit")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.6))
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -713,8 +426,8 @@ private struct InputCard: View {
 }
 
 private struct FormInputCard: View {
-    let request: ApprovalOverlayController.InputRequest
-    let controller: ApprovalOverlayController
+    let request: InputOverlayController.InputRequest
+    let controller: InputOverlayController
 
     @State private var values: [String: String] = [:]
     @State private var validationMessage: String?
@@ -761,7 +474,7 @@ private struct FormInputCard: View {
                         } else if field.isMultiline {
                             ZStack(alignment: .topLeading) {
                                 if (values[field.id] ?? "").isEmpty {
-                                    Text(field.placeholder.isEmpty ? "Paste or type here…" : field.placeholder)
+                                    Text(field.placeholder.isEmpty ? "Paste or type here..." : field.placeholder)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.secondary.opacity(0.5))
                                         .padding(.horizontal, 6)
@@ -825,7 +538,7 @@ private struct FormInputCard: View {
             }
 
             if hasMultilineField {
-                Text("⌘Return to submit")
+                Text("Cmd+Return to submit")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.6))
                     .frame(maxWidth: .infinity, alignment: .trailing)

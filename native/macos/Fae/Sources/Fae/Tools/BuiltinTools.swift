@@ -134,13 +134,8 @@ struct BashTool: Tool {
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"bash","arguments":{"command":"ls -la ~/Documents"}}</tool_call>"#
 
-    /// Approval description including command classification.
-    ///
-    /// Called by `PipelineCoordinator` to build a richer approval card.
+    /// Description of the bash command for narration/logging.
     static func approvalDescription(for command: String) -> String {
-        if let warning = InputSanitizer.classifyBashCommand(command) {
-            return "\(warning)\nCommand: \(command)"
-        }
         return "Command: \(command)"
     }
 
@@ -675,10 +670,6 @@ struct FetchURLTool: Tool {
             return .error("URL must start with http:// or https://")
         }
 
-        if let blockedReason = Self.blockedReason(for: urlString) {
-            return .error(blockedReason)
-        }
-
         // Open in browser if requested.
         let shouldOpen = input["open_in_browser"] as? Bool ?? false
         if shouldOpen, let url = URL(string: urlString) {
@@ -818,7 +809,7 @@ struct InputRequestTool: Tool {
 /// the caller until the user responds.
 ///
 /// Acts as a coordination point between `InputRequestTool` (called by the LLM
-/// during tool execution) and `ApprovalOverlayController` (the SwiftUI overlay
+/// during tool execution) and `InputOverlayController` (the SwiftUI overlay
 /// that shows the input card and posts responses back).
 ///
 /// `PipelineCoordinator.inputRequired()` also uses this bridge so that both

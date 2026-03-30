@@ -149,7 +149,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let auxiliaryWindows = AuxiliaryWindowManager()
     let onboarding = OnboardingController()
     let jitPermissions = JitPermissionController()
-    let approvalOverlay = ApprovalOverlayController()
+    let inputOverlay = InputOverlayController()
     let sparkleUpdater = SparkleUpdaterController()
     let relayServer = FaeRelayServer()
     let aboutWindow = AboutWindowController()
@@ -250,8 +250,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             coworkWindow?.currentWindow
         }
         auxiliaryWindows.observeWindowState()
-        auxiliaryWindows.approvalController = approvalOverlay
-        auxiliaryWindows.observeApprovalController()
+        auxiliaryWindows.inputController = inputOverlay
+        auxiliaryWindows.observeInputController()
         auxiliaryWindows.debugConsoleController = debugConsole
         faeCore.setDebugConsole(debugConsole)
         debugLog(debugConsole, .qa, "Build marker: tool-mode-popup-v1")
@@ -313,7 +313,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         let localRuntimeServer = FaeLocalRuntimeServer(
             faeCore: faeCore,
             conversation: coworkConversation,
-            approvalOverlay: approvalOverlay
+            inputOverlay: inputOverlay
         )
         self.localRuntimeServer = localRuntimeServer
         coworkWindow.runtimeDescriptor = localRuntimeServer.descriptor
@@ -526,7 +526,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 faeCore: faeCore,
                 debugConsole: debugConsole,
                 conversation: conversation,
-                approvalOverlay: approvalOverlay,
+                inputOverlay: inputOverlay,
                 auxiliaryWindows: auxiliaryWindows,
                 coworkWindow: coworkWindow
             )

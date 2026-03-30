@@ -65,11 +65,11 @@ final class AuxiliaryWindowManager: ObservableObject {
     weak var canvasController: CanvasController?
     weak var windowState: WindowStateController?
     weak var subtitleState: SubtitleStateController?
-    var approvalController: ApprovalOverlayController?
+    var inputController: InputOverlayController?
     var coworkWindowProvider: (() -> NSWindow?)?
 
     private var modeCancellable: AnyCancellable?
-    private var approvalCancellable: AnyCancellable?
+    private var inputCancellable: AnyCancellable?
     private var coworkRoutingCancellable: AnyCancellable?
     private var canvasPanelDelegate: PanelCloseDelegate?
     private var isCoworkConversationActive: Bool = false
@@ -102,19 +102,18 @@ final class AuxiliaryWindowManager: ObservableObject {
             }
     }
 
-    /// Wire up observation of approval controller state. Call once after
-    /// `approvalController` is set.
-    func observeApprovalController() {
-        guard let controller = approvalController else { return }
-        approvalCancellable = Publishers.CombineLatest4(
-            controller.$activeApproval,
+    /// Wire up observation of input overlay controller state. Call once after
+    /// `inputController` is set.
+    func observeInputController() {
+        guard let controller = inputController else { return }
+        inputCancellable = Publishers.CombineLatest3(
             controller.$activeInput,
             controller.$activeToolModeRequest,
             controller.$activeGovernanceConfirmation
         )
         .receive(on: RunLoop.main)
-        .sink { [weak self] approval, input, toolMode, governance in
-            if approval != nil || input != nil || toolMode != nil || governance != nil {
+        .sink { [weak self] input, toolMode, governance in
+            if input != nil || toolMode != nil || governance != nil {
                 self?.showApproval()
             } else {
                 self?.hideApproval()
@@ -210,8 +209,8 @@ final class AuxiliaryWindowManager: ObservableObject {
     // MARK: - Approval Overlay
 
     func showApproval() {
-        guard let controller = approvalController else { return }
-        if approvalPanel == nil { approvalPanel = makeApprovalPanel(controller: controller) }
+        guard let controller = inputController else { return }
+        if approvalPanel == nil { approvalPanel = makeInputPanel(controller: controller) }
         guard let panel = approvalPanel else { return }
 
         let anchorWindow: NSWindow?
@@ -256,13 +255,11 @@ final class AuxiliaryWindowManager: ObservableObject {
         isApprovalVisible = true
     }
 
-    /// Deny any pending tool approval and send a `runtime.stop` command to the pipeline.
+    /// Send a `runtime.stop` command to the pipeline.
     ///
     /// Intended as an emergency kill-switch — call this when Fae is misbehaving
-    /// during tool execution. Denying the approval prevents any pending tool from
-    /// running; stopping the runtime halts generation completely.
+    /// during tool execution. Stopping the runtime halts generation completely.
     func emergencyStop() {
-        approvalController?.deny()
         NotificationCenter.default.post(name: .faeEmergencyStop, object: nil)
     }
 
@@ -489,17 +486,17 @@ final class AuxiliaryWindowManager: ObservableObject {
         return panel
     }
 
-    private func makeApprovalPanel(controller: ApprovalOverlayController) -> NSPanel {
+    private func makeInputPanel(controller: InputOverlayController) -> NSPanel {
         let size = NSSize(width: 340, height: 300)
-        // Use InteractivePanel so approval buttons (Yes/No, Enable Tools) receive clicks.
-        // Plain NSPanel with .nonactivatingPanel has canBecomeKey=false → clicks silently dropped.
+        // Use InteractivePanel so input buttons (Submit/Cancel, Enable Tools) receive clicks.
+        // Plain NSPanel with .nonactivatingPanel has canBecomeKey=false -> clicks silently dropped.
         let panel = InteractivePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .utilityWindow, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.title = "Approval"
+        panel.title = "Input"
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -507,7 +504,7 @@ final class AuxiliaryWindowManager: ObservableObject {
         panel.backgroundColor = .clear
         panel.hasShadow = false
 
-        let view = ApprovalOverlayView(controller: controller)
+        let view = InputOverlayView(controller: controller)
         embedSwiftUI(view.preferredColorScheme(.dark), in: panel)
         return panel
     }

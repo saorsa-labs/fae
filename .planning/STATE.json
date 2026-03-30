@@ -1,27 +1,21 @@
 {
   "version": 1,
-  "project": "autonomous-self-improvement-loop",
-  "active": false,
+  "project": "Fae Permissions Great Purge",
+  "active": true,
   "milestone": {
-    "number": 4,
-    "name": "Shadow Eval + Hardening"
+    "number": 1,
+    "name": "Delete & Refactor"
   },
   "phase": {
-    "number": "4.3",
-    "name": "Full Test Suite",
-    "plan": null,
-    "status": "complete"
+    "number": "1.2",
+    "name": "Refactor ApprovalOverlay into InputOverlay",
+    "plan": "PLAN-phase-1.2.md"
   },
-  "task": {
-    "current": 3,
-    "total": 3,
-    "name": "Integration tests"
+  "progress": {
+    "total_tasks": 9,
+    "completed_tasks": 9,
+    "current_task": null
   },
-  "review": {
-    "status": "passed",
-    "iteration": 1,
-    "last_verdict": "PASS"
-  },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-30T22:45:00Z"
+  "status": "phase_transition",
+  "last_updated": "2026-03-31T01:00:00Z"
 }

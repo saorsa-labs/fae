@@ -234,38 +234,6 @@ final class BackendEventRouter: Sendable {
                 userInfo: payload
             )
 
-        // MARK: - Tool Approval
-
-        case "approval.requested":
-            var userInfo: [String: Any] = ["event": event]
-            if let requestId = payload["request_id"] { userInfo["request_id"] = requestId }
-            if let toolName = payload["tool_name"] as? String { userInfo["tool_name"] = toolName }
-            if let inputJson = payload["input_json"] as? String { userInfo["input_json"] = inputJson }
-            if let manualOnly = payload["manual_only"] as? Bool { userInfo["manual_only"] = manualOnly }
-            if let disasterLevel = payload["disaster_level"] as? Bool { userInfo["disaster_level"] = disasterLevel }
-            NotificationCenter.default.post(
-                name: .faeApprovalRequested, object: nil, userInfo: userInfo
-            )
-
-        case "approval.resolved":
-            var userInfo: [String: Any] = ["event": event]
-            if let requestId = payload["request_id"] { userInfo["request_id"] = requestId }
-            if let approved = payload["approved"] as? Bool { userInfo["approved"] = approved }
-            if let source = payload["source"] as? String { userInfo["source"] = source }
-            NotificationCenter.default.post(
-                name: .faeApprovalResolved, object: nil, userInfo: userInfo
-            )
-
-        case "approval.batch_requested":
-            var userInfo: [String: Any] = ["event": event]
-            if let batchId = payload["batch_id"] as? String { userInfo["batch_id"] = batchId }
-            if let toolName = payload["tool_name"] as? String { userInfo["tool_name"] = toolName }
-            if let count = payload["count"] { userInfo["count"] = count }
-            if let description = payload["description"] as? String { userInfo["description"] = description }
-            NotificationCenter.default.post(
-                name: .faeBatchApprovalRequested, object: nil, userInfo: userInfo
-            )
-
         // MARK: - Pipeline State (all remaining pipeline.* events)
 
         default:
@@ -437,42 +405,6 @@ extension Notification.Name {
     /// - `message: String?` — error description for `"error"`
     static let faeRuntimeProgress = Notification.Name("faeRuntimeProgress")
 
-    // MARK: Tool Approval
-
-    /// Posted when a tool requests approval before execution.
-    ///
-    /// userInfo keys:
-    /// - `event: String` — `"approval.requested"`
-    /// - `request_id: UInt64` — unique approval request identifier
-    /// - `tool_name: String` — the tool requesting approval
-    /// - `input_json: String?` — JSON-encoded tool arguments
-    static let faeApprovalRequested = Notification.Name("faeApprovalRequested")
-
-    /// Posted when a tool approval is resolved (voice, button, or timeout).
-    ///
-    /// userInfo keys:
-    /// - `event: String` — `"approval.resolved"`
-    /// - `request_id: UInt64` — the resolved request identifier
-    /// - `approved: Bool` — whether the tool was approved
-    /// - `source: String` — `"voice"`, `"button"`, or `"timeout"`
-    static let faeApprovalResolved = Notification.Name("faeApprovalResolved")
-
-    /// Posted when a batch of tool approvals is requested at once.
-    ///
-    /// userInfo keys:
-    /// - `batch_id: String` — unique batch identifier
-    /// - `tool_name: String` — the tool being batch-approved
-    /// - `count: Int` — number of actions in the batch
-    /// - `description: String` — representative description
-    static let faeBatchApprovalRequested = Notification.Name("faeBatchApprovalRequested")
-
-    /// Posted when the user responds to a batch approval request.
-    ///
-    /// userInfo keys:
-    /// - `batch_id: String` — the batch identifier
-    /// - `approved: Bool` — whether the batch was approved
-    static let faeBatchApprovalRespond = Notification.Name("faeBatchApprovalRespond")
-
     // MARK: Tool Mode Upgrade
 
     /// Posted by PipelineCoordinator when tools are needed but blocked.
@@ -482,7 +414,7 @@ extension Notification.Name {
     /// - `reason: String` — why tools are blocked (e.g. "toolMode=off", "owner_enrollment_required")
     static let faeToolModeUpgradeRequested = Notification.Name("faeToolModeUpgradeRequested")
 
-    /// Posted by ApprovalOverlayController when the user responds to a tool-mode popup.
+    /// Posted by InputOverlayController when the user responds to a tool-mode popup.
     ///
     /// userInfo keys:
     /// - `action: String` — "set_mode", "start_enrollment", "open_settings", or "dismiss"

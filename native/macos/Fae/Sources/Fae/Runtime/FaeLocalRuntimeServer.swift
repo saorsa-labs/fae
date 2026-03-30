@@ -11,7 +11,6 @@ struct FaeLocalRuntimeDescriptor: Sendable {
 final class FaeLocalRuntimeServer {
     private enum ChatOutcome {
         case completed(String)
-        case pendingApproval(String)
         case timedOut(String?)
     }
 
@@ -25,7 +24,7 @@ final class FaeLocalRuntimeServer {
     private var listener: NWListener?
     private weak var faeCore: FaeCore?
     private weak var conversation: ConversationController?
-    private weak var approvalOverlay: ApprovalOverlayController?
+    private weak var inputOverlay: InputOverlayController?
 
     let descriptor: FaeLocalRuntimeDescriptor
     private let port: UInt16
@@ -33,12 +32,12 @@ final class FaeLocalRuntimeServer {
     init(
         faeCore: FaeCore,
         conversation: ConversationController,
-        approvalOverlay: ApprovalOverlayController,
+        inputOverlay: InputOverlayController,
         port: UInt16 = 7434
     ) {
         self.faeCore = faeCore
         self.conversation = conversation
-        self.approvalOverlay = approvalOverlay
+        self.inputOverlay = inputOverlay
         self.port = port
         self.descriptor = FaeLocalRuntimeDescriptor(
             baseURL: URL(string: "http://127.0.0.1:\(port)")!,
@@ -177,7 +176,6 @@ final class FaeLocalRuntimeServer {
 
         let requestID = "chatcmpl-\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
         let startedAt = Date()
-        let baselineApprovalID = approvalOverlay?.activeApproval?.id
 
         conversation.lastInteractionTimestamp = Date()
         setCoworkConversationRouting(active: true)
@@ -185,7 +183,7 @@ final class FaeLocalRuntimeServer {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let outcome = await self.awaitOutcome(since: startedAt, baselineApprovalID: baselineApprovalID)
+            let outcome = await self.awaitOutcome(since: startedAt)
             let body: [String: Any]
             switch outcome {
             case .completed(let content):
@@ -196,15 +194,6 @@ final class FaeLocalRuntimeServer {
                     finishReason: "stop",
                     faeStatus: "completed",
                     approvalPending: false
-                )
-            case .pendingApproval(let toolName):
-                body = FaeOpenAICompatResponseFactory.chatCompletion(
-                    id: requestID,
-                    model: request.model,
-                    content: "Fae is waiting for local approval before running \(toolName).",
-                    finishReason: "stop",
-                    faeStatus: "pending_approval",
-                    approvalPending: true
                 )
             case .timedOut(let partial):
                 body = FaeOpenAICompatResponseFactory.chatCompletion(
@@ -223,24 +212,13 @@ final class FaeLocalRuntimeServer {
         }
     }
 
-    private func awaitOutcome(since: Date, baselineApprovalID: UInt64?) async -> ChatOutcome {
-        // Use a longer deadline to allow time for the user to respond to approval dialogs.
+    private func awaitOutcome(since: Date) async -> ChatOutcome {
         let deadline = Date().addingTimeInterval(120)
-        var lastKnownApprovalID: UInt64? = baselineApprovalID
-        _ = lastKnownApprovalID  // Suppress unused-variable warning; tracked for future diagnostics.
 
         while Date() < deadline {
-            // Track approval state changes but don't bail out — keep waiting so the
-            // user has time to approve/deny. CoWork gets the real response after Fae
-            // finishes generating post-approval, rather than a stale "pending" message.
-            if let approval = approvalOverlay?.activeApproval {
-                lastKnownApprovalID = approval.id
-            }
-
             if let conversation {
                 if !conversation.isGenerating,
                    !conversation.isStreaming,
-                   approvalOverlay?.activeApproval == nil,
                    let assistant = conversation.messages.last(where: { message in
                        message.role == .assistant && message.timestamp >= since.addingTimeInterval(-0.25)
                    })
@@ -250,7 +228,6 @@ final class FaeLocalRuntimeServer {
 
                 if !conversation.isGenerating,
                    !conversation.streamingText.isEmpty,
-                   approvalOverlay?.activeApproval == nil,
                    conversation.lastInteractionTimestamp >= since.addingTimeInterval(-0.25)
                 {
                     return .completed(conversation.streamingText)
@@ -260,12 +237,6 @@ final class FaeLocalRuntimeServer {
             try? await Task.sleep(nanoseconds: 150_000_000)
         }
 
-        // Timed out — if approval is still pending, report it so CoWork knows why.
-        if let approval = approvalOverlay?.activeApproval,
-           approval.id != baselineApprovalID
-        {
-            return .pendingApproval(approval.toolName)
-        }
         return .timedOut(conversation?.streamingText.nilIfEmpty)
     }
 
@@ -273,13 +244,12 @@ final class FaeLocalRuntimeServer {
         let deadline = Date().addingTimeInterval(60)
 
         while Date() < deadline {
-            let approvalPending = approvalOverlay?.activeApproval != nil
             let hasFreshAssistantReply = conversation?.messages.contains(where: { message in
                 message.role == .assistant && message.timestamp >= since.addingTimeInterval(-0.25)
             }) == true
             let isIdle = conversation?.isGenerating == false && conversation?.isStreaming == false
 
-            if !approvalPending && (hasFreshAssistantReply || isIdle) {
+            if hasFreshAssistantReply || isIdle {
                 break
             }
 
