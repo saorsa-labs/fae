@@ -145,7 +145,9 @@ enum CorrectionDetector {
                 .trimmingCharacters(in: .punctuationCharacters)
                 .trimmingCharacters(in: .whitespaces)
             guard !correct.isEmpty else { return nil }
-            return (correct: capitalizeFirst(correct), wrong: wrong.isEmpty ? nil : capitalizeFirst(wrong))
+            let capitalCorrect = capitalizeFirst(correct)
+            guard isPlausibleName(capitalCorrect) else { return nil }
+            return (correct: capitalCorrect, wrong: wrong.isEmpty ? nil : capitalizeFirst(wrong))
         }
 
         // No "not" — just "my name is X"
@@ -153,7 +155,9 @@ enum CorrectionDetector {
             .trimmingCharacters(in: .punctuationCharacters)
             .trimmingCharacters(in: .whitespaces)
         guard !correct.isEmpty else { return nil }
-        return (correct: capitalizeFirst(correct), wrong: nil)
+        let capitalCorrect = capitalizeFirst(correct)
+        guard isPlausibleName(capitalCorrect) else { return nil }
+        return (correct: capitalCorrect, wrong: nil)
     }
 
     /// Match "it's X not Y" or "it's X, not Y".
@@ -171,7 +175,9 @@ enum CorrectionDetector {
                 .trimmingCharacters(in: .punctuationCharacters)
                 .trimmingCharacters(in: .whitespaces)
             guard !correct.isEmpty else { continue }
-            return (correct: capitalizeFirst(correct), wrong: wrong.isEmpty ? nil : capitalizeFirst(wrong))
+            let capitalCorrect = capitalizeFirst(correct)
+            guard isPlausibleName(capitalCorrect) else { continue }
+            return (correct: capitalCorrect, wrong: wrong.isEmpty ? nil : capitalizeFirst(wrong))
         }
         return nil
     }
@@ -190,20 +196,45 @@ enum CorrectionDetector {
                 .trimmingCharacters(in: .punctuationCharacters)
                 .trimmingCharacters(in: .whitespaces)
             guard !correct.isEmpty else { return nil }
-            return (correct: capitalizeFirst(correct), wrong: wrong.isEmpty ? nil : capitalizeFirst(wrong))
+            let capitalCorrect = capitalizeFirst(correct)
+            guard isPlausibleName(capitalCorrect) else { return nil }
+            return (correct: capitalCorrect, wrong: wrong.isEmpty ? nil : capitalizeFirst(wrong))
         }
 
         let correct = String(afterSaid)
             .trimmingCharacters(in: .punctuationCharacters)
             .trimmingCharacters(in: .whitespaces)
         guard !correct.isEmpty else { return nil }
-        return (correct: capitalizeFirst(correct), wrong: nil)
+        let capitalCorrect = capitalizeFirst(correct)
+        guard isPlausibleName(capitalCorrect) else { return nil }
+        return (correct: capitalCorrect, wrong: nil)
     }
 
     /// Capitalize the first character of a string.
     private static func capitalizeFirst(_ str: String) -> String {
         guard let first = str.first else { return str }
         return first.uppercased() + str.dropFirst()
+    }
+
+    /// Whether a string looks plausible as a person's name.
+    /// Rejects strings that are too long, contain common non-name words,
+    /// or have punctuation beyond hyphens and apostrophes.
+    private static func isPlausibleName(_ candidate: String) -> Bool {
+        guard candidate.count >= 2, candidate.count <= 25 else { return false }
+        let nonNameWords: Set<String> = [
+            "peer", "the", "and", "to", "is", "it", "just", "like",
+            "using", "need", "think", "not", "but", "for", "with",
+            "this", "that", "what", "how", "why", "when", "where",
+            "does", "kind", "really", "actually", "also", "very",
+            "about", "right", "wrong", "good", "bad", "here", "there",
+        ]
+        let words = candidate.lowercased().split(separator: " ").map(String.init)
+        for word in words where nonNameWords.contains(word) { return false }
+        let allowed = CharacterSet.letters
+            .union(.whitespaces)
+            .union(CharacterSet(charactersIn: "-'"))
+        if candidate.unicodeScalars.contains(where: { !allowed.contains($0) }) { return false }
+        return true
     }
 }
 

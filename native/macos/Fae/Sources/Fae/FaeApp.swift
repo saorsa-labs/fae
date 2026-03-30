@@ -419,7 +419,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Sparkle update check — triggered by scheduler or LLM tool.
+        // Sparkle update check — user-initiated (LLM tool, menu, settings).
         NotificationCenter.default.addObserver(
             forName: .faeCheckForUpdatesRequested,
             object: nil,
@@ -427,6 +427,17 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.sparkleUpdater.checkForUpdates()
+            }
+        }
+
+        // Sparkle background check — scheduler only, silent when up to date.
+        NotificationCenter.default.addObserver(
+            forName: .faeCheckForUpdatesBackgroundRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.sparkleUpdater.checkForUpdatesInBackground()
             }
         }
 

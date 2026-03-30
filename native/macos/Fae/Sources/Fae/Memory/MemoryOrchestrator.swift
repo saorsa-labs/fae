@@ -529,9 +529,17 @@ actor MemoryOrchestrator {
         let prefix = "Primary user name is "
         guard text.hasPrefix(prefix) else { return nil }
         let remainder = text.dropFirst(prefix.count)
-        return remainder
+        let name = remainder
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        // Reject negation patterns — "Primary user name is not X" is a
+        // correction record, not a definitive name.
+        let lower = name.lowercased()
+        if lower.hasPrefix("not ") || lower.hasPrefix("no ") { return nil }
+        // Reject implausibly long names (likely garbled ASR).
+        if name.count > 40 { return nil }
+        guard !name.isEmpty else { return nil }
+        return name
     }
 
     private func storedFavoriteColor() async throws -> String? {

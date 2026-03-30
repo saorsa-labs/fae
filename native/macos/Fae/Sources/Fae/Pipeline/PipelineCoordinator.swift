@@ -2064,7 +2064,17 @@ actor PipelineCoordinator {
         explicitWakeRequiredFromIdle = false
         engagedUntil = nil
         idleRearmTask = nil
-        NSLog("PipelineCoordinator: gate → idle (idle timeout %ds)", seconds)
+
+        // Reset accumulated adaptive state to prevent the pipeline from going
+        // "deaf" after long sessions — VAD silence EMA, noise floor, echo
+        // suppressor baseline, and wake detector all accumulate over hours.
+        vad.resetAdaptiveState()
+        vad.reset()
+        echoSuppressor.reset()
+        echoSuppressor.resetPlaybackBaseline()
+        resetStreamingWakeDetector()
+
+        NSLog("PipelineCoordinator: gate → idle (idle timeout %ds, adaptive state reset)", seconds)
         await closeConversationSessionIfNeeded(reason: "idle_timeout")
     }
 

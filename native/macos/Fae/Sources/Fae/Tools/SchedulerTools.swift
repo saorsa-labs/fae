@@ -465,4 +465,6 @@ extension Notification.Name {
     static let faeSchedulerUpdate = Notification.Name("faeSchedulerUpdate")
     /// Posted by `FaeScheduler.runCheckUpdate()` to trigger a Sparkle update check on the main thread.
     static let faeCheckForUpdatesRequested = Notification.Name("faeCheckForUpdatesRequested")
+    /// Posted by `FaeScheduler.runCheckUpdate()` for silent background checks (no "up to date" dialog).
+    static let faeCheckForUpdatesBackgroundRequested = Notification.Name("faeCheckForUpdatesBackgroundRequested")
 }

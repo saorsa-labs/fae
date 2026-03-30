@@ -247,6 +247,17 @@ struct VoiceActivityDetector {
         silero?.reset()
     }
 
+    /// Reset adaptive state that accumulates across conversation sessions.
+    /// Call on idle timeout to prevent the VAD from going "deaf" after long
+    /// runtimes — the EMA silence threshold drifts toward the ceiling and
+    /// noise floor creeps up, making new wake-word detection unreliable.
+    mutating func resetAdaptiveState() {
+        emaSilenceDurationMs = 0
+        emaSilenceSeeded = false
+        noiseFloorRms = 0.008
+        noiseFloorSeeded = false
+    }
+
     /// Dynamically adjust silence threshold for barge-in responsiveness.
     mutating func setSilenceThresholdMs(_ ms: Int) {
         minSilenceDurationMs = ms

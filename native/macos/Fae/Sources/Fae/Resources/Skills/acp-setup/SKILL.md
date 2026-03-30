@@ -1,17 +1,10 @@
 ---
 name: acp-setup
-version: 1.0.0
-description: Install and manage acpx — the ACP agent client for delegating tasks to coding agents
-author: Fae
+description: Install and manage acpx — the ACP agent client for delegating tasks to coding agents. Use before first agent_session call or when checking available coding agents.
+metadata:
+  author: Fae
+  version: "1.0.0"
 tags: [acp, agents, setup, coding, delegation]
-type: executable
-scripts:
-  - name: install
-    description: Install acpx (checks existing, installs if missing)
-    filename: install_acpx.py
-  - name: status
-    description: Check acpx installation status and available agents
-    filename: status.py
 ---
 
 # ACP Setup — Agent Client Protocol

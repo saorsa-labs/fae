@@ -898,6 +898,14 @@ actor SkillManager {
         let fm = FileManager.default
 
         for skill in skills {
+            // Plugin agent skills (instruction-only, sourced from .md files)
+            // don't have a SKILL.md in their directory — the body comes from
+            // the agent file directly. Mark healthy if description exists.
+            if skill.type == .instruction && skill.tags.contains("agent") {
+                results[skill.name] = skill.description.isEmpty ? .degraded("Agent has no description") : .healthy
+                continue
+            }
+
             let skillMd = skill.directoryURL.appendingPathComponent("SKILL.md")
             if !fm.fileExists(atPath: skillMd.path) {
                 results[skill.name] = .broken("Missing SKILL.md")
@@ -938,6 +946,68 @@ actor SkillManager {
         }
         return results
     }
+    /// Attempt to repair broken or degraded skills.
+    /// Returns a dictionary of skill names to repair action descriptions.
+    func repairSkills(_ statuses: [String: SkillHealthStatus]) -> [String: String] {
+        let fm = FileManager.default
+        var repairs: [String: String] = [:]
+        let skills = discoverSkills()
+        let skillsByName = Dictionary(skills.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for (name, status) in statuses {
+            switch status {
+            case .healthy:
+                continue
+            case .broken:
+                // For built-in skills, re-copy SKILL.md from bundle.
+                guard let skill = skillsByName[name], skill.tier == .builtin else { continue }
+                guard let bundleSkillsURL = Bundle.faeResources.resourceURL?
+                    .appendingPathComponent("Skills") else { continue }
+                let bundleSkillMd = bundleSkillsURL
+                    .appendingPathComponent(name)
+                    .appendingPathComponent("SKILL.md")
+                guard fm.fileExists(atPath: bundleSkillMd.path) else { continue }
+                let destMd = skill.directoryURL.appendingPathComponent("SKILL.md")
+                do {
+                    if fm.fileExists(atPath: destMd.path) {
+                        try fm.removeItem(at: destMd)
+                    }
+                    try fm.copyItem(at: bundleSkillMd, to: destMd)
+                    repairs[name] = "Restored SKILL.md from bundle"
+                    NSLog("SkillManager: repaired %@ — restored SKILL.md from bundle", name)
+                } catch {
+                    NSLog("SkillManager: repair failed for %@ — %@", name, error.localizedDescription)
+                }
+            case .degraded(let reason):
+                // For executable skills missing MANIFEST.json, generate conservative defaults.
+                guard reason.contains("MANIFEST.json"), let skill = skillsByName[name] else { continue }
+                let manifestURL = skill.directoryURL.appendingPathComponent("MANIFEST.json")
+                let defaultManifest: [String: Any] = [
+                    "schemaVersion": 1,
+                    "capabilities": ["execute"],
+                    "allowedTools": ["run_skill"],
+                    "allowedDomains": [] as [String],
+                    "dataClasses": [] as [String],
+                    "riskTier": "medium",
+                    "timeoutSeconds": 30,
+                ]
+                guard let data = try? JSONSerialization.data(
+                    withJSONObject: defaultManifest,
+                    options: [.prettyPrinted, .sortedKeys]
+                ) else { continue }
+                do {
+                    try data.write(to: manifestURL)
+                    repairs[name] = "Generated conservative MANIFEST.json"
+                    NSLog("SkillManager: repaired %@ — generated conservative MANIFEST.json", name)
+                } catch {
+                    NSLog("SkillManager: repair failed for %@ — %@", name, error.localizedDescription)
+                }
+            }
+        }
+
+        return repairs
+    }
+
     // MARK: - Private Helpers
 
     private func scanDirectory(_ dir: URL, tier: SkillTier) -> [SkillMetadata] {

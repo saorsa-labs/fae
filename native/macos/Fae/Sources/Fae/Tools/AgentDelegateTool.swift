@@ -2,8 +2,8 @@ import Foundation
 
 struct AgentDelegateTool: Tool {
     let name = "delegate_agent"
-    let description = "Delegate a task to an installed external agent CLI such as Codex, Claude Code, or Pi."
-    let parametersSchema = #"{"provider":"string (required — codex|claude|pi)","prompt":"string (required — task to delegate)","workdir":"string (optional — working directory for the delegate agent)","mode":"string (optional — read_only|read_write, default read_only)","model":"string (optional — provider-specific model name)","append_system_prompt":"string (optional — extra system guidance appended for the delegate)","secret_bindings":{"type":"object","description":"optional map of ENV_VAR -> keychain key. Secret values are injected into the delegate process environment"}}"#
+    let description = "Delegate a task to an installed external agent CLI such as Codex, Claude Code, Pi, Gemini, or Copilot."
+    let parametersSchema = #"{"provider":"string (required — codex|claude|pi|gemini|copilot)","prompt":"string (required — task to delegate)","workdir":"string (optional — working directory for the delegate agent)","mode":"string (optional — read_only|read_write, default read_only)","model":"string (optional — provider-specific model name)","append_system_prompt":"string (optional — extra system guidance appended for the delegate)","secret_bindings":{"type":"object","description":"optional map of ENV_VAR -> keychain key. Secret values are injected into the delegate process environment"}}"#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"delegate_agent","arguments":{"provider":"codex","mode":"read_write","workdir":"~/Projects/app","prompt":"Implement the failing parser fix and run the relevant tests."}}</tool_call>"#
@@ -12,7 +12,7 @@ struct AgentDelegateTool: Tool {
         guard let providerRaw = input["provider"] as? String,
               let provider = DelegateProvider(rawValue: providerRaw.lowercased())
         else {
-            return .error("Missing or invalid provider. Use codex, claude, or pi.")
+            return .error("Missing or invalid provider. Use codex, claude, pi, gemini, or copilot.")
         }
 
         guard let prompt = input["prompt"] as? String,
@@ -82,6 +82,8 @@ private enum DelegateProvider: String {
     case codex
     case claude
     case pi
+    case gemini
+    case copilot
 }
 
 private enum DelegateMode: String {
@@ -122,6 +124,24 @@ private enum ExternalAgentDelegate {
             )
         case .pi:
             return try await runPi(
+                prompt: prompt,
+                workdir: workdir,
+                mode: mode,
+                model: model,
+                appendSystemPrompt: appendSystemPrompt,
+                environment: environment
+            )
+        case .gemini:
+            return try await runGemini(
+                prompt: prompt,
+                workdir: workdir,
+                mode: mode,
+                model: model,
+                appendSystemPrompt: appendSystemPrompt,
+                environment: environment
+            )
+        case .copilot:
+            return try await runCopilot(
                 prompt: prompt,
                 workdir: workdir,
                 mode: mode,
@@ -225,6 +245,67 @@ private enum ExternalAgentDelegate {
         ]
         if let model, !model.isEmpty {
             args.append(contentsOf: ["--model", model])
+        }
+        if let appendSystemPrompt, !appendSystemPrompt.isEmpty {
+            args.append(contentsOf: ["--append-system-prompt", appendSystemPrompt])
+        }
+        args.append(buildPrompt(prompt: prompt, mode: mode, appendSystemPrompt: nil))
+
+        let result = try await runProcess(args: args, workdir: workdir, environment: environment, timeoutSeconds: 600)
+        return bestEffortOutput(stdout: result.stdout, stderr: result.stderr)
+    }
+
+    private static func runGemini(
+        prompt: String,
+        workdir: URL,
+        mode: DelegateMode,
+        model: String?,
+        appendSystemPrompt: String?,
+        environment: [String: String]
+    ) async throws -> String {
+        var args = [
+            "gemini",
+            "-p",
+        ]
+        if let model, !model.isEmpty {
+            args.append(contentsOf: ["-m", model])
+        }
+        switch mode {
+        case .readOnly:
+            args.append(contentsOf: ["--sandbox", "read-only"])
+        case .readWrite:
+            args.append(contentsOf: ["--sandbox", "full"])
+        }
+        if let appendSystemPrompt, !appendSystemPrompt.isEmpty {
+            args.append(contentsOf: ["--append-system-prompt", appendSystemPrompt])
+        }
+        args.append(buildPrompt(prompt: prompt, mode: mode, appendSystemPrompt: nil))
+
+        let result = try await runProcess(args: args, workdir: workdir, environment: environment, timeoutSeconds: 600)
+        return bestEffortOutput(stdout: result.stdout, stderr: result.stderr)
+    }
+
+    private static func runCopilot(
+        prompt: String,
+        workdir: URL,
+        mode: DelegateMode,
+        model: String?,
+        appendSystemPrompt: String?,
+        environment: [String: String]
+    ) async throws -> String {
+        var args = [
+            "copilot",
+            "-p",
+            "--output-format", "text",
+        ]
+        if let model, !model.isEmpty {
+            args.append(contentsOf: ["--model", model])
+        }
+        switch mode {
+        case .readOnly:
+            args.append(contentsOf: ["--permission-mode", "plan"])
+        case .readWrite:
+            args.append(contentsOf: ["--permission-mode", "auto"])
         }
         if let appendSystemPrompt, !appendSystemPrompt.isEmpty {
             args.append(contentsOf: ["--append-system-prompt", appendSystemPrompt])

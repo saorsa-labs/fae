@@ -1,23 +1,10 @@
 ---
 name: huggingface-scout
-version: 1.0.0
-description: Search HuggingFace Hub for models, datasets, and training resources
-author: Fae
+description: Search HuggingFace Hub for models, datasets, and training resources. Use for model discovery, dataset search, release monitoring, and candidate evaluation.
+metadata:
+  author: Fae
+  version: "1.0.0"
 tags: [huggingface, models, datasets, training, self-improvement]
-type: executable
-scripts:
-  - name: search_models
-    description: Search HuggingFace for models by architecture, size, and quantization
-    filename: search_models.py
-  - name: search_datasets
-    description: Search HuggingFace for instruction-tuning and preference datasets
-    filename: search_datasets.py
-  - name: check_new_releases
-    description: Check for new model releases since a given date
-    filename: check_new_releases.py
-  - name: evaluate_candidate
-    description: Evaluate a candidate model for Fae compatibility
-    filename: evaluate_candidate.py
 ---
 
 # HuggingFace Scout

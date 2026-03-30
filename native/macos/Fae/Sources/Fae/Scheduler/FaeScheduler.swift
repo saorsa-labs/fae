@@ -1051,17 +1051,35 @@ actor FaeScheduler {
     }
 
     private func runCheckUpdate() async {
-        NSLog("FaeScheduler: check_fae_update — running")
+        NSLog("FaeScheduler: check_fae_update — running (background)")
         await MainActor.run {
-            NotificationCenter.default.post(name: .faeCheckForUpdatesRequested, object: nil)
+            NotificationCenter.default.post(name: .faeCheckForUpdatesBackgroundRequested, object: nil)
         }
     }
 
     private func runSkillHealthCheck() async {
         let manager = SkillManager()
-        let results = await manager.healthCheckAll()
+        var results = await manager.healthCheckAll()
         guard !results.isEmpty else { return }
 
+        // Collect initial issues.
+        let hasIssues = results.contains { _, status in
+            if case .healthy = status { return false }
+            return true
+        }
+
+        // Attempt auto-repair if any issues found.
+        if hasIssues {
+            let repairs = await manager.repairSkills(results)
+            if !repairs.isEmpty {
+                NSLog("FaeScheduler: skill_health_check — repaired: %@",
+                      repairs.map { "\($0.key): \($0.value)" }.sorted().joined(separator: " | "))
+                // Re-check after repair.
+                results = await manager.healthCheckAll()
+            }
+        }
+
+        // Report remaining issues.
         var degraded: [String] = []
         var broken: [String] = []
 
@@ -1112,9 +1130,20 @@ actor FaeScheduler {
             anomalies.append("Memory store is unavailable.")
         }
 
-        // Check skill health.
+        // Check skill health — attempt repair before reporting.
         let skillMgr = SkillManager()
-        let healthResults = await skillMgr.healthCheckAll()
+        var healthResults = await skillMgr.healthCheckAll()
+        let initialIssues = healthResults.filter { _, status in
+            if case .healthy = status { return false }
+            return true
+        }
+        if !initialIssues.isEmpty {
+            let repairResults = await skillMgr.repairSkills(healthResults)
+            if !repairResults.isEmpty {
+                NSLog("FaeScheduler: self_diagnostic — auto-repaired %d skills", repairResults.count)
+                healthResults = await skillMgr.healthCheckAll()
+            }
+        }
         let brokenSkills = healthResults.filter { _, status in
             if case .broken = status { return true }
             return false

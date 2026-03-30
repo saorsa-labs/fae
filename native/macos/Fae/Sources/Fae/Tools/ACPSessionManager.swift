@@ -664,7 +664,88 @@ actor ACPSessionManager {
             }
         }
 
+        // Auto-install acpx on first use — try bun first, fall back to npm.
+        NSLog("ACPSessionManager: acpx not found — attempting auto-install")
+        if let installed = await autoInstallACPX() {
+            return installed
+        }
+
         throw SessionError.acpxNotFound
+    }
+
+    /// Attempt to install acpx globally via bun or npm.
+    /// Returns the installed binary path on success, nil on failure.
+    private func autoInstallACPX() async -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        // Try bun first (faster, preferred).
+        let bunPath = await findInPATH(binary: "bun")
+        if let bunPath {
+            let result = await runInstallProcess(
+                executable: bunPath,
+                arguments: ["install", "-g", "acpx"]
+            )
+            if result {
+                let candidate = "\(home)/.bun/bin/acpx"
+                if FileManager.default.isExecutableFile(atPath: candidate) {
+                    NSLog("ACPSessionManager: acpx installed via bun at %@", candidate)
+                    return candidate
+                }
+            }
+        }
+
+        // Fall back to npm.
+        let npmPath = await findInPATH(binary: "npm")
+        if let npmPath {
+            let result = await runInstallProcess(
+                executable: npmPath,
+                arguments: ["install", "-g", "acpx"]
+            )
+            if result {
+                // npm global bin varies — check common locations.
+                let npmCandidates = [
+                    "\(home)/.npm/bin/acpx",
+                    "/usr/local/bin/acpx",
+                    "\(home)/.local/bin/acpx",
+                ]
+                for candidate in npmCandidates {
+                    if FileManager.default.isExecutableFile(atPath: candidate) {
+                        NSLog("ACPSessionManager: acpx installed via npm at %@", candidate)
+                        return candidate
+                    }
+                }
+                // Try PATH as last resort after npm install.
+                if let pathResult = await findInPATH(binary: "acpx") {
+                    NSLog("ACPSessionManager: acpx installed via npm at %@", pathResult)
+                    return pathResult
+                }
+            }
+        }
+
+        NSLog("ACPSessionManager: auto-install failed — neither bun nor npm could install acpx")
+        return nil
+    }
+
+    /// Run an install command and return true if exit code is 0.
+    private func runInstallProcess(executable: String, arguments: [String]) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            process.terminationHandler = { proc in
+                continuation.resume(returning: proc.terminationStatus == 0)
+            }
+
+            do {
+                try process.run()
+            } catch {
+                NSLog("ACPSessionManager: install process failed to launch: %@", error.localizedDescription)
+                continuation.resume(returning: false)
+            }
+        }
     }
 
     private func findInPATH(binary: String) async -> String? {

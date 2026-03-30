@@ -84,6 +84,8 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
     // MARK: - Public API
 
     /// Trigger a user-initiated update check (e.g. Settings > About > Check for Updates).
+    ///
+    /// Shows UI for both "update available" and "you're up to date" results.
     func checkForUpdates() {
         guard let controller else {
             let alert = NSAlert()
@@ -94,6 +96,15 @@ final class SparkleUpdaterController: NSObject, ObservableObject {
             return
         }
         controller.checkForUpdates(nil)
+    }
+
+    /// Trigger a silent background update check (e.g. from the scheduler).
+    ///
+    /// Only shows UI when an update is actually available. Does nothing visible
+    /// when already up to date — no "You're up to date!" dialog.
+    func checkForUpdatesInBackground() {
+        guard let controller else { return }
+        controller.updater.checkForUpdatesInBackground()
     }
 
     /// Whether Sparkle performs automatic periodic checks.
