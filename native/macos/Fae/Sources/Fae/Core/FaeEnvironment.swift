@@ -155,6 +155,12 @@ enum FaeDirectories {
     /// schema migrations here cannot affect the main memory database.
     static let improvementDatabase: URL = root.appendingPathComponent("improvement.db")
 
+    /// `adapters/` — directory containing personal LoRA adapters produced by the improvement loop.
+    ///
+    /// Each adapter is stored as a subdirectory named by its version string (e.g. `v1/`).
+    /// The Git Vault manager backs up this directory alongside `improvement.db`.
+    static let adaptersDirectory: URL = root.appendingPathComponent("adapters")
+
     // MARK: - JSON Stores
 
     /// `speakers.json` — speaker voice profiles.

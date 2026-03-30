@@ -1181,6 +1181,32 @@ actor FaeScheduler {
             // Non-critical — skip disk check silently.
         }
 
+        // Check improvement loop health.
+        if let improvStore = improvementStore {
+            do {
+                let state = try await improvStore.readState()
+                let cycleState = CycleState(rawValue: state.cycleState) ?? .idle
+                // Check if the coordinator is stuck in a non-idle state (training loop wedge).
+                if cycleState == .training, let startedStr = state.trainingStartedAt,
+                   let started = ISO8601DateFormatter().date(from: startedStr),
+                   Date().timeIntervalSince(started) > ImprovementCycleCoordinator.maxTrainingDurationSeconds {
+                    anomalies.append("Improvement loop appears stuck in training state since \(startedStr).")
+                }
+                NSLog(
+                    "FaeScheduler: self_diagnostic — improvement loop: state=%@ cycles=%d approved=%d",
+                    state.cycleState, state.completedCycles, state.userApprovedCycles
+                )
+            } catch let error as ImprovementStoreError {
+                if case .stateNotInitialised = error {
+                    // State not initialised yet — not an anomaly, loop hasn't run.
+                } else {
+                    anomalies.append("Improvement store read failed: \(error.localizedDescription)")
+                }
+            } catch {
+                anomalies.append("Improvement store read failed: \(error.localizedDescription)")
+            }
+        }
+
         if anomalies.isEmpty {
             NSLog("FaeScheduler: self_diagnostic — all clear")
             return

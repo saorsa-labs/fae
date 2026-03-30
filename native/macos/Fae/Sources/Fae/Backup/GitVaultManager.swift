@@ -205,7 +205,7 @@ actor GitVaultManager {
             }
         }
 
-        for dbFile in ["fae.db", "scheduler.db"] {
+        for dbFile in ["fae.db", "scheduler.db", "improvement.db"] {
             let src = dataURL.appendingPathComponent(dbFile)
             let dst = sourceDir.appendingPathComponent(dbFile)
             if fm.fileExists(atPath: src.path) {
@@ -221,6 +221,14 @@ actor GitVaultManager {
         if fm.fileExists(atPath: srcSkills.path) {
             try? fm.removeItem(at: dstSkills)
             try fm.copyItem(at: srcSkills, to: dstSkills)
+        }
+
+        // Restore personal LoRA adapters.
+        let srcAdapters = dataURL.appendingPathComponent("adapters")
+        let dstAdapters = sourceDir.appendingPathComponent("adapters")
+        if fm.fileExists(atPath: srcAdapters.path) {
+            try? fm.removeItem(at: dstAdapters)
+            try fm.copyItem(at: srcAdapters, to: dstAdapters)
         }
 
         try runGit("checkout", "HEAD", "--", "data/")
@@ -246,7 +254,7 @@ actor GitVaultManager {
         }
 
         if !configOnly {
-            for dbFile in ["fae.db", "scheduler.db", "receipts.db"] {
+            for dbFile in ["fae.db", "scheduler.db", "receipts.db", "improvement.db"] {
                 let src = sourceDir.appendingPathComponent(dbFile)
                 let dst = dataURL.appendingPathComponent(dbFile)
                 if fm.fileExists(atPath: src.path) {
@@ -262,6 +270,14 @@ actor GitVaultManager {
             if fm.fileExists(atPath: srcSkills.path) {
                 try? fm.removeItem(at: dstSkills)
                 try fm.copyItem(at: srcSkills, to: dstSkills)
+            }
+
+            // Back up personal LoRA adapters produced by the improvement loop.
+            let srcAdapters = sourceDir.appendingPathComponent("adapters")
+            let dstAdapters = dataURL.appendingPathComponent("adapters")
+            if fm.fileExists(atPath: srcAdapters.path) {
+                try? fm.removeItem(at: dstAdapters)
+                try fm.copyItem(at: srcAdapters, to: dstAdapters)
             }
         }
     }
