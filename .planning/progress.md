@@ -38,3 +38,22 @@
 ### MILESTONE 1: Invisible Permissions — COMPLETE
 All phases 1.1 through 1.5 done.
 - [x] Phase 1.2: Adapter Deployment Mechanism (commit: 4974fcd4)
+
+### Phase 1.2 Complete - Mon Mar 30 20:21:11 BST 2026
+### Phase 1.3 Starting...
+
+### Phase 1.2 Complete - 
+- [x] Task 1: Add training.personal_adapter_path to SelfConfigTool adjustableKeys
+- [x] Task 2: Add patchConfig cases in FaeCore (hot-swap dispatch)
+- [x] Task 3: PipelineCoordinator.applyAdapterChange(path:)
+- [x] Task 4: LLMEngine.swapAdapter protocol method (default no-op)
+- [x] Task 5: AdapterDeploymentTests.swift (9 tests passing)
+
+### Phase 1.3 Already Implemented (commit 4974fcd4)
+- [x] --adapter CLI flag in FaeBenchmark
+- [x] AdapterComparisonResult + MetricDelta output structures
+- [x] buildComparison() base vs adapter delta computation
+- [x] isComparisonMode path in main benchmark loop
+
+### MILESTONE 1: Adapter Infrastructure — COMPLETE
+Phases 1.1, 1.2, and 1.3 all done.
