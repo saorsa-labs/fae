@@ -61,3 +61,19 @@ Phases 1.1, 1.2, and 1.3 all done.
 
 ### Milestone 1: Adapter Infrastructure COMPLETE - Mon Mar 30 20:25:25 BST 2026
 ### Milestone 2: Improvement Loop Core Starting...
+
+### Phase 2.1: ImprovementStore (improvement.db) -- COMPLETE
+- [x] ImprovementStore.swift: 5 tables, full CRUD, raw SQL with StatementArguments
+- [x] FaeDirectories.improvementDatabase path added
+- [x] open(at:) overload for test isolation
+- [x] ImprovementStoreTests.swift: 23 tests (all pass)
+  - FeedbackEvent CRUD (5 tests)
+  - ImprovementBaseline CRUD (3 tests)
+  - ImprovementState CRUD (4 tests)
+  - CapabilityGap CRUD (2 tests)
+  - ShadowEvalEpisode CRUD (4 tests)
+  - Error paths + persistence (5 tests)
+- Commit: 840abb12
+
+### Phase 2.1 Complete - Sun Mar 30 21:35:00 BST 2026
+### Phase 2.2 Starting...
