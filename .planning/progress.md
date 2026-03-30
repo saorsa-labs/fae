@@ -139,3 +139,44 @@ Phases 2.1, 2.2, and 2.3 all done.
 ### MILESTONE 3: Feedback + Verification — COMPLETE
 Phases 3.1, 3.2, and 3.3 all done.
 ### Milestone 4: Shadow Eval + Hardening Starting...
+
+### Phase 4.1: Shadow Evaluation -- COMPLETE
+- [x] Add ShadowEvaluator to ImprovementCycleCoordinator (injectable)
+- [x] Alternating night schedule: odd cycles = shadow eval, even = training
+- [x] Shadow eval runs after review gate PASS, before deployment
+- [x] Promotion gate (60% win rate) blocks deployment on failure
+- [x] Gracefully skips when no episodes available
+- [x] 7 new coordinator tests for shadow eval integration
+- Commit: e6f0e828
+
+### Phase 4.1 Complete - Sun Mar 30 21:40:00 BST 2026
+
+### Phase 4.2: CEO Expansions (Vault + Self-Diagnostic) -- COMPLETE
+- [x] improvement.db already in Git Vault backup list (verified)
+- [x] ImprovementHealthReporter: structured health report + dictionary formatting
+- [x] 5 new tests for health report generation
+- Commit: 623d7331
+
+### Phase 4.2 Complete - Sun Mar 30 21:42:00 BST 2026
+
+### Phase 4.3: Full Test Suite -- COMPLETE
+- Total improvement-related tests: 168 (target was 38+)
+  - ImprovementStoreTests: 27
+  - ImprovementCycleCoordinatorTests: 39
+  - ExternalReviewGateTests: 20
+  - ShadowEvaluatorTests: 19
+  - AdapterDeploymentManagerTests: 11 + 9 = 20
+  - ImplicitFeedbackDetectorTests: 22
+  - DirectiveTunerTests: 16
+  - ImprovementHealthReporterTests: 5
+- Full test suite: 1603 tests, 0 failures
+- All 4 milestones complete
+
+### MILESTONE 4: Shadow Eval + Hardening — COMPLETE
+
+### PROJECT COMPLETE: Autonomous Self-Improvement Loop
+All milestones done:
+1. Adapter Infrastructure (LoRA loading, deployment, benchmark)
+2. Improvement Loop Core (ImprovementStore, CycleCoordinator, semi-auto deploy)
+3. Feedback + Verification (ImplicitFeedbackDetector, ExternalReviewGate, DirectiveTuner)
+4. Shadow Eval + Hardening (ShadowEvaluator integration, health reporter, 168 tests)
