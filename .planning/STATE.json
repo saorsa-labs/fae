@@ -1,27 +1,27 @@
 {
   "version": 1,
-  "project": "apprenticeship-trust-phase1",
+  "project": "autonomous-self-improvement-loop",
   "active": true,
   "milestone": {
     "number": 1,
-    "name": "Invisible Permissions (Phase 1)"
+    "name": "Adapter Infrastructure"
   },
   "phase": {
-    "number": "1.5",
-    "name": "Full Test Suite",
-    "plan": "PLAN-phase-1.5.md",
-    "status": "complete"
+    "number": "1.1",
+    "name": "MLXLLMEngine LoRA Adapter Loading",
+    "plan": "PLAN-phase-1.1.md",
+    "status": "executing"
   },
   "task": {
-    "current": 10,
-    "total": 10,
-    "name": "All tests complete"
+    "current": 1,
+    "total": 5,
+    "name": "Add adapter loading to MLXLLMEngine"
   },
   "review": {
-    "status": "passed",
+    "status": "fixing",
     "iteration": 1,
-    "last_verdict": "PASS"
+    "last_verdict": "FAIL"
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-28T17:00:00Z"
+  "status": "executing",
+  "last_updated": "2026-03-30T19:40:00Z"
 }

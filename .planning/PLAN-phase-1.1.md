@@ -1,31 +1,76 @@
-# Phase 1.1: Prerequisites
+# Phase 1.1: MLXLLMEngine LoRA Adapter Loading
 
-## Task 1: Update SOUL.md narration clause
-**Files:** `native/macos/Fae/Sources/Fae/Resources/SOUL.md`
-**Spec:** In the `## Tools` section (after the existing bullet about confirming outcomes), add a clause about narration-as-transparency for the owner: "When acting on the owner's behalf for reversible actions, she narrates briefly after completion — not as a request for approval, but as quiet transparency. The owner can always say 'undo that' to reverse the action." Remove or soften the "always confirms before" language that implies pre-action approval popups. Keep the irreversible-action clause ("never does something irreversible without being clearly asked").
-**Tests:** None (resource file).
-**Done when:** SOUL.md reflects narrate-after-act model for reversible actions while preserving the irreversible-action gate.
+## Context
+mlx-swift-lm has full LoRA adapter support built-in:
+- `LoRAContainer.from(directory: URL)` loads adapter from directory with `adapter_config.json` + `adapters.safetensors`
+- `model.load(adapter:)` applies adapter to loaded model
+- `model.unload(adapter:)` removes adapter, restores original weights
+- QLoRA supported for 4-bit quantized models (what Fae uses)
+- Located at: `.build/checkouts/mlx-swift-lm/Libraries/MLXLMCommon/Adapters/`
 
-## Task 2: Update HEARTBEAT.md invisible permissions
-**Files:** `native/macos/Fae/Sources/Fae/Resources/HEARTBEAT.md`
-**Spec:** Replace or update the `## Progressive Permissions` section (lines 24-32) with an "Invisible Permissions" section. Describe: owner voice identity auto-approves all reversible actions, narration is the disclosure mechanism (not confirmation), action receipts provide undo capability, only DamageControlPolicy disaster/confirmManual operations get hard gates. Keep it concise (10-15 lines).
-**Tests:** None (resource file).
-**Done when:** HEARTBEAT.md reflects invisible permissions model.
+## Task 1: Add adapter loading to MLXLLMEngine
+**Files:** `native/macos/Fae/Sources/FaeInference/MLXLLMEngine.swift`
+**Spec:**
+- Add `import MLXLMCommon` for LoRAContainer access (if not already imported)
+- Add `private var currentAdapter: (any ModelAdapter)?` property
+- Add `public private(set) var loadedAdapterPath: String?` property
+- Add `public func loadAdapter(from directory: URL) async throws` method:
+  1. Load adapter: `let adapter = try LoRAContainer.from(directory: directory)`
+  2. Apply to model: `try await container.perform { context in try context.model.load(adapter: adapter) }`
+  3. Store: `self.currentAdapter = adapter; self.loadedAdapterPath = directory.path`
+  4. Reset session state (KV cache invalid after adapter change)
+- Add `public func unloadAdapter() async throws` method:
+  1. Guard `currentAdapter != nil`
+  2. Unload: `try await container.perform { context in context.model.unload(adapter: self.currentAdapter!) }`
+  3. Clear: `self.currentAdapter = nil; self.loadedAdapterPath = nil`
+  4. Reset session state
+- Error handling: typed errors for missing directory, missing adapter_config.json, incompatible format
+**Tests:** Unit test: load/unload cycle, invalid path error, nil adapter unload is no-op
+**Done when:** `just build` passes, adapter can be loaded/unloaded programmatically
 
-## Task 3: Add speakerId to ActionIntent and ToolExecutorContext
-**Files:** `native/macos/Fae/Sources/Fae/Tools/TrustedActionBroker.swift`, `native/macos/Fae/Sources/Fae/Tools/ToolExecutorContext.swift`
-**Spec:** Add `let speakerId: String?` to ActionIntent struct (after `livenessScore` at line 21). Add default `nil` value in init. Add `let speakerId: String?` to ToolExecutorContext (after `livenessScore` at line 31). Update both factory methods (`coworkExternal`, `restrictedFallback`) with `speakerId: nil`. This is plumbing for Phase 2 trust envelopes — not used in broker evaluation yet.
-**Tests:** Existing tests must still compile. No new tests needed (additive field with default).
-**Done when:** Both structs have speakerId, all call sites compile, `just check` passes.
+## Task 2: Verify FaeConfig.TrainingConfig has adapter fields
+**Files:** `native/macos/Fae/Sources/Fae/Core/FaeConfig.swift`
+**Spec:**
+- Verify `personalAdapterPath: String?` exists in TrainingConfig (should already be there per codebase analysis)
+- Verify `previousAdapterPath: String?` exists
+- Add `adapterAutoLoadEnabled: Bool = false` if not present
+- Add `approvedAdapterCycles: Int = 0` if not present (tracks earned auto-deploy progress)
+**Tests:** None needed (additive fields with defaults)
+**Done when:** TrainingConfig has all 4 adapter-related fields, `just build` passes
 
-## Task 4: Wire speakerId from PipelineCoordinator to ToolExecutor
-**Files:** `native/macos/Fae/Sources/Fae/Pipeline/PipelineCoordinator.swift`, `native/macos/Fae/Sources/Fae/Tools/ToolExecutor.swift`
-**Spec:** In PipelineCoordinator where ToolExecutorContext is constructed (search for `ToolExecutorContext(` in the file), populate `speakerId` from the current speaker profile. The pipeline already has `speakerGateState` which contains the current speaker's profile ID. Pass `speakerGateState.currentSpeakerId` (or equivalent) as `speakerId`. In ToolExecutor where ActionIntent is built from context (~line 259), pass `context.speakerId` through.
-**Tests:** Existing tests must pass. No new behavior to test yet.
-**Done when:** speakerId flows from speaker gate state through context to ActionIntent, `just check` passes.
+## Task 3: Wire adapter loading into model startup path
+**Files:** `native/macos/Fae/Sources/Fae/ML/ModelManager.swift`
+**Spec:**
+- After `MLXLLMEngine.load(modelID:)` succeeds in ModelManager, check `FaeConfig.shared.training.personalAdapterPath`
+- If path is set AND file exists AND `adapterAutoLoadEnabled == true`:
+  1. Call `llmEngine.loadAdapter(from: URL(fileURLWithPath: path))`
+  2. Log success: "Loaded personal adapter from \(path)"
+- If adapter loading fails: log warning, continue with base model (graceful degradation, never crash)
+- Add `var currentAdapterPath: String? { llmEngine.loadedAdapterPath }` computed property
+**Tests:** Test graceful degradation: set invalid adapter path, verify base model still works
+**Done when:** Model startup loads adapter when configured, `just build` passes
 
-## Task 5: Add receiptsFile path to FaeDirectories
-**Files:** `native/macos/Fae/Sources/Fae/Core/FaeEnvironment.swift`
-**Spec:** Add `static let receiptsFile: URL = root.appendingPathComponent("receipts.db")` to FaeDirectories, following the pattern of existing path declarations (after `recoveryDirectory` or similar). This is the path for the separate receipts.db database.
-**Tests:** None needed (static path declaration).
-**Done when:** `FaeDirectories.receiptsFile` exists and resolves to `~/Library/Application Support/fae/receipts.db`, `just check` passes.
+## Task 4: Add adapter hot-swap method
+**Files:** `native/macos/Fae/Sources/FaeInference/MLXLLMEngine.swift`
+**Spec:**
+- Add `public func swapAdapter(to directory: URL?) async throws`:
+  1. If `directory == nil`: unload current adapter and return
+  2. If current adapter loaded: unload it first
+  3. Load new adapter from directory
+  4. Reset session state (KV cache)
+- Guard: must not be called during active generation (check if generate stream is active)
+- This is the method ImprovementCycleCoordinator will call for deployment/rollback
+**Tests:** Test swap from nil to adapter, adapter to different adapter, adapter to nil
+**Done when:** Hot-swap works without model reload, `just build` passes
+
+## Task 5: Adapter round-trip integration tests
+**Files:** `native/macos/Fae/Tests/IntegrationTests/AdapterLoadingTests.swift` (new)
+**Spec:**
+- Test `loadAdapter(from:)` with valid mock adapter directory (create minimal adapter_config.json + empty safetensors)
+- Test `loadAdapter(from:)` with nonexistent directory throws typed error
+- Test `loadAdapter(from:)` with directory missing adapter_config.json throws typed error
+- Test `unloadAdapter()` when no adapter loaded is safe no-op
+- Test `swapAdapter(to:)` replaces current adapter
+- Test adapter loading resets KV cache (sessionState cleared)
+- Note: these tests verify the API surface. Full mlx-tune → Swift round-trip is a separate manual test (needs actual trained adapter weights)
+**Done when:** All tests pass, `just test` green

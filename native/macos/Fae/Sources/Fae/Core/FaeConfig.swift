@@ -408,6 +408,8 @@ struct FaeConfig: Codable {
         var minEpisodesSinceLastExport: Int = 100
         var personalAdapterPath: String? = nil
         var previousAdapterPath: String? = nil
+        var adapterAutoLoadEnabled: Bool = false
+        var approvedAdapterCycles: Int = 0
     }
 
     // MARK: - Agents

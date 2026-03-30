@@ -122,6 +122,8 @@ public func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
 public enum MLEngineError: LocalizedError {
     case notLoaded(String)
     case loadFailed(String, Error)
+    case adapterLoadFailed(String)
+    case adapterNotCompatible(String)
 
     public var errorDescription: String? {
         switch self {
@@ -129,6 +131,10 @@ public enum MLEngineError: LocalizedError {
             return "\(engine) engine not loaded"
         case .loadFailed(let engine, let error):
             return "\(engine) engine failed to load: \(error.localizedDescription)"
+        case .adapterLoadFailed(let reason):
+            return "Adapter load failed: \(reason)"
+        case .adapterNotCompatible(let reason):
+            return "Adapter not compatible: \(reason)"
         }
     }
 }

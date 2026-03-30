@@ -318,6 +318,20 @@ actor ModelManager {
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.6))
             eventBus.send(.runtimeProgress(stage: "llm", progress: 1.0))
 
+            // Load personal LoRA adapter if configured and auto-load is enabled.
+            if let mlxLLM = llm as? MLXLLMEngine,
+               config.training.adapterAutoLoadEnabled,
+               let adapterPath = config.training.personalAdapterPath,
+               FileManager.default.fileExists(atPath: adapterPath)
+            {
+                do {
+                    try await mlxLLM.loadAdapter(from: URL(fileURLWithPath: adapterPath))
+                    NSLog("ModelManager: loaded personal adapter from %@", adapterPath)
+                } catch {
+                    NSLog("ModelManager: personal adapter load failed (continuing with base model): %@", error.localizedDescription)
+                }
+            }
+
             // Setup wired memory policy for GPU memory management.
             // This helps prevent OOM by coordinating memory limits across tasks.
             setupWiredMemoryPolicy()

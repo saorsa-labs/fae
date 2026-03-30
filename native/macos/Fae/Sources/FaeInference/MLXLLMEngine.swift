@@ -40,6 +40,9 @@ public actor MLXLLMEngine: LLMEngine {
 
     private var container: ModelContainer?
     private var loadedModelId: String?
+    private var currentAdapter: (any ModelAdapter)?
+    /// Path of the currently loaded LoRA adapter directory, or nil if using the base model.
+    public private(set) var loadedAdapterPath: String?
     public private(set) var isLoaded: Bool = false
     public private(set) var loadState: MLEngineLoadState = .notStarted
     private var sessionState: SessionState?
@@ -128,11 +131,91 @@ public actor MLXLLMEngine: LLMEngine {
 
     public func shutdown() async {
         sessionState = nil
+        currentAdapter = nil
+        loadedAdapterPath = nil
         container = nil
         wiredMemoryTicketProvider = nil
         lastCompletionInfo = nil
         isLoaded = false
         loadState = .notStarted
+    }
+
+    // MARK: - LoRA Adapter Management
+
+    /// Whether a LoRA adapter is currently loaded on top of the base model.
+    public var isAdapterLoaded: Bool { currentAdapter != nil }
+
+    /// Load a LoRA adapter from a directory containing adapter_config.json and adapters.safetensors.
+    ///
+    /// The base model must already be loaded. The adapter weights are applied on top of the
+    /// current model weights, enabling fine-tuned behavior without reloading the full model.
+    /// The KV cache is reset after loading to ensure clean generation state.
+    ///
+    /// - Parameter directory: Path to directory with adapter files.
+    /// - Throws: ``MLEngineError/notLoaded(_:)`` if no model loaded,
+    ///   ``MLEngineError/adapterLoadFailed(_:)`` if adapter files cannot be read or applied.
+    public func loadAdapter(from directory: URL) async throws {
+        guard let container else {
+            throw MLEngineError.notLoaded("LLM")
+        }
+
+        let adapter: any ModelAdapter
+        do {
+            adapter = try LoRAContainer.from(directory: directory)
+        } catch {
+            throw MLEngineError.adapterLoadFailed(
+                "Failed to load adapter from \(directory.path): \(error.localizedDescription)"
+            )
+        }
+
+        do {
+            try await container.perform { context in
+                try context.model.load(adapter: adapter)
+            }
+        } catch {
+            throw MLEngineError.adapterLoadFailed(
+                "Failed to apply adapter to model: \(error.localizedDescription)"
+            )
+        }
+
+        currentAdapter = adapter
+        loadedAdapterPath = directory.path
+        sessionState = nil
+        NSLog("MLXLLMEngine: loaded LoRA adapter from %@", directory.path)
+    }
+
+    /// Unload the currently loaded LoRA adapter, restoring the base model.
+    ///
+    /// If no adapter is loaded, this method returns silently.
+    /// The KV cache is reset after unloading.
+    public func unloadAdapter() async {
+        guard let adapter = currentAdapter, let container else {
+            currentAdapter = nil
+            loadedAdapterPath = nil
+            return
+        }
+
+        await container.perform { context in
+            context.model.unload(adapter: adapter)
+        }
+
+        currentAdapter = nil
+        loadedAdapterPath = nil
+        sessionState = nil
+        NSLog("MLXLLMEngine: unloaded LoRA adapter")
+    }
+
+    /// Swap the current LoRA adapter for a different one, or remove it entirely.
+    ///
+    /// - Parameter directory: Path to new adapter directory, or nil to remove the current adapter.
+    /// - Throws: Propagates errors from ``loadAdapter(from:)`` if loading fails.
+    public func swapAdapter(to directory: URL?) async throws {
+        if currentAdapter != nil {
+            await unloadAdapter()
+        }
+        if let directory {
+            try await loadAdapter(from: directory)
+        }
     }
 
     public func measureMemory(
