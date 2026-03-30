@@ -124,6 +124,8 @@ actor DefaultTrustedActionBroker: TrustedActionBroker {
         "training_data_export": ["activate_skill", "run_skill"],
         "training_cycle": ["activate_skill", "run_skill"],
         "acp_session_monitor": ["agent_session", "activate_skill"],
+        // Autonomous self-improvement cycle.
+        "improvement_cycle": ["activate_skill", "run_skill", "delegate_agent", "self_config"],
     ]
 
     /// Tools that scheduler tasks can NEVER use regardless of allowlist.

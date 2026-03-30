@@ -53,6 +53,12 @@ actor FaeScheduler {
     /// Action receipt store for GC — set by FaeCore.
     private var receiptStore: ReceiptStore?
 
+    /// Store for the autonomous self-improvement loop.
+    private var improvementStore: ImprovementStore?
+
+    /// Coordinator for the nightly self-improvement cycle.
+    private var improvementCycleCoordinator: ImprovementCycleCoordinator?
+
     /// Daily proactive interjection counter, reset at midnight.
     var proactiveInterjectionCount: Int = 0
     var proactiveDigestEligibleCounts: [String: Int] = [:]
@@ -130,6 +136,12 @@ actor FaeScheduler {
     /// Wire the action receipt store for GC during memory_gc.
     func setReceiptStore(_ store: ReceiptStore) {
         receiptStore = store
+    }
+
+    /// Wire the improvement store and create the cycle coordinator.
+    func setImprovementStore(_ store: ImprovementStore) {
+        improvementStore = store
+        improvementCycleCoordinator = ImprovementCycleCoordinator(store: store)
     }
 
     /// Set the proactive query handler (must be called before start for awareness tasks to work).
@@ -1513,6 +1525,33 @@ actor FaeScheduler {
         )
     }
 
+    private func runImprovementCycle() async {
+        // Lazy-open the improvement store if needed.
+        if improvementStore == nil {
+            let store = ImprovementStore()
+            do {
+                try await store.open()
+                improvementStore = store
+            } catch {
+                NSLog("FaeScheduler: improvement_cycle — failed to open store: %@", error.localizedDescription)
+                return
+            }
+        }
+        // Lazy-create coordinator if needed.
+        if improvementCycleCoordinator == nil, let store = improvementStore {
+            improvementCycleCoordinator = ImprovementCycleCoordinator(store: store)
+        }
+        guard let coordinator = improvementCycleCoordinator else {
+            NSLog("FaeScheduler: improvement_cycle — coordinator not available")
+            return
+        }
+        do {
+            try await coordinator.runCycle()
+        } catch {
+            NSLog("FaeScheduler: improvement_cycle failed: %@", error.localizedDescription)
+        }
+    }
+
     private func runEnhancedMorningBriefing() async {
         guard !morningBriefingDelivered else { return }
 
@@ -1583,6 +1622,8 @@ actor FaeScheduler {
         if hour == 2, minute < 2 { await runDailyIfNeeded("memory_backup") { await runMemoryBackup() } }
         // vault_backup: daily 02:30
         if hour == 2, minute >= 30, minute < 32 { await runDailyIfNeeded("vault_backup") { await runVaultBackup() } }
+        // improvement_cycle: daily 03:00 — autonomous self-improvement loop
+        if hour == 3, minute < 2 { await runDailyIfNeeded("improvement_cycle") { await runImprovementCycle() } }
         // memory_gc: daily 03:30
         if hour == 3, minute >= 30, minute < 32 { await runDailyIfNeeded("memory_gc") { await runMemoryGC() } }
         // noise_budget_reset: daily 00:00 + morning briefing flag reset
@@ -1838,6 +1879,7 @@ actor FaeScheduler {
         case "overnight_work":         await runOvernightWork()
         case "enhanced_morning_briefing": await runEnhancedMorningBriefing()
         case "capability_discovery":      await runCapabilityDiscovery()
+        case "improvement_cycle":         await runImprovementCycle()
         default:
             if await runUserTaskIfExists(id: id, at: runAt, silent: true, reason: "trigger") {
                 return
@@ -1955,6 +1997,7 @@ actor FaeScheduler {
             "vault_backup", "camera_presence_check", "screen_activity_check",
             "overnight_work", "enhanced_morning_briefing",
             "capability_discovery",
+            "improvement_cycle",
         ]
         ids.formUnion(builtinIDs)
 

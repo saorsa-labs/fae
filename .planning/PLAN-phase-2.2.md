@@ -1,34 +1,58 @@
-# Phase 2.2: Fast-Path Wiring
+# Phase 2.2: ImprovementCycleCoordinator
+
+## Status: In Progress
 
 ## Context
-
-Phase 2.1 created `ParakeetStreamingEngine` as a standalone actor. This phase wires it
-into the live audio pipeline so Parakeet partials flow to the UI, keyword spotter, and
-barge-in decisions during active speech.
+Phase 2.1 delivered ImprovementStore (improvement.db) with full CRUD. This phase builds
+the coordinator that drives the autonomous self-improvement loop as a deterministic
+state machine integrated with the scheduler.
 
 ## Tasks
 
-### Task 1: Add streamingSTTEngine property to PipelineCoordinator
+### Task 1: ImprovementCycleCoordinator actor skeleton + state machine
+- Create `Sources/Fae/Scheduler/ImprovementCycleCoordinator.swift`
+- Define CycleState enum: idle, collecting, training, evaluating, proposing, deploying
+- Actor with ImprovementStore dependency
+- `transition(to:)` method with valid transition enforcement
+- `currentState` property reading from ImprovementStore
+- Doc comments on all public members
+- Files: `Sources/Fae/Scheduler/ImprovementCycleCoordinator.swift`
 
-- Add `streamingSTTEngine: (any StreamingSTTEngine)?` property
-- Add parameter to init with default `nil`
-- Wire from FaeCore using `modelManager.parakeetEngine`
+### Task 2: runCycle() — main orchestration loop
+- Implement `runCycle()` async method that:
+  1. Reads current state from ImprovementStore
+  2. Checks minimum data threshold (>=20 feedback events AND >=5 corrections)
+  3. If threshold not met, logs skip and returns
+  4. Transitions IDLE -> COLLECTING: gathers pending feedback events
+  5. Transitions COLLECTING -> TRAINING: delegates to training skill
+  6. Transitions TRAINING -> EVALUATING: runs eval benchmark
+  7. Transitions EVALUATING -> PROPOSING: generates proposal
+  8. Error handling: any failure -> logs error, resets to IDLE
+- Each transition persists state to ImprovementStore
+- Stuck-detection: if trainingStartedAt > 2h ago, force reset to IDLE
+- Files: `Sources/Fae/Scheduler/ImprovementCycleCoordinator.swift`
 
-### Task 2: Feed audio to Parakeet in capture loop
+### Task 3: Scheduler integration
+- Add "improvement_cycle" to schedulerTaskAllowlists in TrustedActionBroker
+  with: ["activate_skill", "run_skill", "delegate_agent", "self_config"]
+- Add improvement_cycle daily task in FaeScheduler.scheduler_tick at 03:00
+- Add case to triggerByName for manual triggering
+- Wire ImprovementStore into FaeScheduler (lazy open)
+- Wire ImprovementCycleCoordinator creation in FaeScheduler
+- Files: `TrustedActionBroker.swift`, `FaeScheduler.swift`
 
-- In the `streamingAudioSafe` block, feed audio to Parakeet alongside existing Qwen3-ASR
-- Route Parakeet partials through `handleStreamingPartialTranscript`
-- Use detached Task to avoid blocking the 36ms audio loop
+### Task 4: ImprovementCycleCoordinatorTests
+- Test: initial state is idle
+- Test: runCycle skips if <20 feedback events
+- Test: runCycle skips if <5 correction-type events
+- Test: valid state transitions succeed
+- Test: invalid state transitions throw/reject
+- Test: stuck-detection resets to idle after 2h
+- Test: error during training resets to idle
+- Test: idempotency (calling runCycle twice in IDLE is safe)
+- Files: `Tests/HandoffTests/ImprovementCycleCoordinatorTests.swift`
 
-### Task 3: Reset Parakeet on segment boundaries
-
-- Add `streamingSTTEngine?.reset()` at all streaming epoch reset points:
-  - Pipeline stop/teardown
-  - User cancel
-  - cancelAndWait (test harness)
-  - Barge-in segment boundary resets
-
-### Task 4: Validate build and tests
-
-- Zero warnings on `swift build`
-- All existing tests pass (no behavior changes)
+### Task 5: Build verification
+- swift build passes
+- swift test --filter ImprovementCycleCoordinator passes
+- No regressions in ImprovementStoreTests

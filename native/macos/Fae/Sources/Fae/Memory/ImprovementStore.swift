@@ -311,6 +311,17 @@ actor ImprovementStore {
         }
     }
 
+    /// Count unconsumed feedback events whose `signal_type` is `"correction"`.
+    func correctionFeedbackCount() throws -> Int {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM feedback_events WHERE consumed = 0 AND signal_type = 'correction'"
+            ) ?? 0
+        }
+    }
+
     // MARK: - ImprovementBaseline CRUD
 
     /// Insert a new baseline measurement. Returns the stored record with `id` assigned.
