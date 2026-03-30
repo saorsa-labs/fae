@@ -1,28 +1,29 @@
-# Phase 4.2: WebRTC AEC3 Evaluation
+# Plan: Phase 4.2 — CEO Expansions (Vault Backup + Self-Diagnostic)
 
-## Goal
-Evaluate feasibility of integrating WebRTC AEC3 for proper acoustic echo cancellation, and document findings.
+## Context
+From roadmap:
+- Git Vault backup for improvement.db + adapters
+- Self-diagnostic integration for improvement health
 
 ## Tasks
 
-### Task 1: Feasibility Analysis — Reference Signal Access
-Document whether macOS AVAudioEngine provides access to the playback reference signal needed by AEC. Investigate AudioPlaybackManager's ability to tap the output buffer.
+### Task 1: Add improvement.db to Git Vault backup list
+- Add `FaeDirectories.improvementDatabase` to GitVaultManager's backup file list
+- Add adapter directory to vault backup (if present)
+- Tests: verify improvement.db path is in backup list
 
-### Task 2: Feasibility Analysis — WebRTC AEC3 API Compatibility
-Investigate WebRTC's AEC3 C/C++ API and whether it can be wrapped for Swift. Assess binary size, licensing, build complexity.
+Files: `Sources/Fae/Backup/GitVaultManager.swift`
 
-### Task 3: Enhanced Heuristics (if AEC infeasible)
-If AEC3 integration is infeasible (likely), enhance the heuristic stack instead:
-- Cross-correlation between capture and recent playback audio
-- Spectral subtraction using known TTS output spectrum
-- Adaptive echo tail based on measured speaker-to-mic delay
+### Task 2: Self-diagnostic improvement health
+- Create `ImprovementHealthReporter` — generates a health summary
+- Reports: current cycle state, completedCycles, deferralCount, lastCycleAt, lastCycleError,
+  pending feedback count, shadow eval stats
+- Format as a structured dictionary for DiagnosticsManager integration
+- Tests: health report generation
 
-**Files**: `EchoSuppressor.swift`, `AudioPlaybackManager.swift`
+Files: `Sources/Fae/Scheduler/ImprovementHealthReporter.swift`, `Tests/HandoffTests/ImprovementHealthReporterTests.swift`
 
-### Task 4: Documentation
-Create `.planning/reviews/aec3-feasibility.md` documenting the evaluation, findings, and chosen approach.
-
-## Success Criteria
-- Clear feasibility assessment documented
-- If infeasible: enhanced heuristics implemented and tested
-- `swift build` zero warnings, `swift test` all pass
+### Task 3: Build verification + full test run
+- `swift build` zero errors/warnings
+- All HandoffTests pass
+- Update progress.md
