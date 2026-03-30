@@ -88,4 +88,19 @@ Phases 1.1, 1.2, and 1.3 all done.
 - Commit: 156e3260
 
 ### Phase 2.2 Complete - Sun Mar 30 21:44:00 BST 2026
-### Phase 2.3 Starting...
+
+### Phase 2.3: Semi-Automatic Deployment -- COMPLETE
+- [x] AdapterDeploymentManager: proposal generation, deploy, rollback, approval tracking
+- [x] ImprovementCycleCoordinator: approve/reject/rollback API + earned auto-deploy
+- [x] Pause in proposing state until user approval (< 5 approved cycles)
+- [x] Auto-deploy after 5 user-approved cycles
+- [x] AdapterDeploymentManagerTests: 9 tests
+- [x] ImprovementCycleCoordinatorTests expanded: 20 tests (approval, rejection, rollback, auto-deploy)
+- [x] 63 total improvement tests, all passing
+- Commit: bdbf0caf
+
+### Phase 2.3 Complete - Sun Mar 30 21:50:00 BST 2026
+
+### MILESTONE 2: Improvement Loop Core — COMPLETE
+Phases 2.1, 2.2, and 2.3 all done.
+### Milestone 3: Feedback + Verification Starting...

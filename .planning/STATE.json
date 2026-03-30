@@ -3,12 +3,12 @@
   "project": "autonomous-self-improvement-loop",
   "active": true,
   "milestone": {
-    "number": 2,
-    "name": "Improvement Loop Core"
+    "number": 3,
+    "name": "Feedback + Verification"
   },
   "phase": {
-    "number": "2.3",
-    "name": "Semi-Automatic Deployment",
+    "number": "3.1",
+    "name": "ImplicitFeedbackDetector",
     "plan": null,
     "status": "pending"
   },
@@ -23,5 +23,5 @@
     "last_verdict": null
   },
   "status": "phase_transition",
-  "last_updated": "2026-03-30T21:44:00Z"
+  "last_updated": "2026-03-30T21:50:00Z"
 }
