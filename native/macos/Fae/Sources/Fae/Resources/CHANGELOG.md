@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.187] - 2026-03-31 — Voice Experience Overhaul
+
+Fae now responds to "Hey Fae" via acoustic detection, learns your vocabulary from Contacts and Calendar, and has a push-to-talk button for guaranteed activation on any Mac.
+
+### Added
+
+- **Push-to-talk**: Hold Right Option key to talk, release to stop. Also works via orb click in collapsed mode. Prior mic state is tracked and restored on release.
+- **2-second audio ring buffer**: AudioCaptureManager continuously buffers the last 2 seconds of mic input (even when muted) for missed-wake capture.
+- **Missed-wake capture**: When PTT is pressed after a failed wake word detection, the preceding audio is saved as a WAV file for future training data (FIFO cap of 500 files).
+- **6-step fused enrollment**: Replaces the old 4-step flow. New steps: name, 4 wake phrases ("Hey Fae"), 3 conversational samples, 20s room noise baseline, photo, completion with confidence scores. All artifacts committed atomically on step 6.
+- **WakeWordScoreFusion**: Weighted fusion of keyword classifier (0.7) and acoustic template cosine similarity (0.3). Template-only fallback mode (threshold 0.7) when classifier model isn't loaded.
+- **ShadowWakeWordEvaluator**: Runs acoustic and text-based detectors in parallel. Promotes acoustic to primary after 200 attempts with FP < 1% and FN < 5%. Demotes if post-promotion FP exceeds 2% in a 50-utterance rolling window. Thermal pause support.
+- **PersonalLexicon**: Actor-based personal vocabulary store with JSON persistence. Single shared instance across pipeline, scheduler, and core. Backed up via Git Vault.
+- **VocabularyHarvester**: Imports names from Contacts (CNContactStore) and Calendar events (next 30 days). Runs post-enrollment and daily at 04:00. Triggers live DVC rebuild.
+- **ASRConfidenceDetector**: Phonetic clustering and spelling divergence detection across utterances. Max 1 correction prompt per conversation. Typed correction flow feeds PersonalLexicon and DynamicVocabularyCorrector.
+- **Room noise persistence**: Enrollment ambient noise RMS saved to noise_profile.json for future VAD threshold calibration.
+- **DynamicVocabularyCorrector.ingestLexicon()**: Consumes PersonalLexicon entries on cache rebuild, making harvested vocabulary immediately available for post-ASR correction.
+
+### Changed
+
+- **Shadow evaluator wiring**: Detection results fed to ShadowWakeWordEvaluator in processRecognizedVoiceText() where both acoustic and text results are known (not hard-coded).
+- **Enrollment error logging**: SpeakerProfileStore and WakeWordProfileStore now log persistence failures instead of swallowing them silently.
+
 ## [Unreleased]
 
 ### Added
