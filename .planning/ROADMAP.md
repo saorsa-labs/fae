@@ -23,14 +23,14 @@
 - Storage: ~/Library/Application Support/fae/wake_training/missed/ (max 500, FIFO)
 - Tests: ring buffer, hold/release, missed-wake logging
 
-### Phase 1.2: Fused Enrollment Flow <- YOU ARE HERE
+### Phase 1.2: Fused Enrollment Flow ✅ COMPLETE
 - Replace SpeakerEnrollmentView 4-step with 6-step:
   1. Name, 2. Wake phrases (4x), 3. Conversational (3x 8s), 4. Room noise (20s), 5. Photo, 6. Complete
 - Atomic commit on step 6 completion
 - Generate acoustic templates + reference embeddings from wake phrases
 - Tests: completion, abandonment, template generation
 
-### Phase 1.3: Bundle Keyword Classifier
+### Phase 1.3: Bundle Keyword Classifier <- YOU ARE HERE
 - Train MLXKeywordClassifier offline (~10K synthetic + LibriSpeech negatives)
 - Bundle model.safetensors + config.json
 - Score fusion: 0.7 * classifier + 0.3 * max(template_cosine)
