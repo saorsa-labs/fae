@@ -1,28 +1,23 @@
-# Code Simplifier Review
+# Code Simplification Review
+**Date**: 2026-03-31
+**Mode**: gsd-phase
 
-## Reviewer: Code Simplifier
-## Scope: Phase 1.1 — LoRA Adapter Loading
+## Findings
 
-### Simplification Opportunities
+- [LOW] recordRoomNoise() duplicates a progress update loop instead of reusing startPulsingProgress(). However, the deterministic-duration approach (counting ticks) is different from pulsing and is intentional.
+- [LOW] stepIndicator builds `let steps: [EnrollmentStep] = [...]` on every body evaluation. Could be `private static let enrollmentSteps`. Minor.
+- [LOW] commitAndComplete() has an inline NSLog with string interpolation for all fields — could be tidied but it's a logging call.
+- [OK] recordWakePhrase and recordConversationalSample share the pulsing progress helper cleanly.
+- [OK] roomNoiseStep view's progress ring is a clean inline ZStack, not worth extracting.
 
-**`loadAdapter` — two do/catch blocks:**
-Current: two separate do/catch blocks, each mapping to `adapterLoadFailed` with different messages.
-Alternative: single do/catch using enum pattern matching on the underlying error type.
-Recommendation: **Keep current** — two-phase approach gives better error attribution for debugging. No simplification warranted.
+## Simplification Opportunities
 
-**`unloadAdapter` — guard condition:**
-Current: `guard let adapter = currentAdapter, let container else { ... }`
-The guard binding of `container` in unload is only needed because `container.perform` requires it. In practice, if `currentAdapter != nil`, `container` must be non-nil (they are set together in `loadAdapter`). The compound guard is slightly misleading.
-Simplification: Could assert `container != nil` here instead of guarding. But the current defensive guard is safer.
-Recommendation: **Keep current** — defensive guard is correct.
+1. **stepIndicator static steps** — replace the inline `let steps` with a `private static let enrollmentSteps`:
+   ```swift
+   private static let enrollmentSteps: [EnrollmentStep] = [.name, .wakePhrases, .conversational, .roomNoise, .photo, .complete]
+   ```
+   Minor: evaluated once per type rather than once per body call.
 
-**`swapAdapter` — composition:**
-Current: Explicit `if currentAdapter != nil { await unloadAdapter() }` then `if let directory { try await loadAdapter(from: directory) }`
-This is clear and readable. No simplification needed.
+2. No other meaningful simplifications — the diff is well-structured.
 
-**`ModelManager` adapter block:**
-Current: 4-condition `if let` chain — clean and idiomatic Swift.
-No simplification opportunity.
-
-### Verdict: No simplifications required — code is already minimal and well-structured.
-Grade: A
+## Grade: A-

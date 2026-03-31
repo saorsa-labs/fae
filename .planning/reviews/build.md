@@ -1,26 +1,31 @@
-# Build Validation Review
+# Build Validation Report
+**Date**: 2026-03-31
+**Language**: Swift (Package.swift)
 
-## Reviewer: Build Validator
-## Scope: Phase 1.1 — LoRA Adapter Loading
+## Results
+| Check | Status |
+|-------|--------|
+| swift build | PASS (1.81s) |
+| swift test --filter EchoText | PASS (26 tests) |
+| swift test --filter WakeWordAcoustic | PASS (4 tests) |
+| FusedEnrollmentFlowTests compile | FAIL |
+| .swiftlint.yml | NOT FOUND |
+| .swiftformat | NOT FOUND |
 
-### Build Results
+## Errors
+```
+FusedEnrollmentFlowTests.swift:154:43: error: 'profiles' is inaccessible due to 'private' protection level
+FusedEnrollmentFlowTests.swift:154:43: error: cannot call value of non-function type '[SpeakerProfileStore.SpeakerProfile]'
+```
 
-**swift build:** PASS (Build complete — 1.86s)
-**Errors:** 0
-**Warnings (new, project-owned):** 0 new warnings introduced
-  - Pre-existing: `UnsafeMutableRawPointer to CFString` warning in PipelineCoordinator.swift:7002 (pre-existing, not introduced by this commit)
-  - Pre-existing: `mlx-swift` unused dependency warning (third-party, not actionable)
-  - Pre-existing: unhandled file warning (third-party mlx-audio-swift, not actionable)
+Root cause: Test calls `await speakerStore.profiles()` but `profiles` is a `private var [SpeakerProfile]`.
+The correct public API is `speakerStore.profileSummaries()` which returns `[SpeakerProfileSummary]`.
 
-**Tests:** 6/6 PASS (AdapterLoadingTests)
+Three test functions are affected: testAtomicCommitWritesConversationalEmbeddingsToSpeakerStore(),
+testFullEnrollmentAtomicCommit(), testAbandonmentBeforeCompleteLeavesStoresEmpty().
 
-### New Code Compile Analysis
+## Warnings (pre-existing, not from this phase)
+- 'fae': dependency 'mlx-swift' unused
+- Unhandled resource files (mlx-audio-swift, Fae target)
 
-- `MLXLLMEngine.loadAdapter(from:)` — compiles cleanly, `LoRAContainer.from(directory:)` resolves from `MLXLMCommon`
-- `MLXLLMEngine.unloadAdapter()` — compiles cleanly
-- `MLXLLMEngine.swapAdapter(to:)` — compiles cleanly
-- `ModelManager` adapter block — compiles cleanly with correct `llm as? MLXLLMEngine` cast
-- `FaeCore.patchConfig` — `applyAdapterChange(path:)` resolves correctly on `PipelineCoordinator`
-- `PipelineCoordinator.applyAdapterChange(path:)` — compiles cleanly, `llmEngine.swapAdapter(to:)` resolves
-
-### Verdict: BUILD PASS — Zero new errors or warnings introduced
+## Grade: C (compile error in new test file; main target builds clean)

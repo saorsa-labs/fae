@@ -1,32 +1,25 @@
-# Task Specification Assessment
+# Task Specification Review
+**Date**: 2026-03-31
+**Task**: Task 1 — Define new EnrollmentStep enum and state variables
 
-## Reviewer: Task Assessor
-## Scope: Phase 1.1 — LoRA Adapter Loading (commit ad69623f)
+## Spec Compliance (Task 1 per PLAN-phase-1.2-fused-enrollment.md)
 
-### Task Goal
-From PLAN-phase-1.1.md / ROADMAP.md: Add LoRA adapter loading support to `MLXLLMEngine` so that personal fine-tuned adapters (from mlx-tune training) can be applied to the base model at runtime without reloading the full model.
+- [x] Add new EnrollmentStep cases (.wakePhrases, .conversational, .roomNoise replacing .recording)
+- [x] Add @State variables: wakePhraseIndex, wakeTemplates, conversationalIndex, conversationalEmbeddings, noiseFloorRMS, noiseProgress
+- [x] Add WakeWordProfileStore parameter to SpeakerEnrollmentView
+- [x] Update body switch to handle .wakePhrases, .conversational, .roomNoise
+- [x] EnrollmentStep now conforms to Equatable (required for stepIndicator)
 
-### Completeness Check
+## Scope Assessment
+Tasks 2, 3, 4, 5 are also implemented in this commit (full UI, recording logic, atomic commit, ContentView call site update). This is positive scope expansion — all tasks except 6/7 (tests) are complete. The tests file exists but has a compile error (Task 6/7 are partially done).
 
-**DELIVERED:**
-- ✅ `loadAdapter(from: URL)` — loads LoRA adapter from directory
-- ✅ `unloadAdapter()` — removes adapter, restores base model
-- ✅ `swapAdapter(to: URL?)` — atomic swap or removal
-- ✅ `isAdapterLoaded` / `loadedAdapterPath` — observable state
-- ✅ KV cache invalidation on adapter change (`sessionState = nil`)
-- ✅ `shutdown()` cleanup of adapter state
-- ✅ `MLEngineError` extension with typed adapter errors
-- ✅ `ModelManager` auto-load on startup when configured
-- ✅ `FaeConfig.Training` fields for auto-load gating
-- ✅ Unit tests for API surface
+## Extra work (beyond Task 1):
+- Wake phrase step UI + recordWakePhrase() (Task 2)
+- Room noise step UI + recordRoomNoise() (Task 3)
+- commitAndComplete() atomic commit (Task 4)
+- ContentView already wired with wakeWordProfileStore (Task 5)
+- FusedEnrollmentFlowTests.swift created (Task 6/7 partial — has compile error)
+- EchoSuppressor improvements (not in plan — good pragmatic improvement but out-of-scope for this phase)
+- stepIndicator progress dots (nice UX addition, not in spec)
 
-**NOT DELIVERED (per TODOS.md, intentionally deferred to Phase 1.2):**
-- ❌ `SelfConfigTool` support for `training.personalAdapterPath` key (deploy path)
-- ❌ `FaeCore.patchConfig()` case for adapter path
-- ❌ `PipelineCoordinator` adapter reload observer
-- ❌ `FaeBenchmark --adapter` flag
-
-### Assessment
-Phase 1.1 task scope is correctly scoped and completely delivered. The deferred items are correctly tracked in TODOS.md as Phase 1.2 prerequisites. The task did not over-promise or under-deliver.
-
-### Verdict: PASS — Task complete within defined scope
+## Grade: A- (all core tasks implemented; test compile error needs fix)

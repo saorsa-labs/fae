@@ -1,29 +1,20 @@
 # Test Coverage Review
+**Date**: 2026-03-31
 
-## Reviewer: Test Quality Analyst
-## Scope: Phase 1.1 — LoRA Adapter Loading
+## Statistics
+- Test files: 130+ across HandoffTests, IntegrationTests, SearchTests, EvalTests
+- Test functions: ~1800 total
+- Relevant new test file: FusedEnrollmentFlowTests.swift (14 test functions)
+- Tests pass (filtered run): WakeWordAcousticDetectorTests (4/4), EchoTextOverlapTests (26/26)
 
-### New Tests: AdapterLoadingTests.swift (6 tests)
+## Findings
+- [CRITICAL] FusedEnrollmentFlowTests.swift:154 — COMPILE ERROR: `speakerStore.profiles()` is inaccessible (private var). The test calls `await speakerStore.profiles()` as a function but `profiles` is a private stored property, not a public function. The correct API is `speakerStore.profileSummaries()` which returns [SpeakerProfileSummary].
+- [HIGH] Tests at lines 78, 139, 154 attempt to read internal state via `speakerStore.profiles()` which does not compile — these tests cannot run until fixed.
+- [OK] WakeWordAcousticDetector.makeTemplate tests (lines 15-55) are well-structured and cover happy path, silence, and too-short audio
+- [OK] Atomic commit logic (lines 89-141) tests the correct public API for WakeWordProfileStore
+- [OK] Noise floor RMS tests (lines 169-191) are self-contained and don't require hardware
+- [OK] Consistency score tests (lines 195-208) match SpeakerProfileStore.consistencyScore API correctly
+- [MEDIUM] No test for the scenario where makeTemplate returns nil (e.g. wake phrase too long) — wakePhraseIndex advances but wakeTemplates stays short. The complete step shows fewer templates but enrollment isn't blocked.
+- [LOW] FusedEnrollmentFlowTests references WakeWordAcousticDetectorTests.syntheticWakePhrase() — that helper must be accessible (internal/public). Likely fine given @testable import.
 
-1. `testLoadAdapterWithoutModelThrowsNotLoaded` — ✅ Covers notLoaded guard
-2. `testUnloadAdapterWithoutAdapterIsNoOp` — ✅ Covers safe no-op path
-3. `testFreshEngineHasNoAdapter` — ✅ Covers initial state assertions
-4. `testSwapAdapterToNilUnloads` — ✅ Covers swap-to-nil path
-5. `testLoadAdapterFromInvalidDirectoryThrows` — ✅ Covers error path (limited without real model)
-6. `testShutdownClearsAdapterState` — ✅ Covers shutdown state cleanup
-
-### Coverage Assessment
-
-**PASS** - All tests pass (verified 6/6).
-**PASS** - No forced-failure tests with `XCTFail` left in dead branches.
-**PASS** - Tests cover the complete API surface at the unit level without requiring model downloads.
-
-### Gaps
-
-**SHOULD FIX (1 vote):** No test for the `loadAdapter` → failure → state consistency path: if `container.perform { context.model.load(adapter:) }` throws, `currentAdapter` and `loadedAdapterPath` should remain nil (they are set AFTER the try). A test verifying that a failed apply leaves the engine in "no adapter" state would make this invariant explicit.
-
-**MINOR (1 vote):** No test for `swapAdapter` mid-failure: if swap unloads old adapter then fails to load new one, base model should be active. This is the most important behavioral guarantee of `swapAdapter` and has no test coverage.
-
-**MINOR (1 vote):** `testLoadAdapterFromInvalidDirectoryThrows` accepts BOTH `notLoaded` and `adapterLoadFailed` as "acceptable" — this makes the test unable to distinguish the correct error path. The test comment explains this limitation ("Without a loaded model, we get notLoaded") but the dual-accept pattern weakens the assertion.
-
-### Verdict: PASS (unit tests solid for no-model paths; integration tests deferred and documented)
+## Grade: D (due to compile error blocking test execution)
