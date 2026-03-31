@@ -17,12 +17,15 @@ final class CoWorkPreservedGatingTests: XCTestCase {
 
         func log(
             event: String,
-            toolName: String?,
-            decision: String,
+            toolName: String,
+            decision: String?,
             reasonCode: String?,
-            arguments: [String: String]?
+            approved: Bool?,
+            success: Bool?,
+            error: String?,
+            arguments: [String: Any]?
         ) {
-            events.append((event: event, decision: decision))
+            events.append((event: event, decision: decision ?? ""))
         }
     }
 
