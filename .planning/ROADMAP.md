@@ -30,13 +30,13 @@
 - Generate acoustic templates + reference embeddings from wake phrases
 - Tests: completion, abandonment, template generation
 
-### Phase 1.3: Bundle Keyword Classifier <- YOU ARE HERE
+### Phase 1.3: Bundle Keyword Classifier ✅ COMPLETE
 - Train MLXKeywordClassifier offline (~10K synthetic + LibriSpeech negatives)
 - Bundle model.safetensors + config.json
 - Score fusion: 0.7 * classifier + 0.3 * max(template_cosine)
 - Tests: loading, inference, fusion, threshold
 
-### Phase 1.4: Shadow-Mode Evaluator
+### Phase 1.4: Shadow-Mode Evaluator ✅ COMPLETE
 - ShadowWakeWordEvaluator: parallel detector comparison
 - Promotion: 200 attempts + FP < 1% + FN < 5%
 - Demotion: FP > 2% over 50-utterance window
