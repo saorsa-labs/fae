@@ -70,6 +70,7 @@ struct ContentView: View {
                 captureManager: faeCore.nativeEnrollmentCaptureManager,
                 speakerEncoder: faeCore.nativeEnrollmentSpeakerEncoder,
                 speakerProfileStore: faeCore.nativeEnrollmentSpeakerProfileStore,
+                wakeWordProfileStore: faeCore.nativeEnrollmentWakeWordProfileStore,
                 onComplete: { enrolledName in
                     showingNativeEnrollment = false
                     let trimmedName = enrolledName.trimmingCharacters(in: .whitespacesAndNewlines)

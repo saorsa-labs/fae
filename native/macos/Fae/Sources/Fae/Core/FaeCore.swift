@@ -37,6 +37,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     var nativeEnrollmentCaptureManager: AudioCaptureManager { captureManager }
     var nativeEnrollmentSpeakerEncoder: CoreMLSpeakerEncoder { speakerEncoder }
     var nativeEnrollmentSpeakerProfileStore: SpeakerProfileStore { speakerProfileStore }
+    var nativeEnrollmentWakeWordProfileStore: WakeWordProfileStore { wakeWordProfileStore }
 
     /// Whether Fae is currently speaking (TTS playback in progress).
     /// Exposed for the test harness to wait until speech completes.

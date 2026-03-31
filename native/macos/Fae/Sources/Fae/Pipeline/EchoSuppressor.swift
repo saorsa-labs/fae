@@ -657,19 +657,32 @@ struct EchoSuppressor {
     private static let maxRecentTextChunks = 8
 
     /// Word overlap threshold above which a transcript is considered echo.
-    /// 0.75 = at least 75% of the transcript's words must match recent assistant text.
-    /// Set high to avoid rejecting legitimate user speech that references Fae's words
-    /// (e.g., user says "check my calendar for Tuesday" after Fae said "check your calendar").
-    private static let textOverlapThreshold: Float = 0.75
+    /// 0.85 = at least 85% of the transcript's words must match recent assistant text.
+    /// Set high to avoid rejecting legitimate user speech that shares common words with
+    /// assistant text (e.g., "tell me about the project" after Fae said "the project").
+    private static let textOverlapThreshold: Float = 0.85
 
     /// Minimum consecutive matching words required as a secondary echo signal.
-    /// Requires at least 4 consecutive words to appear in the same order as assistant text.
-    /// This catches partial echo more reliably than bag-of-words overlap alone.
-    private static let textOverlapMinConsecutiveWords = 4
+    /// Requires at least 5 consecutive words to appear in the same order as assistant text.
+    /// Raised from 4 to reduce false positives from common word sequences.
+    private static let textOverlapMinConsecutiveWords = 5
 
     /// Minimum word count for bag-of-words overlap checking.
     /// Short utterances use exact-match instead (see isLikelyEchoText).
     private static let textOverlapMinWords = 4
+
+    /// Function words excluded from bag-of-words echo overlap.
+    /// These appear in virtually every English sentence and inflate overlap scores
+    /// when user speech happens to reference the same topic as assistant speech.
+    private static let functionWords: Set<String> = [
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+        "has", "have", "had", "do", "does", "did", "will", "would", "could",
+        "should", "can", "may", "might", "shall", "it", "its", "i", "me", "my",
+        "you", "your", "we", "our", "they", "them", "their", "this", "that",
+        "these", "those", "not", "no", "so", "if", "then", "also", "just",
+        "about", "up", "out", "into", "over", "after", "before",
+    ]
 
     /// Number words → digit normalization for echo matching.
     /// "five fifty six" in transcript should match "556" in assistant text.
@@ -729,9 +742,13 @@ struct EchoSuppressor {
 
         let assistantWords = Set(assistantText.split(separator: " ").map(String.init))
 
-        // Signal 1: Bag-of-words overlap (75%+ threshold).
-        let matchCount = words.filter { assistantWords.contains($0) }.count
-        let overlap = Float(matchCount) / Float(words.count)
+        // Signal 1: Bag-of-words overlap (85%+ threshold).
+        // Exclude common function words from the overlap count — they appear in almost
+        // every sentence and cause false positives when the user references the same topic.
+        let contentWords = words.filter { !Self.functionWords.contains($0) }
+        guard contentWords.count >= 3 else { return false }
+        let matchCount = contentWords.filter { assistantWords.contains($0) }.count
+        let overlap = Float(matchCount) / Float(contentWords.count)
         if overlap >= Self.textOverlapThreshold {
             return true
         }

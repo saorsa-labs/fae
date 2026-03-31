@@ -7,22 +7,28 @@
     "name": "Push-to-Talk + Fused Enrollment"
   },
   "phase": {
-    "number": "1.1",
-    "name": "Push-to-Talk Button",
-    "plan": "PLAN-phase-1.1-voice.md"
+    "number": "1.2",
+    "name": "Fused Enrollment Flow",
+    "plan": ".planning/PLAN-phase-1.2-fused-enrollment.md"
   },
   "progress": {
     "total_tasks": 8,
-    "completed_tasks": 7,
-    "current_task": 8
+    "completed_tasks": 0,
+    "current_task": "Task 1: Define new EnrollmentStep enum and state variables"
   },
   "review": {
-    "status": "pending",
-    "iteration": 0,
-    "last_verdict": null
+    "status": "passed",
+    "iteration": 1,
+    "last_verdict": "PASS"
   },
   "status": "executing",
-  "last_updated": "2026-03-31T15:48:00Z",
+  "last_updated": "2026-03-31T16:00:00Z",
   "design_doc": "~/.gstack/projects/saorsa-labs-fae/davidirvine-main-design-20260331-151032.md",
-  "completed_phases": []
+  "completed_phases": [
+    {
+      "number": "1.1",
+      "name": "Push-to-Talk Button",
+      "result": "AudioRingBuffer, hold-to-talk, orb click, MissedWakeStore, 17 tests. Commit: 3f2f7fd4"
+    }
+  ]
 }
