@@ -511,6 +511,38 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             self.mainWindow?.makeKeyAndOrderFront(nil)
         }
 
+        // Hold-to-talk (Right Option key) — press to listen, release to stop.
+        hotkeyManager.startHoldToTalk(
+            onPress: {
+                NotificationCenter.default.post(name: .faePTTPressed, object: nil)
+            },
+            onRelease: {
+                NotificationCenter.default.post(name: .faePTTReleased, object: nil)
+            }
+        )
+
+        // Observe PTT notifications to mute/unmute the pipeline.
+        NotificationCenter.default.addObserver(
+            forName: .faePTTPressed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let faeCore = self?.faeCore else { return }
+            Task {
+                await faeCore.setMicMutedForTesting(false)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .faePTTReleased,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let faeCore = self?.faeCore else { return }
+            Task {
+                await faeCore.setMicMutedForTesting(true)
+            }
+        }
+
         // Test harness: start localhost HTTP server for programmatic control.
         let isTestServerMode = CommandLine.arguments.contains("--test-server")
             || ProcessInfo.processInfo.environment["FAE_TEST_SERVER"] == "1"

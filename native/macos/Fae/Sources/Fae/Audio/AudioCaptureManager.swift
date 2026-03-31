@@ -41,12 +41,32 @@ actor AudioCaptureManager {
     /// Set by PipelineCoordinator when the user toggles the mic button off.
     var isMuted: Bool = false
 
+    // MARK: - Pre-Roll Ring Buffer
+
+    /// Rolling 2-second buffer of raw microphone audio for missed-wake capture.
+    /// Written unconditionally in ``emitChunk(_:)`` (before mute/gate checks)
+    /// so it always reflects actual mic input.
+    private var ringBuffer = AudioRingBuffer(capacity: 32_000)
+
     // MARK: - Public API
 
     /// Mute or unmute the microphone. When muted, incoming audio chunks are
     /// silently dropped before reaching the VAD/STT pipeline.
     func setMuted(_ muted: Bool) {
         isMuted = muted
+    }
+
+    /// Returns the most recent `seconds` of captured audio (up to 2 seconds),
+    /// sampled at ``targetSampleRate``.
+    ///
+    /// Returns an empty array if capture has not started or no audio has been
+    /// written yet. The ring buffer is written unconditionally (even when muted),
+    /// so this always reflects actual microphone input.
+    /// - Parameter seconds: Duration of audio to retrieve (clamped to buffer capacity).
+    /// - Returns: Float32 samples ordered oldest to newest.
+    func recentAudio(seconds: Double) -> [Float] {
+        let sampleCount = Int(seconds * Double(Self.targetSampleRate))
+        return ringBuffer.read(last: sampleCount)
     }
 
     /// Returns an AsyncStream of 576-sample mono Float32 chunks at 16kHz.
@@ -512,6 +532,13 @@ actor AudioCaptureManager {
     }
 
     private func emitChunk(_ chunk: AudioChunk) {
+        // Always write to ring buffer BEFORE mute/gate checks.
+        // This ensures recentAudio() reflects actual mic input regardless of
+        // pipeline state — critical for missed-wake capture on PTT press.
+        if !chunk.samples.isEmpty {
+            ringBuffer.write(chunk.samples)
+        }
+
         // Hard mute: mic button toggled off — drop chunk entirely (don't even
         // send silence, so the VAD/STT pipeline stays completely idle).
         if isMuted {

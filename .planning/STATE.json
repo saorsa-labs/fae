@@ -1,58 +1,28 @@
 {
   "version": 1,
-  "project": "Fae Permissions Great Purge",
-  "active": false,
+  "project": "Voice Experience Overhaul",
+  "active": true,
   "milestone": {
-    "number": 3,
-    "name": "Tests & Documentation"
+    "number": 1,
+    "name": "Push-to-Talk + Fused Enrollment"
   },
   "phase": {
-    "number": "3.2",
-    "name": "Documentation & CLAUDE.md Update",
-    "plan": null
+    "number": "1.1",
+    "name": "Push-to-Talk Button",
+    "plan": "PLAN-phase-1.1-voice.md"
   },
   "progress": {
-    "total_tasks": 5,
-    "completed_tasks": 5,
-    "current_task": null
+    "total_tasks": 8,
+    "completed_tasks": 7,
+    "current_task": 8
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-31T06:00:00Z",
-  "completed_phases": [
-    {
-      "number": "1.1",
-      "name": "Delete files + extract VLM sanitizer",
-      "result": "9 files deleted, VLM sanitizer extracted, -1429 lines"
-    },
-    {
-      "number": "1.2",
-      "name": "Refactor ApprovalOverlay into InputOverlay",
-      "result": "Created InputOverlayController + InputOverlayView, deleted 3 files, -1031 lines"
-    },
-    {
-      "number": "1.3",
-      "name": "Simplify ToolExecutor",
-      "result": "Rewrote ToolExecutor.swift: removed 14-layer pipeline. -368 lines."
-    },
-    {
-      "number": "2.1",
-      "name": "Simplify PipelineCoordinator",
-      "result": "Removed 49 errors worth of ticket/broker/limiter/guard code."
-    },
-    {
-      "number": "2.2",
-      "name": "Simplify Secondary Files + Tests",
-      "result": "Fixed 8 source files, deleted 10 test files, fixed 10 test files. Zero errors."
-    },
-    {
-      "number": "3.1",
-      "name": "Add New Test Suites",
-      "result": "5 new test suites (46 tests). All pass."
-    },
-    {
-      "number": "3.2",
-      "name": "Documentation & CLAUDE.md Update",
-      "result": "Removed all TrustedActionBroker/CapabilityTicket refs from CLAUDE.md. Updated security model."
-    }
-  ]
+  "review": {
+    "status": "pending",
+    "iteration": 0,
+    "last_verdict": null
+  },
+  "status": "executing",
+  "last_updated": "2026-03-31T15:48:00Z",
+  "design_doc": "~/.gstack/projects/saorsa-labs-fae/davidirvine-main-design-20260331-151032.md",
+  "completed_phases": []
 }

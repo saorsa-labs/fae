@@ -125,6 +125,10 @@ struct ContentView: View {
                     name: .faeConversationEngage,
                     object: nil
                 )
+                NotificationCenter.default.post(
+                    name: .faePTTPressed,
+                    object: nil
+                )
             },
             onOrbContextMenu: {
                 showCollapsedContextMenu()
@@ -143,6 +147,9 @@ struct ContentView: View {
                 onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } }
             )
             .frame(height: 300)
+            .overlay(alignment: .bottom) {
+                SubtitleOverlayView()
+            }
 
             // Subtle separator
             Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)

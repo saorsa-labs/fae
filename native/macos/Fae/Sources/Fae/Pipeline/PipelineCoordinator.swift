@@ -116,6 +116,27 @@ actor PipelineCoordinator {
         NSLog("PipelineCoordinator: mic %@", muted ? "muted" : "unmuted")
     }
 
+    // MARK: - Missed-Wake Tracking
+
+    /// Set when the wake-word detection path finds a candidate that did not
+    /// meet the confidence threshold. Consumed (and reset) by PTT press handler
+    /// to capture pre-roll audio for training.
+    private var failedWakeFlag: Bool = false
+
+    /// Called by the wake-word detection path when a candidate detection
+    /// did not meet the confidence threshold to start listening.
+    func markFailedWake() {
+        failedWakeFlag = true
+    }
+
+    /// Returns true (and resets the flag) if a failed wake was recorded
+    /// since the last call.
+    func consumeFailedWake() -> Bool {
+        let value = failedWakeFlag
+        failedWakeFlag = false
+        return value
+    }
+
     /// Live override for tool mode — set by FaeCore when the user changes tool settings.
     /// `nil` means fall back to `config.toolMode`.
     private var toolModeLive: String?

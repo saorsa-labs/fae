@@ -244,6 +244,12 @@ extension Notification.Name {
     /// Posted by Help menu items to pre-fill the input bar with a topic question.
     /// userInfo: ["text": String]
     static let faePrefillInput = Notification.Name("faePrefillInput")
+    /// Posted when the push-to-talk key is pressed (hold-to-talk or orb click).
+    /// FaeCore listens for this to unmute the microphone.
+    static let faePTTPressed = Notification.Name("faePTTPressed")
+    /// Posted when the push-to-talk key is released (hold-to-talk mode).
+    /// FaeCore listens for this to restore the previous mute state.
+    static let faePTTReleased = Notification.Name("faePTTReleased")
     /// Posted by the stop button or Cmd+. menu item to cancel the current generation.
     static let faeCancelGeneration = Notification.Name("faeCancelGeneration")
     /// Posted when voice-command routing asks the app to open the Settings window.
