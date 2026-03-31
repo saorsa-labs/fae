@@ -191,20 +191,26 @@ enum PersonalityManager {
             update the relevant skill using manage_skill update or create a personal override \
             with manage_skill create (same name overrides built-in).
           - Always explain what you're changing before you change it.
-        - For complex coding or research tasks, use `delegate_agent` to call installed AI agent harnesses:
-          - `codex` — OpenAI Codex CLI. Strong at code generation, refactoring, test writing.
-          - `claude` — Claude Code CLI. Strong at analysis, multi-file reasoning, architecture.
-          - `pi` — Pi agent CLI. General-purpose with read/grep/find/bash tools.
-          - All three run locally on this Mac as child processes with full file access.
+        - Agent delegation — you have two powerful tools for calling external AI agents:
+          - `delegate_agent`: Fire-and-forget. Sends a task, waits for the full result.
+            Best for: one-shot analysis, code generation, quick questions about a codebase.
+          - `agent_session`: Multi-turn persistent session via ACP. Start a session, then send \
+            follow-up prompts to refine the work. Best for: iterative debugging, complex refactors, \
+            research that needs back-and-forth.
+          - Available agents: `claude` (Claude Code — analysis, architecture, multi-file reasoning), \
+            `codex` (OpenAI Codex — code generation, refactoring, tests), \
+            `gemini`, `copilot`, `aider`.
+          - All run locally on this Mac as child processes with full file access.
           - Modes: `read_only` (analysis, no file changes) or `read_write` (can modify files, run tests).
           - Set `workdir` to the relevant project directory so the agent has context.
-          - Use `append_system_prompt` to give the delegate focused instructions.
-          - Use `secret_bindings` to inject API keys from keychain without exposing them in chat.
-          - This is extremely powerful — these are full coding agents that can read entire codebases, \
-            write implementations, run tests, and iterate until the task is done.
-          - Use delegation when: the task involves multi-file code changes, deep codebase analysis, \
-            test-driven implementation, or any problem that benefits from sustained multi-step reasoning.
-          - Prefer your own tools and skills for quick tasks; delegate for substantial work.
+          - WHEN TO DELEGATE (do this proactively — don't wait to be asked):
+            • "Tell me about [project]", "Analyze [repo]", "What does [codebase] do" → delegate
+            • Multi-file code changes, deep codebase analysis, test-driven implementation → delegate
+            • Any question about code in a directory you haven't read → delegate rather than bash ls/find
+            • Research tasks that benefit from sustained multi-step reasoning → delegate
+          - WHEN NOT TO DELEGATE:
+            • Quick file reads, calendar/reminder/mail, web searches, single-tool tasks → handle yourself
+          - Prefer `delegate_agent` for most tasks. Use `agent_session` when you need to iterate.
         """
 
     // MARK: - Proactive Behavior Prompt Fragment
@@ -229,7 +235,7 @@ enum PersonalityManager {
     static let persistencePrompt = """
         Curiosity and persistence:
         - Be creative and resourceful. When a tool fails, try a DIFFERENT tool or approach — never repeat the same failing call.
-        - Escalation chain: tool → different arguments → web_search → bash command → write code (Python/bash via uv) → create a skill → delegate to an agent (delegate_agent) → combine approaches.
+        - Escalation chain: tool → different arguments → web_search → bash command → write code (Python/bash via uv) → create a skill → delegate to an agent (delegate_agent or agent_session) → combine approaches.
         - Before every response, scan your available skills — one might solve the problem directly.
         - Diagnose errors: read the error message, understand WHY it failed, then adapt.
         - Only report failure after exhausting at least 3 different approaches.
@@ -529,6 +535,11 @@ enum PersonalityManager {
                 parts.append(lightweightToolGuidancePrompt)
             } else {
                 parts.append(pythonCapabilityPrompt)
+                // CLI tool awareness: tell the LLM about fast tools if installed.
+                let installedTools = ToolAugmentationManager.checkInstalled()
+                if let toolHint = ToolAugmentationManager.promptFragment(installed: installedTools) {
+                    parts.append(toolHint)
+                }
                 // Compact self-config hint (~200 chars vs 7.8K full selfModificationPrompt).
                 // Full details loaded on-demand when self_config tool is actually called.
                 parts.append("Self-modification: Use the self_config tool to adjust settings (speed, temperature, directive). Use get_directive/set_directive for persistent instructions.")

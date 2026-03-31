@@ -754,6 +754,22 @@ actor ACPSessionManager {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
             process.arguments = [binary]
 
+            // Signed apps inherit a minimal PATH — supply a rich one so we
+            // find binaries in common developer locations (~/.bun/bin, etc.).
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            process.environment = [
+                "PATH": [
+                    "\(home)/.bun/bin",
+                    "\(home)/.local/bin",
+                    "\(home)/.cargo/bin",
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    "/usr/bin",
+                    "/bin",
+                ].joined(separator: ":"),
+                "HOME": home,
+            ]
+
             let output = Pipe()
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice

@@ -248,6 +248,18 @@ actor FaeScheduler {
         scheduleRepeating("self_diagnostic", interval: 6 * 3600) { [weak self] in
             await self?.runSelfDiagnostic()
         }
+        scheduleRepeating("workspace_discovery", interval: 12 * 3600) { [weak self] in
+            await self?.runWorkspaceDiscovery()
+        }
+        scheduleRepeating("tool_augmentation_check", interval: 24 * 3600) { [weak self] in
+            await self?.runToolAugmentationCheck()
+        }
+        // Run workspace + tool checks shortly after startup for immediate awareness.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s delay
+            await self?.runToolAugmentationCheck()
+            await self?.runWorkspaceDiscovery()
+        }
 
         // Daily tasks (check every 60s, run if past due)
         scheduleRepeating("scheduler_tick", interval: 60) { [weak self] in
@@ -1906,6 +1918,8 @@ actor FaeScheduler {
         case "enhanced_morning_briefing": await runEnhancedMorningBriefing()
         case "capability_discovery":      await runCapabilityDiscovery()
         case "improvement_cycle":         await runImprovementCycle()
+        case "workspace_discovery":       await runWorkspaceDiscovery()
+        case "tool_augmentation_check":  await runToolAugmentationCheck()
         default:
             if await runUserTaskIfExists(id: id, at: runAt, silent: true, reason: "trigger") {
                 return
@@ -2009,6 +2023,123 @@ actor FaeScheduler {
         return Array(runs.suffix(max(1, limit)))
     }
 
+    // MARK: - Workspace Discovery
+
+    /// Scan the filesystem for git repositories and store as memory records.
+    /// Uses fd (fast) when available, falls back to FileManager. Works on any Mac.
+    private func runWorkspaceDiscovery() async {
+        guard let store = memoryStore else { return }
+        NSLog("FaeScheduler: workspace_discovery — running")
+
+        let projects = ToolAugmentationManager.discoverProjects()
+        guard !projects.isEmpty else {
+            NSLog("FaeScheduler: workspace_discovery — no projects found")
+            return
+        }
+
+        let text = ToolAugmentationManager.formatProjectsForMemory(projects)
+
+        do {
+            let existing = try await store.findActiveByTag("workspace_discovery")
+            if let previous = existing.first {
+                if previous.text != text {
+                    let newRecord = try await store.supersedeRecord(
+                        oldId: previous.id,
+                        newText: text,
+                        confidence: 0.95,
+                        sourceTurnId: nil,
+                        tags: ["workspace_discovery", "project_location"],
+                        note: "workspace_discovery: updated project list",
+                        importanceScore: 0.80,
+                        staleAfterSecs: 604_800  // 7 days
+                    )
+                    await embedRecord(id: newRecord.id, text: text)
+                    NSLog("FaeScheduler: workspace_discovery — updated with %d projects", projects.count)
+                } else {
+                    NSLog("FaeScheduler: workspace_discovery — no changes (%d projects)", projects.count)
+                }
+            } else {
+                let record = try await store.insertRecord(
+                    kind: .fact,
+                    text: text,
+                    confidence: 0.95,
+                    sourceTurnId: nil,
+                    tags: ["workspace_discovery", "project_location"],
+                    importanceScore: 0.80,
+                    staleAfterSecs: 604_800  // 7 days
+                )
+                await embedRecord(id: record.id, text: text)
+                NSLog("FaeScheduler: workspace_discovery — stored %d projects", projects.count)
+            }
+        } catch {
+            NSLog("FaeScheduler: workspace_discovery — error: %@", error.localizedDescription)
+        }
+    }
+
+    // MARK: - Tool Augmentation
+
+    /// Check which CLI tools are installed and store as a memory record.
+    /// Installs core-tier tools if a package manager is available.
+    private func runToolAugmentationCheck() async {
+        guard let store = memoryStore else { return }
+        NSLog("FaeScheduler: tool_augmentation_check — running")
+
+        // Install missing core tools if package manager is available.
+        if ToolAugmentationManager.packageManagerBinary() != nil {
+            let newly = await ToolAugmentationManager.installCoreTier()
+            if !newly.isEmpty {
+                NSLog("FaeScheduler: tool_augmentation — installed: %@", newly.joined(separator: ", "))
+            }
+        }
+
+        let installed = ToolAugmentationManager.checkInstalled()
+        let text = ToolAugmentationManager.availableToolsSummary(installed: installed)
+
+        do {
+            let existing = try await store.findActiveByTag("tool_augmentation")
+            if let previous = existing.first {
+                if previous.text != text {
+                    let newRecord = try await store.supersedeRecord(
+                        oldId: previous.id,
+                        newText: text,
+                        confidence: 0.95,
+                        sourceTurnId: nil,
+                        tags: ["tool_augmentation", "cli_tools"],
+                        note: "tool_augmentation_check: updated tool inventory",
+                        importanceScore: 0.70,
+                        staleAfterSecs: 604_800
+                    )
+                    await embedRecord(id: newRecord.id, text: text)
+                    NSLog("FaeScheduler: tool_augmentation — updated (%d tools)", installed.count)
+                } else {
+                    NSLog("FaeScheduler: tool_augmentation — no changes (%d tools)", installed.count)
+                }
+            } else {
+                let record = try await store.insertRecord(
+                    kind: .fact,
+                    text: text,
+                    confidence: 0.95,
+                    sourceTurnId: nil,
+                    tags: ["tool_augmentation", "cli_tools"],
+                    importanceScore: 0.70,
+                    staleAfterSecs: 604_800
+                )
+                await embedRecord(id: record.id, text: text)
+                NSLog("FaeScheduler: tool_augmentation — stored (%d tools)", installed.count)
+            }
+        } catch {
+            NSLog("FaeScheduler: tool_augmentation — error: %@", error.localizedDescription)
+        }
+    }
+
+    /// Embed a memory record for ANN recall.
+    private func embedRecord(id: String, text: String) async {
+        guard let engine = embeddingEngine, let vs = vectorStore else { return }
+        if let embedding = try? await engine.embed(text: text) {
+            try? await vs.upsertRecordEmbedding(recordId: id, embedding: embedding)
+        }
+    }
+
     func statusAll() async -> [[String: Any]] {
         var ids = Set(runHistory.keys).union(disabledTaskIDs)
         ids.formUnion(readSchedulerTasks().map(\.id))
@@ -2024,6 +2155,8 @@ actor FaeScheduler {
             "overnight_work", "enhanced_morning_briefing",
             "capability_discovery",
             "improvement_cycle",
+            "workspace_discovery",
+            "tool_augmentation_check",
         ]
         ids.formUnion(builtinIDs)
 

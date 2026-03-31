@@ -177,7 +177,7 @@ Truth sources: `SOUL.md`, `fae.db`, `docs/guides/Memory.md`.
 
 Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 
-**Repeating tasks**: `memory_reflect` (6h), `memory_reindex` (3h), `memory_migrate` (1h), `memory_inbox_ingest` (5min), `memory_digest` (6h), `check_fae_update` (6h), `skill_health_check` (5min), `self_diagnostic` (6h).
+**Repeating tasks**: `memory_reflect` (6h), `memory_reindex` (3h), `memory_migrate` (1h), `memory_inbox_ingest` (5min), `memory_digest` (6h), `check_fae_update` (6h), `skill_health_check` (5min), `self_diagnostic` (6h), `workspace_discovery` (12h), `tool_augmentation_check` (24h).
 
 **Daily tasks** (via scheduler_tick): `memory_backup` (02:00), `vault_backup` (02:30), `memory_gc` (03:30), `noise_budget_reset` (00:00), `morning_briefing` (configurable, default 08:00, suppressed when enhanced briefing active), `skill_proposals` (11:00), `skill_distill` (13:00), `stale_relationships` (weekly Sun 10:00), `capability_discovery` (every 3 days, 14:00), `embedding_reindex` (weekly Sun 03:00).
 
@@ -209,6 +209,33 @@ Collect corrections → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
 **LoRA adapter loading:** MLXLLMEngine.loadAdapter(from:), unloadAdapter(), swapAdapter(to:). Uses mlx-swift-lm's built-in LoRAContainer. Hot-swap via SelfConfigTool `training.personal_adapter_path`.
 
 **Scheduler tool access:** Scheduler tasks run as owner (isOwner=true). Proactive allowlists in `ProactiveRequestContext` limit available tools per task.
+
+## Tool Augmentation & Workspace Discovery
+
+`ToolAugmentationManager` (`Core/ToolAugmentationManager.swift`) manages CLI tool discovery, installation, and workspace scanning.
+
+**Workspace discovery** (`workspace_discovery`, 12h + 30s after startup): Scans common project directories on any Mac for git repos. Uses `fd` if installed (fast), falls back to FileManager. Detects project type (Rust/Swift/JS/Python/Go/etc.) and extracts GitHub remote URLs. Stores as a `fact` memory record tagged `workspace_discovery` + `project_location`. Scans: `~/Desktop/`, `~/Documents/`, `~/Developer/`, `~/Projects/`, `~/Code/`, `~/repos/`, `~/src/`, `~/workspace/`, `~/work/`, `~/dev/`, `~/github/`, `~/git/`, plus `~` direct children. Max depth 3-4 levels.
+
+**Tool augmentation** (`tool_augmentation_check`, 24h + 30s after startup): Checks which CLI tools are installed, installs core-tier tools via brew/zb if a package manager is available, stores inventory as a `fact` memory record tagged `tool_augmentation`.
+
+| Tier | Tool | Binary | Purpose |
+|------|------|--------|---------|
+| Core | fd | `fd` | Fast file finder (replaces find) |
+| Core | ripgrep | `rg` | Fast text search (replaces grep) |
+| Core | jq | `jq` | JSON processor |
+| Core | GitHub CLI | `gh` | GitHub issues, PRs, repos |
+| Core | tree | `tree` | Directory structure viewer |
+| Core | bat | `bat` | Cat with syntax highlighting |
+| Extended | tokei | `tokei` | Code statistics by language |
+| Extended | ffmpeg | `ffmpeg` | Audio and video processing |
+| Extended | pandoc | `pandoc` | Document format conversion |
+| Extended | yq | `yq` | YAML processor |
+| Extended | delta | `delta` | Better git diffs |
+| Extended | ImageMagick | `magick` | Image processing |
+
+**Prompt awareness**: `PersonalityManager.assemblePrompt()` injects a compact hint about available tools so the LLM prefers `fd` over `find`, `rg` over `grep`, etc. Tool check results are cached for 5 minutes.
+
+**SafeBashExecutor PATH**: `~/.local/bin:~/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
 
 ## Tool system
 
@@ -503,7 +530,7 @@ Sources/
 
 All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 
-### Core/ (26 files)
+### Core/ (27 files)
 
 | File | Role |
 |------|------|
@@ -532,6 +559,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `CapabilitySnapshotService.swift` | Capability state snapshots |
 | `ChannelSettingsStore.swift` | Channel configuration persistence |
 | `SettingsCapabilityManifest.swift` | Settings capability definitions |
+| `ToolAugmentationManager.swift` | CLI tool discovery, install, workspace scanning, project detection |
 | `ProgressivePhotoCapture.swift` | Camera frame capture for progressive visual identity updates |
 
 ### ML/ (16 files)

@@ -51,7 +51,7 @@ enum SafeBashExecutor {
 
         // Constrained environment: expose only a minimal set.
         let home = NSHomeDirectory()
-        let minimalPath = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        let minimalPath = "\(home)/.local/bin:\(home)/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         process.environment = [
             "PATH": minimalPath,
             "HOME": home,
