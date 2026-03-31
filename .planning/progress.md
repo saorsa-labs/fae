@@ -198,3 +198,10 @@ All milestones done:
 - NOTE: Expected compile errors from deleted types. Resolved in Phase 1.2+.
 
 ### Phase 1.2: Refactor ApprovalOverlay into InputOverlay — IN PROGRESS
+### Phase 1.2 Complete - Tue 31 Mar 2026 16:16:53 BST
+- 6-step fused enrollment: wake phrases (4x), conversational (3x 8s), room noise (20s), photo, complete
+- Atomic commit on step 6 — no partial writes if user abandons
+- wakeWordProfileStore parameter added to SpeakerEnrollmentView
+- nativeEnrollmentWakeWordProfileStore accessor added to FaeCore
+- 13 tests: completion, abandonment, template generation, noise floor, consistency
+- All FusedEnrollmentFlowTests pass
