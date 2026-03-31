@@ -74,6 +74,17 @@ struct WakeWordAcousticDetector {
         )
     }
 
+    /// Return all template cosine similarities for the given audio, sorted descending.
+    /// Used by WakeWordScoreFusion to combine with classifier scores.
+    static func templateSimilarities(
+        samples: [Float],
+        sampleRate: Int,
+        templates: [Template]
+    ) -> [Float] {
+        guard let prepared = prepare(samples: samples, sampleRate: sampleRate) else { return [] }
+        return allSimilarities(embedding: prepared.embedding, templates: templates)
+    }
+
     static func bestSimilarity(samples: [Float], sampleRate: Int, templates: [Template]) -> Float? {
         guard let prepared = prepare(samples: samples, sampleRate: sampleRate) else { return nil }
         return bestSimilarity(embedding: prepared.embedding, templates: templates)

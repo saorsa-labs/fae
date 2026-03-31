@@ -605,6 +605,9 @@ struct SpeakerEnrollmentView: View {
     /// Commits all enrollment data atomically. Nothing is written to persistent
     /// stores before this point — if the user cancels at any earlier step,
     /// no partial data is persisted.
+    /// Commits all enrollment data. Each store write is independent — if one fails,
+    /// the others still persist. This is acceptable for a local-only app because
+    /// partial enrollment is recoverable (user can re-enroll or fix via settings).
     private func commitAndComplete() async {
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -616,6 +619,10 @@ struct SpeakerEnrollmentView: View {
                 role: .owner,
                 displayName: trimmedName
             )
+            let saved = await speakerProfileStore.hasOwnerProfile()
+            if !saved {
+                NSLog("SpeakerEnrollmentView: WARNING — speaker profile persist may have failed")
+            }
         }
 
         // 2. Record acoustic wake templates
@@ -626,18 +633,37 @@ struct SpeakerEnrollmentView: View {
                 source: "enrollment"
             )
         }
+        let wakeCount = await wakeWordProfileStore.acousticTemplates().count
+        if wakeCount < wakeTemplates.count {
+            NSLog("SpeakerEnrollmentView: WARNING — wake template persist may have failed (stored=%d, expected=%d)",
+                  wakeCount, wakeTemplates.count)
+        }
 
         // 3. Save photo if captured
         if let data = capturedPhotoData {
             onPhotoCapture?(data)
         }
 
+        // 4. Persist room noise baseline
+        if noiseFloorRMS > 0 {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let json = "{\n  \"rms\": \(noiseFloorRMS),\n  \"captured\": \"\(formatter.string(from: Date()))\"\n}\n"
+            do {
+                try json.write(to: FaeDirectories.noiseProfileFile, atomically: true, encoding: .utf8)
+                NSLog("SpeakerEnrollmentView: noise profile saved rms=%.5f", noiseFloorRMS)
+            } catch {
+                NSLog("SpeakerEnrollmentView: noise profile save failed — %@", error.localizedDescription)
+            }
+        }
+
         NSLog(
-            "SpeakerEnrollmentView: enrollment committed — name=%@ conv=%d wake=%d photo=%@",
+            "SpeakerEnrollmentView: enrollment committed — name=%@ conv=%d wake=%d photo=%@ noise=%.5f",
             trimmedName,
             conversationalEmbeddings.count,
             wakeTemplates.count,
-            capturedPhotoData != nil ? "yes" : "no"
+            capturedPhotoData != nil ? "yes" : "no",
+            noiseFloorRMS
         )
 
         step = .complete

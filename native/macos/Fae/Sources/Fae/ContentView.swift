@@ -126,10 +126,6 @@ struct ContentView: View {
                     name: .faeConversationEngage,
                     object: nil
                 )
-                NotificationCenter.default.post(
-                    name: .faePTTPressed,
-                    object: nil
-                )
             },
             onOrbContextMenu: {
                 showCollapsedContextMenu()

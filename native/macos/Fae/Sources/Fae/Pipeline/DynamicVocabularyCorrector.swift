@@ -209,6 +209,63 @@ actor DynamicVocabularyCorrector {
         )
     }
 
+    // MARK: - PersonalLexicon Integration
+
+    /// Ingest entries from a `PersonalLexicon` snapshot into the correction table.
+    ///
+    /// Called during `rebuild()` or independently after a lexicon update. Lexicon
+    /// variants are added as `source: "lexicon"` entries. Existing entries from
+    /// other sources are preserved; lexicon entries fill gaps but do not override.
+    func ingestLexicon(_ snapshot: PersonalLexicon.Snapshot) {
+        var newEntries: [CorrectionEntry] = []
+        let existingPatterns = Set(corrections.map(\.pattern))
+
+        for entry in snapshot.entries {
+            let canonical = entry.canonical
+            guard canonical.count >= 2 else { continue }
+
+            // Add explicit variants from the lexicon.
+            for variant in entry.variants {
+                let pattern = variant.lowercased()
+                guard !pattern.isEmpty, pattern != canonical.lowercased() else { continue }
+                guard !existingPatterns.contains(pattern) else { continue }
+                newEntries.append(CorrectionEntry(
+                    pattern: pattern,
+                    replacement: canonical,
+                    source: "lexicon:\(entry.source)"
+                ))
+            }
+
+            // Also generate phonetic variants for the canonical name if not already present.
+            for variant in Self.phoneticVariants(of: canonical) {
+                guard !existingPatterns.contains(variant) else { continue }
+                newEntries.append(CorrectionEntry(
+                    pattern: variant,
+                    replacement: canonical,
+                    source: "lexicon:\(entry.source)"
+                ))
+            }
+        }
+
+        guard !newEntries.isEmpty else { return }
+
+        // Deduplicate within new entries.
+        var seen = existingPatterns
+        let novel = newEntries.filter { entry in
+            guard !seen.contains(entry.pattern) else { return false }
+            seen.insert(entry.pattern)
+            return true
+        }
+
+        corrections.append(contentsOf: novel)
+        corrections.sort { $0.pattern.count > $1.pattern.count }
+
+        NSLog(
+            "DynamicVocabularyCorrector: ingested %d lexicon entries from %d vocabulary items",
+            novel.count, snapshot.entries.count
+        )
+    }
+
     // MARK: - Phonetic Variant Generation
 
     /// Generate common ASR misrecognition variants for a proper name.

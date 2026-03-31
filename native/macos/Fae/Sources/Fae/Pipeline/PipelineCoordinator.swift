@@ -116,6 +116,11 @@ actor PipelineCoordinator {
         NSLog("PipelineCoordinator: mic %@", muted ? "muted" : "unmuted")
     }
 
+    /// Query the current mic mute state from the audio capture manager.
+    func isMicMuted() async -> Bool {
+        await capture.isMuted
+    }
+
     // MARK: - Missed-Wake Tracking
 
     /// Set when the wake-word detection path finds a candidate that did not
@@ -327,9 +332,14 @@ actor PipelineCoordinator {
     private var vad = VoiceActivityDetector()
     private var echoSuppressor = EchoSuppressor()
     private let vocabularyCorrector = DynamicVocabularyCorrector()
+    private let personalLexicon: PersonalLexicon
+    private let asrConfidenceDetector = ASRConfidenceDetector()
     private var thinkTagStripper = TextProcessing.ThinkTagStripper()
     private var voiceTagStripper = VoiceTagStripper()
     private let keywordSpotter: KeywordSpotter
+
+    /// Shadow-mode evaluator for acoustic wake-word detection promotion/demotion.
+    private let shadowWakeEvaluator = ShadowWakeWordEvaluator()
 
     /// Micro keyword classifier for audio-based interrupt detection.
     /// When available, classifies accumulated barge-in audio to populate
@@ -605,6 +615,7 @@ actor PipelineCoordinator {
         skillManager: SkillManager? = nil,
         toolAnalytics: ToolAnalytics? = nil,
         modelManager: ModelManager? = nil,
+        personalLexicon: PersonalLexicon? = nil,
         rescueMode: Bool = false
     ) {
         self.eventBus = eventBus
@@ -626,6 +637,7 @@ actor PipelineCoordinator {
         self.skillManager = skillManager
         self.toolAnalytics = toolAnalytics
         self.modelManager = modelManager
+        self.personalLexicon = personalLexicon ?? PersonalLexicon()
         self.isRescueMode = rescueMode
         self.toolExecutor = ToolExecutor(
             registry: registry,
@@ -752,7 +764,8 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .command, "Wake aliases loaded: \(wakeAliases.joined(separator: ", "))")
         }
 
-        // Build dynamic vocabulary corrections from known names.
+        // Load personal vocabulary and build dynamic corrections from known names.
+        await personalLexicon.load()
         await rebuildVocabularyCorrections()
 
         // Wire keyword classifier and turn detector from ModelManager (non-critical).
@@ -1753,19 +1766,55 @@ actor PipelineCoordinator {
         let prefixMaxSamples = Int(Float(segment.sampleRate) * WakeWordAcousticDetector.maxDurationSeconds)
         let prefix = Array(segment.samples.prefix(prefixMaxSamples))
         let templates = await wakeStore.acousticTemplates()
+
+        // Get template similarities for fusion.
+        let similarities = WakeWordAcousticDetector.templateSimilarities(
+            samples: prefix,
+            sampleRate: segment.sampleRate,
+            templates: templates
+        )
+
+        // Get classifier wake confidence if available.
+        var classifierScore: Float?
+        if let classifier = keywordClassifier {
+            if let result = try? await classifier.classify(audio: prefix, sampleRate: segment.sampleRate),
+               result.label == .wake {
+                classifierScore = result.confidence
+            }
+        }
+
+        // Fuse scores from both detectors.
+        let fusionResult = WakeWordScoreFusion.fuse(
+            classifierScore: classifierScore,
+            templateSimilarities: similarities
+        )
+
+        // Shadow evaluator is fed later in processRecognizedVoiceText()
+        // where both acoustic and text detection results are known.
+
+        guard fusionResult.isActivated else {
+            // Mark failed wake for missed-wake capture on next PTT press.
+            if fusionResult.score > 0 {
+                markFailedWake()
+            }
+            return nil
+        }
+
+        // Find the best detection above threshold for the return value.
         guard let detection = WakeWordAcousticDetector.bestDetection(
             samples: prefix,
             sampleRate: segment.sampleRate,
             templates: templates,
             threshold: effectiveAcousticWakeThreshold()
         ) else {
+            markFailedWake()
             return nil
         }
 
         debugLog(
             debugConsole,
             .command,
-            "Acoustic wake detected on segment sim=\(String(format: "%.3f", detection.similarity))"
+            "Acoustic wake detected on segment sim=\(String(format: "%.3f", detection.similarity)) fusion=\(String(format: "%.3f", fusionResult.score)) mode=\(fusionResult.mode)"
         )
         publishVoiceAttention(
             stage: "wake",
@@ -1818,12 +1867,45 @@ actor PipelineCoordinator {
         let threshold = duringPlayback ? baseThreshold + 0.03 : baseThreshold
 
         let templates = await wakeStore.acousticTemplates()
+
+        // Use score fusion for streaming wake detection.
+        let streamSimilarities = WakeWordAcousticDetector.templateSimilarities(
+            samples: speechInputStage.streamingWakeSamples,
+            sampleRate: AudioCaptureManager.targetSampleRate,
+            templates: templates
+        )
+        var streamClassifierScore: Float?
+        if let classifier = keywordClassifier {
+            if let result = try? await classifier.classify(
+                audio: speechInputStage.streamingWakeSamples,
+                sampleRate: AudioCaptureManager.targetSampleRate
+            ), result.label == .wake {
+                streamClassifierScore = result.confidence
+            }
+        }
+        let streamFusion = WakeWordScoreFusion.fuse(
+            classifierScore: streamClassifierScore,
+            templateSimilarities: streamSimilarities
+        )
+        await shadowWakeEvaluator.recordResult(
+            acousticDetected: streamFusion.isActivated,
+            textDetected: false
+        )
+
+        guard streamFusion.isActivated else {
+            if streamFusion.score > 0 {
+                markFailedWake()
+            }
+            return
+        }
+
         guard let detection = WakeWordAcousticDetector.bestDetection(
             samples: speechInputStage.streamingWakeSamples,
             sampleRate: AudioCaptureManager.targetSampleRate,
             templates: templates,
             threshold: threshold
         ) else {
+            markFailedWake()
             return
         }
 
@@ -2234,6 +2316,59 @@ actor PipelineCoordinator {
             entityNames: entityNames,
             speakerNames: speakerNames
         )
+
+        // Ingest PersonalLexicon entries on top of the standard vocabulary sources.
+        let lexiconSnapshot = await personalLexicon.snapshot()
+        await vocabularyCorrector.ingestLexicon(lexiconSnapshot)
+    }
+
+    /// Prompt the user to type a word that the ASR is uncertain about.
+    ///
+    /// Posts a notification that the conversation window can pick up to show
+    /// a gentle inline suggestion. The user can type the correct spelling,
+    /// which feeds back into PersonalLexicon and DynamicVocabularyCorrector.
+    private func promptForSpellingCorrection(variants: [String]) async {
+        guard !variants.isEmpty else { return }
+
+        let prompt = "I noticed I've been hearing '\(variants.first ?? "")' differently each time. " +
+            "Could you type the correct spelling so I remember it?"
+
+        debugLog(debugConsole, .pipeline, "Spelling correction prompt: \(prompt)")
+
+        // Store the variants so when the user types a response, we can create
+        // the lexicon entry with the wrong variants.
+        pendingSpellingCorrectionVariants = variants
+    }
+
+    /// Variants awaiting typed correction from the user.
+    /// Set by `promptForSpellingCorrection`, consumed by `applyTypedSpellingCorrection`.
+    private var pendingSpellingCorrectionVariants: [String]?
+
+    /// Apply a typed spelling correction from the user.
+    ///
+    /// Called when the user types a word in response to a spelling correction prompt.
+    /// Updates PersonalLexicon and DynamicVocabularyCorrector.
+    func applyTypedSpellingCorrection(_ correctSpelling: String) async {
+        let trimmed = correctSpelling.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let variants = pendingSpellingCorrectionVariants ?? []
+        pendingSpellingCorrectionVariants = nil
+
+        // Add to PersonalLexicon.
+        await personalLexicon.upsert(
+            canonical: trimmed,
+            variants: variants.filter { $0.lowercased() != trimmed.lowercased() },
+            source: "typed_correction"
+        )
+        await personalLexicon.save()
+
+        // Add to DynamicVocabularyCorrector for immediate effect.
+        for variant in variants where variant.lowercased() != trimmed.lowercased() {
+            await vocabularyCorrector.addCorrectionPair(wrong: variant, correct: trimmed)
+        }
+
+        debugLog(debugConsole, .pipeline, "Typed spelling correction applied: '\(trimmed)' (was: \(variants.joined(separator: ", ")))")
     }
 
     private func learnWakeAliasIfNeeded(rawText: String) async {
@@ -3421,6 +3556,14 @@ actor PipelineCoordinator {
             wakeSource = nil
         }
         let addressedToFae = wakeMatch != nil || effectiveAcousticWakeDetection != nil
+
+        // Feed shadow evaluator now that both detection results are known.
+        // This enables accurate promotion/demotion statistics.
+        await shadowWakeEvaluator.recordResult(
+            acousticDetected: effectiveAcousticWakeDetection != nil,
+            textDetected: wakeMatch != nil
+        )
+
         if addressedToFae {
             await learnWakeAliasIfNeeded(rawText: effectiveRawText)
             // Auto-enroll acoustic wake template from confirmed wake segments
@@ -4089,6 +4232,18 @@ actor PipelineCoordinator {
             // Fix garbled wake word: "[garble], [command]" → "Fae, [command]"
             text = TextProcessing.fixGarbledWakeWord(text)
 
+            // Feed into ASR confidence detector for spelling divergence analysis.
+            if let uncertain = await asrConfidenceDetector.recordAndDetect(text) {
+                debugLog(debugConsole, .pipeline, "ASR uncertainty detected: \(uncertain.variants.joined(separator: "/"))")
+                // Schedule a gentle correction prompt after the current turn completes.
+                let variants = uncertain.variants
+                Task { [weak self] in
+                    // Brief delay to let the current turn finish.
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    await self?.promptForSpellingCorrection(variants: variants)
+                }
+            }
+
             NSLog("PipelineCoordinator: STT → \"%@\"", text)
             debugLog(debugConsole, .stt, text)
 
@@ -4638,15 +4793,19 @@ actor PipelineCoordinator {
             }
         }
 
-        // Feed name corrections into DynamicVocabularyCorrector.
+        // Feed name corrections into DynamicVocabularyCorrector and PersonalLexicon.
         if record.correction.kind == .nameError,
            let correct = record.correction.correctedValue
         {
+            let wrong = record.correction.originalValue
             await vocabularyCorrector.addCorrectionPair(
-                wrong: record.correction.originalValue,
+                wrong: wrong,
                 correct: correct
             )
-            debugLog(debugConsole, .pipeline, "Fed name correction to vocabulary corrector: \(correct)")
+            let variants = wrong.map { [$0] } ?? []
+            await personalLexicon.upsert(canonical: correct, variants: variants, source: "correction")
+            await personalLexicon.save()
+            debugLog(debugConsole, .pipeline, "Fed name correction to vocabulary corrector + lexicon: \(correct)")
         }
     }
 

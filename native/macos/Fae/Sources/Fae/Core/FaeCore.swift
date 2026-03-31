@@ -194,6 +194,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var vectorStore: VectorStore?
     private let speakerProfileStore: SpeakerProfileStore
     private let wakeWordProfileStore: WakeWordProfileStore
+    private let personalLexicon = PersonalLexicon()
+    private var missedWakeStore: MissedWakeStore?
     private var skillManagerRef: SkillManager?
     private var pluginManagerRef: PluginManager?
     private var scheduler: FaeScheduler?
@@ -232,6 +234,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // Ensure user has a copy of SOUL.md on first launch.
         SoulManager.ensureUserCopy()
         HeartbeatManager.ensureUserCopy()
+
+        // Initialize missed-wake store (non-critical — nil on failure).
+        self.missedWakeStore = try? MissedWakeStore()
+
+        // Load shared personal lexicon from disk.
+        Task { await personalLexicon.load() }
 
         // Initialize vault (non-blocking — backup failures are logged but not fatal).
         let vault = GitVaultManager()
@@ -427,6 +435,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     skillManager: skillManager,
                     toolAnalytics: toolAnalytics,
                     modelManager: modelManager,
+                    personalLexicon: personalLexicon,
                     rescueMode: isRescue
                 )
                 try await coordinator.start()
@@ -508,6 +517,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         await sched?.shouldPersistScreenContext(contentHash: hash) ?? true
                     }
 
+                    await sched.setPersonalLexicon(personalLexicon)
+                    await sched.setPipelineCoordinator(coordinator)
                     await sched.setAwarenessConfig(config.awareness)
                     await sched.setVisionEnabled(config.vision.enabled)
                     await sched.setSpeakerProfileStore(speakerProfileStore)
@@ -2153,6 +2164,20 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 NotificationCenter.default.post(name: .faeToolModeUpgradeDismiss, object: nil)
 
                 NSLog("FaeCore: owner enrollment complete — hasOwnerSetUp=true, awareness active")
+
+                // Trigger vocabulary harvest from Contacts/Calendar (best-effort).
+                // Uses the shared PersonalLexicon instance to avoid file races.
+                let sharedLexicon = self.personalLexicon
+                let coordinator = self.pipelineCoordinator
+                Task.detached(priority: .utility) {
+                    let result = await VocabularyHarvester.harvest(into: sharedLexicon)
+                    NSLog(
+                        "FaeCore: post-enrollment vocabulary harvest — %d new entries",
+                        result.newEntries
+                    )
+                    // Refresh live DVC cache so new names are corrected immediately.
+                    await coordinator?.rebuildVocabularyCorrections()
+                }
             }
         }
     }
@@ -2294,6 +2319,30 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Check if an owner voiceprint is enrolled in the speaker profile store.
     func hasOwnerVoiceprint() async -> Bool {
         await speakerProfileStore.hasOwnerProfile()
+    }
+
+    /// Capture pre-roll audio when PTT is pressed after a failed wake-word detection.
+    func captureMissedWakeIfNeeded() async {
+        guard let coordinator = pipelineCoordinator else { return }
+        let hadFailed = await coordinator.consumeFailedWake()
+        guard hadFailed, let store = missedWakeStore else { return }
+        let samples = await captureManager.recentAudio(seconds: 2.0)
+        guard !samples.isEmpty else { return }
+        Task.detached(priority: .background) {
+            await store.save(samples: samples)
+        }
+    }
+
+    /// Mute/unmute the microphone via the pipeline coordinator.
+    ///
+    /// Preferred API for PTT and UI — forwards to `PipelineCoordinator.setMicMuted()`.
+    func pipelineSetMicMuted(_ muted: Bool) async {
+        await pipelineCoordinator?.setMicMuted(muted)
+    }
+
+    /// Query the current mic mute state from the audio capture manager.
+    func isMicMuted() async -> Bool {
+        await pipelineCoordinator?.isMicMuted() ?? true
     }
 
     /// Mute/unmute the microphone directly without changing conversation gate state.

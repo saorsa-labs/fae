@@ -163,6 +163,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     // Local runtime server for OpenAI-compatible localhost access.
     var localRuntimeServer: FaeLocalRuntimeServer?
 
+    /// Whether the mic was muted before the current PTT press. Used to restore state on release.
+    var micWasMutedBeforePTT: Bool = true
+
     // Test harness (only active with --test-server or FAE_TEST_SERVER=1)
     var testServer: TestServer?
     var debugFileLogger: DebugFileLogger?
@@ -522,14 +525,20 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // Observe PTT notifications to mute/unmute the pipeline.
+        // Track prior mute state so release restores it instead of forcing mute.
         NotificationCenter.default.addObserver(
             forName: .faePTTPressed,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let faeCore = self?.faeCore else { return }
-            Task {
-                await faeCore.setMicMutedForTesting(false)
+            guard let self else { return }
+            let faeCore = self.faeCore
+            Task { @MainActor in
+                self.micWasMutedBeforePTT = await faeCore.isMicMuted()
+                await faeCore.pipelineSetMicMuted(false)
+
+                // Capture pre-roll audio if a wake-word detection recently failed.
+                await faeCore.captureMissedWakeIfNeeded()
             }
         }
         NotificationCenter.default.addObserver(
@@ -537,9 +546,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let faeCore = self?.faeCore else { return }
-            Task {
-                await faeCore.setMicMutedForTesting(true)
+            guard let self else { return }
+            let faeCore = self.faeCore
+            Task { @MainActor in
+                await faeCore.pipelineSetMicMuted(self.micWasMutedBeforePTT)
             }
         }
 

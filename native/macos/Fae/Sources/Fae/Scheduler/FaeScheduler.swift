@@ -53,6 +53,12 @@ actor FaeScheduler {
     /// Action receipt store for GC — set by FaeCore.
     private var receiptStore: ReceiptStore?
 
+    /// Shared personal lexicon — single actor instance shared with PipelineCoordinator.
+    private var personalLexicon: PersonalLexicon?
+
+    /// Pipeline coordinator reference for refreshing vocabulary after harvest.
+    private weak var pipelineCoordinatorRef: PipelineCoordinator?
+
     /// Store for the autonomous self-improvement loop.
     private var improvementStore: ImprovementStore?
 
@@ -136,6 +142,16 @@ actor FaeScheduler {
     /// Wire the action receipt store for GC during memory_gc.
     func setReceiptStore(_ store: ReceiptStore) {
         receiptStore = store
+    }
+
+    /// Wire the shared personal lexicon so vocabulary harvest uses the same actor instance.
+    func setPersonalLexicon(_ lexicon: PersonalLexicon) {
+        personalLexicon = lexicon
+    }
+
+    /// Wire the pipeline coordinator for refreshing vocabulary corrections after harvest.
+    func setPipelineCoordinator(_ coordinator: PipelineCoordinator) {
+        pipelineCoordinatorRef = coordinator
     }
 
     /// Wire the improvement store and create the cycle coordinator.
@@ -1697,6 +1713,10 @@ actor FaeScheduler {
         if weekday == 1, hour == 0, minute < 2 {
             surfacedDiscoveryItems.removeAll()
         }
+        // vocabulary_harvest: daily 04:00 — harvest Contacts + Calendar names into PersonalLexicon.
+        if hour == 4, minute < 2 {
+            await runDailyIfNeeded("vocabulary_harvest") { await runVocabularyHarvest() }
+        }
         // embedding_reindex: weekly on Sunday at 03:00.
         if weekday == 1, hour == 3, minute < 2 {
             await runDailyIfNeeded("embedding_reindex") { await runEmbeddingReindex() }
@@ -2021,6 +2041,27 @@ actor FaeScheduler {
         }
         let runs = runHistory[taskID] ?? []
         return Array(runs.suffix(max(1, limit)))
+    }
+
+    // MARK: - Vocabulary Harvest
+
+    /// Harvest proper names from Contacts and Calendar into PersonalLexicon.
+    /// Runs daily at 04:00 and once after enrollment completion.
+    private func runVocabularyHarvest() async {
+        NSLog("FaeScheduler: vocabulary_harvest — running")
+        let lexicon = personalLexicon ?? PersonalLexicon()
+        if personalLexicon == nil {
+            await lexicon.load()
+        }
+        let result = await VocabularyHarvester.harvest(into: lexicon)
+        NSLog(
+            "FaeScheduler: vocabulary_harvest — %d new, %d merged, skipped: %@",
+            result.newEntries, result.mergedEntries,
+            result.skippedSources.isEmpty ? "none" : result.skippedSources.joined(separator: ", ")
+        )
+
+        // Refresh live DVC cache so new names are corrected immediately.
+        await pipelineCoordinatorRef?.rebuildVocabularyCorrections()
     }
 
     // MARK: - Workspace Discovery

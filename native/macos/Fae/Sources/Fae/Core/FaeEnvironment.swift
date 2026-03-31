@@ -184,6 +184,12 @@ enum FaeDirectories {
     /// `roleplay_voices.json` — roleplay voice assignments.
     static let roleplayVoicesFile: URL = root.appendingPathComponent("roleplay_voices.json")
 
+    /// `personal_lexicon.json` — user vocabulary for post-ASR correction.
+    static let personalLexiconFile: URL = root.appendingPathComponent("personal_lexicon.json")
+
+    /// `noise_profile.json` — room noise baseline captured during enrollment.
+    static let noiseProfileFile: URL = root.appendingPathComponent("noise_profile.json")
+
     /// `owner_photo.jpg` — owner reference photo for visual identity.
     static let ownerPhotoFile: URL = root.appendingPathComponent("owner_photo.jpg")
 

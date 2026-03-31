@@ -1,28 +1,28 @@
 {
   "version": 1,
   "project": "Voice Experience Overhaul",
-  "active": true,
+  "active": false,
   "milestone": {
-    "number": 1,
-    "name": "Push-to-Talk + Fused Enrollment"
+    "number": 2,
+    "name": "Proactive Vocabulary Learning"
   },
   "phase": {
-    "number": "1.3",
-    "name": "Bundle Keyword Classifier",
+    "number": "2.3",
+    "name": "Enhanced Correction Loop",
     "plan": null
   },
   "progress": {
-    "total_tasks": 0,
-    "completed_tasks": 0,
+    "total_tasks": 9,
+    "completed_tasks": 9,
     "current_task": null
   },
   "review": {
-    "status": "pending",
-    "iteration": 0,
-    "last_verdict": null
+    "status": "complete",
+    "iteration": 1,
+    "last_verdict": "pass"
   },
-  "status": "phase_transition",
-  "last_updated": "2026-03-31T16:20:00Z",
+  "status": "milestone_complete",
+  "last_updated": "2026-03-31T16:45:00Z",
   "design_doc": "~/.gstack/projects/saorsa-labs-fae/davidirvine-main-design-20260331-151032.md",
   "completed_phases": [
     {
@@ -33,7 +33,32 @@
     {
       "number": "1.2",
       "name": "Fused Enrollment Flow",
-      "result": "6-step enrollment: wake phrases (4x), conversational (3x), room noise (20s), photo. Atomic commit. 13 tests. Commits: 0bfd3b18..1de4f9dc"
+      "result": "6-step enrollment, atomic commit, 13 tests. Commit: 0bfd3b18"
+    },
+    {
+      "number": "1.3",
+      "name": "WakeWordScoreFusion",
+      "result": "Score fusion (0.7 classifier + 0.3 template), template-only fallback, 13 tests. Commit: 974c7c7a"
+    },
+    {
+      "number": "1.4",
+      "name": "Shadow-Mode Evaluator",
+      "result": "Promotion/demotion logic, thermal pause, diagnostics, 16 tests. Commit: e80bd93e"
+    },
+    {
+      "number": "2.1",
+      "name": "PersonalLexicon Actor",
+      "result": "PersonalLexicon actor with JSON persistence, DVC ingestLexicon(), Git Vault backup, 14 tests."
+    },
+    {
+      "number": "2.2",
+      "name": "Vocabulary Harvesting",
+      "result": "VocabularyHarvester (Contacts+Calendar), scheduler task vocabulary_harvest daily 04:00, post-enrollment trigger, 4 tests."
+    },
+    {
+      "number": "2.3",
+      "name": "Enhanced Correction Loop",
+      "result": "ASRConfidenceDetector (phonetic clustering, divergence detection), typed correction flow, PersonalLexicon+DVC integration, 8 tests."
     }
   ]
 }

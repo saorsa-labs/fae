@@ -47,19 +47,24 @@
 
 ## Milestone 2: Proactive Vocabulary Learning
 
-### Phase 2.1: PersonalLexicon Actor
-- Single source of truth for user vocabulary
-- JSON persistence, Git Vault backup
-- DynamicVocabularyCorrector integration
-- Tests: CRUD, DVC rebuild, persistence
+### Phase 2.1: PersonalLexicon Actor ✅ COMPLETE
+- PersonalLexicon actor with JSON persistence at ~/Library/Application Support/fae/personal_lexicon.json
+- DynamicVocabularyCorrector.ingestLexicon() integration
+- Git Vault backup (personal_lexicon.json added to configFiles)
+- PipelineCoordinator loads lexicon at startup, feeds into DVC rebuild
+- Name corrections auto-saved to lexicon + DVC
+- Tests: 14 (CRUD, persistence, snapshot, bulk merge, DVC integration)
 
-### Phase 2.2: Vocabulary Harvesting
-- Scheduler task: Contacts + Calendar names
-- Permission warm-up during enrollment
-- Tests: harvesting, permission, dedup
+### Phase 2.2: Vocabulary Harvesting ✅ COMPLETE
+- VocabularyHarvester: harvests Contacts (CNContactStore) + Calendar (EKEventStore, next 30 days)
+- Scheduler task vocabulary_harvest: daily at 04:00
+- Post-enrollment trigger: vocabulary harvest runs after primary user enrollment
+- Graceful permission handling: skips sources without access, no crashes
+- Tests: 4 (harvest integration, dedup, persistence, permission handling)
 
-### Phase 2.3: Enhanced Correction Loop
-- ASR confidence heuristic (spelling divergence)
-- "Type that so I remember it" prompt
-- Typed corrections, spelling recognition (stretch)
-- Tests: confidence detection, typed correction flow
+### Phase 2.3: Enhanced Correction Loop ✅ COMPLETE
+- ASRConfidenceDetector: phonetic clustering, spelling divergence detection across utterances
+- Max 1 correction prompt per conversation to avoid annoyance
+- Typed correction flow: applyTypedSpellingCorrection() feeds PersonalLexicon + DVC
+- PipelineCoordinator integration: feeds transcriptions into detector, schedules prompts
+- Tests: 8 (divergence detection, consistent spellings, prompt limits, reset, common/short words, typed correction)

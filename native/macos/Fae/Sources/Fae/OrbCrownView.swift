@@ -54,10 +54,6 @@ struct OrbCrownView: View {
                             name: .faeConversationEngage,
                             object: nil
                         )
-                        NotificationCenter.default.post(
-                            name: .faePTTPressed,
-                            object: nil
-                        )
                     } else if windowState.mode == .compact {
                         windowState.transitionToCollapsed()
                     }

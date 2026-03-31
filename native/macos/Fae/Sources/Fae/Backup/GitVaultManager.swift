@@ -194,7 +194,7 @@ actor GitVaultManager {
         try runGit("checkout", ref, "--", "data/")
 
         let fm = FileManager.default
-        let configFiles = ["config.toml", "directive.md", "SOUL.md", "heartbeat.md", "speakers.json", "owner_photo.jpg"]
+        let configFiles = ["config.toml", "directive.md", "SOUL.md", "heartbeat.md", "speakers.json", "owner_photo.jpg", "personal_lexicon.json"]
 
         for file in configFiles {
             let src = dataURL.appendingPathComponent(file)
@@ -243,7 +243,7 @@ actor GitVaultManager {
         let fm = FileManager.default
         setDataPermissions(readOnly: false)
 
-        let configFiles = ["config.toml", "directive.md", "SOUL.md", "heartbeat.md", "speakers.json", "owner_photo.jpg"]
+        let configFiles = ["config.toml", "directive.md", "SOUL.md", "heartbeat.md", "speakers.json", "owner_photo.jpg", "personal_lexicon.json"]
         for file in configFiles {
             let src = sourceDir.appendingPathComponent(file)
             let dst = dataURL.appendingPathComponent(file)
