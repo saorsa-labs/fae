@@ -14,13 +14,6 @@ struct ToolExecutorContext: Sendable {
     /// Whether the active LLM is running locally or via a non-local API.
     let modelLocality: ModelLocality
 
-    /// The resolved capability ticket for this turn, if any.
-    let capabilityTicket: CapabilityTicket?
-
-    /// Whether the ticket grants access to the tool being executed.
-    /// Pre-resolved by the caller so `ToolExecutor` doesn't need ticket logic.
-    let hasCapabilityTicketForTool: Bool
-
     /// Whether the user explicitly authorized this action (e.g. voice confirmation).
     let explicitUserAuthorization: Bool
 
@@ -71,8 +64,6 @@ struct ToolExecutorContext: Sendable {
             toolMode: "full",
             privacyMode: "shareable",
             modelLocality: .nonLocal,
-            capabilityTicket: nil,
-            hasCapabilityTicketForTool: false,
             explicitUserAuthorization: false,
             isOwner: true,
             livenessScore: nil,
@@ -96,8 +87,6 @@ struct ToolExecutorContext: Sendable {
             toolMode: "off",
             privacyMode: "strict_local",
             modelLocality: .local,
-            capabilityTicket: nil,
-            hasCapabilityTicketForTool: false,
             explicitUserAuthorization: false,
             isOwner: false,
             livenessScore: nil,

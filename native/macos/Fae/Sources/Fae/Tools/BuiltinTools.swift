@@ -60,9 +60,8 @@ struct WriteTool: Tool {
                 try FileManager.default.createDirectory(
                     atPath: dir, withIntermediateDirectories: true
                 )
-                let (sanitized, _) = InputSanitizer.sanitizeContentInput(content)
-                try sanitized.write(toFile: canonical, atomically: true, encoding: .utf8)
-                return .success("Written \(sanitized.count) bytes to \(path)")
+                try content.write(toFile: canonical, atomically: true, encoding: .utf8)
+                return .success("Written \(content.count) bytes to \(path)")
             } catch {
                 return .error("Failed to write file: \(error.localizedDescription)")
             }

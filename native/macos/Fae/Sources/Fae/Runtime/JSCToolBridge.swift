@@ -43,13 +43,9 @@ final class JSCToolBridge: @unchecked Sendable {
     /// When `nil`, no structured logging is performed (default path).
     private let executionLog: JSCExecutionLog?
 
-    /// Script-scoped ticket manager for capability enforcement.
-    /// When non-nil, each tool call verifies the ticket is still active.
-    private let ticketManager: ScriptScopedTicketManager?
-
-    /// The script run ID that this bridge is bound to.
-    /// Used to look up the active capability ticket.
-    private let scriptRunId: String?
+    /// Allowed tool set for per-call enforcement.
+    /// When non-nil, each `fae.tool()` call is checked against this set.
+    private let allowedTools: Set<String>?
 
     /// Count of in-flight async operations (tool calls + sleeps).
     /// When this reaches zero and there are no pending callbacks, the
@@ -66,24 +62,21 @@ final class JSCToolBridge: @unchecked Sendable {
     ///   - callbacks: The ``ToolExecutorCallbacks`` for this script execution.
     ///   - budgetTracker: Optional budget tracker for enforcing resource limits.
     ///   - executionLog: Optional structured log for developer harness debugging.
-    ///   - ticketManager: Optional script-scoped ticket manager for capability enforcement.
-    ///   - scriptRunId: The script run ID this bridge is bound to.
+    ///   - allowedTools: Optional allowed tool set for per-call enforcement.
     init(
         executor: ToolExecutor,
         context: ToolExecutorContext,
         callbacks: ToolExecutorCallbacks,
         budgetTracker: ScriptBudgetTracker? = nil,
         executionLog: JSCExecutionLog? = nil,
-        ticketManager: ScriptScopedTicketManager? = nil,
-        scriptRunId: String? = nil
+        allowedTools: Set<String>? = nil
     ) {
         self.executor = executor
         self.executorContext = context
         self.executorCallbacks = callbacks
         self.budgetTracker = budgetTracker
         self.executionLog = executionLog
-        self.ticketManager = ticketManager
-        self.scriptRunId = scriptRunId
+        self.allowedTools = allowedTools
     }
 
     // MARK: - Log Access
@@ -182,27 +175,23 @@ final class JSCToolBridge: @unchecked Sendable {
 
             bridge.executionLog?.log(.toolCallStart, message: "fae.tool('\(name)') initiated", toolName: name, metadata: ["callId": "\(callId)"])
 
-            // Ticket gate: verify the script-scoped ticket still allows this tool.
-            if let manager = bridge.ticketManager,
-               let runId = bridge.scriptRunId
-            {
-                if !manager.allows(toolName: name, scriptRunId: runId) {
-                    let ticketError = "Capability ticket does not allow tool '\(name)' (ticket expired or revoked)"
-                    bridge.executionLog?.log(.budgetCheck, message: "Ticket rejected: \(ticketError)", toolName: name, success: false)
-                    bridge.stateQueue.sync {
-                        bridge.pendingCallbacks.append {
-                            let resolvers = jsContext.objectForKeyedSubscript("fae")
-                                .objectForKeyedSubscript("_toolResolvers")
-                                .objectForKeyedSubscript(callId)
-                            let jsError = JSValue(newErrorFromMessage: ticketError, in: jsContext)
-                                ?? JSValue(undefinedIn: jsContext)
-                            resolvers?.objectForKeyedSubscript("reject")
-                                .call(withArguments: [jsError as Any])
-                            jsContext.evaluateScript("delete fae._toolResolvers[\(callId)];")
-                        }
+            // Allowed-tools gate: verify the tool is in the allowed set if one was specified.
+            if let allowed = bridge.allowedTools, !allowed.contains(name) {
+                let gateError = "Tool '\(name)' is not in the allowed set for this script"
+                bridge.executionLog?.log(.budgetCheck, message: "Allowed-tools rejected: \(gateError)", toolName: name, success: false)
+                bridge.stateQueue.sync {
+                    bridge.pendingCallbacks.append {
+                        let resolvers = jsContext.objectForKeyedSubscript("fae")
+                            .objectForKeyedSubscript("_toolResolvers")
+                            .objectForKeyedSubscript(callId)
+                        let jsError = JSValue(newErrorFromMessage: gateError, in: jsContext)
+                            ?? JSValue(undefinedIn: jsContext)
+                        resolvers?.objectForKeyedSubscript("reject")
+                            .call(withArguments: [jsError as Any])
+                        jsContext.evaluateScript("delete fae._toolResolvers[\(callId)];")
                     }
-                    return
                 }
+                return
             }
 
             // Budget gate: check tool-call count, concurrency, cancellation, and deadline.

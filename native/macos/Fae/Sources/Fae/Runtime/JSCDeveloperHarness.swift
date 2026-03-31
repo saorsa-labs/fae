@@ -30,9 +30,6 @@ struct JSCDeveloperHarness {
     /// Tools available to scripts run through this harness.
     let tools: [any Tool]
 
-    /// The action broker to use. Defaults to an allow-all broker.
-    let broker: any TrustedActionBroker
-
     /// The default budget for scripts. Overridable per-run.
     let defaultBudget: ScriptBudget
 
@@ -45,17 +42,14 @@ struct JSCDeveloperHarness {
     ///
     /// - Parameters:
     ///   - tools: Tools available to scripts. Use ``MockTool`` for testing.
-    ///   - broker: Action broker. Defaults to ``AllowAllBroker``.
     ///   - defaultBudget: Default budget. Defaults to ``ScriptBudget/default``.
     ///   - toolMode: Tool mode for the executor context. Defaults to `"full"`.
     init(
         tools: [any Tool] = [],
-        broker: any TrustedActionBroker = AllowAllBroker(),
         defaultBudget: ScriptBudget = .default,
         toolMode: String = "full"
     ) {
         self.tools = tools
-        self.broker = broker
         self.defaultBudget = defaultBudget
         self.toolMode = toolMode
     }
@@ -80,11 +74,8 @@ struct JSCDeveloperHarness {
         let registry = ToolRegistry(tools: tools)
         let executor = ToolExecutor(
             registry: registry,
-            actionBroker: broker,
             damageControlPolicy: DamageControlPolicy(),
-            rateLimiter: ToolRateLimiter(),
-            securityLogger: SecurityEventLogger.shared,
-            outboundGuard: OutboundExfiltrationGuard.shared
+            securityLogger: SecurityEventLogger.shared
         )
 
         let runtime = JSCRuntime(
@@ -94,8 +85,6 @@ struct JSCDeveloperHarness {
                     toolMode: toolMode,
                     privacyMode: "local_preferred",
                     modelLocality: .local,
-                    capabilityTicket: nil,
-                    hasCapabilityTicketForTool: true,
                     explicitUserAuthorization: false,
                     isOwner: true,
                     livenessScore: nil,
@@ -110,11 +99,7 @@ struct JSCDeveloperHarness {
                 )
             },
             callbacksFactory: {
-                ToolExecutorCallbacks(
-                    onApprovalPending: { _, _ in },
-                    onVisionAutoEnabled: { },
-                    onComputerUseStep: { 1 }
-                )
+                .noop
             }
         )
 
@@ -170,18 +155,6 @@ extension JSCDeveloperHarness {
         var hasErrors: Bool {
             executionLog.hasErrors
         }
-    }
-}
-
-// MARK: - AllowAllBroker
-
-/// A ``TrustedActionBroker`` that allows all actions without evaluation.
-///
-/// Used as the default broker in ``JSCDeveloperHarness`` so that scripts
-/// can exercise tools freely during development and testing.
-actor AllowAllBroker: TrustedActionBroker {
-    func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-        .allow(reason: DecisionReason(code: .allowLowRisk, message: "developer harness allow-all"))
     }
 }
 

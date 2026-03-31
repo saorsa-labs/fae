@@ -51,27 +51,16 @@ private struct SlowTool: Tool {
     }
 }
 
-/// Broker that always allows.
-private actor AllowBroker: TrustedActionBroker {
-    func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-        .allow(reason: DecisionReason(code: .allowLowRisk, message: "test allow"))
-    }
-}
-
 // MARK: - Helpers
 
 private func makeRuntime(
-    tools: [any Tool] = [],
-    broker: any TrustedActionBroker = AllowBroker()
+    tools: [any Tool] = []
 ) -> JSCRuntime {
     let registry = ToolRegistry(tools: tools)
     let executor = ToolExecutor(
         registry: registry,
-        actionBroker: broker,
         damageControlPolicy: DamageControlPolicy(),
-        rateLimiter: ToolRateLimiter(),
-        securityLogger: SecurityEventLogger.shared,
-        outboundGuard: OutboundExfiltrationGuard.shared
+        securityLogger: SecurityEventLogger.shared
     )
 
     return JSCRuntime(
@@ -81,8 +70,6 @@ private func makeRuntime(
                 toolMode: "full",
                 privacyMode: "local_preferred",
                 modelLocality: .local,
-                capabilityTicket: nil,
-                hasCapabilityTicketForTool: true,
                 explicitUserAuthorization: false,
                 isOwner: true,
                 livenessScore: nil,
@@ -97,11 +84,7 @@ private func makeRuntime(
             )
         },
         callbacksFactory: {
-            ToolExecutorCallbacks(
-                onApprovalPending: { _, _ in },
-                onVisionAutoEnabled: { },
-                onComputerUseStep: { 1 }
-            )
+            .noop
         }
     )
 }

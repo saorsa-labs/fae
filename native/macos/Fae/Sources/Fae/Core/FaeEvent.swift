@@ -28,7 +28,6 @@ enum FaeEvent: Sendable {
 
     case approvalRequested(id: UInt64, toolName: String, input: String, manualOnly: Bool = false, isDisasterLevel: Bool = false)
     case approvalResolved(id: UInt64, approved: Bool, source: String)
-    case batchApprovalRequested(batch: BatchApprovalRequest)
 
     // MARK: Memory
 

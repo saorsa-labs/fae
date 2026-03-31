@@ -31,14 +31,10 @@ actor PipelineCoordinator {
     private let memoryOrchestrator: MemoryOrchestrator?
     private let sessionStore: SessionStore?
     private let workflowTraceStore: WorkflowTraceStore?
-    private let approvalManager: ApprovalManager?
     private let registry: ToolRegistry
-    private let actionBroker: any TrustedActionBroker
     private let damageControlPolicy = DamageControlPolicy()
     private var modelLocality: ModelLocality = .local
-    private let rateLimiter = ToolRateLimiter()
     private let securityLogger = SecurityEventLogger.shared
-    private let outboundGuard = OutboundExfiltrationGuard.shared
     private let speakerEncoder: CoreMLSpeakerEncoder?
     private let speakerProfileStore: SpeakerProfileStore?
     private let wakeWordProfileStore: WakeWordProfileStore?
@@ -501,7 +497,6 @@ actor PipelineCoordinator {
         let toolCalls: [ToolCall]
         let assistantToolMessage: String
         let forceSuppressThinking: Bool
-        let capabilityTicket: CapabilityTicket?
         let explicitUserAuthorization: Bool
         let generationContext: GenerationContext
         let originTurnID: String?
@@ -522,10 +517,6 @@ actor PipelineCoordinator {
     /// Whether any deferred tool jobs are currently running (test harness use).
     var hasPendingDeferredTools: Bool { !deferredToolTasks.isEmpty }
 
-    // MARK: - Capability Tickets
-
-    /// Task-scoped capability grant consumed by the broker.
-    private var activeCapabilityTicket: CapabilityTicket?
     private var sessionDeclaredUserName: String?
 
     /// Tracks tool call signatures (name + args) already executed this user turn.
@@ -586,7 +577,6 @@ actor PipelineCoordinator {
         memoryOrchestrator: MemoryOrchestrator? = nil,
         sessionStore: SessionStore? = nil,
         workflowTraceStore: WorkflowTraceStore? = nil,
-        approvalManager: ApprovalManager? = nil,
         registry: ToolRegistry,
         speakerEncoder: CoreMLSpeakerEncoder? = nil,
         speakerProfileStore: SpeakerProfileStore? = nil,
@@ -608,12 +598,7 @@ actor PipelineCoordinator {
         self.memoryOrchestrator = memoryOrchestrator
         self.sessionStore = sessionStore
         self.workflowTraceStore = workflowTraceStore
-        self.approvalManager = approvalManager
         self.registry = registry
-        self.actionBroker = DefaultTrustedActionBroker(
-            knownTools: Set(registry.toolNames),
-            speakerConfig: config.speaker
-        )
         self.speakerEncoder = speakerEncoder
         self.speakerProfileStore = speakerProfileStore
         self.wakeWordProfileStore = wakeWordProfileStore
@@ -623,12 +608,8 @@ actor PipelineCoordinator {
         self.isRescueMode = rescueMode
         self.toolExecutor = ToolExecutor(
             registry: registry,
-            actionBroker: self.actionBroker,
             damageControlPolicy: damageControlPolicy,
-            rateLimiter: rateLimiter,
             securityLogger: securityLogger,
-            outboundGuard: outboundGuard,
-            approvalManager: approvalManager,
             workflowTraceStore: workflowTraceStore,
             toolAnalytics: toolAnalytics
         )
@@ -1426,7 +1407,7 @@ actor PipelineCoordinator {
         currentTurnGenerationContext = nil
         engagedUntil = nil
         lastAssistantResponseText = ""
-        activeCapabilityTicket = nil
+
         awaitingApproval = false
         manualOnlyApprovalPending = false
         pendingGovernanceAction = nil
@@ -2313,7 +2294,7 @@ actor PipelineCoordinator {
         silentGenerationBuffer.removeAll()
         bargeInState.generationTakeoverCandidate = nil
         bargeInState.falseInterruptionRecovery.cancel()
-        activeCapabilityTicket = nil
+
         awaitingApproval = false
         manualOnlyApprovalPending = false
         pendingGovernanceAction = nil
@@ -3297,10 +3278,7 @@ actor PipelineCoordinator {
                 assistantSpeaking: assistantSpeaking
             ) {
                 debugLog(debugConsole, .approval, "Ignoring voice approval while assistant is still speaking the approval prompt")
-            } else if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText),
-               let manager = approvalManager,
-               await manager.resolveMostRecent(decision: decision, source: "voice")
-            {
+            } else if let decision = VoiceCommandParser.parseApprovalResponse(effectiveText) {
                 debugLog(debugConsole, .approval, "Tool approval decision via voice: \(decision.rawValue)")
                 awaitingApproval = false
                 manualOnlyApprovalPending = false
@@ -3311,7 +3289,7 @@ actor PipelineCoordinator {
                 case .no:
                     ack = PersonalityManager.nextApprovalDenied()
                 case .always:
-                    ack = "Got it, I'll always allow that tool."
+                    ack = "Got it, I'll remember that."
                 }
                 await speakDirect(ack)
             } else {
@@ -4682,7 +4660,6 @@ actor PipelineCoordinator {
         let mode = effectiveToolMode()
         let permissions = await MainActor.run { PermissionStatusProvider.current() }
         let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
-        let approvalSnapshot = await ApprovedToolsStore.shared.approvalSnapshot()
 
         let speakerState: String = {
             if speakerGate.currentSpeakerIsOwner { return "Owner verified" }
@@ -4703,7 +4680,6 @@ actor PipelineCoordinator {
             requireDirectAddress: effectiveRequireDirectAddress(),
             visionEnabled: effectiveVisionEnabled(),
             voiceIdentityLock: effectiveVoiceIdentityLock(),
-            approvalSnapshot: approvalSnapshot,
             registry: registry
         )
     }
@@ -4952,7 +4928,7 @@ actor PipelineCoordinator {
                 await persistFinalAssistantTurnIfNeeded(forgetReply)
                 endAssistantGeneration(for: generationID)
                 engage()
-                activeCapabilityTicket = nil
+        
                 debugLog(debugConsole, .qa, "=== TURN END deterministic_forget ===")
                 return
             }
@@ -4973,19 +4949,13 @@ actor PipelineCoordinator {
                 await persistFinalAssistantTurnIfNeeded(directRecallReply)
                 endAssistantGeneration(for: generationID)
                 engage()
-                activeCapabilityTicket = nil
+        
                 debugLog(debugConsole, .qa, "=== TURN END deterministic_personal_recall ===")
                 return
             }
 
-            // Issue a short-lived capability ticket for this turn.
             let toolMode = effectiveToolMode()
             let privacyMode = effectivePrivacyMode()
-            activeCapabilityTicket = CapabilityTicketIssuer.issue(
-                mode: toolMode,
-                privacyMode: privacyMode,
-                registry: registry
-            )
 
             if proactiveContext == nil,
                let inferredToolCall = Self.repairedToolCallForSkippedTurn(userText),
@@ -5012,7 +4982,7 @@ actor PipelineCoordinator {
                 )
                 await persistFinalAssistantTurnIfNeeded(msg)
                 endAssistantGeneration(for: generationID)
-                activeCapabilityTicket = nil
+        
                 debugLog(debugConsole, .qa, "=== TURN END blocked_before_generation tool=\(inferredToolCall.name) ===")
                 return
             }
@@ -5875,7 +5845,6 @@ actor PipelineCoordinator {
                     toolCalls: [repairCall],
                     assistantToolMessage: "I'll check that with the \(repairCall.name) tool.",
                     forceSuppressThinking: forceSuppressThinking,
-                    capabilityTicket: activeCapabilityTicket,
                     explicitUserAuthorization: explicitUserAuthorizationForTurn,
                     generationContext: generationContext,
                     originTurnID: currentTurnID
@@ -5883,7 +5852,7 @@ actor PipelineCoordinator {
 
                 endAssistantGeneration(for: generationID)
                 engage()
-                activeCapabilityTicket = nil
+        
                 debugLog(debugConsole, .qa, "=== TURN END repaired_deferred_tools count=1 ===")
                 return
             }
@@ -5922,7 +5891,7 @@ actor PipelineCoordinator {
                     await persistFinalAssistantTurnIfNeeded(directReply)
                     endAssistantGeneration(for: generationID)
                     engage()
-                    activeCapabilityTicket = nil
+            
                     debugLog(debugConsole, .qa, "=== TURN END repaired_direct_tool_reply name=\(repairCall.name) ===")
                     return
                 }
@@ -6118,7 +6087,7 @@ actor PipelineCoordinator {
                 await persistFinalAssistantTurnIfNeeded(fallback)
                 endAssistantGeneration(for: generationID)
                 engage()
-                activeCapabilityTicket = nil
+        
                 debugLog(debugConsole, .qa, "=== TURN END fallback reason=llm_error ===")
                 return
             }
@@ -6296,7 +6265,7 @@ actor PipelineCoordinator {
                 endAssistantGeneration(for: generationID)
                 await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: fallback, success: false)
                 engage()
-                activeCapabilityTicket = nil
+        
                 debugLog(debugConsole, .qa, "=== TURN END fallback reason=\(reasonCode) ===")
                 return
             }
@@ -6434,7 +6403,7 @@ actor PipelineCoordinator {
 
             // Refresh follow-up window.
             engage()
-            activeCapabilityTicket = nil
+    
             debugLog(debugConsole, .qa, "=== TURN END spoken_chars=\(assistantTextForStorage.count) tool_calls=0 ===")
             return
         }
@@ -6504,7 +6473,6 @@ actor PipelineCoordinator {
                     let callId = UUID().uuidString
                     let result = await executeTool(
                         call,
-                        capabilityTicketOverride: activeCapabilityTicket,
                         explicitUserAuthorizationOverride: explicitUserAuthorizationForTurn,
                         proactiveContext: proactiveContext,
                         generationContextOverride: generationContext,
@@ -6562,7 +6530,6 @@ actor PipelineCoordinator {
                 toolCalls: Array(toolCalls.prefix(5)),
                 assistantToolMessage: assistantToolMessage,
                 forceSuppressThinking: forceSuppressThinking,
-                capabilityTicket: activeCapabilityTicket,
                 explicitUserAuthorization: explicitUserAuthorizationForTurn,
                 generationContext: generationContext,
                 originTurnID: currentTurnID
@@ -6570,7 +6537,7 @@ actor PipelineCoordinator {
 
             endAssistantGeneration(for: generationID)
             engage()
-            activeCapabilityTicket = nil
+
             debugLog(debugConsole, .qa, "=== TURN END deferred_tools count=\(toolCalls.count) ===")
             return
         }
@@ -6585,7 +6552,7 @@ actor PipelineCoordinator {
             }
             endAssistantGeneration(for: generationID)
             await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
-            activeCapabilityTicket = nil
+    
             return
         }
 
@@ -6632,7 +6599,6 @@ actor PipelineCoordinator {
         await conversationState.addAssistantMessage(assistantHistoryText, tag: proactiveContext?.conversationTag)
         await synchronizeLLMSession()
 
-        let capabilityTicketForToolTurn = activeCapabilityTicket
         let explicitAuthorizationForToolTurn = explicitUserAuthorizationForTurn
 
         // Prevent synthesis/playback jitter: avoid starting tool execution while
@@ -6722,7 +6688,6 @@ actor PipelineCoordinator {
                 seenToolCallSignatures.insert(callSignature)
                 result = await executeTool(
                     call,
-                    capabilityTicketOverride: capabilityTicketForToolTurn,
                     explicitUserAuthorizationOverride: explicitAuthorizationForToolTurn,
                     proactiveContext: proactiveContext,
                     generationContextOverride: generationContext,
@@ -6831,7 +6796,7 @@ actor PipelineCoordinator {
                 }
                 endAssistantGeneration(for: generationID)
                 await finalizeWorkflowTraceIfNeeded(turnID: currentTurnID, assistantOutcome: msg, success: false)
-                activeCapabilityTicket = nil
+        
                 return
             }
             // Recoverable tool error — let LLM see the error and retry.
@@ -6857,7 +6822,7 @@ actor PipelineCoordinator {
             await persistFinalAssistantTurnIfNeeded(directToolReply)
             endAssistantGeneration(for: generationID)
             engage()
-            activeCapabilityTicket = nil
+    
             debugLog(debugConsole, .qa, "=== TURN END direct_tool_reply name=\(toolCalls[0].name) ===")
             return
         }
@@ -7872,7 +7837,6 @@ actor PipelineCoordinator {
         toolCalls: [ToolCall],
         assistantToolMessage: String,
         forceSuppressThinking: Bool,
-        capabilityTicket: CapabilityTicket?,
         explicitUserAuthorization: Bool,
         generationContext: GenerationContext,
         originTurnID: String?
@@ -7883,7 +7847,6 @@ actor PipelineCoordinator {
             toolCalls: toolCalls,
             assistantToolMessage: assistantToolMessage,
             forceSuppressThinking: forceSuppressThinking,
-            capabilityTicket: capabilityTicket,
             explicitUserAuthorization: explicitUserAuthorization,
             generationContext: generationContext,
             originTurnID: originTurnID
@@ -7946,7 +7909,6 @@ actor PipelineCoordinator {
 
             let result = await executeTool(
                 call,
-                capabilityTicketOverride: job.capabilityTicket,
                 explicitUserAuthorizationOverride: job.explicitUserAuthorization,
                 generationContextOverride: job.generationContext,
                 traceTurnID: job.originTurnID,
@@ -8045,14 +8007,6 @@ actor PipelineCoordinator {
             await playback.playThinkingTone()
         }
 
-        // Re-issue a capability ticket for the follow-up turn so the LLM
-        // can make additional tool calls (e.g. a second web_search).
-        activeCapabilityTicket = CapabilityTicketIssuer.issue(
-            mode: effectiveToolMode(),
-            privacyMode: effectivePrivacyMode(),
-            registry: registry
-        )
-
         await generateWithTools(
             userText: job.userText,
             isToolFollowUp: true,
@@ -8068,7 +8022,6 @@ actor PipelineCoordinator {
 
     private func executeTool(
         _ call: ToolCall,
-        capabilityTicketOverride: CapabilityTicket? = nil,
         explicitUserAuthorizationOverride: Bool? = nil,
         proactiveContext: ProactiveRequestContext? = nil,
         generationContextOverride: GenerationContext? = nil,
@@ -8079,11 +8032,7 @@ actor PipelineCoordinator {
 
         // Build per-call context from coordinator state.
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
-        let effectiveTicket = capabilityTicketOverride ?? activeCapabilityTicket
         let currentToolMode = effectiveToolMode()
-        let hasCapabilityTicket = currentToolMode == "full"
-            ? true
-            : (effectiveTicket?.allows(toolName: call.name) ?? false)
         let explicitAuthorization = explicitUserAuthorizationOverride ?? explicitUserAuthorizationForTurn
         let effectiveGenerationContext = generationContextOverride ?? currentTurnGenerationContext
 
@@ -8091,8 +8040,6 @@ actor PipelineCoordinator {
             toolMode: currentToolMode,
             privacyMode: effectivePrivacyMode(),
             modelLocality: modelLocality,
-            capabilityTicket: effectiveTicket,
-            hasCapabilityTicketForTool: hasCapabilityTicket,
             explicitUserAuthorization: explicitAuthorization,
             isOwner: speakerGate.currentSpeakerIsOwner,
             livenessScore: livenessScore,
@@ -8207,8 +8154,7 @@ actor PipelineCoordinator {
                         return await s.incrementComputerUseStep()
                     }
                 )
-            },
-            ticketManager: ScriptScopedTicketManager()
+            }
         )
 
         jscRuntime = runtime
@@ -8229,15 +8175,6 @@ actor PipelineCoordinator {
         let runtime = ensureJSCRuntime()
         let budget = block.budget ?? .default
 
-        // Enter script mode on the approval manager so first-tool-approval
-        // auto-grants batch credits for the remaining budget.
-        await approvalManager?.enterScriptMode(budgetToolCalls: budget.maxToolCalls)
-        defer {
-            // Inline Task so the actor-isolated exitScriptMode runs after await returns.
-            let mgr = approvalManager
-            Task { await mgr?.exitScriptMode() }
-        }
-
         debugLog(debugConsole, .toolCall, "Script execution started (budget: \(budget.maxToolCalls) calls, \(Int(budget.maxWallClockSeconds))s)")
         eventBus.send(.toolCall(
             id: "script-\(UUID().uuidString.prefix(8))",
@@ -8247,22 +8184,13 @@ actor PipelineCoordinator {
 
         // Build real per-turn context from coordinator state.
         let livenessScore: Float? = await speakerEncoder?.lastLivenessResult?.score
-        let effectiveTicket = activeCapabilityTicket
         let currentToolMode = effectiveToolMode()
-        // For scripts, per-tool capability is checked by the bridge's
-        // ScriptScopedTicketManager on each fae.tool() call. The broker's
-        // hasCapabilityTicket check is a supplementary signal — set true here
-        // so the broker doesn't hard-deny script tool calls. The ticket
-        // manager provides the real access control.
-        let hasCapabilityTicket = true
         let effectiveGenerationContext = currentTurnGenerationContext
 
         let scriptContext = ToolExecutorContext(
             toolMode: currentToolMode,
             privacyMode: effectivePrivacyMode(),
             modelLocality: modelLocality,
-            capabilityTicket: effectiveTicket,
-            hasCapabilityTicketForTool: hasCapabilityTicket,
             explicitUserAuthorization: explicitUserAuthorizationForTurn,
             isOwner: speakerGate.currentSpeakerIsOwner,
             livenessScore: livenessScore,

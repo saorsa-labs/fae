@@ -21,20 +21,11 @@ actor JSCRuntime {
     /// Factory for building per-run callbacks.
     private let callbacksFactory: @Sendable () -> ToolExecutorCallbacks
 
-    /// Manager for script-scoped capability tickets.
-    /// Injected at init; when non-nil, tickets are issued per-run and
-    /// revoked on completion, failure, or cancellation.
-    let ticketManager: ScriptScopedTicketManager?
-
     // MARK: - State
 
     /// The budget tracker for the currently-executing script, if any.
     /// Used by ``cancelCurrent()`` to signal cooperative cancellation.
     private var currentTracker: ScriptBudgetTracker?
-
-    /// The script run ID for the currently-executing script, if any.
-    /// Used by ``cancelCurrent()`` to revoke the script-scoped ticket.
-    private var currentRunId: String?
 
     // MARK: - Configuration
 
@@ -53,17 +44,14 @@ actor JSCRuntime {
     ///   - executor: The ``ToolExecutor`` that handles all tool calls.
     ///   - contextFactory: Builds a fresh ``ToolExecutorContext`` for each script run.
     ///   - callbacksFactory: Builds ``ToolExecutorCallbacks`` for each script run.
-    ///   - ticketManager: Optional manager for script-scoped capability tickets.
     init(
         executor: ToolExecutor,
         contextFactory: @escaping @Sendable () -> ToolExecutorContext,
-        callbacksFactory: @escaping @Sendable () -> ToolExecutorCallbacks,
-        ticketManager: ScriptScopedTicketManager? = nil
+        callbacksFactory: @escaping @Sendable () -> ToolExecutorCallbacks
     ) {
         self.executor = executor
         self.contextFactory = contextFactory
         self.callbacksFactory = callbacksFactory
-        self.ticketManager = ticketManager
     }
 
     // MARK: - Cancellation
@@ -76,9 +64,6 @@ actor JSCRuntime {
     /// revoked immediately.
     func cancelCurrent() {
         currentTracker?.cancel()
-        if let runId = currentRunId {
-            ticketManager?.revoke(scriptRunId: runId)
-        }
     }
 
     // MARK: - Execute
@@ -87,16 +72,14 @@ actor JSCRuntime {
     ///
     /// The script runs in an isolated JSContext with the `fae.*` bridge installed.
     /// All tool calls inside the script flow through ``ToolExecutor`` and its
-    /// full security stack. When a ``ticketManager`` is configured and `allowedTools`
-    /// is provided, a script-scoped capability ticket is issued for the run and
-    /// automatically revoked when the script completes, fails, or is cancelled.
+    /// security stack.
     ///
     /// - Parameters:
     ///   - script: The JavaScript source code to evaluate.
     ///   - budget: Resource limits for this execution. Defaults to ``ScriptBudget/default``.
     ///   - executionLog: Optional structured log collector for developer harness debugging.
-    ///   - allowedTools: Tool set for the script-scoped capability ticket. When `nil`
-    ///     and a ``ticketManager`` is configured, no ticket is issued (backward compat).
+    ///   - allowedTools: Tool set for per-call enforcement. When non-nil, each
+    ///     `fae.tool()` call is checked against this set.
     /// - Returns: A ``JSCScriptResult`` with the script's value, logs, and status.
     func run(
         script: String,
@@ -109,31 +92,14 @@ actor JSCRuntime {
         let budgetTracker = ScriptBudgetTracker(budget: budget)
         currentTracker = budgetTracker
 
-        // Generate a unique run ID for ticket scoping.
-        let runId = UUID().uuidString
-        currentRunId = runId
-
-        // Issue a script-scoped ticket if a manager and allowed tools are provided.
-        if let manager = ticketManager, let tools = allowedTools {
-            _ = manager.issue(
-                scriptRunId: runId,
-                allowedTools: tools,
-                ttlSeconds: budget.maxWallClockSeconds
-            )
-        }
-
         defer {
             currentTracker = nil
-            currentRunId = nil
-            // Revoke the script-scoped ticket on every exit path.
-            ticketManager?.revoke(scriptRunId: runId)
         }
 
         executionLog?.log(.scriptStart, message: "Script execution started", metadata: [
             "budgetMaxToolCalls": "\(budget.maxToolCalls)",
             "budgetMaxWallClockSeconds": "\(Int(budget.maxWallClockSeconds))",
             "budgetMaxConcurrentToolCalls": "\(budget.maxConcurrentToolCalls)",
-            "scriptRunId": runId,
         ])
 
         let bridge = JSCToolBridge(
@@ -142,8 +108,7 @@ actor JSCRuntime {
             callbacks: callbacks ?? callbacksFactory(),
             budgetTracker: budgetTracker,
             executionLog: executionLog,
-            ticketManager: ticketManager,
-            scriptRunId: runId
+            allowedTools: allowedTools
         )
 
         // Create a fresh JSContext + VM per run.

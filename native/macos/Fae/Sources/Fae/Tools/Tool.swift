@@ -1,6 +1,30 @@
 import Foundation
 import Tokenizers
 
+// MARK: - Shared Tool Enums
+
+/// Risk level classification for tools.
+///
+/// Used by `VoiceIdentityPolicy` and retained on the `Tool` protocol for
+/// informational purposes. No longer drives a separate approval pipeline.
+enum ToolRiskLevel: String, Sendable {
+    case low
+    case medium
+    case high
+}
+
+/// Source that triggered a tool invocation.
+///
+/// Recorded in security logs and used by proactive-task gating.
+enum ActionSource: String, Sendable {
+    case voice
+    case text
+    case scheduler
+    case relay
+    case skill
+    case unknown
+}
+
 /// Result of a tool execution.
 ///
 /// Every tool produces at minimum a prose ``output`` string consumed by the LLM.

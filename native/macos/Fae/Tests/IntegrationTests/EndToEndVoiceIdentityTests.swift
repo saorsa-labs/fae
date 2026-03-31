@@ -100,37 +100,6 @@ final class EndToEndVoiceIdentityTests: XCTestCase {
         }
     }
 
-    // MARK: - Tool Risk Policy Integration
-
-    func testToolRiskPolicyAllowsLowRisk() async throws {
-        let tool = MockTool(name: "read", riskLevel: .low, requiresApproval: false)
-        let decision = ToolRiskPolicy.decision(for: tool)
-        if case .allow = decision {
-            // Expected
-        } else {
-            XCTFail("Low-risk tool without approval should be allowed")
-        }
-    }
-
-    func testToolRiskPolicyRequiresApprovalForMediumRisk() async throws {
-        let tool = MockTool(name: "write", riskLevel: .medium, requiresApproval: false)
-        let decision = ToolRiskPolicy.decision(for: tool)
-        if case .requireApproval = decision {
-            // Expected
-        } else {
-            XCTFail("Medium-risk tool should require approval")
-        }
-    }
-
-    func testToolRiskPolicyRequiresApprovalWhenExplicit() async throws {
-        let tool = MockTool(name: "special", riskLevel: .low, requiresApproval: true)
-        let decision = ToolRiskPolicy.decision(for: tool)
-        if case .requireApproval = decision {
-            // Expected
-        } else {
-            XCTFail("Tool with requiresApproval should require approval regardless of risk")
-        }
-    }
 
     // MARK: - Combined Decision Matrix
 

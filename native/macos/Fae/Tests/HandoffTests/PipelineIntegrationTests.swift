@@ -271,25 +271,14 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         }
     }
 
-    private actor AllowBroker: TrustedActionBroker {
-        func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-            .allow(reason: DecisionReason(code: .allowLowRisk, message: "test allow"))
-        }
-    }
-
     private func makeRuntime(
-        tools: [any Tool] = [],
-        broker: (any TrustedActionBroker)? = nil,
-        ticketManager: ScriptScopedTicketManager? = nil
+        tools: [any Tool] = []
     ) -> JSCRuntime {
         let registry = ToolRegistry(tools: tools)
         let executor = ToolExecutor(
             registry: registry,
-            actionBroker: broker ?? AllowBroker(),
             damageControlPolicy: DamageControlPolicy(),
-            rateLimiter: ToolRateLimiter(),
-            securityLogger: SecurityEventLogger.shared,
-            outboundGuard: OutboundExfiltrationGuard.shared
+            securityLogger: SecurityEventLogger.shared
         )
 
         return JSCRuntime(
@@ -299,8 +288,6 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
                     toolMode: "full",
                     privacyMode: "local_preferred",
                     modelLocality: .local,
-                    capabilityTicket: nil,
-                    hasCapabilityTicketForTool: true,
                     explicitUserAuthorization: false,
                     isOwner: true,
                     livenessScore: nil,
@@ -315,13 +302,8 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
                 )
             },
             callbacksFactory: {
-                ToolExecutorCallbacks(
-                    onApprovalPending: { _, _ in },
-                    onVisionAutoEnabled: { },
-                    onComputerUseStep: { 1 }
-                )
-            },
-            ticketManager: ticketManager
+                .noop
+            }
         )
     }
 
@@ -378,9 +360,9 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         XCTAssertEqual(result.status, .failure, "Expected failure from budget exceeded, got \(result.status)")
     }
 
-    func testScriptBlockWithAllowedToolsTicket() async {
+    func testScriptBlockWithAllowedToolsEnforcement() async {
         let echo = EchoTool(name: "read")
-        let runtime = makeRuntime(tools: [echo], ticketManager: ScriptScopedTicketManager())
+        let runtime = makeRuntime(tools: [echo])
 
         let block = ScriptBlock(
             source: """
@@ -446,44 +428,6 @@ final class ScriptExecutionIntegrationTests: XCTestCase {
         XCTAssertEqual(results, ["first", "second", "third"])
     }
 
-    // MARK: - Governance Enforcement
-
-    func testScriptBlockGovernedByBroker() async {
-        // Create a broker that denies all tool calls.
-        let denyBroker = DenyBroker()
-        let echo = EchoTool(name: "read")
-        let runtime = makeRuntime(tools: [echo], broker: denyBroker)
-
-        let block = ScriptBlock(
-            source: """
-            try {
-                await fae.tool('read', '{"path":"test"}');
-                return 'should not reach';
-            } catch(e) {
-                return 'denied: ' + e.message;
-            }
-            """,
-            allowedTools: nil,
-            budget: nil,
-            dryRun: false
-        )
-
-        let result = await runtime.run(
-            script: block.source,
-            budget: block.budget ?? .default,
-            allowedTools: block.allowedTools
-        )
-
-        XCTAssertEqual(result.status, .success)
-        XCTAssertTrue(result.value?.contains("denied") == true, "Tool call should be denied by broker")
-    }
-}
-
-/// Broker that denies all tool calls.
-private actor DenyBroker: TrustedActionBroker {
-    func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-        .deny(reason: DecisionReason(code: .ownerRequired, message: "denied by test broker"))
-    }
 }
 
 // MARK: - Prompt Routing Tests

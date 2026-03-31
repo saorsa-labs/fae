@@ -92,13 +92,6 @@ final class FaeEventBus: @unchecked Sendable {
             payload["approved"] = approved
             payload["source"] = source
 
-        case .batchApprovalRequested(let batch):
-            eventName = "approval.batch_requested"
-            payload["batch_id"] = batch.batchId
-            payload["tool_name"] = batch.toolName
-            payload["count"] = batch.count
-            payload["description"] = batch.representativeDescription
-
         case .memoryRecalled(let count):
             eventName = "pipeline.memory_recall"
             payload["count"] = count

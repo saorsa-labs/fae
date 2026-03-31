@@ -25,16 +25,11 @@ enum CapabilitySnapshotService {
         requireDirectAddress: Bool,
         visionEnabled: Bool,
         voiceIdentityLock: Bool,
-        approvalSnapshot: ApprovedToolsStore.ApprovalSnapshot,
         registry: ToolRegistry
     ) -> ToolPermissionSnapshot {
-        let allowedTools = registry.toolNames
-            .filter { registry.isToolAllowed($0, mode: toolMode, privacyMode: privacyMode) }
-            .sorted()
+        let allowedTools = registry.toolNames.sorted()
 
-        let deniedTools = registry.toolNames
-            .filter { !registry.isToolAllowed($0, mode: toolMode, privacyMode: privacyMode) }
-            .sorted()
+        let deniedTools: [String] = []
 
         return ToolPermissionSnapshot(
             generatedAt: Date(),
@@ -49,9 +44,6 @@ enum CapabilitySnapshotService {
             requireDirectAddress: requireDirectAddress,
             visionEnabled: visionEnabled,
             voiceIdentityLock: voiceIdentityLock,
-            approvedTools: approvalSnapshot.approvedTools,
-            approveAllReadonly: approvalSnapshot.approveAllReadonly,
-            approveAllInCurrentMode: approvalSnapshot.approveAll,
             allowedTools: allowedTools,
             deniedTools: deniedTools
         )

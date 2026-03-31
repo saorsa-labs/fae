@@ -216,133 +216,6 @@ final class PathPolicyTests: XCTestCase {
     }
 }
 
-// MARK: - InputSanitizer Tests
-
-final class InputSanitizerTests: XCTestCase {
-
-    func testDetectsShellMetacharacters() {
-        XCTAssertTrue(InputSanitizer.containsShellMetacharacters("echo; rm"))
-        XCTAssertTrue(InputSanitizer.containsShellMetacharacters("cat | grep"))
-        XCTAssertTrue(InputSanitizer.containsShellMetacharacters("$(whoami)"))
-        XCTAssertTrue(InputSanitizer.containsShellMetacharacters("`id`"))
-        XCTAssertTrue(InputSanitizer.containsShellMetacharacters("a & b"))
-    }
-
-    func testNoMetacharactersInCleanInput() {
-        XCTAssertFalse(InputSanitizer.containsShellMetacharacters("ls -la"))
-        XCTAssertFalse(InputSanitizer.containsShellMetacharacters("hello world"))
-        XCTAssertFalse(InputSanitizer.containsShellMetacharacters("file.txt"))
-    }
-
-    func testSanitizeCommandInput() {
-        let (sanitized, modified) = InputSanitizer.sanitizeCommandInput("echo; rm -rf /")
-        XCTAssertTrue(modified)
-        XCTAssertFalse(sanitized.contains(";"))
-    }
-
-    func testSanitizeContentInputOnlyStripsNulls() {
-        let input = "Hello\0World"
-        let (sanitized, modified) = InputSanitizer.sanitizeContentInput(input)
-        XCTAssertTrue(modified)
-        XCTAssertEqual(sanitized, "HelloWorld")
-
-        // Normal content should pass through unchanged.
-        let (normal, normalModified) = InputSanitizer.sanitizeContentInput("Hello; World & Foo")
-        XCTAssertFalse(normalModified)
-        XCTAssertEqual(normal, "Hello; World & Foo")
-    }
-
-    // MARK: - Bash Command Classification
-
-    func testKnownSafeCommands() {
-        XCTAssertNil(InputSanitizer.classifyBashCommand("ls -la"))
-        XCTAssertNil(InputSanitizer.classifyBashCommand("git status"))
-        XCTAssertNil(InputSanitizer.classifyBashCommand("python3 script.py"))
-        XCTAssertNil(InputSanitizer.classifyBashCommand("curl https://example.com"))
-        XCTAssertNil(InputSanitizer.classifyBashCommand("defaults read com.apple.dock"))
-    }
-
-    func testUnknownCommandsReturnWarning() {
-        let warning = InputSanitizer.classifyBashCommand("rm -rf /")
-        XCTAssertNotNil(warning)
-        XCTAssertTrue(warning?.contains("Unknown command") ?? false)
-
-        let sshWarning = InputSanitizer.classifyBashCommand("ssh root@server")
-        XCTAssertNotNil(sshWarning)
-
-        let sudoWarning = InputSanitizer.classifyBashCommand("sudo rm -rf /")
-        XCTAssertNotNil(sudoWarning)
-    }
-
-    func testEmptyCommandReturnsWarning() {
-        let warning = InputSanitizer.classifyBashCommand("")
-        XCTAssertNotNil(warning)
-    }
-
-    func testFullPathCommandStripsPath() {
-        // /usr/bin/ls should be recognized as "ls"
-        XCTAssertNil(InputSanitizer.classifyBashCommand("/usr/bin/ls -la"))
-    }
-}
-
-// MARK: - ToolRateLimiter Tests
-
-final class ToolRateLimiterTests: XCTestCase {
-
-    func testAllowsWithinLimit() async {
-        let limiter = ToolRateLimiter()
-        // bash base limit is 30, but the backward-compatible checkLimit(tool:)
-        // defaults to medium risk which caps at 10.
-        for _ in 0..<10 {
-            let result = await limiter.checkLimit(tool: "bash")
-            XCTAssertNil(result)
-        }
-    }
-
-    func testBlocksOverLimit() async {
-        let limiter = ToolRateLimiter()
-        // Effective limit for bash at medium risk: min(30, 10) = 10.
-        for _ in 0..<10 {
-            _ = await limiter.checkLimit(tool: "bash")
-        }
-        let result = await limiter.checkLimit(tool: "bash")
-        XCTAssertNotNil(result)
-        XCTAssertTrue(result?.contains("Rate limit exceeded") ?? false)
-    }
-
-    func testDifferentToolsHaveSeparateLimits() async {
-        let limiter = ToolRateLimiter()
-        // Exhaust bash limit (10 at medium risk).
-        for _ in 0..<10 {
-            _ = await limiter.checkLimit(tool: "bash")
-        }
-        // web_search should still be allowed (separate counter).
-        let result = await limiter.checkLimit(tool: "web_search")
-        XCTAssertNil(result)
-    }
-
-    func testResetClearsAll() async {
-        let limiter = ToolRateLimiter()
-        for _ in 0..<5 {
-            _ = await limiter.checkLimit(tool: "bash")
-        }
-        await limiter.reset()
-        let result = await limiter.checkLimit(tool: "bash")
-        XCTAssertNil(result)
-    }
-
-    func testDefaultLimitForUnknownTool() async {
-        let limiter = ToolRateLimiter()
-        // Unknown tools: base limit 20, capped to 10 by medium risk + balanced profile.
-        for _ in 0..<10 {
-            let result = await limiter.checkLimit(tool: "custom_tool")
-            XCTAssertNil(result)
-        }
-        let result = await limiter.checkLimit(tool: "custom_tool")
-        XCTAssertNotNil(result)
-    }
-}
-
 // MARK: - Tool Mode Filtering Tests
 
 final class ToolModeFilteringTests: XCTestCase {
@@ -351,13 +224,7 @@ final class ToolModeFilteringTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        ToolToggleStore.reset()
         registry = ToolRegistry.buildDefault()
-    }
-
-    override func tearDown() {
-        ToolToggleStore.reset()
-        super.tearDown()
     }
 
     // MARK: - Assistant Mode (read-only)
@@ -413,13 +280,6 @@ final class ToolModeFilteringTests: XCTestCase {
         XCTAssertTrue(registry.isToolAllowed("write", mode: "full", privacyMode: "strict_local"))
     }
 
-    func testUserToolToggleCanDisableSpecificTool() {
-        XCTAssertTrue(registry.isToolAllowed("calendar", mode: "full"))
-        ToolToggleStore.setToolEnabled(false, for: "calendar")
-        XCTAssertFalse(registry.isToolAllowed("calendar", mode: "full"))
-        ToolToggleStore.setToolEnabled(true, for: "calendar")
-        XCTAssertTrue(registry.isToolAllowed("calendar", mode: "full"))
-    }
 
     // MARK: - Schema Filtering
 
@@ -487,71 +347,6 @@ final class FetchURLCloudMetadataTests: XCTestCase {
     func testAllowsExternalURLs() {
         XCTAssertFalse(FetchURLTool.isCloudMetadataBlocked("https://example.com"))
         XCTAssertFalse(FetchURLTool.isCloudMetadataBlocked("https://api.github.com"))
-    }
-}
-
-// MARK: - ApprovalManager Timeout Tests
-
-final class ApprovalManagerTimeoutTests: XCTestCase {
-
-    func testTimeoutIs45Seconds() {
-        XCTAssertEqual(ApprovalManager.timeoutSeconds, 45)
-    }
-}
-
-// MARK: - Outbound Exfiltration Guard Tests
-
-final class OutboundExfiltrationGuardTests: XCTestCase {
-
-    func testDetectsOutboundByActionAndRecipient() async {
-        let guardrail = OutboundExfiltrationGuard.shared
-        await guardrail.resetForTesting()
-
-        let first = await guardrail.evaluate(
-            toolName: "mail",
-            arguments: [
-                "action": "send",
-                "to": "new-recipient@example.com",
-                "body": "hello there",
-            ]
-        )
-
-        guard case .confirm = first else {
-            XCTFail("Expected confirm for first-time outbound recipient")
-            return
-        }
-
-        await guardrail.recordSuccessfulSend(
-            toolName: "mail",
-            arguments: [
-                "action": "send",
-                "to": "new-recipient@example.com",
-                "body": "hello there",
-            ]
-        )
-
-        let second = await guardrail.evaluate(
-            toolName: "mail",
-            arguments: [
-                "action": "send",
-                "to": "new-recipient@example.com",
-                "body": "follow up",
-            ]
-        )
-
-        XCTAssertNil(second, "Known recipient should not repeatedly trigger novelty confirmation")
-    }
-
-    func testIgnoresReadOnlyMailAction() async {
-        let guardrail = OutboundExfiltrationGuard.shared
-        await guardrail.resetForTesting()
-
-        let decision = await guardrail.evaluate(
-            toolName: "mail",
-            arguments: ["action": "read_recent"]
-        )
-
-        XCTAssertNil(decision)
     }
 }
 

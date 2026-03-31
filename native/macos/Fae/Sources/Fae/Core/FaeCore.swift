@@ -180,7 +180,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private let playbackManager = AudioPlaybackManager()
     private let conversationState = ConversationStateTracker()
     private lazy var modelManager = ModelManager(eventBus: eventBus)
-    private lazy var approvalManager = ApprovalManager(eventBus: eventBus)
     private var pipelineCoordinator: PipelineCoordinator?
     private var memoryOrchestrator: MemoryOrchestrator?
     private var memoryStore: SQLiteMemoryStore?
@@ -227,6 +226,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         // One-time migrations.
         Self.migrateCustomInstructionsToDirective()
         SkillMigrator.migrateIfNeeded()
+        Self.cleanupDeletedSecurityArtifacts()
 
         // Ensure user has a copy of SOUL.md on first launch.
         SoulManager.ensureUserCopy()
@@ -419,7 +419,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     memoryOrchestrator: isRescue ? nil : orchestrator,
                     sessionStore: sessionStore,
                     workflowTraceStore: workflowTraceStore,
-                    approvalManager: approvalManager,
                     registry: registry,
                     speakerEncoder: speakerEncoder,
                     speakerProfileStore: speakerProfileStore,
@@ -1020,15 +1019,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 respondToApproval(requestID: requestId, decisionStr: decisionStr, toolName: toolName, payload: payload)
             }
 
-        case "approval.batch_respond":
-            if let batchId = payload["batch_id"] as? String,
-               let approved = payload["approved"] as? Bool
-            {
-                Task {
-                    await self.approvalManager.resolveBatch(batchId: batchId, approved: approved, source: "button")
-                }
-            }
-
         case "speaker.rename":
             if let label = payload["label"] as? String,
                let displayName = payload["displayName"] as? String
@@ -1486,62 +1476,34 @@ final class FaeCore: ObservableObject, HostCommandSender {
         Task { await pipelineCoordinator?.speakDirect(text) }
     }
 
+    /// Legacy approval response — approvals removed in permissions purge.
+    /// Kept as no-op for TestServer backward compatibility.
     func respondToApproval(requestID: UInt64, decisionStr: String?, toolName: String?, payload: [String: Any]) {
-        let approved = payload["approved"] as? Bool ?? true
-        guard let decision = mapDecision(decisionStr, approved: approved) else { return }
-        NSLog(
-            "FaeCore: respondToApproval request_id=%llu approved=%@ decision=%@ tool=%@ payload_keys=%@",
-            requestID,
-            String(describing: approved),
-            String(describing: decisionStr),
-            String(describing: toolName),
-            payload.keys.sorted().joined(separator: ",")
-        )
-
-        Task {
-            await approvalManager.resolve(requestId: requestID, decision: decision, source: "button")
-        }
+        NSLog("FaeCore: respondToApproval called (no-op — approvals removed)")
     }
 
+    /// Returns empty — approvals removed.
     func pendingApprovalSnapshots() async -> [[String: Any]] {
-        await approvalManager.pendingApprovalSnapshots()
+        []
     }
 
+    /// Returns nil — approvals removed.
     func mostRecentPendingApprovalID() async -> UInt64? {
-        await approvalManager.mostRecentPendingApprovalID()
+        nil
     }
 
-    func clearPendingApprovalsForTest() async {
-        await approvalManager.clearPendingApprovals(source: "test_reset")
-    }
+    /// No-op — approvals removed.
+    func clearPendingApprovalsForTest() async {}
 
-    func clearAllToolApprovalsForTest() async {
-        await ApprovedToolsStore.shared.revokeAll()
-    }
+    /// No-op — tool approvals removed.
+    func clearAllToolApprovalsForTest() async {}
 
     func clearUserSchedulerTasksForTest() async {
         _ = await scheduler?.deleteAllUserTasksForTest()
     }
 
-    /// Legacy method for simple approved/denied resolution.
-    func respondToApproval(requestID: UInt64, approved: Bool) {
-        Task {
-            let decision: VoiceCommandParser.ApprovalDecision = approved ? .yes : .no
-            await approvalManager.resolve(requestId: requestID, decision: decision, source: "button")
-        }
-    }
-
-    private func mapDecision(_ decisionStr: String?, approved: Bool) -> VoiceCommandParser.ApprovalDecision? {
-        guard let decisionStr else {
-            return approved ? .yes : .no
-        }
-        switch decisionStr {
-        case "yes": return .yes
-        case "no": return .no
-        case "always": return .always
-        default: return approved ? .yes : .no
-        }
-    }
+    /// Legacy method — no-op, approvals removed.
+    func respondToApproval(requestID: UInt64, approved: Bool) {}
 
     private func refreshAwarenessRuntime(restartSchedulerTasks: Bool) {
         let awareness = config.awareness
@@ -2724,6 +2686,40 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 NSLog("FaeCore: failed to migrate instructions file: %@", error.localizedDescription)
             }
         }
+    }
+
+    /// Remove artifacts from the deleted security layers (Permissions Great Purge).
+    ///
+    /// Silently cleans up files and UserDefaults keys that belonged to:
+    /// - `ApprovedToolsStore` (approved_tools.json)
+    /// - `ToolToggleStore` (fae.disabledTools UserDefaults key)
+    /// - `OutboundExfiltrationGuard` (outbound-recipients.json)
+    private static func cleanupDeletedSecurityArtifacts() {
+        let fm = FileManager.default
+        guard let appSupport = fm.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return }
+
+        let faeDir = appSupport.appendingPathComponent("fae")
+
+        // Remove approved_tools.json (ApprovedToolsStore — deleted).
+        let approvedTools = faeDir.appendingPathComponent("approved_tools.json")
+        if fm.fileExists(atPath: approvedTools.path) {
+            try? fm.removeItem(at: approvedTools)
+            NSLog("FaeCore: cleaned up approved_tools.json (deleted layer)")
+        }
+
+        // Remove outbound-recipients.json (OutboundExfiltrationGuard — deleted).
+        let securityDir = faeDir.appendingPathComponent("security")
+        let outboundRecipients = securityDir.appendingPathComponent("outbound-recipients.json")
+        if fm.fileExists(atPath: outboundRecipients.path) {
+            try? fm.removeItem(at: outboundRecipients)
+            NSLog("FaeCore: cleaned up security/outbound-recipients.json (deleted layer)")
+        }
+
+        // Remove fae.disabledTools UserDefaults key (ToolToggleStore — deleted).
+        UserDefaults.standard.removeObject(forKey: "fae.disabledTools")
     }
 
     private func handleConfigGet(key: String, commandName: String) {

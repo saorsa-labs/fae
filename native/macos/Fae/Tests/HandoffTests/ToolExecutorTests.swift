@@ -43,39 +43,16 @@ private struct ThrowingTool: Tool {
     }
 }
 
-/// Broker that always allows, and records whether it was called.
-private actor RecordingBroker: TrustedActionBroker {
-    var evaluateCalled = false
-    var lastIntent: ActionIntent?
-
-    func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-        evaluateCalled = true
-        lastIntent = intent
-        return .allow(reason: DecisionReason(code: .allowLowRisk, message: "test allow"))
-    }
-}
-
-/// Broker that always denies.
-private actor DenyingBroker: TrustedActionBroker {
-    func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-        .deny(reason: DecisionReason(code: .noCapabilityTicket, message: "denied by test"))
-    }
-}
-
 // MARK: - Helper
 
 private func makeExecutor(
-    tools: [any Tool] = [],
-    broker: any TrustedActionBroker = RecordingBroker()
+    tools: [any Tool] = []
 ) -> ToolExecutor {
     let registry = ToolRegistry(tools: tools)
     return ToolExecutor(
         registry: registry,
-        actionBroker: broker,
         damageControlPolicy: DamageControlPolicy(),
-        rateLimiter: ToolRateLimiter(),
-        securityLogger: SecurityEventLogger.shared,
-        outboundGuard: OutboundExfiltrationGuard.shared
+        securityLogger: SecurityEventLogger.shared
     )
 }
 
@@ -88,8 +65,6 @@ private func makeContext(
         toolMode: toolMode,
         privacyMode: privacyMode,
         modelLocality: .local,
-        capabilityTicket: nil,
-        hasCapabilityTicketForTool: true,
         explicitUserAuthorization: false,
         isOwner: isOwner,
         livenessScore: nil,
@@ -208,33 +183,6 @@ final class ToolExecutorTests: XCTestCase {
 
     // MARK: Broker Deny
 
-    func testBrokerDenyReturnsError() async {
-        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
-        let executor = makeExecutor(tools: [tool], broker: DenyingBroker())
-        let context = makeContext()
-        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
-
-        let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
-
-        XCTAssertTrue(result.result.isError)
-        XCTAssertTrue(result.result.output.contains("denied by test"))
-    }
-
-    // MARK: Broker is called after preflight passes
-
-    func testBrokerIsCalledForAllowedTool() async {
-        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
-        let broker = RecordingBroker()
-        let executor = makeExecutor(tools: [tool], broker: broker)
-        let context = makeContext()
-        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
-
-        _ = await executor.execute(call, context: context, callbacks: noopCallbacks)
-
-        let wasCalled = await broker.evaluateCalled
-        XCTAssertTrue(wasCalled)
-    }
-
     // MARK: Proactive allowlist
 
     func testProactiveAllowlistBlocksUnlistedTool() async {
@@ -245,8 +193,6 @@ final class ToolExecutorTests: XCTestCase {
             toolMode: context.toolMode,
             privacyMode: context.privacyMode,
             modelLocality: context.modelLocality,
-            capabilityTicket: context.capabilityTicket,
-            hasCapabilityTicketForTool: context.hasCapabilityTicketForTool,
             explicitUserAuthorization: context.explicitUserAuthorization,
             isOwner: context.isOwner,
             livenessScore: context.livenessScore,
@@ -287,47 +233,6 @@ final class ToolExecutorTests: XCTestCase {
         XCTAssertTrue(result.damageControlIntervened, "damageControlIntervened should be true")
     }
 
-    // MARK: - Shadow Mode
-
-    func testShadowModeBypassesDenyToAllow() async {
-        FaeEnvironment.defaults.set(true, forKey: "fae.security.shadowMode")
-        defer { FaeEnvironment.defaults.removeObject(forKey: "fae.security.shadowMode") }
-
-        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
-        let executor = makeExecutor(tools: [tool], broker: DenyingBroker())
-        let context = makeContext()
-        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
-
-        let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
-
-        // Shadow mode converts deny → allow, so the tool executes successfully
-        XCTAssertFalse(result.result.isError, "Shadow mode should bypass deny: \(result.result.output)")
-    }
-
-    // MARK: - Approval with No Manager
-
-    func testConfirmWithNoApprovalManagerReturnsError() async {
-        let tool = StubTool(name: "write", riskLevel: .medium, requiresApproval: true)
-        let broker = ConfirmingBroker()
-        let executor = ToolExecutor(
-            registry: ToolRegistry(tools: [tool]),
-            actionBroker: broker,
-            damageControlPolicy: DamageControlPolicy(),
-            rateLimiter: ToolRateLimiter(),
-            securityLogger: SecurityEventLogger.shared,
-            outboundGuard: OutboundExfiltrationGuard.shared,
-            approvalManager: nil // no manager
-        )
-        // Use isOwner: false so auto-approval doesn't bypass the approval path.
-        let context = makeContext(isOwner: false)
-        let call = makeCall(name: "write", arguments: ["path": "/tmp/test", "content": "hello"])
-
-        let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
-
-        XCTAssertTrue(result.result.isError)
-        XCTAssertTrue(result.result.output.contains("approval manager"), "Expected approval manager error, got: \(result.result.output)")
-    }
-
     // MARK: - Throwing Tool
 
     func testThrowingToolReturnsErrorResult() async {
@@ -344,41 +249,6 @@ final class ToolExecutorTests: XCTestCase {
 
     // MARK: - Argument Injection
 
-    func testCapabilityTicketInjectedForRunSkill() async {
-        let capturingTool = CapturingTool(name: "run_skill")
-        let executor = makeExecutor(tools: [capturingTool])
-        let ticket = CapabilityTicket(
-            id: "test-ticket-42",
-            issuedAt: Date(),
-            expiresAt: Date().addingTimeInterval(300),
-            allowedTools: ["run_skill"]
-        )
-        let context = ToolExecutorContext(
-            toolMode: "full",
-            privacyMode: "local_preferred",
-            modelLocality: .local,
-            capabilityTicket: ticket,
-            hasCapabilityTicketForTool: true,
-            explicitUserAuthorization: false,
-            isOwner: true,
-            livenessScore: nil,
-            speakerId: nil,
-            actionSource: .voice,
-            proactiveContext: nil,
-            visionEnabled: false,
-            firstOwnerEnrollmentActive: false,
-            workflowTurnID: nil,
-            traceToolCallID: nil,
-            workflowRunID: nil
-        )
-        let call = makeCall(name: "run_skill", arguments: ["name": "test-skill"])
-
-        _ = await executor.execute(call, context: context, callbacks: noopCallbacks)
-
-        let captured = capturingTool.capturedInput
-        XCTAssertEqual(captured?["capability_ticket"] as? String, "test-ticket-42")
-    }
-
     // MARK: - Vision Auto-Enable Callback
 
     func testVisionAutoEnableCallbackFired() async {
@@ -388,8 +258,6 @@ final class ToolExecutorTests: XCTestCase {
             toolMode: "full",
             privacyMode: "local_preferred",
             modelLocality: .local,
-            capabilityTicket: nil,
-            hasCapabilityTicketForTool: true,
             explicitUserAuthorization: false,
             isOwner: true,
             livenessScore: nil,
@@ -431,15 +299,15 @@ final class ToolExecutorTests: XCTestCase {
     }
 
     func testBlockedExecutionReturnsNonNilLatency() async {
-        let tool = StubTool(name: "read", riskLevel: .low, requiresApproval: false)
-        let executor = makeExecutor(tools: [tool], broker: DenyingBroker())
+        // Use an unknown tool name — registry lookup failure gives us a blocked path.
+        let executor = makeExecutor(tools: [])
         let context = makeContext()
-        let call = makeCall(name: "read", arguments: ["path": "/tmp/test"])
+        let call = makeCall(name: "nonexistent", arguments: [:])
 
         let result = await executor.execute(call, context: context, callbacks: noopCallbacks)
 
         XCTAssertTrue(result.result.isError)
-        XCTAssertNotNil(result.latencyMs, "latencyMs must be non-nil even for broker denials")
+        XCTAssertNotNil(result.latencyMs, "latencyMs must be non-nil even for blocked executions")
     }
 
     func testThrowingToolReturnsNonNilLatency() async {
@@ -470,19 +338,14 @@ final class ToolExecutorTests: XCTestCase {
 
         let executor = ToolExecutor(
             registry: ToolRegistry(tools: [tool]),
-            actionBroker: RecordingBroker(),
             damageControlPolicy: DamageControlPolicy(),
-            rateLimiter: ToolRateLimiter(),
             securityLogger: SecurityEventLogger.shared,
-            outboundGuard: OutboundExfiltrationGuard.shared,
             workflowTraceStore: store
         )
         let context = ToolExecutorContext(
             toolMode: "full",
             privacyMode: "local_preferred",
             modelLocality: .local,
-            capabilityTicket: nil,
-            hasCapabilityTicketForTool: true,
             explicitUserAuthorization: false,
             isOwner: true,
             livenessScore: nil,
@@ -525,11 +388,8 @@ final class ToolExecutorTests: XCTestCase {
 
         let executor = ToolExecutor(
             registry: ToolRegistry(tools: [tool]),
-            actionBroker: RecordingBroker(),
             damageControlPolicy: DamageControlPolicy(),
-            rateLimiter: ToolRateLimiter(),
             securityLogger: SecurityEventLogger.shared,
-            outboundGuard: OutboundExfiltrationGuard.shared,
             workflowTraceStore: store
         )
         // workflowRunID is nil — trace should be skipped
@@ -546,16 +406,6 @@ final class ToolExecutorTests: XCTestCase {
 }
 
 // MARK: - Additional Test Doubles
-
-/// Broker that always returns `.confirm(...)` — triggers the approval path.
-private actor ConfirmingBroker: TrustedActionBroker {
-    func evaluate(_ intent: ActionIntent) async -> BrokerDecision {
-        .confirm(
-            prompt: ConfirmationPrompt(message: "Please confirm"),
-            reason: DecisionReason(code: .mediumRiskRequiresConfirmation, message: "test confirm")
-        )
-    }
-}
 
 /// Tool that captures its input for assertion.
 private final class CapturingTool: Tool, @unchecked Sendable {

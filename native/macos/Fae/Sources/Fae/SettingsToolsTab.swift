@@ -13,7 +13,6 @@ struct SettingsToolsTab: View {
 
     @AppStorage("toolMode") private var toolMode: String = "full"
     @State private var permissionSnapshot = PermissionStatusProvider.current()
-    @State private var showResetAlert = false
 
     var body: some View {
         Form {
@@ -70,29 +69,6 @@ struct SettingsToolsTab: View {
                     title: "Remembers every action",
                     description: "Logs every change so you can undo it with one tap."
                 )
-            }
-
-            // MARK: Trust & Approvals
-            Section("Trust & Approvals") {
-                Button("Reset approvals\u{2026}") {
-                    showResetAlert = true
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .alert("Reset approvals?", isPresented: $showResetAlert) {
-                    Button("Cancel", role: .cancel) { }
-                    Button("Reset", role: .destructive) {
-                        Task {
-                            await ApprovedToolsStore.shared.revokeAll()
-                        }
-                    }
-                } message: {
-                    Text("Fae will ask before acting again \u{2014} like a fresh start.")
-                }
-
-                Text("When Fae asks permission, tap Always to build trust over time. Reset clears all remembered approvals.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
 
             // MARK: Apple Tool Permissions

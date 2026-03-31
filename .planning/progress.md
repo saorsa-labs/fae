@@ -180,3 +180,21 @@ All milestones done:
 2. Improvement Loop Core (ImprovementStore, CycleCoordinator, semi-auto deploy)
 3. Feedback + Verification (ImplicitFeedbackDetector, ExternalReviewGate, DirectiveTuner)
 4. Shadow Eval + Hardening (ShadowEvaluator integration, health reporter, 168 tests)
+
+---
+
+## PROJECT: Fae Permissions Great Purge
+
+## 2026-03-31
+
+### Phase 1.1: Delete Source Files + Extract VLM Sanitizer — COMPLETE
+- [x] Task 1: Extract sanitizeVLMPrompt() to MLXVLMEngine.swift (private static method)
+- [x] Task 2: Remove classifyBashCommand call from BuiltinTools.swift
+- [x] Task 3: Remove NetworkTargetPolicy check from fetch_url (keep file for MCP/skills)
+- [x] Task 4: Delete 9 source files (1,429 lines removed)
+  - TrustedActionBroker.swift, CapabilityTicket.swift, ToolRateLimiter.swift
+  - ToolRiskPolicy.swift, OutboundExfiltrationGuard.swift, ApprovedToolsStore.swift
+  - ToolToggleStore.swift, ApprovalManager.swift, InputSanitizer.swift
+- NOTE: Expected compile errors from deleted types. Resolved in Phase 1.2+.
+
+### Phase 1.2: Refactor ApprovalOverlay into InputOverlay — IN PROGRESS

@@ -777,8 +777,6 @@ final class CoworkToolExecutorTests: XCTestCase {
         XCTAssertEqual(context.toolMode, "full")
         XCTAssertEqual(context.privacyMode, "shareable")
         XCTAssertEqual(context.modelLocality, .nonLocal)
-        XCTAssertNil(context.capabilityTicket)
-        XCTAssertFalse(context.hasCapabilityTicketForTool)
         XCTAssertFalse(context.explicitUserAuthorization)
         XCTAssertTrue(context.isOwner)
         XCTAssertNil(context.livenessScore)
@@ -798,7 +796,6 @@ final class CoworkToolExecutorTests: XCTestCase {
         XCTAssertEqual(context.modelLocality, .local)
         XCTAssertFalse(context.isOwner)
         XCTAssertFalse(context.visionEnabled)
-        XCTAssertNil(context.capabilityTicket)
     }
 
     // MARK: - Test: ToolExecutorCallbacks.noop

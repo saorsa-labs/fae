@@ -208,7 +208,7 @@ Collect corrections → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
 
 **LoRA adapter loading:** MLXLLMEngine.loadAdapter(from:), unloadAdapter(), swapAdapter(to:). Uses mlx-swift-lm's built-in LoRAContainer. Hot-swap via SelfConfigTool `training.personal_adapter_path`.
 
-**Scheduler allowlist:** `improvement_cycle: ["activate_skill", "run_skill", "delegate_agent", "self_config"]`
+**Scheduler tool access:** Scheduler tasks run as owner (isOwner=true). Proactive allowlists in `ProactiveRequestContext` limit available tools per task.
 
 ## Tool system
 
@@ -235,20 +235,22 @@ Collect corrections → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
 
 **Native MLX tool calling**: tool specs passed via `UserInput.tools` → Qwen3.5 chat template. No separate intent classifier.
 
-### Tool security (8-layer model)
+### Tool security (4-layer model)
+
+Voice identity is the security model. Owner gets full access; DamageControlPolicy is the safety net for catastrophic operations.
 
 | Layer | Implementation | Purpose |
 |-------|---------------|---------|
 | Voice identity | `SpeakerProfileStore` | Primary user verification — only recognized voices get tool access |
-| Damage control | `DamageControlPolicy` | Pre-broker: block/disaster/confirm for catastrophic ops |
-| Tool mode filtering | `ToolRegistry` | LLM never sees blocked tools |
-| Execution guard | `PipelineCoordinator` | Rejects hallucinated tool calls |
-| Path validation | `PathPolicy` | Blocks writes to dotfiles, system paths |
-| Rate limiting | `ToolRateLimiter` | Per-tool sliding-window limits |
-| TrustedActionBroker | `TrustedActionBroker` | Default-deny policy chokepoint |
-| Outbound guard | `OutboundExfiltrationGuard` | Novel recipient + sensitive payload detection |
+| Damage control | `DamageControlPolicy` | Block/disaster/confirm for catastrophic bash ops + credential path protection |
+| Reversibility | `ReversibilityEngine` + `ReceiptStore` | Pre-mutation file snapshots, undo support, action receipts |
+| CoWork gating | `CoworkToolExecutor` | External LLM calls gated with DamageControlPolicy (nonLocal locality) |
 
-**PolicyProfile modes**: balanced (default), moreAutonomous, moreCautious.
+**Simplified ToolExecutor flow** (replaced 14-layer pipeline):
+1. Registry lookup + tool mode filtering
+2. Proactive allowlist + TillDone gate + computer-use step limit
+3. DamageControlPolicy evaluate (bash patterns, path rules, credential protection)
+4. Execute with timeout, plugin hooks, receipt tracking
 
 **Apple tool reads are INTENTIONALLY ungated** — only writes/mutations need approval. macOS permission is the only read gate.
 
@@ -258,7 +260,7 @@ All external (non-local) LLM calls from CoWork are gated by `CoworkToolExecutor`
 
 **What is enforced**: DamageControlPolicy zero-access paths, inbound injection scan, fail-closed startup gate, SecurityEventLogger audit, per-provider metrics.
 
-**What is NOT enforced (by design)**: TrustedActionBroker, OutboundExfiltrationGuard, ToolRegistry mode filtering, approval overlay. These apply to individual tool calls, not provider-level LLM requests.
+**What is NOT enforced (by design)**: ToolRegistry mode filtering, approval overlay. CoWork provider calls are not individual tool dispatches.
 
 **Why not full ToolExecutor parity**: `ToolExecutor.execute()` checks `registry.isToolAllowed()` at step 1, rejecting unregistered tool names. CoWork uses synthetic names ("external_llm") that are not in the registry. DamageControlPolicy is the layer that matters for provider-level gating.
 
@@ -353,7 +355,7 @@ Config: `[channels]` in config.toml. Credentials in macOS Keychain via `Credenti
 
 **Always-on from first launch.** Camera/screen awareness start automatically after primary user enrollment.
 No consent gate — these features are core to what Fae is, not optional add-ons.
-`injectProactiveQuery()` with immutable `ProactiveRequestContext`. Per-task tool allowlists in `TrustedActionBroker`.
+`injectProactiveQuery()` with immutable `ProactiveRequestContext`. Per-task tool allowlists in `ProactiveRequestContext.allowedTools`.
 `AwarenessThrottle`: battery, thermal, quiet hours (22:00-07:00) gating.
 
 ### Progressive identity learning
@@ -501,7 +503,7 @@ Sources/
 
 All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 
-### Core/ (27 files)
+### Core/ (26 files)
 
 | File | Role |
 |------|------|
@@ -530,7 +532,6 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `CapabilitySnapshotService.swift` | Capability state snapshots |
 | `ChannelSettingsStore.swift` | Channel configuration persistence |
 | `SettingsCapabilityManifest.swift` | Settings capability definitions |
-| `ToolToggleStore.swift` | Per-tool enable/disable persistence |
 | `ProgressivePhotoCapture.swift` | Camera frame capture for progressive visual identity updates |
 
 ### ML/ (16 files)
@@ -598,12 +599,15 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `UVRuntime.swift` | Python uv runtime for package-heavy skills |
 | `FaeLocalRuntimeServer.swift` | Local HTTP runtime server |
 
-### Tools/ (34 files)
+### Tools/ (25 files)
 
 | File | Role |
 |------|------|
-| `Tool.swift` | Tool protocol definition |
+| `Tool.swift` | Tool protocol definition (ToolRiskLevel, ActionSource, ToolResult) |
 | `ToolRegistry.swift` | Dynamic registration, schema generation, mode filtering |
+| `ToolExecutor.swift` | Simplified 4-step execution pipeline (registry, proactive gate, DamageControl, execute) |
+| `ToolExecutorContext.swift` | Per-call runtime state + ToolExecutorCallbacks |
+| `ToolExecutorDelegate.swift` | ToolExecutorResult + delegate protocol |
 | `BuiltinTools.swift` | Core tools (read, write, edit, bash, self_config, web_search, fetch_url) |
 | `AppleTools.swift` | Apple integration (calendar, contacts, mail, reminders, notes) |
 | `SchedulerTools.swift` | Scheduler management tools |
@@ -620,22 +624,15 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `WindowControlTool.swift` | Window management tool |
 | `SessionSearchTool.swift` | Session search tool |
 | `TillDoneTool.swift` | Task-driven work with hard gating |
-| `TrustedActionBroker.swift` | Default-deny policy chokepoint; scheduler per-task allowlists |
-| `DamageControlPolicy.swift` | Pre-broker catastrophic operation blocking |
-| `CapabilityTicket.swift` | Task-scoped temporary grants with TTL |
+| `DamageControlPolicy.swift` | Catastrophic operation blocking (bash rules, credential path protection) |
 | `ReversibilityEngine.swift` | Pre-mutation file checkpoints and rollback |
-| `SafeBashExecutor.swift` | Sandboxed bash (8-pattern denylist, process-group kill) |
+| `SafeBashExecutor.swift` | Sandboxed bash (process-group kill, timeout, PATH isolation) |
 | `SafeSkillExecutor.swift` | Constrained Python (ulimits, restricted cwd) |
-| `PathPolicy.swift` | Write-path validation (dotfiles, system paths, `.fae-vault`) |
-| `InputSanitizer.swift` | Shell metacharacter detection |
-| `NetworkTargetPolicy.swift` | Blocks localhost, metadata, RFC1918 |
-| `OutboundExfiltrationGuard.swift` | Novel recipient + sensitive payload detection |
+| `PathPolicy.swift` | Write-path validation (system paths) |
+| `NetworkTargetPolicy.swift` | Blocks localhost, metadata, RFC1918 (used by MCP/skills) |
 | `SecurityEventLogger.swift` | Append-only JSONL security log (5MB rotation) |
 | `SensitiveDataRedactor.swift` | API key/token/password redaction |
-| `ToolRateLimiter.swift` | Per-tool sliding-window rate limiter |
-| `ToolRiskPolicy.swift` | Risk-level → approval routing |
 | `ToolAnalytics.swift` | Tool usage analytics |
-| `ApprovedToolsStore.swift` | Persisted tool approval state |
 
 ### Memory/ (17 files)
 
@@ -719,7 +716,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `CoworkToolExecutorError.swift` | Error types for CoWork security pipeline |
 | `WorkWithFaeWorkspace.swift` | "Work with Fae" workspace integration |
 
-### Audio/ (3 files), Backup/ (1 file), Agent/ (1 file)
+### Audio/ (3 files), Backup/ (1 file)
 
 | File | Role |
 |------|------|
@@ -727,7 +724,6 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `Audio/AudioPlaybackManager.swift` | Audio playback with barge-in support |
 | `Audio/AudioToneGenerator.swift` | Thinking/listening/ready beep tones |
 | `Backup/GitVaultManager.swift` | Git-based rolling backup at `~/.fae-vault/` |
-| `Agent/ApprovalManager.swift` | Tool approval lifecycle (20s timeout) |
 
 ### Top-level files (74 files)
 

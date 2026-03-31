@@ -105,7 +105,7 @@ actor MLXVLMEngine: VLMEngine {
                     let ciImage = CIImage(cgImage: image)
                     let chatMessages: [Chat.Message] = [
                         .system("Describe what you see accurately and concisely."),
-                        .user(InputSanitizer.sanitizeVLMPrompt(prompt), images: [.ciImage(ciImage)]),
+                        .user(Self.sanitizeVLMPrompt(prompt), images: [.ciImage(ciImage)]),
                     ]
                     var userInput = UserInput(chat: chatMessages)
                     userInput.additionalContext = ["enable_thinking": !options.suppressThinking]
@@ -141,5 +141,42 @@ actor MLXVLMEngine: VLMEngine {
                 }
             }
         }
+    }
+
+    // MARK: - VLM Prompt Sanitization
+
+    /// Strip known prompt injection patterns from VLM prompts.
+    ///
+    /// Vision-language models can be manipulated by adversarial text rendered
+    /// in screenshots or camera images. This strips the most common attack
+    /// vectors from the user-supplied prompt before it reaches the model.
+    private static func sanitizeVLMPrompt(_ prompt: String) -> String {
+        var result = prompt
+
+        let injectionPatterns = [
+            #"(?i)ignore (?:all )?(?:previous |prior |above )?instructions"#,
+            #"(?i)you are now "#,
+            #"(?i)new instructions:"#,
+            #"(?i)system prompt:"#,
+            #"(?i)\[INST\]"#,
+            #"(?i)\[/INST\]"#,
+            #"(?i)<\|(?:im_start|im_end|system|endoftext)\|>"#,
+            #"(?i)<<SYS>>"#,
+            #"(?i)<</SYS>>"#,
+        ]
+
+        for pattern in injectionPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: "")
+        }
+
+        result = result.replacingOccurrences(
+            of: #"\s{3,}"#,
+            with: "  ",
+            options: .regularExpression
+        )
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -362,31 +362,4 @@ final class JSCDeveloperHarnessTests: XCTestCase {
         XCTAssertTrue(result.output.contains("intentional failure"))
     }
 
-    // MARK: - AllowAllBroker Tests
-
-    func testAllowAllBrokerAlwaysAllows() async {
-        let broker = AllowAllBroker()
-        let intent = ActionIntent(
-            source: .voice,
-            toolName: "bash",
-            riskLevel: .high,
-            requiresApproval: true,
-            isOwner: true,
-            livenessScore: nil,
-            speakerId: nil,
-            explicitUserAuthorization: false,
-            hasCapabilityTicket: false,
-            argumentSummary: "test",
-            schedulerTaskId: nil,
-            schedulerAllowedTools: [],
-            schedulerConsentGranted: false
-        )
-        let decision = await broker.evaluate(intent)
-        switch decision {
-        case .allow:
-            break // expected
-        default:
-            XCTFail("AllowAllBroker should always return .allow, got \(decision)")
-        }
-    }
 }

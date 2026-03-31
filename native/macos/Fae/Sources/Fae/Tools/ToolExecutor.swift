@@ -1,21 +1,21 @@
 import Foundation
 
-/// Standalone actor that encapsulates the full tool execution security stack.
+/// Standalone actor that encapsulates the tool execution pipeline.
 ///
-/// Extracted from `PipelineCoordinator.executeTool()` so that both the existing
-/// pipeline tool-call path and the new JSC tool-program runtime can share the
-/// same governance enforcement:
+/// Simplified from the original 14-layer security stack to a direct flow:
 ///
-/// 1. Tool mode / privacy filtering
-/// 2. Proactive allowlist check
-/// 3. TillDone hard gate
-/// 4. Computer-use step limit
-/// 5. Vision auto-enable
-/// 6. Tool lookup + rate limiting
-/// 7. DamageControl → OutboundGuard → Broker policy chain
-/// 8. Approval overlay
-/// 9. Timeout-wrapped execution
-/// 10. Analytics + audit logging
+/// 1. Registry lookup + rescue mode + tool mode filtering
+/// 2. Proactive allowlist + TillDone gate + computer-use step limit
+/// 3. DamageControlPolicy evaluate (bash patterns, path rules)
+///    - Block → hard deny
+///    - Disaster → narrate + countdown (barge-in cancel)
+///    - ConfirmManual → narrate + countdown
+///    - Allow → proceed
+/// 4. Pre-state capture, plugin hooks, timeout-wrapped execution
+/// 5. Post-execution: analytics, security log, receipt, narration
+///
+/// Voice identity is the security model — verified owner gets full access.
+/// DamageControlPolicy remains as the safety net for catastrophic operations.
 
 /// Protocol for tool executor functionality, enabling test doubles.
 ///
@@ -34,12 +34,8 @@ actor ToolExecutor: ToolExecutorProtocol {
     // MARK: - Dependencies
 
     let registry: ToolRegistry
-    let actionBroker: any TrustedActionBroker
     let damageControlPolicy: DamageControlPolicy
-    let rateLimiter: ToolRateLimiter
     let securityLogger: SecurityEventLogger
-    let outboundGuard: OutboundExfiltrationGuard
-    let approvalManager: ApprovalManager?
     let workflowTraceStore: WorkflowTraceStore?
     let toolAnalytics: ToolAnalytics?
     weak var delegate: (any ToolExecutorDelegate)?
@@ -63,24 +59,16 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     init(
         registry: ToolRegistry,
-        actionBroker: any TrustedActionBroker,
         damageControlPolicy: DamageControlPolicy,
-        rateLimiter: ToolRateLimiter,
         securityLogger: SecurityEventLogger,
-        outboundGuard: OutboundExfiltrationGuard,
-        approvalManager: ApprovalManager? = nil,
         workflowTraceStore: WorkflowTraceStore? = nil,
         toolAnalytics: ToolAnalytics? = nil,
         delegate: (any ToolExecutorDelegate)? = nil,
         debugConsole: DebugConsoleController? = nil
     ) {
         self.registry = registry
-        self.actionBroker = actionBroker
         self.damageControlPolicy = damageControlPolicy
-        self.rateLimiter = rateLimiter
         self.securityLogger = securityLogger
-        self.outboundGuard = outboundGuard
-        self.approvalManager = approvalManager
         self.workflowTraceStore = workflowTraceStore
         self.toolAnalytics = toolAnalytics
         self.delegate = delegate
@@ -109,7 +97,7 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     // MARK: - Execute
 
-    /// Execute a single tool call through the full security stack.
+    /// Execute a single tool call through the simplified pipeline.
     ///
     /// - Parameters:
     ///   - call: The parsed tool call from the LLM.
@@ -142,7 +130,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         )
     }
 
-    /// Inner execution — all security layers, approval, and tool invocation.
+    /// Inner execution — simplified pipeline.
     /// Trace recording is handled by the caller (`execute`).
     private func executeInner(
         _ call: ToolCall,
@@ -242,59 +230,13 @@ actor ToolExecutor: ToolExecutorProtocol {
             )
         }
 
-        let selfConfigRead = Self.isSelfConfigReadAction(arguments: call.arguments)
-        let effectiveRequiresApproval = Self.toolRequiresApproval(
-            toolName: call.name,
-            arguments: call.arguments,
-            defaultRequiresApproval: tool.requiresApproval
-        )
-        let effectiveRiskLevel: ToolRiskLevel = (call.name == "self_config" && selfConfigRead) ? .low : tool.riskLevel
-
-        // ── 7. Rate limiting ────────────────────────────────────────────
-        if let limitError = await rateLimiter.checkLimit(
-            tool: call.name,
-            riskLevel: effectiveRiskLevel
-        ) {
-            debugLog(debugConsole, .toolResult, "Rate limited: \(call.name) reason=\(limitError)")
-            return ToolExecutorResult(
-                result: .error(limitError),
-                approvedByUser: nil,
-                damageControlIntervened: false,
-                latencyMs: nil
-            )
-        }
-
-        // ── 8. Build ActionIntent ───────────────────────────────────────
-        let intent = ActionIntent(
-            source: context.actionSource,
-            toolName: call.name,
-            riskLevel: effectiveRiskLevel,
-            requiresApproval: effectiveRequiresApproval,
-            isOwner: context.isOwner,
-            livenessScore: context.livenessScore,
-            speakerId: context.speakerId,
-            explicitUserAuthorization: context.explicitUserAuthorization,
-            hasCapabilityTicket: context.hasCapabilityTicketForTool,
-            argumentSummary: Self.buildApprovalDescription(
-                toolName: call.name,
-                reason: "confirmation required",
-                arguments: call.arguments
-            ),
-            schedulerTaskId: context.proactiveContext?.taskId,
-            schedulerAllowedTools: context.proactiveContext?.allowedTools ?? [],
-            schedulerConsentGranted: context.proactiveContext?.consentGranted ?? false
-        )
-
-        let brokerDecisionStartedAt = Date()
+        // ── 7. DamageControlPolicy ──────────────────────────────────────
         var workflowDamageControlIntervened = false
-
-        // ── 9. Damage Control — Layer 0 (pre-broker) ───────────────────
         let dcVerdict = await damageControlPolicy.evaluate(
             toolName: call.name,
             arguments: call.arguments,
             locality: context.modelLocality
         )
-        var dcManualDecision: BrokerDecision?
         switch dcVerdict {
         case .allow:
             break
@@ -326,12 +268,18 @@ actor ToolExecutor: ToolExecutorProtocol {
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC disaster: \(call.name) — \(reason)")
-            dcManualDecision = .confirm(
-                prompt: ConfirmationPrompt(message: reason),
-                reason: DecisionReason(code: .damageControlDisaster, message: reason),
-                manualOnly: true,
-                isDisasterLevel: true
-            )
+            // Narrate the danger + countdown. User can barge-in to cancel.
+            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(
+                "This looks dangerous: \(reason). Proceeding in 5 seconds. Say stop to cancel."
+            ) ?? false
+            if !shouldProceed {
+                return ToolExecutorResult(
+                    result: .error("Action cancelled: \(reason)"),
+                    approvedByUser: false,
+                    damageControlIntervened: true,
+                    latencyMs: nil
+                )
+            }
 
         case .confirmManual(let reason):
             workflowDamageControlIntervened = true
@@ -343,238 +291,22 @@ actor ToolExecutor: ToolExecutorProtocol {
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC confirm manual: \(call.name) — \(reason)")
-            dcManualDecision = .confirm(
-                prompt: ConfirmationPrompt(message: reason),
-                reason: DecisionReason(code: .damageControlConfirmManual, message: reason),
-                manualOnly: true,
-                isDisasterLevel: false
-            )
-        }
-
-        // ── 10. Outbound Guard + Broker ─────────────────────────────────
-        let brokerDecision: BrokerDecision
-        if let dcVerdict = dcManualDecision {
-            brokerDecision = dcVerdict
-        } else if let outboundDecision = await outboundGuard.evaluate(
-            toolName: call.name,
-            arguments: call.arguments
-        ) {
-            switch outboundDecision {
-            case .confirm(let message):
-                brokerDecision = .confirm(
-                    prompt: ConfirmationPrompt(message: message),
-                    reason: DecisionReason(
-                        code: .outboundRecipientNovelty,
-                        message: message
-                    )
-                )
-            case .deny(let message):
-                brokerDecision = .deny(
-                    reason: DecisionReason(
-                        code: .outboundPayloadRisk,
-                        message: message
-                    )
-                )
-            }
-        } else {
-            brokerDecision = await actionBroker.evaluate(intent)
-        }
-
-        let brokerDecisionString: String
-        let brokerReasonCode: String?
-        switch brokerDecision {
-        case .allow(let reason):
-            brokerDecisionString = "allow"
-            brokerReasonCode = reason.code.rawValue
-        case .allowWithTransform(_, let reason):
-            brokerDecisionString = "allow_with_transform"
-            brokerReasonCode = reason.code.rawValue
-        case .confirm(_, let reason, _, _):
-            brokerDecisionString = "confirm"
-            brokerReasonCode = reason.code.rawValue
-        case .deny(let reason):
-            brokerDecisionString = "deny"
-            brokerReasonCode = reason.code.rawValue
-        }
-
-        debugLog(debugConsole, .approval, "Broker decision for \(call.name): \(brokerDecisionString) reason=\(brokerReasonCode ?? "none")")
-
-        await securityLogger.log(
-            event: "broker_decision",
-            toolName: call.name,
-            decision: brokerDecisionString,
-            reasonCode: brokerReasonCode,
-            arguments: call.arguments
-        )
-
-        // ── 11. Shadow mode bypass ──────────────────────────────────────
-        var effectiveDecision = brokerDecision
-        if FaeEnvironment.defaults.bool(forKey: "fae.security.shadowMode") {
-            switch brokerDecision {
-            case .confirm(_, let reason, _, _), .deny(let reason):
-                await securityLogger.log(
-                    event: "shadow_decision",
-                    toolName: call.name,
-                    decision: brokerDecisionString,
-                    reasonCode: reason.code.rawValue,
-                    approved: nil,
-                    success: true,
-                    error: "Shadow mode bypassed enforcement",
-                    arguments: call.arguments
-                )
-                effectiveDecision = .allow(reason: reason)
-            default:
-                break
-            }
-        }
-
-        // ── 12. Approval gate ───────────────────────────────────────────
-        var approvedByUser = false
-        switch effectiveDecision {
-        case .allow:
-            break
-
-        case .allowWithTransform(let transform, _):
-            if let transformError = await applySafetyTransform(
-                transform,
-                toolName: call.name,
-                arguments: call.arguments
-            ) {
+            // Narrate + countdown for manual confirmation.
+            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(
+                "\(reason). Proceeding in 5 seconds. Say stop to cancel."
+            ) ?? false
+            if !shouldProceed {
                 return ToolExecutorResult(
-                    result: .error(transformError),
-                    approvedByUser: nil,
-                    damageControlIntervened: workflowDamageControlIntervened,
-                        latencyMs: nil
+                    result: .error("Action cancelled: \(reason)"),
+                    approvedByUser: false,
+                    damageControlIntervened: true,
+                    latencyMs: nil
                 )
             }
-
-        case .confirm(let prompt, _, let manualOnly, let isDisasterLevel):
-            // Voice identity auto-approval: when the speaker is the verified
-            // owner and the operation is not disaster-level or manual-only,
-            // auto-approve. Voice identity IS the security model — asking
-            // "say yes" after already verifying the speaker's voice is redundant
-            // and breaks the voice-first UX (echo suppression blocks the response).
-            if context.isOwner && !manualOnly && !isDisasterLevel {
-                debugLog(debugConsole, .approval, "Auto-approved \(call.name) for verified owner (voice identity)")
-                approvedByUser = true
-                await securityLogger.log(
-                    event: "tool_auto_approved_owner",
-                    toolName: call.name,
-                    decision: "confirm",
-                    reasonCode: brokerReasonCode,
-                    approved: true,
-                    success: true,
-                    error: nil,
-                    arguments: call.arguments
-                )
-            } else if let manager = approvalManager {
-                debugLog(debugConsole, .approval, "Requesting approval for \(call.name): \(prompt.message) manualOnly=\(manualOnly)")
-                await callbacks.onApprovalPending(true, manualOnly)
-                async let approvalDecision = manager.requestApproval(
-                    toolName: call.name,
-                    description: prompt.message,
-                    manualOnly: manualOnly,
-                    isDisasterLevel: isDisasterLevel
-                )
-                if !manualOnly {
-                    await delegate?.toolExecutorSpeakDirect(prompt.message)
-                }
-                let approved = await approvalDecision
-                await callbacks.onApprovalPending(false, false)
-                approvedByUser = approved
-                debugLog(debugConsole, .approval, "Approval result for \(call.name): \(approved)")
-                if !approved {
-                    let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
-                    if let analytics = toolAnalytics {
-                        await analytics.record(
-                            toolName: call.name,
-                            success: false,
-                            latencyMs: latencyMs,
-                            approved: false,
-                            error: "Tool execution denied by user"
-                        )
-                    }
-                    await securityLogger.log(
-                        event: "tool_denied",
-                        toolName: call.name,
-                        decision: "confirm",
-                        reasonCode: brokerReasonCode,
-                        approved: false,
-                        success: false,
-                        error: "Tool execution denied by user",
-                        arguments: call.arguments
-                    )
-                    return ToolExecutorResult(
-                        result: .error("Tool execution denied by user."),
-                        approvedByUser: false,
-                        damageControlIntervened: workflowDamageControlIntervened,
-                            latencyMs: nil
-                    )
-                }
-            } else {
-                let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
-                if let analytics = toolAnalytics {
-                    await analytics.record(
-                        toolName: call.name,
-                        success: false,
-                        latencyMs: latencyMs,
-                        approved: nil,
-                        error: "Tool requires approval, but no approval manager is available"
-                    )
-                }
-                await securityLogger.log(
-                    event: "tool_denied",
-                    toolName: call.name,
-                    decision: "confirm",
-                    reasonCode: brokerReasonCode,
-                    approved: nil,
-                    success: false,
-                    error: "No approval manager available",
-                    arguments: call.arguments
-                )
-                return ToolExecutorResult(
-                    result: .error("Tool requires approval, but no approval manager is available."),
-                    approvedByUser: nil,
-                    damageControlIntervened: workflowDamageControlIntervened,
-                        latencyMs: nil
-                )
-            }
-
-        case .deny(let reason):
-            debugLog(debugConsole, .toolResult, "Denied by broker: \(call.name) reason=\(reason.code.rawValue)")
-            let latencyMs = Int(Date().timeIntervalSince(brokerDecisionStartedAt) * 1000)
-            if let analytics = toolAnalytics {
-                await analytics.record(
-                    toolName: call.name,
-                    success: false,
-                    latencyMs: latencyMs,
-                    approved: nil,
-                    error: "Denied by broker: \(reason.code.rawValue)"
-                )
-            }
-            await securityLogger.log(
-                event: "tool_denied",
-                toolName: call.name,
-                decision: "deny",
-                reasonCode: reason.code.rawValue,
-                approved: nil,
-                success: false,
-                error: reason.message,
-                arguments: call.arguments
-            )
-            return ToolExecutorResult(
-                result: .error(reason.message),
-                approvedByUser: nil,
-                damageControlIntervened: workflowDamageControlIntervened,
-                latencyMs: nil
-            )
         }
 
-        // ── 13. Argument augmentation ───────────────────────────────────
+        // ── 8. Argument augmentation ────────────────────────────────────
         var executionArguments = call.arguments
-        if call.name == "run_skill", let ticketId = context.capabilityTicket?.id {
-            executionArguments["capability_ticket"] = ticketId
-        }
         if call.name == "voice_identity",
            let action = executionArguments["action"] as? String,
            action == "collect_sample"
@@ -582,7 +314,7 @@ actor ToolExecutor: ToolExecutorProtocol {
             executionArguments["enrollment_active"] = context.firstOwnerEnrollmentActive
         }
 
-        // ── 13b. Plugin PreToolUse hooks ──────────────────────────────
+        // ── 9. Plugin PreToolUse hooks ──────────────────────────────────
         if let hookRunner = pluginHookRunner, await hookRunner.hasHooks(for: .preToolUse) {
             let hookInput = HookInput.preToolUse(
                 toolName: call.name,
@@ -601,12 +333,10 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
         }
 
-        // ── 13c. Pre-state capture (BEFORE execution) ────────────────────
-        // Capture the file state now, before the tool mutates it.
-        // This must happen before step 14 — after execution the original content is gone.
+        // ── 10. Pre-state capture (BEFORE execution) ────────────────────
         let preState = receiptStore?.capturePreStateForTool(toolName: call.name, arguments: call.arguments)
 
-        // ── 13d. Irreversible countdown ───────────────────────────────────
+        // ── 11. Irreversible countdown ──────────────────────────────────
         // For high-impact irreversible actions (mail send, agent delegation),
         // present a 5-second countdown so the user can barge in to cancel.
         // Skip for proactive tasks (no user present).
@@ -625,7 +355,7 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
         }
 
-        // ── 14. Execute with timeout ────────────────────────────────────
+        // ── 12. Execute with timeout ────────────────────────────────────
         let timeoutSeconds = Self.toolTimeoutSeconds(for: call.name)
         let startTime = Date()
         let result: ToolResult
@@ -653,29 +383,29 @@ actor ToolExecutor: ToolExecutorProtocol {
                     toolName: call.name,
                     success: false,
                     latencyMs: latencyMs,
-                    approved: approvedByUser ? true : nil,
+                    approved: nil,
                     error: error.localizedDescription
                 )
             }
             await securityLogger.log(
                 event: "tool_result",
                 toolName: call.name,
-                decision: brokerDecisionString,
-                reasonCode: brokerReasonCode,
-                approved: approvedByUser ? true : nil,
+                decision: "allow",
+                reasonCode: nil,
+                approved: nil,
                 success: false,
                 error: error.localizedDescription,
                 arguments: call.arguments
             )
             return ToolExecutorResult(
                 result: .error("Tool error: \(error.localizedDescription)"),
-                approvedByUser: approvedByUser ? true : nil,
+                approvedByUser: nil,
                 damageControlIntervened: workflowDamageControlIntervened,
                 latencyMs: nil
             )
         }
 
-        // ── 14b. Plugin PostToolUse hooks ─────────────────────────────
+        // ── 13. Plugin PostToolUse hooks ─────────────────────────────────
         if let hookRunner = pluginHookRunner, await hookRunner.hasHooks(for: .postToolUse) {
             let hookInput = HookInput.postToolUse(
                 toolName: call.name,
@@ -687,7 +417,7 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
         }
 
-        // ── 15. Post-execution analytics + logging ──────────────────────
+        // ── 14. Post-execution analytics + logging ──────────────────────
         let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
         debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
         if let analytics = toolAnalytics {
@@ -695,7 +425,7 @@ actor ToolExecutor: ToolExecutorProtocol {
                 toolName: call.name,
                 success: !result.isError,
                 latencyMs: latencyMs,
-                approved: approvedByUser ? true : nil,
+                approved: nil,
                 error: result.isError ? result.output : nil
             )
         }
@@ -703,21 +433,15 @@ actor ToolExecutor: ToolExecutorProtocol {
         await securityLogger.log(
             event: "tool_result",
             toolName: call.name,
-            decision: brokerDecisionString,
-            reasonCode: brokerReasonCode,
-            approved: approvedByUser ? true : nil,
+            decision: "allow",
+            reasonCode: nil,
+            approved: nil,
             success: !result.isError,
             error: result.isError ? result.output : nil,
             arguments: call.arguments
         )
 
-        if !result.isError {
-            await outboundGuard.recordSuccessfulSend(toolName: call.name, arguments: call.arguments)
-        }
-
-        // ── 16. Action receipt ────────────────────────────────────────────
-        // Pre-state (preState) was captured at step 13c, before the tool executed —
-        // it reflects the original file content, not the post-mutation content.
+        // ── 15. Action receipt ──────────────────────────────────────────
         var narrationReceiptId: String?
         if !result.isError, let store = receiptStore {
             narrationReceiptId = await store.createReceipt(
@@ -730,11 +454,7 @@ actor ToolExecutor: ToolExecutorProtocol {
             )
         }
 
-        // ── 17. Post-action narration ─────────────────────────────────────
-        // Only narrate write-class tools. Read-only tools (reversibility =
-        // .notApplicable) are silent. Narration is interruptible — barge-in
-        // during narration offers undo of the tagged receipt.
-        // Skip narration for proactive tasks (no user present to hear it).
+        // ── 16. Post-action narration ───────────────────────────────────
         let reversibility = ActionReversibility.classify(toolName: call.name, arguments: call.arguments)
         if !result.isError,
            reversibility != .notApplicable,
@@ -747,9 +467,9 @@ actor ToolExecutor: ToolExecutorProtocol {
 
         return ToolExecutorResult(
             result: result,
-            approvedByUser: approvedByUser ? true : nil,
+            approvedByUser: nil,
             damageControlIntervened: workflowDamageControlIntervened,
-                latencyMs: nil
+            latencyMs: nil
         )
     }
 
@@ -812,80 +532,6 @@ actor ToolExecutor: ToolExecutorProtocol {
         }
     }
 
-    // MARK: - Safety Transform
-
-    /// Apply deterministic safety wrappers before executing a tool.
-    private func applySafetyTransform(
-        _ transform: SafetyTransform,
-        toolName: String,
-        arguments: [String: Any]
-    ) async -> String? {
-        switch transform {
-        case .none:
-            return nil
-
-        case .checkpointBeforeMutation:
-            if ["write", "edit"].contains(toolName) {
-                guard let path = arguments["path"] as? String else {
-                    return "Safety checkpoint failed: missing path argument"
-                }
-
-                switch PathPolicy.validateWritePath(path) {
-                case .blocked(let reason):
-                    return reason
-                case .allowed(let canonical):
-                    let checkpointId = ReversibilityEngine.createCheckpoint(
-                        for: canonical,
-                        reason: "\(toolName) transform"
-                    )
-                    if checkpointId == nil {
-                        return "Safety checkpoint failed: could not create reversible snapshot"
-                    }
-
-                    await securityLogger.log(
-                        event: "safety_transform",
-                        toolName: toolName,
-                        decision: "checkpointBeforeMutation",
-                        reasonCode: nil,
-                        approved: nil,
-                        success: true,
-                        error: nil,
-                        arguments: ["path": canonical, "checkpoint_id": checkpointId ?? ""]
-                    )
-                    return nil
-                }
-            }
-
-            if toolName == "manage_skill",
-               let action = arguments["action"] as? String,
-               action == "delete",
-               let name = arguments["name"] as? String,
-               Self.isSafeSkillName(name)
-            {
-                let path = SkillManager.skillsDirectory.appendingPathComponent(name).path
-                let checkpointId = ReversibilityEngine.createCheckpoint(
-                    for: path,
-                    reason: "manage_skill delete transform"
-                )
-                if checkpointId == nil {
-                    return "Safety checkpoint failed: could not snapshot skill before delete"
-                }
-                await securityLogger.log(
-                    event: "safety_transform",
-                    toolName: toolName,
-                    decision: "checkpointBeforeMutation",
-                    reasonCode: nil,
-                    approved: nil,
-                    success: true,
-                    error: nil,
-                    arguments: ["path": path, "checkpoint_id": checkpointId ?? ""]
-                )
-            }
-
-            return nil
-        }
-    }
-
     // MARK: - Static Helpers
 
     /// Per-tool timeout: vision tools get an extended budget.
@@ -934,34 +580,6 @@ actor ToolExecutor: ToolExecutorProtocol {
         return defaultRequiresApproval
     }
 
-    /// Build a self_config-specific approval summary.
-    private static func selfConfigApprovalSummary(arguments: [String: Any]) -> String {
-        let action = (arguments["action"] as? String)?.lowercased() ?? ""
-        if selfConfigReadActions.contains(action) {
-            return "I can check your current settings."
-        }
-
-        if action == "adjust_setting" {
-            let key = arguments["key"] as? String ?? "a setting"
-            return "I can update \(key)."
-        }
-
-        if action.contains("directive") || action.contains("instructions") {
-            switch action {
-            case "set_directive", "set_instructions":
-                return "I can replace your persistent directive."
-            case "append_directive", "append_instructions":
-                return "I can append to your persistent directive."
-            case "clear_directive", "clear_instructions":
-                return "I can clear your persistent directive."
-            default:
-                return "I can update your persistent directive."
-            }
-        }
-
-        return "I can update your Fae settings."
-    }
-
     /// Build a plain-language confirmation prompt with concrete action context.
     static func buildApprovalDescription(
         toolName: String, reason: String, arguments: [String: Any]
@@ -971,7 +589,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         case "bash":
             if let command = arguments["command"] as? String {
                 let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-                let preview = trimmed.count > 140 ? String(trimmed.prefix(140)) + "…" : trimmed
+                let preview = trimmed.count > 140 ? String(trimmed.prefix(140)) + "..." : trimmed
                 summary = "I can run this command: \(preview)."
             } else {
                 summary = "I can run a shell command for this step."
@@ -992,7 +610,26 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
 
         case "self_config":
-            summary = selfConfigApprovalSummary(arguments: arguments)
+            let action = (arguments["action"] as? String)?.lowercased() ?? ""
+            if selfConfigReadActions.contains(action) {
+                summary = "I can check your current settings."
+            } else if action == "adjust_setting" {
+                let key = arguments["key"] as? String ?? "a setting"
+                summary = "I can update \(key)."
+            } else if action.contains("directive") || action.contains("instructions") {
+                switch action {
+                case "set_directive", "set_instructions":
+                    summary = "I can replace your persistent directive."
+                case "append_directive", "append_instructions":
+                    summary = "I can append to your persistent directive."
+                case "clear_directive", "clear_instructions":
+                    summary = "I can clear your persistent directive."
+                default:
+                    summary = "I can update your persistent directive."
+                }
+            } else {
+                summary = "I can update your Fae settings."
+            }
 
         case "run_skill":
             let skillName = arguments["name"] as? String ?? "a skill"
@@ -1057,7 +694,6 @@ actor ToolExecutor: ToolExecutorProtocol {
             return "I've made that edit."
 
         case "bash":
-            // Only reversible bash commands get narration.
             if let command = arguments["command"] as? String {
                 let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.hasPrefix("mkdir ") { return "I've created that folder." }
@@ -1130,9 +766,6 @@ actor ToolExecutor: ToolExecutorProtocol {
             return "Done."
 
         default:
-            // Irreversible tools (mail, delegate_agent, agent_session, run_skill,
-            // click/type_text/scroll) don't use narration — mail gets a countdown,
-            // delegation tools get a countdown, computer-use is silent.
             return nil
         }
     }
@@ -1145,7 +778,6 @@ actor ToolExecutor: ToolExecutorProtocol {
         switch toolName {
         case "mail":
             let action = arguments["action"] as? String ?? ""
-            // Sending, replying, and forwarding are irreversible.
             return action == "send" || action == "reply" || action == "forward"
 
         case "delegate_agent", "agent_session":
