@@ -48,6 +48,12 @@ struct CoworkExportPacket: Sendable, Equatable {
     let excludedDataClasses: [CoworkExportDataClass]
     let excludedContext: [String]
 
+    /// Renders the final prompt for external providers.
+    ///
+    /// **Prompt positioning optimization (Onyx research):** Context sections come first,
+    /// then critical instructions at the END of the context block. LLMs follow
+    /// end-positioned instructions ~90% vs ~30% for start-positioned ones.
+    /// The user prompt is always the very last content.
     var renderedPrompt: String {
         let userPrompt = sections.first(where: { $0.kind == .userPrompt })?.content ?? ""
         let contextSections = sections.filter { $0.kind != .userPrompt }
@@ -56,15 +62,17 @@ struct CoworkExportPacket: Sendable, Equatable {
             return userPrompt
         }
 
+        // 1. Open context block.
         var lines: [String] = [
             "[WORK WITH FAE CONTEXT]",
-            "Use only the explicit exported context below. Local-only memory, workspace inventory, and hidden conversation context stayed on this Mac unless included here.",
         ]
 
+        // 2. Context sections (conversation, attachments, focused items).
         for section in contextSections {
             lines.append(section.content)
         }
 
+        // 3. Excluded context disclosure.
         if !excludedContext.isEmpty {
             lines.append("Context kept on this Mac:")
             for item in excludedContext {
@@ -72,6 +80,10 @@ struct CoworkExportPacket: Sendable, Equatable {
             }
         }
 
+        // 4. Critical instructions at END (recency bias optimization).
+        lines.append("Use only the explicit exported context above. Local-only memory, workspace inventory, and hidden conversation context stayed on this Mac unless included here.")
+
+        // 5. Close context block; user prompt last.
         lines.append("[/WORK WITH FAE CONTEXT]")
         lines.append(userPrompt)
         return lines.joined(separator: "\n")

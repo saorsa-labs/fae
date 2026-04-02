@@ -1142,18 +1142,22 @@ enum WorkWithFaeWorkspaceStore {
             )
         }
 
+        // Prompt positioning: conversation and context go first, critical instructions
+        // come at the END of the context block (recency bias — 90% follow rate vs 30%
+        // when instructions appear at the start). User prompt is always last.
         var localLines: [String] = [
             "[WORK WITH FAE CONTEXT]",
-            "Use this workspace context to ground your answer. Prefer the selected workspace and attached files before asking the user to re-explain.",
         ]
         var containsLocalOnlyContext = false
 
+        // 1. Conversation history (summaries before recent turns — already ordered by
+        //    formattedConversationHistory).
         if let priorConversation {
             localLines.append("Recent conversation:")
             localLines.append(priorConversation)
-            localLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
         }
 
+        // 2. Workspace and attachment context (reference material).
         if let selectedDirectoryPath = state.selectedDirectoryPath {
             containsLocalOnlyContext = true
             localLines.append("Workspace root: \(selectedDirectoryPath)")
@@ -1206,7 +1210,17 @@ enum WorkWithFaeWorkspaceStore {
             }
         }
 
+        // 3. Critical instructions at END of context (recency bias optimization).
+        //    LLMs follow instructions placed at the end of context significantly more
+        //    reliably than instructions placed at the beginning (~90% vs ~30%).
+        localLines.append("Use this workspace context to ground your answer. Prefer the selected workspace and attached files before asking the user to re-explain.")
+        if priorConversation != nil {
+            localLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
+        }
+
         localLines.append("[/WORK WITH FAE CONTEXT]")
+
+        // 4. User prompt is always the final content (last user message).
         localLines.append(trimmedPrompt)
 
         return WorkWithFaePreparedPrompt(
