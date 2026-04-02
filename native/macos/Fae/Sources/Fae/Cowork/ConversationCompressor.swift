@@ -100,27 +100,19 @@ actor ConversationCompressor: Sendable {
         }
     }
 
-    /// Synchronous compression check without LLM — returns original messages or hard-truncated.
-    /// Used as a fallback when no provider is available.
+    /// Synchronous compression check without LLM — returns messages unchanged.
+    /// Without a local LLM provider, we cannot generate a summary, so we do
+    /// NOT truncate. The existing hard cap in `sanitizedConversationState` remains
+    /// the safety net; this path must never silently discard messages.
     func compressIfNeeded(
         messages: [WorkWithFaeConversationMessage],
         contextWindowTokens: Int,
         modelID: String
     ) -> [WorkWithFaeConversationMessage] {
-        // Guard against edge cases
-        guard messages.count > 10 else { return messages }
-
-        // Check if compression is needed
-        let currentTokens = totalTokens(in: messages)
-        let compressionThreshold = Int(Double(contextWindowTokens) * config.compressionTriggerRatio)
-
-        guard currentTokens > compressionThreshold else {
-            return messages
-        }
-
-        // No provider available — fall back to keeping recent messages only
-        let recentCount = max(1, Int(Double(messages.count) * config.recentMessagesRatio))
-        return Array(messages.suffix(recentCount))
+        // No provider available — return messages unchanged.
+        // Hard-cap truncation in WorkWithFaeWorkspaceStore is the safety net.
+        logger.debug("Compression skipped: no local LLM provider available")
+        return messages
     }
 
     // MARK: - Summary Generation

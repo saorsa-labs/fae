@@ -1342,11 +1342,19 @@ enum WorkWithFaeWorkspaceStore {
     }
 
     private static func formattedConversationHistory(from messages: [WorkWithFaeConversationMessage], limit: Int = 12) -> String? {
-        let relevant = messages.suffix(limit)
+        // Always include summary messages (compressed history) regardless of limit,
+        // then append the most recent non-summary messages up to the limit.
+        let summaries = messages.filter { $0.role == "summary" }
+        let nonSummaries = messages.filter { $0.role != "summary" }
+        let recentNonSummaries = Array(nonSummaries.suffix(limit))
+        let relevant = summaries + recentNonSummaries
         guard !relevant.isEmpty else { return nil }
         let lines = relevant.compactMap { message -> String? in
             let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+            if message.role == "summary" {
+                return "- [Compressed context]: \(String(trimmed.prefix(2400)))"
+            }
             let role = message.role.capitalized
             return "- \(role): \(String(trimmed.prefix(1200)))"
         }

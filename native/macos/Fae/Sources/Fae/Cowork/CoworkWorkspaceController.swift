@@ -1363,6 +1363,14 @@ final class CoworkWorkspaceController: ObservableObject {
         if compressed.count != messages.count {
             await MainActor.run {
                 self.workspaceState.conversationMessages = compressed
+                // Sync the compressed result back to the live conversation buffer
+                // so the Combine persistence sink doesn't overwrite with stale data.
+                self.isRestoringWorkspaceConversation = true
+                let restoredMessages = compressed.compactMap(Self.chatMessage(from:))
+                self.conversation.replaceMessages(restoredMessages)
+                DispatchQueue.main.async { [weak self] in
+                    self?.isRestoringWorkspaceConversation = false
+                }
                 self.persistWorkspaceState()
             }
         }
@@ -1974,11 +1982,13 @@ final class CoworkWorkspaceController: ObservableObject {
         else {
             return
         }
-        let persistedMessages = Array(
-            conversation.messages
-                .suffix(WorkWithFaeWorkspaceStore.maxConversationMessages)
-                .map(Self.workspaceConversationMessage(from:))
-        )
+        // Preserve summary messages at the front when truncating, so compressed
+        // history survives the Combine persistence sink.
+        let summaries = conversation.messages.filter { $0.role == .summary }
+        let nonSummaries = conversation.messages.filter { $0.role != .summary }
+        let truncatedNonSummaries = Array(nonSummaries.suffix(WorkWithFaeWorkspaceStore.maxConversationMessages - summaries.count))
+        let combined = summaries + truncatedNonSummaries
+        let persistedMessages = combined.map(Self.workspaceConversationMessage(from:))
         guard workspaceRegistry.workspaces[index].state.conversationMessages != persistedMessages else {
             return
         }

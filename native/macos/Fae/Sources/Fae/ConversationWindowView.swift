@@ -213,7 +213,7 @@ private struct MessageBubble: View {
     private var alignment: Alignment {
         switch message.role {
         case .user: return .trailing
-        case .assistant: return .leading
+        case .assistant, .summary: return .leading
         case .tool: return .center
         }
     }
@@ -222,6 +222,7 @@ private struct MessageBubble: View {
         switch message.role {
         case .user: return Color(white: 0.95)
         case .assistant: return Color(white: 0.92)
+        case .summary: return Color(white: 0.80)
         case .tool: return Color.primary.opacity(0.55)
         }
     }
@@ -234,6 +235,9 @@ private struct MessageBubble: View {
         case .assistant:
             // Fae's lavender-grey — distinct from user
             return Color(red: 0.24, green: 0.20, blue: 0.30)
+        case .summary:
+            // Muted teal — compressed history indicator
+            return Color(red: 0.15, green: 0.20, blue: 0.22)
         case .tool:
             return Color.primary.opacity(0.05)
         }
@@ -245,6 +249,8 @@ private struct MessageBubble: View {
             return Color(red: 0.35, green: 0.45, blue: 0.65).opacity(0.5)
         case .assistant:
             return Color(red: 180 / 255, green: 168 / 255, blue: 196 / 255).opacity(0.25)
+        case .summary:
+            return Color(red: 0.30, green: 0.45, blue: 0.50).opacity(0.3)
         case .tool:
             return Color.primary.opacity(0.07)
         }
