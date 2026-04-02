@@ -7,20 +7,46 @@
     "name": "CoWork Intelligence"
   },
   "phase": {
-    "number": "1.1",
-    "name": "Per-Message Model Metadata",
-    "plan": null
+    "number": "1.2",
+    "name": "Context Compression Engine",
+    "plan": "PLAN-phase-1.2-context-compression.md"
   },
   "progress": {
-    "total_tasks": 13,
-    "completed_tasks": 0,
-    "current_task": 9
+    "total_tasks": 5,
+    "completed_tasks": 4,
+    "current_task": "Task 5: Add Compression Tests and Validation"
   },
   "review": {
-    "status": "fixing",
-    "iteration": 1,
+    "status": "pending",
+    "iteration": 0,
     "last_verdict": null
   },
   "status": "executing",
-  "last_updated": "2026-04-02T13:00:00Z"
+  "last_updated": "2026-04-02T14:24:00Z",
+  "tasks_completed": [
+    {
+      "number": 1,
+      "name": "Create ConversationCompressor Actor",
+      "status": "completed",
+      "commit": "25f38b35"
+    },
+    {
+      "number": 2,
+      "name": "Implement Summary Generation",
+      "status": "completed",
+      "commit": "0f3c64b7"
+    },
+    {
+      "number": 3,
+      "name": "Add Compression Trigger to Workspace Save",
+      "status": "completed",
+      "commit": "97ad3be0"
+    },
+    {
+      "number": 4,
+      "name": "Update CoworkWorkspaceController to Pass Runtime",
+      "status": "completed",
+      "commit": "c07d7889"
+    }
+  ]
 }
