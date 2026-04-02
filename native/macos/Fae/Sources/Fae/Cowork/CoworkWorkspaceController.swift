@@ -41,6 +41,7 @@ final class CoworkWorkspaceController: ObservableObject {
     private let runtimeDescriptor: FaeLocalRuntimeDescriptor?
     private let chatProvider: (any CoworkLLMProvider)?
     private let remoteModelCatalog = CoworkRemoteModelCatalog.shared
+    private let compressor: ConversationCompressor
     private var observations: [NSObjectProtocol] = []
     private var refreshTask: Task<Void, Never>?
     private var refreshTimer: Timer?
@@ -57,6 +58,7 @@ final class CoworkWorkspaceController: ObservableObject {
         } else {
             self.chatProvider = nil
         }
+        self.compressor = ConversationCompressor()
         self.workspaceRegistry = WorkWithFaeWorkspaceStore.loadRegistry()
         self.workspaceState = WorkWithFaeWorkspaceStore.selectedWorkspace(in: self.workspaceRegistry)?.state ?? .empty
         installObservers()
