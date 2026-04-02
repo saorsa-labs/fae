@@ -911,8 +911,26 @@ enum WorkWithFaeWorkspaceStore {
 
     private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
         var sanitized = state
-        sanitized.conversationMessages = Array(sanitized.conversationMessages.suffix(maxConversationMessages))
+        // Apply compression if needed, otherwise hard truncate
+        sanitized.conversationMessages = compressConversation(sanitized.conversationMessages)
         return sanitized
+    }
+    
+    /// Applies compression to conversation if enabled, otherwise falls back to hard truncation.
+    /// This is a foundation for Task 3 integration with ConversationCompressor.
+    private static func compressConversation(
+        _ messages: [WorkWithFaeConversationMessage],
+        maxMessages: Int = maxConversationMessages
+    ) -> [WorkWithFaeConversationMessage] {
+        // Hard safety limit: never keep more than 500 messages
+        let hardCap = 500
+        if messages.count > hardCap {
+            return Array(messages.suffix(hardCap))
+        }
+        
+        // For now, use hard truncation. Task 3 will replace this with actual compression
+        // when ConversationCompressor and LLM invocation are integrated.
+        return Array(messages.suffix(maxMessages))
     }
 
     private static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {

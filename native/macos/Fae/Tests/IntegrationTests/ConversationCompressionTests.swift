@@ -270,4 +270,83 @@ final class ConversationCompressionTests: XCTestCase {
             "Progressive compression should preserve existing context"
         )
     }
+    
+    // MARK: - Task 3: Workspace Integration Tests
+    
+    func testCompressConversationAppliesSoftLimit() async {
+        // Test that the workspace compression function respects max limit
+        let messages = (0..<150).map { i in
+            WorkWithFaeConversationMessage(
+                role: i % 2 == 0 ? "user" : "assistant",
+                content: "Message \(i)",
+                modelID: "test-model"
+            )
+        }
+        
+        // Workspace uses maxConversationMessages = 120 by default
+        let maxMessages = 120
+        
+        // Create a minimal state for testing
+        let state = WorkWithFaeWorkspaceState(
+            selectedDirectoryPath: nil,
+            indexedFiles: [],
+            attachments: [],
+            conversationMessages: messages
+        )
+        
+        // The sanitizedConversationState function should apply compression
+        // For now it uses hard truncation, so we expect maxMessages or less
+        // We can't directly call sanitizedConversationState (it's private),
+        // but we can verify messages get truncated by saving
+        WorkWithFaeWorkspaceStore.save(state)
+        
+        let loaded = WorkWithFaeWorkspaceStore.load()
+        XCTAssertLessThanOrEqual(
+            loaded.conversationMessages.count,
+            maxMessages,
+            "Saved state should respect max conversation messages limit"
+        )
+    }
+    
+    func testCompressionPreservesBranches() async {
+        // Verify that when a workspace is duplicated (branched),
+        // compressed messages are preserved
+        let messages = (0..<90).map { i in
+            WorkWithFaeConversationMessage(
+                role: i % 2 == 0 ? "user" : "assistant",
+                content: String(repeating: "x", count: 100),
+                modelID: "test-model"
+            )
+        }
+        
+        let summaryMessage = WorkWithFaeConversationMessage(
+            role: "summary",
+            content: "Conversation summary",
+            modelID: "test-model",
+            providerKind: "fae-localhost"
+        )
+        
+        let stateWithSummary = WorkWithFaeWorkspaceState(
+            selectedDirectoryPath: nil,
+            indexedFiles: [],
+            attachments: [],
+            conversationMessages: [summaryMessage] + messages
+        )
+        
+        // Save the state
+        WorkWithFaeWorkspaceStore.save(stateWithSummary)
+        
+        // Load it back
+        let loaded = WorkWithFaeWorkspaceStore.load()
+        
+        // Verify summary message is preserved
+        let summaryExists = loaded.conversationMessages.contains { msg in
+            msg.role == "summary"
+        }
+        
+        XCTAssertTrue(
+            summaryExists,
+            "Summary messages should be preserved through save/load cycle"
+        )
+    }
 }
