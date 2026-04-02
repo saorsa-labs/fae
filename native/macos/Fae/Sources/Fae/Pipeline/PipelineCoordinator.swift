@@ -3856,8 +3856,13 @@ actor PipelineCoordinator {
         }
 
         // Run turn detector on streaming partial for adaptive endpointing.
+        // Pass audio samples when available so SmartTurn can use audio features.
         if let td = turnDetector {
-            let prediction = await td.predictEndOfTurn(lastUserText: correctedText)
+            let audioSamples = lastProcessedSegment?.samples
+            let prediction = await td.predictEndOfTurn(
+                lastUserText: correctedText,
+                lastAudioSamples: audioSamples
+            )
             lastEOUProbability = prediction.probability
         }
     }

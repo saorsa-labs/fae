@@ -105,9 +105,11 @@ struct VoiceActivityDetector {
 
     init(sampleRate: Int = SileroVADEngine.sampleRate) {
         self.sampleRate = sampleRate
-        self.silero = try? SileroVADEngine()
-        if silero == nil {
-            NSLog("VoiceActivityDetector: Silero model unavailable — falling back to legacy RMS VAD")
+        do {
+            self.silero = try SileroVADEngine()
+        } catch {
+            self.silero = nil
+            NSLog("VoiceActivityDetector: *** SILERO VAD LOAD FAILED *** — falling back to legacy RMS-only VAD. Error: %@. This SIGNIFICANTLY degrades speech detection accuracy.", error.localizedDescription)
         }
         recalculateThresholds()
     }

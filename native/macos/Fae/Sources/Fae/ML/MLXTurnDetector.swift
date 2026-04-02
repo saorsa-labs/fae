@@ -66,6 +66,14 @@ actor MLXTurnDetector {
     private var config: TurnDetectorConfig?
     private(set) var isLoaded = false
 
+    /// SmartTurn audio-based endpoint detector — preferred over text-based heuristics.
+    /// When loaded, ``predictEndOfTurn(lastUserText:conversationTurns:lastAudioSamples:)``
+    /// uses SmartTurn's audio features for more accurate end-of-utterance prediction.
+    private var smartTurn: SmartTurnAdapter?
+
+    /// Whether SmartTurn audio endpoint detection is available.
+    var smartTurnAvailable: Bool { smartTurn != nil }
+
     /// The language code for threshold lookup (default: "en").
     var language: String = "en"
 
@@ -85,6 +93,23 @@ actor MLXTurnDetector {
     }
 
     // MARK: - Load
+
+    /// Load the SmartTurn audio endpoint detector from HuggingFace.
+    ///
+    /// SmartTurn uses a Whisper-encoder-based classifier operating on audio features
+    /// directly, avoiding the need for text tokenization. Non-critical: if loading
+    /// fails, the turn detector falls back to rule-based heuristics.
+    func loadSmartTurn(repoID: String = SmartTurnAdapter.defaultRepoID) async {
+        let adapter = SmartTurnAdapter()
+        do {
+            try await adapter.load(repoID: repoID)
+            self.smartTurn = adapter
+            NSLog("MLXTurnDetector: SmartTurn audio endpoint detector loaded")
+        } catch {
+            NSLog("MLXTurnDetector: SmartTurn load failed (rule-based fallback): %@",
+                  error.localizedDescription)
+        }
+    }
 
     /// Load the turn detector from a directory with `model.safetensors` and `config.json`.
     ///
@@ -122,26 +147,41 @@ actor MLXTurnDetector {
 
     // MARK: - Predict
 
-    /// Predict whether the user has finished their turn using rule-based heuristics
-    /// enhanced by the model when available.
+    /// Predict whether the user has finished their turn.
     ///
-    /// When the model is not loaded, falls back to the rule-based heuristics in
-    /// `TextProcessing.isLikelyIncompleteTurn()`. When loaded, uses the model's
-    /// EOU probability for more nuanced detection.
+    /// **Priority**: SmartTurn audio model (when loaded + audio provided) → rule-based
+    /// text heuristics. SmartTurn operates on audio features directly and handles
+    /// nuanced patterns that text heuristics miss (e.g., trailing fillers, prosodic cues).
     ///
     /// - Parameters:
     ///   - lastUserText: The most recent user utterance (from STT).
     ///   - conversationTurns: Recent conversation turns as (role, text) pairs.
+    ///   - lastAudioSamples: Raw audio samples from the last speech segment (16 kHz mono).
+    ///     When provided and SmartTurn is loaded, audio-based prediction is used.
     /// - Returns: EOU prediction with probability and threshold comparison.
     func predictEndOfTurn(
         lastUserText: String,
-        conversationTurns: [(role: String, text: String)] = []
-    ) -> EOUPrediction {
+        conversationTurns: [(role: String, text: String)] = [],
+        lastAudioSamples: [Float]? = nil
+    ) async -> EOUPrediction {
         let startTime = Date()
         let unlikelyThreshold = Self.languageThresholds[language] ?? Self.defaultThreshold
 
-        // Rule-based fallback when model is not loaded.
-        // Uses the same heuristics as silenceThresholdMs() but returns a probability.
+        // SmartTurn audio-based prediction (preferred when available).
+        if let smartTurn, let audioSamples = lastAudioSamples, !audioSamples.isEmpty {
+            if let result = await smartTurn.predictEndpoint(samples: audioSamples) {
+                // Map SmartTurn's probability (0=continue, 1=end) to our EOU convention.
+                let isUnlikely = !result.isEndOfTurn
+                return EOUPrediction(
+                    probability: result.probability,
+                    isUnlikely: isUnlikely,
+                    latencyMs: result.latencyMs
+                )
+            }
+            // SmartTurn inference failed — fall through to rule-based.
+        }
+
+        // Rule-based fallback when SmartTurn is not available.
         let trimmed = lastUserText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if TextProcessing.isLikelyContinuationCue(trimmed) {

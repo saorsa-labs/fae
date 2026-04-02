@@ -270,15 +270,18 @@ actor ModelManager {
         self.recommendedContextSize = effectiveContext
         var failedEngines: [String] = []
 
-        // STT — degraded mode if it fails (text input only).
+        // STT — degraded mode if it fails (text input only). Retry up to 3 times
+        // with exponential backoff for transient network/download failures.
         eventBus.send(.runtimeProgress(stage: "stt", progress: 0))
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.05))
         do {
-            try await stt.load(modelID: config.stt.modelId)
+            try await retryLoad(engineName: "STT", maxAttempts: 3) {
+                try await stt.load(modelID: config.stt.modelId)
+            }
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.3))
             eventBus.send(.runtimeProgress(stage: "stt", progress: 1.0))
         } catch {
-            NSLog("ModelManager: STT load failed (degraded — text input only): %@", error.localizedDescription)
+            NSLog("ModelManager: STT load failed after retries (degraded — text input only): %@", error.localizedDescription)
             failedEngines.append("STT")
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.3))
         }
@@ -378,12 +381,15 @@ actor ModelManager {
             throw MLEngineError.loadFailed("LLM", error)
         }
 
-        // TTS — degraded mode if it fails (no spoken output).
+        // TTS — degraded mode if it fails (no spoken output). Retry up to 3 times
+        // with exponential backoff for transient network/download failures.
         eventBus.send(.runtimeProgress(stage: "tts", progress: 0.66))
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.68))
         let effectiveTTSModelID = effectiveTTSModelID(for: config)
         do {
-            try await tts.load(modelID: effectiveTTSModelID)
+            try await retryLoad(engineName: "TTS", maxAttempts: 3) {
+                try await tts.load(modelID: effectiveTTSModelID)
+            }
             if effectiveTTSModelID.localizedCaseInsensitiveContains("12Hz") {
                 NSLog("ModelManager: TTS streaming profile = 12Hz codec")
             } else {
@@ -392,7 +398,7 @@ actor ModelManager {
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.85))
             eventBus.send(.runtimeProgress(stage: "tts", progress: 0.85))
         } catch {
-            NSLog("ModelManager: TTS load failed (degraded — no voice output): %@", error.localizedDescription)
+            NSLog("ModelManager: TTS load failed after retries (degraded — no voice output): %@", error.localizedDescription)
             failedEngines.append("TTS")
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.85))
         }
@@ -581,18 +587,26 @@ actor ModelManager {
         }
 
         // Turn detector — non-critical, degrades gracefully to rule-based heuristics.
-        if MLXTurnDetector.modelExists {
+        // SmartTurn (audio-based) is preferred; LiveKit text model is a secondary option.
+        do {
             let td = MLXTurnDetector()
-            do {
+            // Try SmartTurn first (audio-based endpoint detection via MLXAudioVAD).
+            await td.loadSmartTurn()
+            if await td.smartTurnAvailable {
+                NSLog("ModelManager: turn detector loaded (SmartTurn audio-based)")
+            } else if MLXTurnDetector.modelExists {
+                // Fall back to LiveKit text-based model if available locally.
                 try await td.load(modelPath: MLXTurnDetector.defaultModelPath)
-                self.turnDetector = td
-                NSLog("ModelManager: turn detector loaded")
-            } catch {
-                NSLog("ModelManager: turn detector load failed (rule-based fallback): %@",
-                      error.localizedDescription)
+                NSLog("ModelManager: turn detector loaded (LiveKit text-based)")
+            } else {
+                NSLog("ModelManager: turn detector using rule-based endpointing only")
             }
-        } else {
-            NSLog("ModelManager: turn detector model not found — using rule-based endpointing")
+            self.turnDetector = td
+        } catch {
+            NSLog("ModelManager: turn detector load failed (rule-based fallback): %@",
+                  error.localizedDescription)
+            // Still create the detector — it works with rule-based heuristics.
+            self.turnDetector = MLXTurnDetector()
         }
 
         // Speech verifier — prefer Core ML (ANE) over MLX (GPU).
@@ -654,6 +668,38 @@ actor ModelManager {
         } else {
             NSLog("ModelManager: loaded in degraded mode — failed engines: %@", failedEngines.joined(separator: ", "))
         }
+    }
+
+    /// Retry an async throwing operation with exponential backoff.
+    ///
+    /// Used for STT/TTS model loading where transient network failures during
+    /// HuggingFace downloads are common on first launch.
+    ///
+    /// - Parameters:
+    ///   - engineName: Engine name for log messages.
+    ///   - maxAttempts: Maximum number of attempts (default: 3).
+    ///   - operation: The async throwing operation to retry.
+    private func retryLoad(
+        engineName: String,
+        maxAttempts: Int = 3,
+        _ operation: () async throws -> Void
+    ) async throws {
+        var lastError: Error?
+        for attempt in 1...maxAttempts {
+            do {
+                try await operation()
+                return
+            } catch {
+                lastError = error
+                if attempt < maxAttempts {
+                    let backoffSeconds = UInt64(pow(2.0, Double(attempt - 1))) // 1s, 2s, 4s
+                    NSLog("ModelManager: %@ load attempt %d/%d failed: %@ — retrying in %llds",
+                          engineName, attempt, maxAttempts, error.localizedDescription, backoffSeconds)
+                    try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
+                }
+            }
+        }
+        if let lastError { throw lastError }
     }
 
     private func persistVoiceRuntimeStatus(source: String, lockApplied: Bool) {

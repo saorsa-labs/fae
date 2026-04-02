@@ -129,7 +129,9 @@ actor AudioCaptureManager {
                     outStatus.pointee = .haveData
                     return buffer
                 }
-                if error == nil {
+                if let error {
+                    NSLog("AudioCaptureManager: WARNING — AVAudioConverter failed: %@ (audio dropped)", error.localizedDescription)
+                } else {
                     let chunk = Self.extractChunk(from: converted)
                     Task { await self.emitChunk(chunk) }
                 }
@@ -537,6 +539,22 @@ actor AudioCaptureManager {
         // pipeline state — critical for missed-wake capture on PTT press.
         if !chunk.samples.isEmpty {
             ringBuffer.write(chunk.samples)
+        }
+
+        // Validate audio samples — NaN/Inf from broken drivers or converters
+        // would poison VAD state and cause cascading false detections.
+        if !chunk.samples.isEmpty {
+            var hasInvalid = false
+            for sample in chunk.samples {
+                if sample.isNaN || sample.isInfinite {
+                    hasInvalid = true
+                    break
+                }
+            }
+            if hasInvalid {
+                NSLog("AudioCaptureManager: WARNING — dropping chunk with NaN/Inf samples (broken audio driver?)")
+                return
+            }
         }
 
         // Hard mute: mic button toggled off — drop chunk entirely (don't even
