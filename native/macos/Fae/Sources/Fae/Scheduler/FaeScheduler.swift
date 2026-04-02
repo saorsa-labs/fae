@@ -1599,6 +1599,13 @@ actor FaeScheduler {
             NSLog("FaeScheduler: improvement_cycle — coordinator not available")
             return
         }
+        // Wire training bridge if not already set.
+        do {
+            let bridge = try await TrainingBridge.createDefault()
+            await coordinator.setTrainingBridge(bridge)
+        } catch {
+            NSLog("FaeScheduler: improvement_cycle — training bridge unavailable (%@), cycle will skip training", error.localizedDescription)
+        }
         do {
             try await coordinator.runCycle()
         } catch {

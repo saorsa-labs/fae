@@ -812,4 +812,95 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(logCalled, "SecurityEventLogger closure should be called during cycle review")
     }
+
+    // MARK: - TrainingBridge Integration
+
+    func testRunCycleSkipsTrainingGracefullyWhenBridgeNil() async throws {
+        // When no TrainingBridge is set, the coordinator should still complete a cycle
+        // (training step logs a skip, eval uses zero deltas, cycle ends normally).
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        // Do NOT set trainingBridge.
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        // Should reach proposing (paused for approval since 0 approved cycles).
+        let state = try await coordinator.currentState()
+        XCTAssertEqual(state, .proposing,
+                       "Cycle should reach proposing even without a training bridge")
+    }
+
+    func testTrainingBridgeSetterWorks() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        // Create a bridge with a dummy uv path and temp directories.
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-bridge-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        let bridge = TrainingBridge(
+            uvPath: "/usr/bin/false",
+            orchestratorScriptsDir: tmpDir,
+            dataBridgeScriptsDir: tmpDir
+        )
+        await coordinator.setTrainingBridge(bridge)
+        // If we got here without error, setter works.
+    }
+
+    func testMinSFTExamplesConstant() {
+        // Verify the minimum threshold is reasonable.
+        XCTAssertEqual(ImprovementCycleCoordinator.minSFTExamples, 10)
+    }
+
+    func testTrainingBenchmarkResultDeltaComputation() {
+        // Verify the delta computation matches what the coordinator uses.
+        let baseline = TrainingBenchmarkResult(
+            toolCallingAccuracy: 0.80,
+            faeCapabilityAccuracy: 0.70,
+            assistantFitAccuracy: 0.60,
+            serializationAccuracy: 0.50,
+            avgThroughputTPS: 40.0,
+            modelId: "test",
+            adapterPath: nil
+        )
+        let adapter = TrainingBenchmarkResult(
+            toolCallingAccuracy: 0.90,
+            faeCapabilityAccuracy: 0.80,
+            assistantFitAccuracy: 0.70,
+            serializationAccuracy: 0.60,
+            avgThroughputTPS: 42.0,
+            modelId: "test",
+            adapterPath: "/tmp/adapter"
+        )
+        let delta = adapter.delta(from: baseline)
+        // All +10 percentage points.
+        XCTAssertEqual(delta.toolCallingDelta ?? 0, 10.0, accuracy: 0.01)
+        XCTAssertEqual(delta.faeCapabilityDelta ?? 0, 10.0, accuracy: 0.01)
+        XCTAssertEqual(delta.assistantFitDelta ?? 0, 10.0, accuracy: 0.01)
+        XCTAssertEqual(delta.serializationDelta ?? 0, 10.0, accuracy: 0.01)
+        XCTAssertEqual(delta.throughputDelta ?? 0, 2.0, accuracy: 0.01)
+    }
+
+    func testNilBridgeCycleReachesProposingWithZeroDeltas() async throws {
+        // Full cycle without bridge: training is skipped, eval uses zero deltas,
+        // review passes (all zeros ≥ 0), cycle pauses in proposing.
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let state = try await coordinator.currentState()
+        XCTAssertEqual(state, .proposing)
+
+        // Approve deployment to verify the full path works.
+        try await coordinator.approveDeployment()
+        let afterApproval = try await coordinator.currentState()
+        XCTAssertEqual(afterApproval, .idle)
+
+        // Check userApprovedCycles incremented.
+        let storedState = try await store.readState()
+        XCTAssertEqual(storedState.userApprovedCycles, 1)
+        XCTAssertEqual(storedState.completedCycles, 1)
+    }
 }

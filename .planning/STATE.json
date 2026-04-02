@@ -1,64 +1,48 @@
 {
   "version": 1,
-  "project": "Voice Experience Overhaul",
+  "project": "mlx-tune Training Integration",
   "active": false,
   "milestone": {
-    "number": 2,
-    "name": "Proactive Vocabulary Learning"
+    "number": 1,
+    "name": "End-to-End Training Pipeline"
   },
   "phase": {
-    "number": "2.3",
-    "name": "Enhanced Correction Loop",
+    "number": "1.4",
+    "name": "End-to-End Verification",
     "plan": null
   },
   "progress": {
-    "total_tasks": 9,
-    "completed_tasks": 9,
+    "total_tasks": 18,
+    "completed_tasks": 18,
     "current_task": null
   },
   "review": {
     "status": "complete",
-    "iteration": 1,
+    "iteration": 0,
     "last_verdict": "pass"
   },
   "status": "milestone_complete",
-  "last_updated": "2026-03-31T16:45:00Z",
-  "design_doc": "~/.gstack/projects/saorsa-labs-fae/davidirvine-main-design-20260331-151032.md",
+  "last_updated": "2026-03-31T21:25:00Z",
   "completed_phases": [
     {
       "number": "1.1",
-      "name": "Push-to-Talk Button",
-      "result": "AudioRingBuffer, hold-to-talk, orb click, MissedWakeStore, 17 tests. Commit: 3f2f7fd4"
+      "name": "TrainingBridge Actor",
+      "result": "TrainingBridge actor with export/launch/poll/evaluate, FaeDirectories training paths, 15 tests."
     },
     {
       "number": "1.2",
-      "name": "Fused Enrollment Flow",
-      "result": "6-step enrollment, atomic commit, 13 tests. Commit: 0bfd3b18"
+      "name": "Wire Coordinator → TrainingBridge",
+      "result": "Replaced training stub + zeroed EvalDelta. FaeScheduler wires bridge. 42 coordinator tests pass."
     },
     {
       "number": "1.3",
-      "name": "WakeWordScoreFusion",
-      "result": "Score fusion (0.7 classifier + 0.3 template), template-only fallback, 13 tests. Commit: 974c7c7a"
+      "name": "FaeBenchmark Integration",
+      "result": "TrainingBenchmarkResult, runBenchmark(), baseline capture, tiered eval (benchmark→loss-based). 21 bridge tests pass."
     },
     {
       "number": "1.4",
-      "name": "Shadow-Mode Evaluator",
-      "result": "Promotion/demotion logic, thermal pause, diagnostics, 16 tests. Commit: e80bd93e"
-    },
-    {
-      "number": "2.1",
-      "name": "PersonalLexicon Actor",
-      "result": "PersonalLexicon actor with JSON persistence, DVC ingestLexicon(), Git Vault backup, 14 tests."
-    },
-    {
-      "number": "2.2",
-      "name": "Vocabulary Harvesting",
-      "result": "VocabularyHarvester (Contacts+Calendar), scheduler task vocabulary_harvest daily 04:00, post-enrollment trigger, 4 tests."
-    },
-    {
-      "number": "2.3",
-      "name": "Enhanced Correction Loop",
-      "result": "ASRConfidenceDetector (phonetic clustering, divergence detection), typed correction flow, PersonalLexicon+DVC integration, 8 tests."
+      "name": "End-to-End Verification",
+      "result": "Fixed stale stub comment in performDeploy, E2E tests for approve/reject flow. 44 coordinator tests, 21 bridge tests. CLAUDE.md updated."
     }
   ]
 }

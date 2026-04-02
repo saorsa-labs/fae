@@ -111,6 +111,15 @@ actor ImprovementCycleCoordinator {
     /// Injected to decouple from the file system.
     var directiveWriter: ((_ text: String) throws -> Void)?
 
+    /// Training bridge for calling mlx-tune scripts (export, train, poll, evaluate).
+    ///
+    /// Set by FaeScheduler before running cycles. When nil, the training step
+    /// is skipped gracefully (pre-Phase 2.3 behaviour).
+    private var trainingBridge: TrainingBridge?
+
+    /// Minimum SFT examples required before training proceeds.
+    static let minSFTExamples = 10
+
     // MARK: - Init
 
     /// Create a coordinator backed by the given improvement store.
@@ -142,6 +151,11 @@ actor ImprovementCycleCoordinator {
     /// Set the directive writer closure. Called by FaeCore or tests.
     func setDirectiveWriter(_ writer: @escaping (_ text: String) throws -> Void) {
         directiveWriter = writer
+    }
+
+    /// Set the training bridge. Called by FaeScheduler after wiring.
+    func setTrainingBridge(_ bridge: TrainingBridge) {
+        trainingBridge = bridge
     }
 
     // MARK: - State Machine
@@ -379,12 +393,67 @@ actor ImprovementCycleCoordinator {
             return
         }
 
-        // Step 5: TRAINING — delegate to training skill.
-        // (Actual training integration deferred to Phase 2.3+; this establishes the state flow.)
+        // Step 5: TRAINING — export data, launch mlx-tune, poll until complete.
+        var producedAdapterPath: String?
         do {
             try await transition(to: .training)
-            NSLog("ImprovementCycleCoordinator: training phase (stub — no adapter produced yet)")
-            // TODO: delegate to training-orchestrator skill
+
+            guard let bridge = trainingBridge else {
+                NSLog("ImprovementCycleCoordinator: training bridge not available, skipping training")
+                // Graceful degradation: proceed to evaluation with no adapter.
+                producedAdapterPath = nil
+                // Fall through to evaluation step.
+                try await transition(to: .evaluating)
+                // Jump past the training block.
+                throw ImprovementCycleError.storeNotAvailable // caught below, triggers eval-only path
+            }
+
+            // 5a. Export training data from fae.db.
+            NSLog("ImprovementCycleCoordinator: exporting training data")
+            let exportResult = try await bridge.exportTrainingData()
+            NSLog(
+                "ImprovementCycleCoordinator: exported %d SFT examples, %d DPO pairs",
+                exportResult.sftExamples, exportResult.dpoPairs
+            )
+
+            guard exportResult.sftExamples >= Self.minSFTExamples else {
+                NSLog(
+                    "ImprovementCycleCoordinator: insufficient SFT examples (%d/%d), skipping training",
+                    exportResult.sftExamples, Self.minSFTExamples
+                )
+                try? await forceIdle(error: "insufficient_sft_data")
+                return
+            }
+
+            // 5b. Choose training mode based on available data.
+            let mode: TrainingMode = exportResult.dpoPairs >= 5 ? .dpo : .sft
+            NSLog("ImprovementCycleCoordinator: launching %@ training", mode.rawValue)
+
+            let launchResult = try await bridge.launchTraining(mode: mode)
+            NSLog(
+                "ImprovementCycleCoordinator: training started (pid=%d, model=%@, adapter=%@)",
+                launchResult.pid, launchResult.modelId, launchResult.adapterPath
+            )
+
+            // 5c. Poll until the detached training worker completes.
+            let adapterPath = try await bridge.pollUntilComplete()
+            producedAdapterPath = adapterPath
+            NSLog("ImprovementCycleCoordinator: training complete — adapter at %@", adapterPath)
+
+            // 5d. Store adapter path in improvement state.
+            try await store.ensureStateRow()
+            var state = try await store.readState()
+            state.currentAdapterPath = adapterPath
+            try await store.writeState(state)
+        } catch let error as ImprovementCycleError {
+            // Rethrown from the bridge-nil path above — not a real failure.
+            if case .storeNotAvailable = error {
+                NSLog("ImprovementCycleCoordinator: no training bridge — proceeding with eval-only path")
+            } else {
+                NSLog("ImprovementCycleCoordinator: training failed: %@", error.localizedDescription)
+                try? await forceIdle(error: "training_failed: \(error.localizedDescription)")
+                return
+            }
         } catch {
             NSLog("ImprovementCycleCoordinator: training failed: %@", error.localizedDescription)
             try? await forceIdle(error: "training_failed: \(error.localizedDescription)")
@@ -393,17 +462,49 @@ actor ImprovementCycleCoordinator {
 
         // Step 6: EVALUATING — run eval benchmark + external review gate.
         do {
-            try await transition(to: .evaluating)
+            // Transition may already have happened in the bridge-nil path above.
+            let evalState = try await currentState()
+            if evalState != .evaluating {
+                try await transition(to: .evaluating)
+            }
             NSLog("ImprovementCycleCoordinator: evaluating phase")
 
-            // Build eval delta stub (real eval integration in Phase 4).
-            let evalDelta = EvalDelta(
-                toolCallingDelta: 0.0,
-                faeCapabilityDelta: 0.0,
-                assistantFitDelta: 0.0,
-                serializationDelta: 0.0,
-                throughputDelta: nil
-            )
+            // Build EvalDelta: prefer FaeBenchmark (real accuracy), fall back to loss-based proxy.
+            // When no adapter was produced, deltas are zero (neutral — no regression, no gain).
+            let evalDelta: EvalDelta
+            if let bridge = trainingBridge, let adapterPath = producedAdapterPath {
+                // Try real benchmark evaluation first (if FaeBenchmark binary is configured).
+                if await bridge.isBenchmarkAvailable {
+                    do {
+                        NSLog("ImprovementCycleCoordinator: running FaeBenchmark baseline")
+                        let baseline = try await bridge.runBenchmark(adapterPath: nil)
+                        // Store baseline for historical comparison.
+                        let pendingCount = (try? await store.pendingFeedbackEvents().count) ?? 0
+                        try? await store.insertBaseline(baseline.toBaseline(feedbackEventCount: pendingCount))
+
+                        NSLog("ImprovementCycleCoordinator: running FaeBenchmark with adapter")
+                        let adapterResult = try await bridge.runBenchmark(adapterPath: adapterPath)
+
+                        evalDelta = adapterResult.delta(from: baseline)
+                        NSLog(
+                            "ImprovementCycleCoordinator: benchmark delta — tools=%.1f%% fae=%.1f%% fit=%.1f%% ser=%.1f%%",
+                            evalDelta.toolCallingDelta ?? 0, evalDelta.faeCapabilityDelta ?? 0,
+                            evalDelta.assistantFitDelta ?? 0, evalDelta.serializationDelta ?? 0
+                        )
+                    } catch {
+                        NSLog("ImprovementCycleCoordinator: benchmark failed (%@), falling back to loss-based eval", error.localizedDescription)
+                        evalDelta = try await lossBasedEvalDelta(bridge: bridge, adapterPath: adapterPath)
+                    }
+                } else {
+                    // No benchmark binary — use loss-based proxy.
+                    evalDelta = try await lossBasedEvalDelta(bridge: bridge, adapterPath: adapterPath)
+                }
+            } else {
+                evalDelta = EvalDelta(
+                    toolCallingDelta: 0.0, faeCapabilityDelta: 0.0,
+                    assistantFitDelta: 0.0, serializationDelta: 0.0, throughputDelta: nil
+                )
+            }
 
             // Run external review gate.
             let stateForReview = try await store.readState()
@@ -597,9 +698,8 @@ actor ImprovementCycleCoordinator {
         var state = try await store.readState()
 
         // Track rollback path: current → previous before updating.
-        let newPath = state.currentAdapterPath // stub: Phase 3 will set real path from training
+        // currentAdapterPath was set during the training step with the real adapter directory.
         state.previousAdapterPath = state.currentAdapterPath
-        state.currentAdapterPath = newPath
         state.userApprovedCycles += 1
         try await store.writeState(state)
 
@@ -609,6 +709,36 @@ actor ImprovementCycleCoordinator {
             "ImprovementCycleCoordinator: adapter deployed (userApprovedCycles=%d)",
             state.userApprovedCycles
         )
+    }
+
+    // MARK: - Loss-Based Eval Fallback
+
+    /// Compute EvalDelta from the training loss-based proxy score.
+    ///
+    /// Used when FaeBenchmark is not available. Maps the 0.0–1.0 score
+    /// from evaluate.py to a uniform delta across all dimensions.
+    private func lossBasedEvalDelta(bridge: TrainingBridge, adapterPath: String) async throws -> EvalDelta {
+        do {
+            let evalResult = try await bridge.evaluateAdapter(adapterPath: adapterPath)
+            let delta = (evalResult.score - 0.5) * 100.0
+            NSLog(
+                "ImprovementCycleCoordinator: loss-based eval score=%.2f loss=%.2f rec=%@ delta=%.1f",
+                evalResult.score, evalResult.finalLoss, evalResult.recommendation, delta
+            )
+            return EvalDelta(
+                toolCallingDelta: delta,
+                faeCapabilityDelta: delta,
+                assistantFitDelta: delta,
+                serializationDelta: delta,
+                throughputDelta: nil
+            )
+        } catch {
+            NSLog("ImprovementCycleCoordinator: loss-based eval failed: %@ — using zero delta", error.localizedDescription)
+            return EvalDelta(
+                toolCallingDelta: 0.0, faeCapabilityDelta: 0.0,
+                assistantFitDelta: 0.0, serializationDelta: 0.0, throughputDelta: nil
+            )
+        }
     }
 
     // MARK: - Recovery

@@ -75,6 +75,10 @@ public actor MLXLLMEngine: LLMEngine {
                 config = ModelConfiguration(directory: localDirectory)
                 NSLog("MLXLLMEngine: resolved local model directory %@", localDirectory.path)
             } else {
+                // No complete local cache found. This covers fresh downloads AND
+                // interrupted downloads — hasModelPayload validates all shards exist
+                // for sharded models, so a partial download won't be used.
+                // ModelConfiguration(id:) triggers HubApi which resumes missing files.
                 config = ModelConfiguration(id: modelID)
                 NSLog("MLXLLMEngine: model not cached locally — download will begin")
             }
@@ -98,6 +102,7 @@ public actor MLXLLMEngine: LLMEngine {
             throw error
         }
     }
+
 
     /// Attach a pre-loaded ModelContainer (e.g. from VLMModelFactory for multimodal models).
     ///

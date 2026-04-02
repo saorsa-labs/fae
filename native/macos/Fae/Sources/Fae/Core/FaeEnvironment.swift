@@ -210,6 +210,32 @@ enum FaeDirectories {
     /// `inbox/` — memory inbox for ingestion.
     static let inboxDirectory: URL = root.appendingPathComponent("inbox")
 
+    // MARK: - Training Pipeline
+
+    /// `training/` — training pipeline working directory.
+    static let trainingDirectory: URL = {
+        let url = root.appendingPathComponent("training")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    /// `training/data/` — exported SFT/DPO training data from fae.db.
+    static let trainingDataDirectory: URL = {
+        let url = trainingDirectory.appendingPathComponent("data")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    /// `models/personal/` — personal LoRA adapters produced by mlx-tune.
+    static let personalModelsDirectory: URL = {
+        let url = modelsDirectory.appendingPathComponent("personal")
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    /// `training/run.json` — current/last training run metadata.
+    static let trainingRunFile: URL = trainingDirectory.appendingPathComponent("run.json")
+
     // MARK: - Vault Blocked Path
 
     /// The vault path prefix for PathPolicy blocklist.

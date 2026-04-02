@@ -16,7 +16,30 @@ private func hasModelPayload(at directory: URL) -> Bool {
 
     let hasConfig = contents.contains("config.json")
     let hasWeights = contents.contains { $0.hasSuffix(".safetensors") || $0.hasSuffix(".gguf") }
-    return hasConfig && hasWeights
+    guard hasConfig, hasWeights else { return false }
+
+    // For sharded models, verify ALL shards are present.
+    // A partial download (e.g. user killed Fae mid-download) leaves an index
+    // file referencing shards that don't exist yet, which crashes in quantize().
+    let indexFile = directory.appendingPathComponent("model.safetensors.index.json")
+    if fm.fileExists(atPath: indexFile.path) {
+        guard let data = try? Data(contentsOf: indexFile),
+              let index = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let weightMap = index["weight_map"] as? [String: String]
+        else {
+            return false
+        }
+        let requiredShards = Set(weightMap.values)
+        for shard in requiredShards {
+            let shardPath = directory.appendingPathComponent(shard).path
+            guard fm.fileExists(atPath: shardPath) else {
+                NSLog("hasModelPayload: missing shard %@ in %@", shard, directory.lastPathComponent)
+                return false
+            }
+        }
+    }
+
+    return true
 }
 
 private func huggingFaceHubCacheDirectory(

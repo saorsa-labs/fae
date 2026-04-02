@@ -199,12 +199,29 @@ Collect corrections → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
 
 **Key components:**
 - `ImprovementCycleCoordinator` (actor): State machine IDLE -> COLLECTING -> TRAINING -> EVALUATING -> PROPOSING -> DEPLOYING with rollback
+- `TrainingBridge` (actor): Calls mlx-tune Python scripts via `uv run --script`. Methods: `exportTrainingData()`, `launchTraining()`, `pollUntilComplete()`, `evaluateAdapter()`, `runBenchmark()`. Scripts from training-orchestrator and training-data-bridge skills. Optional FaeBenchmark binary for real accuracy eval.
 - `ImprovementStore` (improvement.db): Separate SQLite database with 5 tables (feedback_events, improvement_baselines, improvement_state, capability_gaps, shadow_eval)
 - `ImplicitFeedbackDetector`: 7 signal types captured after each turn (re-ask, abandonment, follow-through, interruption, praise, topic_change, silence_acceptance)
 - `ExternalReviewGate`: 3-provider fallback (Codex -> Claude -> internal), PASS/FAIL/CONCERN with 3-deferral max
 - `DirectiveFastTuner`: Pattern-based directive amendments every 7th cycle (faster than model training)
 - `ShadowEvaluator`: Overnight replay on alternate nights, 60% win rate promotion gate
 - `AdapterDeploymentManager`: Semi-automatic mode (morning proposals), earned auto-deploy after 5 approved cycles
+
+**Training pipeline flow** (nightly at 03:00, requires 20+ feedback events with 5+ corrections):
+1. `TrainingBridge.exportTrainingData()` → calls `build_dataset.py` → writes `train.jsonl` + `dpo_pairs.jsonl`
+2. `TrainingBridge.launchTraining(mode:)` → calls `train.py` or `train_dpo.py` → detached mlx-tune worker
+3. `TrainingBridge.pollUntilComplete()` → polls `check_status.py` every 30s (max 2h)
+4. Evaluation (tiered): FaeBenchmark (real accuracy, if binary configured) → loss-based proxy (evaluate.py)
+   - FaeBenchmark: runs base model + adapter, compares tool/capability/fit/serialization accuracy → real `EvalDelta`
+   - Loss-based: maps training loss score (0.0–1.0) to uniform delta (fallback)
+   - Baseline stored in `ImprovementStore.improvement_baselines` for historical comparison
+5. `ExternalReviewGate.review()` → Codex/Claude/internal validation
+6. Deploy or propose for approval (earned auto-deploy after 5 approved cycles)
+
+**Training data paths:**
+- Export data: `~/Library/Application Support/fae/training/data/` (`FaeDirectories.trainingDataDirectory`)
+- Personal adapters: `~/Library/Application Support/fae/models/personal/` (`FaeDirectories.personalModelsDirectory`)
+- Run metadata: `~/Library/Application Support/fae/training/run.json` (`FaeDirectories.trainingRunFile`)
 
 **LoRA adapter loading:** MLXLLMEngine.loadAdapter(from:), unloadAdapter(), swapAdapter(to:). Uses mlx-swift-lm's built-in LoRAContainer. Hot-swap via SelfConfigTool `training.personal_adapter_path`.
 
@@ -684,7 +701,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `DirectiveFastTuner.swift` | Pattern-based directive amendments from feedback analysis |
 | `ShadowEvaluator.swift` | Overnight shadow eval with 60% win rate promotion gate |
 
-### Scheduler/ (10 files)
+### Scheduler/ (11 files)
 
 | File | Role |
 |------|------|
@@ -696,6 +713,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `SchedulerPersistenceStore.swift` | Scheduler state persistence |
 | `TaskRunLedger.swift` | Task idempotency and run tracking |
 | `ImprovementCycleCoordinator.swift` | Deterministic state machine for autonomous improvement loop |
+| `TrainingBridge.swift` | Calls mlx-tune Python scripts via uv for export, train, poll, evaluate |
 | `AdapterDeploymentManager.swift` | Semi-auto deploy with earned auto-deploy after 5 cycles |
 | `ImprovementHealthReporter.swift` | Self-diagnostic integration for improvement loop health |
 

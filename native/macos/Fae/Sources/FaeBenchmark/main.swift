@@ -44,6 +44,13 @@ let models: [ModelEntry] = [
         shortName: "qwen3.5-27b-opus-distilled",
         modelID: "mlx-community/Qwen3.5-27B-Claude-4.6-Opus-Distilled-MLX-4bit"
     ),
+    // Claude Opus reasoning-distilled: CoT fine-tuned for agentic reasoning. ~14GB at 4-bit.
+    ModelEntry(
+        shortName: "qwen3.5-27b-opus-reasoning",
+        modelID: "Jackrong/MLX-Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-4bit"
+    ),
+    // MoE: 122B total params, 10B active per token. ~70GB at 4-bit.
+    ModelEntry(shortName: "qwen3.5-122b-a10b", modelID: "mlx-community/Qwen3.5-122B-A10B-4bit"),
 ]
 
 // MARK: - Result Types
