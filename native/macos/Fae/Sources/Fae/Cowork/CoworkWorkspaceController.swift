@@ -34,6 +34,12 @@ final class CoworkWorkspaceController: ObservableObject {
     @Published private(set) var latestConsensusResults: [WorkWithFaeConsensusResult] = []
     @Published private(set) var latestConsensusPrompt: String?
     @Published private(set) var latestConsensusWorkspaceID: UUID?
+
+    /// Per-agent accumulated text streamed live during consensus. Keys are agent IDs.
+    @Published private(set) var streamingConsensusChunks: [String: String] = [:]
+
+    /// `true` while a streaming consensus run is actively receiving chunks.
+    @Published private(set) var isConsensusStreaming: Bool = false
     @Published private(set) var blockedRemoteEgressRequest: BlockedRemoteEgressRequest?
 
     private let faeCore: FaeCore
@@ -1666,6 +1672,13 @@ final class CoworkWorkspaceController: ObservableObject {
 
             // Accumulate results progressively as chunks stream in.
             var partialResults: [String: WorkWithFaeConsensusResult] = [:]
+            var streamingTexts: [String: String] = [:]
+
+            await MainActor.run {
+                self.streamingConsensusChunks = [:]
+                self.isConsensusStreaming = true
+            }
+
             let stream = await self.streamingConsensusEngine.streamConsensus(
                 participants: resolvedParticipants,
                 preparedPrompt: preparedPrompt,
@@ -1690,6 +1703,7 @@ final class CoworkWorkspaceController: ObservableObject {
                         responseText: chunk.errorText == nil ? chunk.text : nil,
                         errorText: chunk.errorText
                     )
+                    streamingTexts[chunk.agentID] = chunk.errorText == nil ? chunk.text : nil
                 } else {
                     // Streaming partial — update the in-progress result.
                     partialResults[chunk.agentID] = WorkWithFaeConsensusResult(
@@ -1700,13 +1714,21 @@ final class CoworkWorkspaceController: ObservableObject {
                         responseText: chunk.text,
                         errorText: nil
                     )
+                    streamingTexts[chunk.agentID] = chunk.text
                 }
 
-                // Publish sorted results on MainActor for live UI updates.
+                // Publish sorted results and streaming text on MainActor for live UI updates.
                 let sortedResults = participants.compactMap { p in partialResults[p.id] }
+                let updatedStreamingTexts = streamingTexts
                 await MainActor.run {
                     self.latestConsensusResults = sortedResults
+                    self.streamingConsensusChunks = updatedStreamingTexts
                 }
+            }
+
+            await MainActor.run {
+                self.isConsensusStreaming = false
+                self.streamingConsensusChunks = [:]
             }
 
             // Final sorted results after all agents complete.
