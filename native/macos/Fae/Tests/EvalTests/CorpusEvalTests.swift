@@ -512,20 +512,18 @@ final class CorpusEvalTests: XCTestCase {
             guard let samples = Self.loadPCM16WAV(at: file) else { continue }
 
             // Feed in 576-sample chunks, same as the pipeline.
+            // Without a loaded model, feedStreamingAudio drops samples safely.
             let chunkSize = 576
             var offset = 0
-            var chunksF = 0
             while offset + chunkSize <= samples.count {
                 await engine.feedStreamingAudio(Array(samples[offset..<(offset + chunkSize)]))
-                chunksF += 1
                 offset += chunkSize
             }
 
-            // With 16000 samples (1s) and 576-sample chunks, we get ~27 chunks.
-            // That's 15,552 samples fed — above the 8000-sample interval threshold.
-            let shouldRun = await engine.shouldRunStreamingTranscription()
-            XCTAssertTrue(shouldRun,
-                          "Should be ready for streaming after feeding \(chunksF) chunks of real audio")
+            // Without a loaded model, the session won't start.
+            let isCurrentlyStreaming = await engine.isStreaming
+            XCTAssertFalse(isCurrentlyStreaming,
+                           "Engine should not be streaming without a loaded model")
 
             await engine.resetStreaming()
         }

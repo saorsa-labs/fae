@@ -371,9 +371,9 @@ actor PipelineCoordinator {
     /// Minimum audio samples before running keyword classification (500ms at 16kHz).
     private static let keywordClassifierMinSamples = 8_000
 
-    /// Single-slot guard for streaming transcription tasks.
-    /// Prevents task pile-up when transcription takes longer than the audio chunk interval.
-    private var streamingTranscriptionInFlight: Bool = false
+    /// Task consuming streaming transcription events from MLXSTTEngine's
+    /// StreamingInferenceSession. Replaces the old single-slot guard.
+    private var streamingEventConsumerTask: Task<Void, Never>?
 
     // MARK: - Speculative Prefill
 
@@ -825,6 +825,7 @@ actor PipelineCoordinator {
         bargeInState.generationTakeoverCandidate = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
+        cancelStreamingEventConsumer()
         speechInputStage.incrementStreamingEpoch()
         await sttEngine.resetStreaming()
         await streamingSTTEngine?.reset()
@@ -874,6 +875,7 @@ actor PipelineCoordinator {
 
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
+        cancelStreamingEventConsumer()
         Task { [weak self] in
             await self?.sttEngine.resetStreaming()
             await self?.streamingSTTEngine?.reset()
@@ -901,6 +903,7 @@ actor PipelineCoordinator {
         lastEOUProbability = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
+        cancelStreamingEventConsumer()
         await sttEngine.resetStreaming()
         await streamingSTTEngine?.reset()
 
@@ -2890,6 +2893,13 @@ actor PipelineCoordinator {
             if streamingAudioSafe {
                 let epoch = speechInputStage.streamingEpoch
 
+                // Ensure a streaming session is active for Qwen3-ASR slow-path.
+                // The session is created on first safe speech chunk and destroyed
+                // on segment completion or pipeline reset via resetStreaming().
+                if await !sttEngine.isStreaming {
+                    await sttEngine.startStreamingSession()
+                }
+
                 // Fast-path: feed Parakeet TDT (CTC-based, frame-independent).
                 // Runs a decode pass when enough audio accumulates, providing
                 // low-latency partials without growing-buffer re-transcription.
@@ -2906,25 +2916,33 @@ actor PipelineCoordinator {
                     }
                 }
 
-                // Slow-path: growing-buffer Qwen3-ASR (higher accuracy, higher latency).
-                // When Parakeet is available, this still accumulates audio for the
-                // final high-accuracy transcription after speech ends.
+                // Slow-path: Qwen3-ASR via StreamingInferenceSession.
+                // Feed audio continuously; the session handles windowing, incremental
+                // mel spectrograms, and provisional→confirmed token promotion internally.
                 await sttEngine.feedStreamingAudio(chunk.samples)
-                if await sttEngine.shouldRunStreamingTranscription() {
-                    // Single-slot guard: only spawn if no transcription task is in flight.
-                    // Prevents task pile-up when transcription takes longer than chunk interval.
-                    if !streamingTranscriptionInFlight {
-                        streamingTranscriptionInFlight = true
-                        Task { [weak self] in
-                            guard let self else { return }
-                            defer { Task { await self.clearStreamingTranscriptionFlag() } }
-                            if let partial = await self.sttEngine.runStreamingTranscription() {
-                                // Drop stale partials from a previous streaming session.
-                                // When fast-path is active, slow-path partials supplement
-                                // with higher accuracy as more audio accumulates.
+
+                // Start the event consumer if a streaming session is active
+                // but we haven't started consuming events yet.
+                if await sttEngine.isStreaming, streamingEventConsumerTask == nil {
+                    let capturedEpoch = epoch
+                    streamingEventConsumerTask = Task { [weak self] in
+                        guard let self else { return }
+                        guard let events = await self.sttEngine.streamingEvents else { return }
+                        for await event in events {
+                            guard !Task.isCancelled else { break }
+                            switch event {
+                            case .provisional(let text), .confirmed(let text):
                                 await self.handleStreamingPartialTranscript(
-                                    partial, epoch: epoch, source: .qwen3ASR
+                                    text, epoch: capturedEpoch, source: .qwen3ASR
                                 )
+                            case .displayUpdate(_, let provisionalText):
+                                if !provisionalText.isEmpty {
+                                    await self.handleStreamingPartialTranscript(
+                                        provisionalText, epoch: capturedEpoch, source: .qwen3ASR
+                                    )
+                                }
+                            case .ended, .stats:
+                                break
                             }
                         }
                     }
@@ -3257,6 +3275,7 @@ actor PipelineCoordinator {
                     // Increment epoch synchronously so any in-flight streaming
                     // transcription result is invalidated immediately.
                     speechInputStage.incrementStreamingEpoch()
+                    cancelStreamingEventConsumer()
                     Task { [weak self] in
                         await self?.sttEngine.resetStreaming()
                         await self?.streamingSTTEngine?.reset()
@@ -3781,9 +3800,10 @@ actor PipelineCoordinator {
     /// Last fast-path partial for disagreement detection against slow-path.
     private var lastFastPathPartial: String?
 
-    /// Clear the streaming transcription single-slot guard.
-    private func clearStreamingTranscriptionFlag() {
-        streamingTranscriptionInFlight = false
+    /// Cancel and clean up the streaming event consumer task.
+    private func cancelStreamingEventConsumer() {
+        streamingEventConsumerTask?.cancel()
+        streamingEventConsumerTask = nil
     }
 
     private func handleStreamingPartialTranscript(

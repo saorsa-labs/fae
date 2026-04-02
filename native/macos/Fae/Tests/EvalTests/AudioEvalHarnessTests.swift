@@ -229,9 +229,9 @@ final class AudioEvalHarnessTests: XCTestCase {
         let entries = Self.loadCorpus().filter { !$0.transcript.isEmpty }
         guard !entries.isEmpty else { return }
 
-        // For each speech clip, simulate streaming audio feed and verify that
-        // consecutive partials don't differ by more than the instability threshold.
-        // Without a loaded model, this validates the buffer/interval mechanics.
+        // For each speech clip, verify that the streaming session lifecycle works:
+        // start → feed audio → reset. Without a loaded model, feedStreamingAudio
+        // silently drops samples (session is nil), but the API shouldn't crash.
         for entry in entries {
             let wavURL = Self.corpusDir.appendingPathComponent(entry.file)
             guard let samples = Self.loadWAV(at: wavURL) else { continue }
@@ -239,21 +239,18 @@ final class AudioEvalHarnessTests: XCTestCase {
             let engine = MLXSTTEngine()
             let chunkSize = 576
             var offset = 0
-            var feedCount = 0
 
+            // Without a loaded model, startStreamingSession is a no-op
+            // and feedStreamingAudio drops samples safely.
             while offset + chunkSize <= samples.count {
                 let chunk = Array(samples[offset..<(offset + chunkSize)])
                 await engine.feedStreamingAudio(chunk)
-                feedCount += 1
                 offset += chunkSize
             }
 
-            // Verify buffer accumulated correctly.
-            let shouldRun = await engine.shouldRunStreamingTranscription()
-            if feedCount * chunkSize >= MLXSTTEngine.streamingIntervalSamples {
-                XCTAssertTrue(shouldRun,
-                              "Should be ready for streaming after feeding \(feedCount) chunks from \(entry.file)")
-            }
+            let isCurrentlyStreaming = await engine.isStreaming
+            XCTAssertFalse(isCurrentlyStreaming,
+                           "Engine should not be streaming without a loaded model")
 
             await engine.resetStreaming()
         }

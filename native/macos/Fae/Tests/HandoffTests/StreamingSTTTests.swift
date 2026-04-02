@@ -3,64 +3,37 @@ import XCTest
 
 final class StreamingSTTTests: XCTestCase {
 
-    // MARK: - Engine Unit Tests
+    // MARK: - Engine Unit Tests (StreamingInferenceSession)
 
-    func testStreamingEngineBufferAccumulates() async {
+    func testStreamingSessionNotActiveWithoutModel() async {
         let engine = MLXSTTEngine()
-        let samples = [Float](repeating: 0.1, count: 576)
-
-        await engine.feedStreamingAudio(samples)
-        await engine.feedStreamingAudio(samples)
-
-        // Buffer should have accumulated both chunks.
-        let partial = await engine.partialTranscript
-        XCTAssertEqual(partial, "", "Partial transcript should be empty before any transcription runs")
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming, "Should not be streaming without a loaded model")
     }
 
-    func testStreamingEngineResetClearsState() async {
+    func testFeedAudioSafeWithoutSession() async {
         let engine = MLXSTTEngine()
-        let samples = [Float](repeating: 0.1, count: 576)
+        // Feeding audio without a session should not crash.
+        await engine.feedStreamingAudio([Float](repeating: 0.1, count: 576))
+        await engine.feedStreamingAudio([Float](repeating: 0.1, count: 576))
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming, "Should not be streaming after feeding without model")
+    }
 
-        await engine.feedStreamingAudio(samples)
+    func testResetStreamingClearsSession() async {
+        let engine = MLXSTTEngine()
+        await engine.feedStreamingAudio([Float](repeating: 0.1, count: 576))
         await engine.resetStreaming()
-
-        // After reset, shouldRunStreamingTranscription should be false
-        // (buffer is empty, no new samples).
-        let shouldRun = await engine.shouldRunStreamingTranscription()
-        XCTAssertFalse(shouldRun, "Should not run streaming transcription after reset")
-
-        let partial = await engine.partialTranscript
-        XCTAssertEqual(partial, "", "Partial transcript should be empty after reset")
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming, "Should not be streaming after reset")
     }
 
-    func testStreamingEngineGuardsOverlap() async {
+    func testStartStreamingRequiresModel() async {
         let engine = MLXSTTEngine()
-        // Feed enough samples to trigger a streaming run.
-        let samples = [Float](repeating: 0.1, count: MLXSTTEngine.streamingIntervalSamples)
-        await engine.feedStreamingAudio(samples)
-
-        let shouldRun = await engine.shouldRunStreamingTranscription()
-        XCTAssertTrue(shouldRun, "Should be ready for streaming transcription after feeding enough samples")
-
-        // Without a model loaded, runStreamingTranscription returns nil
-        // but shouldn't crash.
-        let result = await engine.runStreamingTranscription()
-        XCTAssertNil(result, "Should return nil when model is not loaded")
-    }
-
-    func testStreamingEngineIntervalCheck() async {
-        let engine = MLXSTTEngine()
-        // Feed fewer samples than the interval threshold.
-        let smallChunk = [Float](repeating: 0.1, count: MLXSTTEngine.streamingIntervalSamples - 1)
-        await engine.feedStreamingAudio(smallChunk)
-
-        let shouldRunBefore = await engine.shouldRunStreamingTranscription()
-        XCTAssertFalse(shouldRunBefore, "Should not run with fewer samples than interval threshold")
-
-        // One more sample pushes over the threshold.
-        await engine.feedStreamingAudio([0.1])
-        let shouldRunAfter = await engine.shouldRunStreamingTranscription()
-        XCTAssertTrue(shouldRunAfter, "Should run after reaching interval threshold")
+        // Without a loaded model, startStreamingSession should be a no-op.
+        await engine.startStreamingSession()
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming, "Should not start streaming without a loaded model")
     }
 
     // MARK: - Pipeline Policy Tests (Static Methods)
@@ -116,45 +89,7 @@ final class StreamingSTTTests: XCTestCase {
         )
     }
 
-    // MARK: - Streaming Epoch / Slot Invariants
-
-    func testStreamingEngineResetAfterInFlightDoesNotCrash() async {
-        let engine = MLXSTTEngine()
-        let samples = [Float](repeating: 0.1, count: MLXSTTEngine.streamingIntervalSamples)
-        await engine.feedStreamingAudio(samples)
-
-        // Start a transcription attempt (returns nil — no model loaded).
-        let result = await engine.runStreamingTranscription()
-        XCTAssertNil(result)
-
-        // Reset immediately after — should not crash or leave inconsistent state.
-        await engine.resetStreaming()
-        let shouldRun = await engine.shouldRunStreamingTranscription()
-        XCTAssertFalse(shouldRun)
-        let partial = await engine.partialTranscript
-        XCTAssertEqual(partial, "")
-    }
-
-    func testResetDoesNotClearActiveRunSlot() async {
-        // After a run completes (no model → nil), the slot is released.
-        // Reset clears the buffer but not the slot.
-        // Fresh data after reset should allow a new run.
-        let engine = MLXSTTEngine()
-        let samples = [Float](repeating: 0.1, count: MLXSTTEngine.streamingIntervalSamples)
-        await engine.feedStreamingAudio(samples)
-
-        let shouldRunBefore = await engine.shouldRunStreamingTranscription()
-        XCTAssertTrue(shouldRunBefore, "Should be ready before first run")
-
-        let result = await engine.runStreamingTranscription()
-        XCTAssertNil(result)
-
-        await engine.resetStreaming()
-
-        await engine.feedStreamingAudio(samples)
-        let shouldRunAfterReset = await engine.shouldRunStreamingTranscription()
-        XCTAssertTrue(shouldRunAfterReset, "Should be ready after reset + fresh data")
-    }
+    // MARK: - Streaming Session Lifecycle
 
     func testMultipleResetsAreIdempotent() async {
         let engine = MLXSTTEngine()
@@ -164,37 +99,24 @@ final class StreamingSTTTests: XCTestCase {
         await engine.resetStreaming()
         await engine.resetStreaming()
 
-        let shouldRun = await engine.shouldRunStreamingTranscription()
-        XCTAssertFalse(shouldRun)
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming, "Multiple resets should leave engine in clean state")
     }
 
-    func testWedgeTimeoutIsReasonable() {
-        // The wedge timeout must be long enough to never fire during normal
-        // inference but short enough to recover promptly from a stuck run.
-        // Normal inference: <1s for 1.5s of audio on M-series.
-        // Timeout: 3s — 3x normal maximum.
-        XCTAssertEqual(
-            MLXSTTEngine.streamingWedgeTimeoutSeconds, 3.0,
-            "Wedge timeout should be 3 seconds"
-        )
-    }
-
-    func testSlotReleasedAfterNoModelRun() async {
-        // When runStreamingTranscription() fails at the model guard,
-        // the slot should never have been claimed — so shouldRun
-        // returns true again after feeding fresh data.
+    func testCancelStreamingSessionSafe() async {
         let engine = MLXSTTEngine()
-        let samples = [Float](repeating: 0.1, count: MLXSTTEngine.streamingIntervalSamples)
+        // Cancel without ever starting should not crash.
+        await engine.cancelStreamingSession()
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming)
+    }
 
-        await engine.feedStreamingAudio(samples)
-        let result = await engine.runStreamingTranscription()
-        XCTAssertNil(result, "No model loaded — should return nil")
-
-        // Slot was never claimed because guard exited early.
-        // Feed more data — should be ready again.
-        await engine.feedStreamingAudio(samples)
-        let shouldRun = await engine.shouldRunStreamingTranscription()
-        XCTAssertTrue(shouldRun, "Slot should be available after failed run (no model)")
+    func testStopStreamingSessionSafe() async {
+        let engine = MLXSTTEngine()
+        // Stop without ever starting should not crash.
+        await engine.stopStreamingSession()
+        let isStreaming = await engine.isStreaming
+        XCTAssertFalse(isStreaming)
     }
 
     // MARK: - Acoustic Robustness
@@ -246,37 +168,21 @@ final class StreamingSTTTests: XCTestCase {
         XCTAssertLessThanOrEqual(threshold, 12.0, "Minimum SNR for streaming should not exceed 12 dB")
     }
 
-    func testEditDistanceRatio() {
-        // Identical strings → 0.
-        XCTAssertEqual(MLXSTTEngine.editDistanceRatio("hello", "hello"), 0, accuracy: 0.01)
+    func testPreprocessForASRDoesNotCrash() {
+        // Verify audio preprocessing handles edge cases without crashing.
+        var empty: [Float] = []
+        MLXSTTEngine.preprocessForASR(&empty, sampleRate: 16000)
+        XCTAssertTrue(empty.isEmpty)
 
-        // Completely different → 1.
-        XCTAssertEqual(MLXSTTEngine.editDistanceRatio("abc", "xyz"), 1.0, accuracy: 0.01)
+        var silence = [Float](repeating: 0, count: 576)
+        MLXSTTEngine.preprocessForASR(&silence, sampleRate: 16000)
+        // All-zero input should remain all-zero (peak < 0.001 threshold).
+        XCTAssertEqual(silence.reduce(0, +), 0, accuracy: 0.001)
 
-        // One character change in "hello" → 1/5 = 0.2.
-        XCTAssertEqual(MLXSTTEngine.editDistanceRatio("hello", "hallo"), 0.2, accuracy: 0.01)
-
-        // Empty vs non-empty → 1.
-        XCTAssertEqual(MLXSTTEngine.editDistanceRatio("", "abc"), 1.0, accuracy: 0.01)
-
-        // Both empty → 0.
-        XCTAssertEqual(MLXSTTEngine.editDistanceRatio("", ""), 0, accuracy: 0.01)
-
-        // Partial extension (typical of growing ASR): "what's the" → "what's the weather".
-        let ratio = MLXSTTEngine.editDistanceRatio("what's the", "what's the weather")
-        XCTAssertLessThan(ratio, 0.5, "Growing partial should have low edit distance ratio")
-    }
-
-    func testPartialInstabilityThreshold() {
-        // The instability threshold should reject radical rewrites but allow
-        // natural partial growth.
-        XCTAssertGreaterThanOrEqual(
-            MLXSTTEngine.maxPartialInstabilityRatio, 0.6,
-            "Instability threshold should not be too aggressive"
-        )
-        XCTAssertLessThanOrEqual(
-            MLXSTTEngine.maxPartialInstabilityRatio, 0.95,
-            "Instability threshold should catch truly unstable partials"
-        )
+        var normal = [Float](repeating: 0.5, count: 576)
+        MLXSTTEngine.preprocessForASR(&normal, sampleRate: 16000)
+        // Peak-normalized to 0.707 — all samples should be ~0.707.
+        let peak = normal.lazy.map { abs($0) }.max() ?? 0
+        XCTAssertLessThanOrEqual(peak, 0.71, "Peak should be normalized to ~-3dBFS")
     }
 }
