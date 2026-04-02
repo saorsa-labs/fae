@@ -1360,6 +1360,18 @@ struct CoworkWorkspaceView: View {
                             if conversation.messages.isEmpty && conversation.streamingText.isEmpty {
                                 emptyConversationState
                             } else {
+                                if controller.workspaceState.conversationMessages.contains(where: { $0.role == "summary" }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "text.badge.minus")
+                                            .font(.system(size: 10, weight: .medium))
+                                        Text("Earlier conversation compressed into summary")
+                                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    }
+                                    .foregroundStyle(.secondary.opacity(0.6))
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 4)
+                                }
+
                                 ForEach(Array(conversation.messages.suffix(40).enumerated()), id: \.element.id) { offset, message in
                                     let absoluteIndex = max(0, conversation.messages.count - 40) + offset
                                     conversationBubble(message, at: absoluteIndex)

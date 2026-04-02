@@ -1326,6 +1326,48 @@ final class CoworkWorkspaceController: ObservableObject {
         }
     }
 
+    /// Compresses the workspace conversation if token count exceeds the model's context window threshold.
+    /// Uses the local LLM to generate a summary when a provider is available; otherwise falls back gracefully.
+    private func compressConversationIfNeeded(modelID: String) async {
+        let messages = await MainActor.run { self.workspaceState.conversationMessages }
+        guard messages.count > 10 else { return }
+
+        // Look up context window from the known model registry (in K tokens)
+        let contextWindowTokens: Int
+        if let meta = CoworkKnownModelRegistry.metadata(for: modelID), let ctxK = meta.contextWindowK {
+            contextWindowTokens = ctxK * 1_000
+        } else {
+            // Default to 32K for unknown models
+            contextWindowTokens = 32_000
+        }
+
+        let compressed: [WorkWithFaeConversationMessage]
+        if let runtimeDescriptor {
+            let provider = FaeLocalhostCoworkProvider(descriptor: runtimeDescriptor)
+            compressed = await compressor.compressIfNeeded(
+                messages: messages,
+                contextWindowTokens: contextWindowTokens,
+                modelID: modelID,
+                provider: provider,
+                runtimeDescriptor: runtimeDescriptor
+            )
+        } else {
+            compressed = await compressor.compressIfNeeded(
+                messages: messages,
+                contextWindowTokens: contextWindowTokens,
+                modelID: modelID
+            )
+        }
+
+        // Only persist if compression actually changed the messages
+        if compressed.count != messages.count {
+            await MainActor.run {
+                self.workspaceState.conversationMessages = compressed
+                self.persistWorkspaceState()
+            }
+        }
+    }
+
     private func blockRemoteEgressIfNeeded(
         for preparedPrompt: WorkWithFaePreparedPrompt,
         targetAgents: [WorkWithFaeAgentProfile],
@@ -1374,6 +1416,7 @@ final class CoworkWorkspaceController: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
+            await self.compressConversationIfNeeded(modelID: executionAgent.modelIdentifier)
             let requestStartedAt = Date()
             let thinkingLevel = await MainActor.run { self.faeCore.thinkingLevel }
             let externalSystemPrompt: String? = executionAgent.providerKind == .faeLocalhost ? nil : {
@@ -1584,6 +1627,8 @@ final class CoworkWorkspaceController: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
+            let primaryModelID = participants.first?.modelIdentifier ?? "unknown"
+            await self.compressConversationIfNeeded(modelID: primaryModelID)
             let thinkingLevel = await MainActor.run { self.faeCore.thinkingLevel }
             await MainActor.run {
                 self.conversation.appendMessage(role: .user, content: prompt, modelID: nil, providerKind: nil)

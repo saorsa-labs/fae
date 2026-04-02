@@ -911,13 +911,14 @@ enum WorkWithFaeWorkspaceStore {
 
     private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
         var sanitized = state
-        // Apply compression if needed, otherwise hard truncate
+        // Hard truncation safety cap — real LLM-based compression runs in CoworkWorkspaceController
+        // before each submission via compressConversationIfNeeded(). This is the last-resort backstop.
         sanitized.conversationMessages = compressConversation(sanitized.conversationMessages)
         return sanitized
     }
-    
-    /// Applies compression to conversation if enabled, otherwise falls back to hard truncation.
-    /// This is a foundation for Task 3 integration with ConversationCompressor.
+
+    /// Hard truncation fallback for persistence. Real LLM-based compression lives in
+    /// CoworkWorkspaceController.compressConversationIfNeeded() and runs before each provider call.
     private static func compressConversation(
         _ messages: [WorkWithFaeConversationMessage],
         maxMessages: Int = maxConversationMessages
@@ -927,9 +928,8 @@ enum WorkWithFaeWorkspaceStore {
         if messages.count > hardCap {
             return Array(messages.suffix(hardCap))
         }
-        
-        // For now, use hard truncation. Task 3 will replace this with actual compression
-        // when ConversationCompressor and LLM invocation are integrated.
+
+        // Hard truncation — preserves summary messages if they fall within the window
         return Array(messages.suffix(maxMessages))
     }
 
