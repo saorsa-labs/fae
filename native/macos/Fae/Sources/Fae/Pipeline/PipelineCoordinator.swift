@@ -296,24 +296,29 @@ actor PipelineCoordinator {
               enabled ? "true" : "false", mode, approvalRequiresMatch ? "true" : "false")
     }
 
-    /// Switch the TTS voice live without restarting. No-op if TTS engine is not Kokoro.
+    /// Switch the TTS voice live without restarting.
     func setTTSVoice(_ voice: String) async {
-        if let kokoro = ttsEngine as? KokoroMLXTTSEngine {
-            await kokoro.switchVoice(to: voice)
+        if let adapter = ttsEngine as? FaeTTSAdapter {
+            await adapter.switchVoice(to: voice)
         }
     }
 
     /// Preview a named voice by synthesizing a short phrase and playing it once.
     func previewTTSVoice(_ voice: String) async {
-        guard let kokoro = ttsEngine as? KokoroMLXTTSEngine else { return }
         let phrase = "Hiya, I'm Fae. I've just fed the wee birdies, and I'm feeling quietly cheeky today."
         do {
-            guard let buffer = try await kokoro.previewSynthesize(voice: voice, text: phrase),
-                  let channelData = buffer.floatChannelData?[0]
-            else { return }
-            let samples = Array(UnsafeBufferPointer(start: channelData, count: Int(buffer.frameLength)))
+            let stream = await ttsEngine.synthesize(text: phrase, voiceInstruct: voice)
             markAssistantSpeechStarted()
-            await playback.enqueue(samples: samples, sampleRate: 24_000, isFinal: true)
+            for try await buffer in stream {
+                guard let channelData = buffer.floatChannelData?[0] else { continue }
+                let samples = Array(UnsafeBufferPointer(start: channelData, count: Int(buffer.frameLength)))
+                await playback.enqueue(
+                    samples: samples,
+                    sampleRate: Int(buffer.format.sampleRate),
+                    isFinal: false
+                )
+            }
+            await playback.markEnd()
         } catch {
             NSLog("PipelineCoordinator: voice preview failed: %@", error.localizedDescription)
         }

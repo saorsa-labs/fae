@@ -172,7 +172,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     private let sttEngine = MLXSTTEngine()
     private let llmEngine: any LLMEngine = MLXLLMEngine()
-    private let ttsEngine: any TTSEngine = KokoroMLXTTSEngine()
+    private let ttsEngine: any TTSEngine = FaeTTSAdapter()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
     /// Enrollment now uses the pipeline's captureManager directly — see
