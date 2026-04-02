@@ -1,48 +1,26 @@
 {
   "version": 1,
-  "project": "mlx-tune Training Integration",
-  "active": false,
+  "project": "CoWork Evolution",
+  "active": true,
   "milestone": {
     "number": 1,
-    "name": "End-to-End Training Pipeline"
+    "name": "CoWork Intelligence"
   },
   "phase": {
-    "number": "1.4",
-    "name": "End-to-End Verification",
+    "number": "1.1",
+    "name": "Per-Message Model Metadata",
     "plan": null
   },
   "progress": {
-    "total_tasks": 18,
-    "completed_tasks": 18,
-    "current_task": null
+    "total_tasks": 13,
+    "completed_tasks": 0,
+    "current_task": 9
   },
   "review": {
-    "status": "complete",
+    "status": "pending",
     "iteration": 0,
-    "last_verdict": "pass"
+    "last_verdict": null
   },
-  "status": "milestone_complete",
-  "last_updated": "2026-03-31T21:25:00Z",
-  "completed_phases": [
-    {
-      "number": "1.1",
-      "name": "TrainingBridge Actor",
-      "result": "TrainingBridge actor with export/launch/poll/evaluate, FaeDirectories training paths, 15 tests."
-    },
-    {
-      "number": "1.2",
-      "name": "Wire Coordinator → TrainingBridge",
-      "result": "Replaced training stub + zeroed EvalDelta. FaeScheduler wires bridge. 42 coordinator tests pass."
-    },
-    {
-      "number": "1.3",
-      "name": "FaeBenchmark Integration",
-      "result": "TrainingBenchmarkResult, runBenchmark(), baseline capture, tiered eval (benchmark→loss-based). 21 bridge tests pass."
-    },
-    {
-      "number": "1.4",
-      "name": "End-to-End Verification",
-      "result": "Fixed stale stub comment in performDeploy, E2E tests for approve/reject flow. 44 coordinator tests, 21 bridge tests. CLAUDE.md updated."
-    }
-  ]
+  "status": "executing",
+  "last_updated": "2026-04-02T13:00:00Z"
 }

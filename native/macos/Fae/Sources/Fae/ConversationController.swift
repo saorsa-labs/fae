@@ -14,12 +14,18 @@ struct ChatMessage: Identifiable, Equatable {
     let role: ChatRole
     let content: String
     let timestamp: Date
+    /// Which model generated this message (e.g. "gpt-4o", "claude-opus-4-6"). Nil for user messages.
+    let modelID: String?
+    /// Which provider generated this message (e.g. "openai", "anthropic", "fae-localhost"). Nil for user messages.
+    let providerKind: String?
 
-    init(id: UUID = UUID(), role: ChatRole, content: String, timestamp: Date = Date()) {
+    init(id: UUID = UUID(), role: ChatRole, content: String, timestamp: Date = Date(), modelID: String? = nil, providerKind: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
+        self.modelID = modelID
+        self.providerKind = providerKind
     }
 }
 
@@ -111,8 +117,8 @@ final class ConversationController: ObservableObject {
 
     // MARK: - Message Store
 
-    func appendMessage(role: ChatRole, content: String) {
-        let message = ChatMessage(role: role, content: content)
+    func appendMessage(role: ChatRole, content: String, modelID: String? = nil, providerKind: String? = nil) {
+        let message = ChatMessage(role: role, content: content, modelID: modelID, providerKind: providerKind)
         messages.append(message)
         // FIFO cap at maxMessages
         if messages.count > maxMessages {

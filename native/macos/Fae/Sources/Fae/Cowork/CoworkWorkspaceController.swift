@@ -1389,6 +1389,9 @@ final class CoworkWorkspaceController: ObservableObject {
                 systemPrompt: externalSystemPrompt
             )
 
+            let agentModelID = executionAgent.modelIdentifier
+            let agentProviderKind = executionAgent.providerKind.rawValue
+
             if executionAgent.providerKind == .faeLocalhost {
                 await MainActor.run {
                     self.conversation.appendMessage(role: .user, content: prompt)
@@ -1408,7 +1411,7 @@ final class CoworkWorkspaceController: ObservableObject {
                                     && message.timestamp >= requestStartedAt.addingTimeInterval(-0.25)
                             }
                             if !hasFreshAssistantReply {
-                                self.conversation.appendMessage(role: .assistant, content: response.content)
+                                self.conversation.appendMessage(role: .assistant, content: response.content, modelID: agentModelID, providerKind: agentProviderKind)
                             }
                             self.conversation.isGenerating = false
                             if self.conversation.isStreaming {
@@ -1465,7 +1468,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 let provider = try CoworkProviderFactory.provider(for: executionAgent, runtimeDescriptor: self.runtimeDescriptor)
                 let usesWebSearch = provider is any CoworkWebSearchProvider
                 await MainActor.run {
-                    self.conversation.appendMessage(role: .user, content: prompt)
+                    self.conversation.appendMessage(role: .user, content: prompt, modelID: nil, providerKind: nil)
                     self.conversation.beginThinkingTurn(
                         placeholderTrace: Self.remoteThinkingTrace(
                             for: executionAgent,
@@ -1513,7 +1516,7 @@ final class CoworkWorkspaceController: ObservableObject {
                         self.conversation.finalizeStreaming()
                     } else {
                         self.conversation.finalizeThinkingTrace()
-                        self.conversation.appendMessage(role: .assistant, content: response.content)
+                        self.conversation.appendMessage(role: .assistant, content: response.content, modelID: agentModelID, providerKind: agentProviderKind)
                     }
                     self.providerStatus = "\(executionAgent.backendDisplayName) replied"
                     self.conversationBindingWorkspaceID = nil
@@ -1581,7 +1584,7 @@ final class CoworkWorkspaceController: ObservableObject {
             guard let self else { return }
             let thinkingLevel = await MainActor.run { self.faeCore.thinkingLevel }
             await MainActor.run {
-                self.conversation.appendMessage(role: .user, content: prompt)
+                self.conversation.appendMessage(role: .user, content: prompt, modelID: nil, providerKind: nil)
                 self.conversation.isGenerating = true
                 self.prependActivity(
                     title: triggeredAutomatically ? "Auto-compare started" : "Consensus run started",
@@ -1648,7 +1651,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 self.latestConsensusPrompt = prompt
                 self.latestConsensusWorkspaceID = self.selectedWorkspace?.id
                 self.conversation.isGenerating = false
-                self.conversation.appendMessage(role: .assistant, content: summary)
+                self.conversation.appendMessage(role: .assistant, content: summary, modelID: nil, providerKind: "consensus-synthesis")
                 self.providerStatus = triggeredAutomatically ? "Auto-compare ready" : "Consensus ready"
                 self.conversationBindingWorkspaceID = nil
                 self.prependActivity(
@@ -1945,13 +1948,15 @@ final class CoworkWorkspaceController: ObservableObject {
             id: message.id,
             role: message.role.rawValue,
             content: message.content,
-            timestamp: message.timestamp
+            timestamp: message.timestamp,
+            modelID: message.modelID,
+            providerKind: message.providerKind
         )
     }
 
     private static func chatMessage(from message: WorkWithFaeConversationMessage) -> ChatMessage? {
         guard let role = ChatRole(rawValue: message.role) else { return nil }
-        return ChatMessage(id: message.id, role: role, content: message.content, timestamp: message.timestamp)
+        return ChatMessage(id: message.id, role: role, content: message.content, timestamp: message.timestamp, modelID: message.modelID, providerKind: message.providerKind)
     }
 
     private func persistWorkspaceRegistry() {

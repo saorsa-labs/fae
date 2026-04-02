@@ -85,12 +85,16 @@ struct WorkWithFaeConversationMessage: Identifiable, Codable, Hashable, Sendable
     let role: String
     let content: String
     let timestamp: Date
+    let modelID: String?
+    let providerKind: String?
 
-    init(id: UUID = UUID(), role: String, content: String, timestamp: Date = Date()) {
+    init(id: UUID = UUID(), role: String, content: String, timestamp: Date = Date(), modelID: String? = nil, providerKind: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
+        self.modelID = modelID
+        self.providerKind = providerKind
     }
 }
 
