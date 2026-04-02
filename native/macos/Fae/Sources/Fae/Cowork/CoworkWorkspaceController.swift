@@ -1415,7 +1415,7 @@ final class CoworkWorkspaceController: ObservableObject {
                             }
                             self.conversation.isGenerating = false
                             if self.conversation.isStreaming {
-                                self.conversation.finalizeStreaming()
+                                self.conversation.finalizeStreaming(modelID: agentModelID, providerKind: agentProviderKind)
                             } else {
                                 self.conversation.finalizeThinkingTrace()
                             }
@@ -1513,7 +1513,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 await MainActor.run {
                     self.conversation.isGenerating = false
                     if self.conversation.isStreaming {
-                        self.conversation.finalizeStreaming()
+                        self.conversation.finalizeStreaming(modelID: agentModelID, providerKind: agentProviderKind)
                     } else {
                         self.conversation.finalizeThinkingTrace()
                         self.conversation.appendMessage(role: .assistant, content: response.content, modelID: agentModelID, providerKind: agentProviderKind)
@@ -1535,7 +1535,7 @@ final class CoworkWorkspaceController: ObservableObject {
                     self.conversationBindingWorkspaceID = nil
                     let hadPartial = !self.conversation.streamingText.isEmpty
                     if self.conversation.isStreaming {
-                        self.conversation.cancelStreaming()
+                        self.conversation.cancelStreaming(modelID: agentModelID, providerKind: agentProviderKind)
                     }
                     self.conversation.clearThinkingTrace()
                     if !hadPartial {
@@ -1651,7 +1651,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 self.latestConsensusPrompt = prompt
                 self.latestConsensusWorkspaceID = self.selectedWorkspace?.id
                 self.conversation.isGenerating = false
-                self.conversation.appendMessage(role: .assistant, content: summary, modelID: nil, providerKind: "consensus-synthesis")
+                self.conversation.appendMessage(role: .assistant, content: summary, modelID: nil, providerKind: WorkWithFaeConversationMessage.ProviderKind.consensusSynthesis)
                 self.providerStatus = triggeredAutomatically ? "Auto-compare ready" : "Consensus ready"
                 self.conversationBindingWorkspaceID = nil
                 self.prependActivity(

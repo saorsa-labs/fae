@@ -980,4 +980,58 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
             XCTAssertEqual(restoredConversation.messages.map(\.content), expectedByWorkspaceID[workspaceID])
         }
     }
+
+    // MARK: - Per-Message Model Metadata — Backward Compatibility (Phase 1.1)
+
+    func testConversationMessageDecodesWithoutMetadataFields() throws {
+        // Old-format JSON without modelID/providerKind must decode with nil for new fields.
+        let oldJSON = """
+        {
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "role": "assistant",
+            "content": "Hello from the past",
+            "timestamp": 0
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let message = try decoder.decode(WorkWithFaeConversationMessage.self, from: oldJSON)
+        XCTAssertEqual(message.content, "Hello from the past")
+        XCTAssertNil(message.modelID, "Old messages must decode with nil modelID")
+        XCTAssertNil(message.providerKind, "Old messages must decode with nil providerKind")
+    }
+
+    func testConversationMessageEncodesAndDecodesWithMetadata() throws {
+        // New messages with metadata must round-trip cleanly.
+        let original = WorkWithFaeConversationMessage(
+            role: "assistant",
+            content: "Model response",
+            modelID: "gpt-4o",
+            providerKind: "openAICompatibleExternal"
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(original)
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(WorkWithFaeConversationMessage.self, from: data)
+        XCTAssertEqual(decoded.modelID, "gpt-4o")
+        XCTAssertEqual(decoded.providerKind, "openAICompatibleExternal")
+        XCTAssertEqual(decoded.content, "Model response")
+    }
+
+    func testConversationMessageHashableWithNilMetadata() {
+        // WorkWithFaeConversationMessage must be Hashable with nil optional fields.
+        let id = UUID()
+        let ts = Date(timeIntervalSince1970: 1_700_000_000)
+        let msg1 = WorkWithFaeConversationMessage(id: id, role: "user", content: "hi", timestamp: ts)
+        let msg2 = WorkWithFaeConversationMessage(id: id, role: "user", content: "hi", timestamp: ts)
+        var set = Set<WorkWithFaeConversationMessage>()
+        set.insert(msg1)
+        set.insert(msg2)
+        XCTAssertEqual(set.count, 1, "Identical messages must hash to same bucket")
+    }
+
+    func testConsensusSynthesisConstantMatchesMagicString() {
+        // Ensure the ProviderKind constant stays in sync with any historical hard-coded value.
+        XCTAssertEqual(WorkWithFaeConversationMessage.ProviderKind.consensusSynthesis, "consensus-synthesis")
+    }
 }

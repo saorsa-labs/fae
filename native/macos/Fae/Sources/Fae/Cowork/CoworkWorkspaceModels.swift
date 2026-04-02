@@ -5,6 +5,9 @@ import Foundation
 /// Ephemeral per-request settings that override workspace defaults without
 /// permanently changing the agent profile. Used for "ask this one question
 /// with a different temperature" or "use a different model just this once".
+///
+/// - TODO(phase-1.2): Wire into `runSingleAgentSubmission` and `runConsensus` to allow
+///   per-request model/temperature/prompt overrides without changing the agent profile binding.
 struct MessageOverride: Sendable, Codable, Hashable {
     /// Override sampling temperature for this request only.
     let temperatureOverride: Double?

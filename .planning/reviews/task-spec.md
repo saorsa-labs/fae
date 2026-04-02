@@ -1,25 +1,43 @@
-# Task Specification Review
-**Date**: 2026-03-31
-**Task**: Task 1 — Define new EnrollmentStep enum and state variables
+# Task Spec Assessment — Phase 1.1
 
-## Spec Compliance (Task 1 per PLAN-phase-1.2-fused-enrollment.md)
+## Reviewer: Task Assessor
+## Focus: Did implementation match the plan?
 
-- [x] Add new EnrollmentStep cases (.wakePhrases, .conversational, .roomNoise replacing .recording)
-- [x] Add @State variables: wakePhraseIndex, wakeTemplates, conversationalIndex, conversationalEmbeddings, noiseFloorRMS, noiseProgress
-- [x] Add WakeWordProfileStore parameter to SpeakerEnrollmentView
-- [x] Update body switch to handle .wakePhrases, .conversational, .roomNoise
-- [x] EnrollmentStep now conforms to Equatable (required for stepIndicator)
+### Plan vs Implementation
 
-## Scope Assessment
-Tasks 2, 3, 4, 5 are also implemented in this commit (full UI, recording logic, atomic commit, ContentView call site update). This is positive scope expansion — all tasks except 6/7 (tests) are complete. The tests file exists but has a compile error (Task 6/7 are partially done).
+| Task | Planned | Status |
+|------|---------|--------|
+| Task 1: Backward compat unit tests | Tests first (TDD) | NOT DONE |
+| Task 2: modelID/providerKind on WorkWithFaeConversationMessage | Add fields, nil defaults | DONE |
+| Task 3: Mirror fields on ChatMessage | Add fields, nil defaults | DONE |
+| Task 4: Update conversion functions | chatMessage() + workspaceConversationMessage() | DONE |
+| Task 5: Wire runSingleAgentSubmission | Tag assistant messages | PARTIALLY DONE — streaming gap |
+| Task 6: Wire runConsensus | Tag consensus summary | DONE |
+| Task 7: Wire synthesis paths | Tag synthesis if separate | N/A (merged into runConsensus) |
+| Task 8: Update appendMessage signature | Add metadata params | DONE |
+| Task 9: MessageOverride struct | Sendable, Codable, Hashable | DONE |
+| Task 10: Persistence round-trip tests | Encode/decode tests | NOT DONE |
+| Task 11: Document semantics | Doc comments | PARTIALLY DONE |
+| Task 12: Verify UI/export not broken | Check accessors | DONE (implicitly — no UI changes) |
+| Task 13: Integration test E2E | Full flow test | NOT DONE |
 
-## Extra work (beyond Task 1):
-- Wake phrase step UI + recordWakePhrase() (Task 2)
-- Room noise step UI + recordRoomNoise() (Task 3)
-- commitAndComplete() atomic commit (Task 4)
-- ContentView already wired with wakeWordProfileStore (Task 5)
-- FusedEnrollmentFlowTests.swift created (Task 6/7 partial — has compile error)
-- EchoSuppressor improvements (not in plan — good pragmatic improvement but out-of-scope for this phase)
-- stepIndicator progress dots (nice UX addition, not in spec)
+### Critical Gap: Streaming Path (Task 5)
+- Plan said: "assistant message tagged with agent's model/provider"
+- Actual: streaming path calls `finalizeStreaming()` which loses metadata
+- This is a MUST FIX for Task 5 to be considered complete
 
-## Grade: A- (all core tasks implemented; test compile error needs fix)
+### Missing Tests (Tasks 1, 10, 13)
+- Plan's TDD approach was not followed
+- Tests are required acceptance criteria
+- All three test tasks are incomplete
+
+### Overall Assessment
+- Core data structure tasks (2-4, 8-9): COMPLETE
+- Submission path wiring (5-7): PARTIALLY COMPLETE (streaming gap)
+- Testing (1, 10, 13): NOT DONE
+- Documentation (11): PARTIAL
+
+Phase 1.1 is approximately 60% complete against spec. Cannot mark COMPLETE.
+
+### Vote
+MUST FIX: Fix streaming path + add minimum backward-compat test

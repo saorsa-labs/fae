@@ -203,18 +203,18 @@ final class ConversationController: ObservableObject {
         streamingText = text
     }
 
-    func finalizeStreaming() {
+    func finalizeStreaming(modelID: String? = nil, providerKind: String? = nil) {
         if !streamingText.isEmpty {
-            appendMessage(role: .assistant, content: streamingText)
+            appendMessage(role: .assistant, content: streamingText, modelID: modelID, providerKind: providerKind)
         }
         streamingText = ""
         isStreaming = false
     }
 
-    func cancelStreaming() {
-        // Commit any partial text as a message (barge-in)
+    func cancelStreaming(modelID: String? = nil, providerKind: String? = nil) {
+        // Commit any partial text as a message (barge-in or error recovery)
         if !streamingText.isEmpty {
-            appendMessage(role: .assistant, content: streamingText)
+            appendMessage(role: .assistant, content: streamingText, modelID: modelID, providerKind: providerKind)
         }
         streamingText = ""
         isStreaming = false

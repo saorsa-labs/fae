@@ -85,7 +85,10 @@ struct WorkWithFaeConversationMessage: Identifiable, Codable, Hashable, Sendable
     let role: String
     let content: String
     let timestamp: Date
+    /// Which model generated this message (e.g. "gpt-4o", "claude-opus-4-6"). Nil for user messages.
     let modelID: String?
+    /// Which provider generated this message. Known values: "faeLocalhost", "openAICompatibleExternal",
+    /// "anthropic", or `ProviderKind.consensusSynthesis`. Nil for user messages.
     let providerKind: String?
 
     init(id: UUID = UUID(), role: String, content: String, timestamp: Date = Date(), modelID: String? = nil, providerKind: String? = nil) {
@@ -95,6 +98,12 @@ struct WorkWithFaeConversationMessage: Identifiable, Codable, Hashable, Sendable
         self.timestamp = timestamp
         self.modelID = modelID
         self.providerKind = providerKind
+    }
+
+    // MARK: - Known providerKind values
+    enum ProviderKind {
+        /// A synthesized summary produced by comparing multiple agents (not a single provider).
+        static let consensusSynthesis = "consensus-synthesis"
     }
 }
 

@@ -17,8 +17,8 @@
     "current_task": 9
   },
   "review": {
-    "status": "pending",
-    "iteration": 0,
+    "status": "fixing",
+    "iteration": 1,
     "last_verdict": null
   },
   "status": "executing",

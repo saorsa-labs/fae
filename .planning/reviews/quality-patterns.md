@@ -1,16 +1,40 @@
-# Quality Patterns Review
-**Date**: 2026-03-31
+# Quality Patterns Review — Phase 1.1
 
-## Good Patterns Found
-- Atomic commit pattern: all persistent writes deferred to commitAndComplete() — classic transactional enrollment design
-- Actor isolation respected throughout (await on speakerProfileStore and wakeWordProfileStore calls)
-- Helper extraction: startPulsingProgress() and recordingRing extracted to reduce duplication
-- EnrollmentStep: Equatable conformance added to support firstIndex(of:) in stepIndicator
-- Guard-before-enroll: `if !conversationalEmbeddings.isEmpty` before bulkEnroll avoids empty profile creation on edge cases
-- EchoSuppressor: functionWords Set<String> is a recognized NLP technique (stop-word filtering) applied sensibly
+## Reviewer: Quality Patterns Analyst
+## Focus: Swift best practices, patterns, anti-patterns
 
-## Anti-Patterns Found
-- [MEDIUM] captureSegment(durationSeconds: 20.0) for room noise capture — this method is designed for speech capture (waits for RMS > 0.008 before starting timer, requires ~3s of speech for hasUsableSpeech). For ambient noise, this is semantically wrong. If the room is genuinely quiet, captureSegment will wait indefinitely for speech onset and eventually timeout after 26s returning tail-end samples. The noiseFloorRMS will reflect trailing audio, not baseline ambient noise.
-- [LOW] WakeWordAcousticDetectorTests.syntheticWakePhrase() used in test file — this is an implementation detail of a test helper. If the helper is internal, the @testable import will expose it but it's a slightly fragile dependency.
+### Findings
 
-## Grade: B+
+**FINDING 1 — HIGH: finalizeStreaming signature should accept metadata**
+- Pattern: functions that commit data should carry all required data
+- Anti-pattern: caller has data, callee internally creates record without that data
+- Fix: `func finalizeStreaming(modelID: String? = nil, providerKind: String? = nil)`
+- This is a clean, backward-compatible API addition
+- Vote: MUST FIX
+
+**FINDING 2 — PASS: Default parameter pattern is correctly used**
+- `= nil` defaults on all new parameters — callers don't break
+- Swift best practice: additive API extension via default parameters
+- All existing call sites continue to compile without changes
+
+**FINDING 3 — PASS: Struct immutability maintained**
+- All new fields are `let` not `var` — correct for immutable message records
+- WorkWithFaeConversationMessage as a value type with let fields is correct Swift
+
+**FINDING 4 — MEDIUM: Missing `static let` for magic provider kind strings**
+- "consensus-synthesis" is a magic string in production code
+- Pattern: define constants for values that will be compared/displayed/filtered
+- `extension WorkWithFaeConversationMessage { static let consensisSynthesisProviderKind = "consensus-synthesis" }`
+- Vote: SHOULD FIX
+
+**FINDING 5 — PASS: Sendable conformance pattern is correct**
+- MessageOverride: all fields are value types → Sendable synthesis is correct
+- No closures, no class references → no Sendable violations
+
+**FINDING 6 — PASS: Codable auto-synthesis is the right choice**
+- For WorkWithFaeConversationMessage, auto-synthesis handles Optional correctly
+- Adding manual CodingKeys would be over-engineering for this case
+- WorkWithFaeWorkspaceState has manual Codable (complex type) — appropriate distinction
+
+### Summary
+1 MUST FIX (streaming), 1 SHOULD FIX (magic string), rest pass.

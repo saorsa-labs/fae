@@ -135,6 +135,50 @@ final class ConversationControllerTests: XCTestCase {
         XCTAssertNil(controller.restoredFromDevice)
     }
 
+    // MARK: - Per-Message Model Metadata (Phase 1.1)
+
+    func testAppendMessageStoresModelIDAndProviderKind() {
+        let controller = ConversationController()
+        controller.appendMessage(role: .assistant, content: "reply", modelID: "gpt-4o", providerKind: "openAICompatibleExternal")
+        XCTAssertEqual(controller.messages.last?.modelID, "gpt-4o")
+        XCTAssertEqual(controller.messages.last?.providerKind, "openAICompatibleExternal")
+    }
+
+    func testAppendMessageNilMetadataForUserMessages() {
+        let controller = ConversationController()
+        controller.appendMessage(role: .user, content: "hello")
+        XCTAssertNil(controller.messages.last?.modelID)
+        XCTAssertNil(controller.messages.last?.providerKind)
+    }
+
+    func testFinalizeStreamingPreservesModelMetadata() {
+        let controller = ConversationController()
+        controller.startStreaming()
+        controller.updateStreaming(text: "streamed response")
+        controller.finalizeStreaming(modelID: "claude-opus-4-6", providerKind: "anthropic")
+        XCTAssertEqual(controller.messages.last?.modelID, "claude-opus-4-6")
+        XCTAssertEqual(controller.messages.last?.providerKind, "anthropic")
+        XCTAssertFalse(controller.isStreaming)
+    }
+
+    func testCancelStreamingPreservesModelMetadata() {
+        let controller = ConversationController()
+        controller.startStreaming()
+        controller.updateStreaming(text: "partial answer")
+        controller.cancelStreaming(modelID: "gpt-4o", providerKind: "openAICompatibleExternal")
+        XCTAssertEqual(controller.messages.last?.modelID, "gpt-4o")
+        XCTAssertEqual(controller.messages.last?.providerKind, "openAICompatibleExternal")
+    }
+
+    func testFinalizeStreamingWithNilMetadataLeavesFieldsNil() {
+        let controller = ConversationController()
+        controller.startStreaming()
+        controller.updateStreaming(text: "no metadata")
+        controller.finalizeStreaming()
+        XCTAssertNil(controller.messages.last?.modelID)
+        XCTAssertNil(controller.messages.last?.providerKind)
+    }
+
     func testHandleLinkDetectedPostsEventWithoutMutatingMessages() async throws {
         let controller = ConversationController()
         let expectation = expectation(forNotification: .faeConversationLinkDetected, object: nil) { notification in

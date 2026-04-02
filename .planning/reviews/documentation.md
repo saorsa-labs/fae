@@ -1,13 +1,35 @@
-# Documentation Review
-**Date**: 2026-03-31
+# Documentation Review — Phase 1.1
 
-## Findings
-- [OK] SpeakerEnrollmentView struct has updated doc comment describing all 6 steps
-- [OK] commitAndComplete() has a clear doc comment explaining atomicity guarantee
-- [OK] startPulsingProgress() has a doc comment explaining usage and cancellation contract
-- [MEDIUM] recordWakePhrase() has no doc comment explaining the nil-template fallthrough behaviour (advances without a template if makeTemplate fails)
-- [MEDIUM] recordRoomNoise() has no doc comment explaining that captureSegment waits for speech onset, which may cause an unexpected wait during what should be silent capture
-- [LOW] roomNoiseStep view (private var) has no comment explaining the 20-second purpose in the enrollment flow context
-- [OK] EchoSuppressor changes: textOverlapThreshold, textOverlapMinConsecutiveWords, and functionWords all have updated inline comments explaining the reasoning
+## Reviewer: Documentation Auditor
+## Focus: Doc comments, semantic clarity, API contracts
 
-## Grade: B+
+### Findings
+
+**FINDING 1 — PASS: modelID and providerKind have clear doc comments on ChatMessage**
+- "Which model generated this message (e.g. 'gpt-4o', 'claude-opus-4-6'). Nil for user messages."
+- "Which provider generated this message (e.g. 'openai', 'anthropic', 'fae-localhost'). Nil for user messages."
+- Clear, with examples, explains nil semantics
+
+**FINDING 2 — PASS: WorkWithFaeConversationMessage fields have no doc comments BUT...**
+- The struct is a persistence type mirroring ChatMessage
+- Acceptable to omit docs on internal persistence struct if ChatMessage is documented
+- MINOR: Would benefit from `/// Mirror of ChatMessage.modelID — see that type for semantics.`
+
+**FINDING 3 — PASS: MessageOverride has excellent doc comments**
+- Top-level doc explains intent clearly: "ephemeral per-request settings"
+- Each property has a doc comment with example value
+- `init` has appropriate all-nil default documentation implicit in signature
+
+**FINDING 4 — MEDIUM: "consensus-synthesis" magic string is undocumented**
+- No comment explains what "consensus-synthesis" means as a providerKind value
+- What does it mean downstream? Is it a reserved value? Can providers return this name?
+- Should document the full providerKind value space: "fae-localhost", "openai", "anthropic", "openAICompatibleExternal", "consensus-synthesis"
+- Vote: SHOULD FIX
+
+**FINDING 5 — MEDIUM: appendMessage() updated signature has no doc comment**
+- The new parameters `modelID` and `providerKind` on `appendMessage()` have no inline docs
+- At minimum: `/// - modelID: Model that generated the response. Pass nil for user messages.`
+- Vote: SHOULD FIX
+
+### Summary
+2 SHOULD FIX documentation gaps. Overall documentation quality is good.
