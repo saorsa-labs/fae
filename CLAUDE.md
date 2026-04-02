@@ -105,13 +105,13 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 |--------|-------|-----------|---------|
 | STT | Qwen3-ASR-1.7B | MLX 4-bit | Speech-to-text |
 | LLM | Qwen3.5 (2B / 4B / 35B-A3B) | MLX 4-bit | Conversation, tool use |
-| TTS | Kokoro-82M (hexgrad) | KokoroSwift/MLX float32 | Text-to-speech (pre-computed voice embeddings, 24 kHz) |
+| TTS | Kokoro-82M (hexgrad) | MLXAudioTTS float32 | Text-to-speech (FaeTTSAdapter, pre-computed voice embeddings, 24 kHz) |
 | VLM (fast) | SmolVLM2-256M | MLXVLM mlx | Always-on vision — presence detection, screen triage (<1GB) |
 | VLM (deep) | SmolVLM2-500M | MLXVLM mlx | On-demand vision — detailed screenshot/camera analysis (1.8GB) |
 | Embedding | Hash-384 | MLX | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML fp16 | Voice identity (1024-dim x-vectors) |
 | Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
-| Turn Detector | Causal LM (Qwen2.5-0.5B based) | MLX 4-bit | Semantic end-of-utterance prediction for adaptive endpointing (when model available) |
+| Turn Detector | SmartTurn (Whisper-encoder classifier) | MLXAudioVAD float32 | Audio-based end-of-utterance prediction for adaptive endpointing (falls back to rule-based heuristics) |
 
 **Auto model selection** (single LLM, via `voiceModelPreset: "auto"`):
 
@@ -583,17 +583,16 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 
 | File | Role |
 |------|------|
-| `ModelManager.swift` | Loads STT, LLM, TTS, Speaker; on-demand VLM; degraded mode tracking |
+| `ModelManager.swift` | Loads STT, LLM, TTS, Speaker; on-demand VLM; degraded mode tracking; retry logic |
 | `MLXSTTEngine.swift` | Qwen3-ASR speech-to-text |
-| `KokoroMLXTTSEngine.swift` | **Active TTS** — Kokoro-82M via KokoroSwift/MLX |
-| `KokoroPythonTTSEngine.swift` | Alternative TTS — Kokoro via ONNX Python (unused) |
-| `MLXTTSEngine.swift` | Legacy TTS — Qwen3-TTS (retained, not active) |
+| `FaeTTSAdapter.swift` | **Active TTS** — Kokoro-82M via MLXAudioTTS (streaming, 54 voices, 9 languages) |
+| `SmartTurnAdapter.swift` | SmartTurn audio-based endpoint detection via MLXAudioVAD |
 | `MLXVLMEngine.swift` | Qwen3-VL vision-language model (on-demand) |
 | `MLXEmbeddingEngine.swift` | Hash-384 embedding engine |
 | `NeuralEmbeddingEngine.swift` | Tiered Qwen3-Embedding (8B/4B/0.6B/hash by RAM) |
 | `CoreMLSpeakerEncoder.swift` | ECAPA-TDNN Core ML inference + mel spectrogram |
 | `MLXKeywordClassifier.swift` | Micro 1D-CNN keyword classifier for barge-in interrupt detection (~200K params) |
-| `MLXTurnDetector.swift` | Semantic end-of-utterance detector for adaptive endpointing (LiveKit-compatible) |
+| `MLXTurnDetector.swift` | Semantic end-of-utterance detector — SmartTurn (preferred) + rule-based fallback |
 | `SpeakerProfileStore.swift` | Speaker profile enrollment, matching, persistence |
 | `StreamingSTTEngine.swift` | Streaming STT support |
 | `CharacterVoiceLibrary.swift` | Character voice definitions for roleplay |
@@ -766,9 +765,10 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 
 | File | Role |
 |------|------|
-| `Audio/AudioCaptureManager.swift` | Microphone capture (16kHz mono) |
+| `Audio/AudioCaptureManager.swift` | Microphone capture (16kHz mono), NaN/Inf validation |
 | `Audio/AudioPlaybackManager.swift` | Audio playback with barge-in support |
 | `Audio/AudioToneGenerator.swift` | Thinking/listening/ready beep tones |
+| `Audio/WAVParser.swift` | Lightweight WAV file parser (PCM 16-bit mono) |
 | `Backup/GitVaultManager.swift` | Git-based rolling backup at `~/.fae-vault/` |
 
 ### Top-level files (74 files)

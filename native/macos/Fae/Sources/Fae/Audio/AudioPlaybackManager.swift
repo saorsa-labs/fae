@@ -216,8 +216,8 @@ actor AudioPlaybackManager {
     func playFile(url: URL) async {
         do {
             let data = try Data(contentsOf: url)
-            let sampleRate = MLXTTSEngine.parseWAVSampleRate(data) ?? 24_000
-            let samples = MLXTTSEngine.parseWAVToFloat32(data)
+            let sampleRate = WAVParser.parseSampleRate(data) ?? 24_000
+            let samples = WAVParser.parseToFloat32(data)
             guard !samples.isEmpty else {
                 NSLog("AudioPlaybackManager: empty or unsupported WAV at %@", url.lastPathComponent)
                 return

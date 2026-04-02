@@ -535,7 +535,7 @@ actor ModelManager {
                 {
                     do {
                         let voiceData = try Data(contentsOf: voiceURL)
-                        let samples = MLXTTSEngine.parseWAVToFloat32(voiceData)
+                        let samples = WAVParser.parseToFloat32(voiceData)
                         if !samples.isEmpty {
                             let embedding = try await speaker.embed(audio: samples, sampleRate: 24_000)
                             await store.enroll(

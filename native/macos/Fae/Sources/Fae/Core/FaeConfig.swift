@@ -186,8 +186,8 @@ struct FaeConfig: Codable {
         var modelId: String = "kokoro:fae"
         var speed: Float = 1.1
         var sampleRate: Int = 24_000
-        /// Reference audio transcript (used by MLXTTSEngine / Qwen3-TTS ICL voice cloning).
-        /// Not used by KokoroMLXTTSEngine, which uses pre-computed .bin embeddings.
+        /// Reference audio transcript (legacy, used by Qwen3-TTS ICL voice cloning).
+        /// Not used by FaeTTSAdapter / KokoroSwift, which uses pre-computed .bin embeddings.
         var referenceText: String? = TtsConfig.bundledFaeReferenceText
         /// Path to a custom voice WAV file (overrides bundled fae.wav when voiceIdentityLock=false).
         var customVoicePath: String?
@@ -606,8 +606,7 @@ struct FaeConfig: Codable {
 
     /// Return the active TTS model identifier (used for display in About / Settings).
     ///
-    /// Active engine: KokoroMLXTTSEngine (Kokoro-82M via KokoroSwift / MLX).
-    /// The legacy MLXTTSEngine (Qwen3-TTS) is kept for potential fallback but is not active.
+    /// Active engine: FaeTTSAdapter (Kokoro-82M via KokoroSwift / MLX).
     static func recommendedTTSModel(
         totalMemoryBytes: UInt64? = nil
     ) -> String {

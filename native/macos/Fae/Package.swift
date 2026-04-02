@@ -18,7 +18,7 @@ let package = Package(
         // Sparkle 2 auto-update framework (EdDSA signature verification).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         // MLX ecosystem — local ML inference on Apple Silicon.
-        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMinor(from: "0.31.1")),
+        // mlx-swift is resolved transitively via mlx-swift-lm.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMinor(from: "2.31.0")),
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", from: "0.1.2"),
         // SQLite with ORM — memory store.
@@ -31,9 +31,8 @@ let package = Package(
         .package(url: "https://github.com/LebJe/TOMLKit", from: "0.6.0"),
         // Neural Voice Activity Detection (Silero VAD v6 via CoreML).
         .package(url: "https://github.com/paean-ai/silero-vad-swift.git", from: "1.0.0"),
-        // Vendored Kokoro + Misaki packages are forced static to avoid duplicate
-        // MLXNN runtime class loading and resource-packaging issues in app bundles.
-        .package(path: "Vendor/kokoro-ios"),
+        // NOTE: kokoro-ios vendored package removed from dependencies.
+        // FaeTTSAdapter uses MLXAudioTTS (mlx-audio-swift) directly.
         // MCP (Model Context Protocol) — official Swift SDK for connecting to MCP servers.
         // Enables Fae to use plugin-provided MCP tools (Slack, Linear, etc.).
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -68,8 +67,6 @@ let package = Package(
                 "CSQLiteVecCore",
                 .product(name: "TOMLKit", package: "TOMLKit"),
                 .product(name: "SileroVAD", package: "silero-vad-swift"),
-                // Kokoro-82M TTS via MLX — no Python/subprocess dependency.
-                .product(name: "KokoroSwift", package: "kokoro-ios"),
                 // MCP client for plugin-provided tool servers.
                 .product(name: "MCP", package: "swift-sdk"),
             ],
