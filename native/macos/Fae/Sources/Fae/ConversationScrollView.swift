@@ -143,7 +143,7 @@ struct MessageBubbleView: View {
     private var alignment: Alignment {
         switch message.role {
         case .user: return .trailing
-        case .assistant: return .leading
+        case .assistant, .summary: return .leading
         case .tool: return .center
         }
     }
@@ -152,6 +152,7 @@ struct MessageBubbleView: View {
         switch message.role {
         case .user: return Color(white: 0.95)
         case .assistant: return Color(white: 0.92)
+        case .summary: return Color(white: 0.80)
         case .tool: return Color.primary.opacity(0.55)
         }
     }
@@ -162,6 +163,8 @@ struct MessageBubbleView: View {
             return Color(red: 0.22, green: 0.28, blue: 0.42)
         case .assistant:
             return Color(red: 0.24, green: 0.20, blue: 0.30)
+        case .summary:
+            return Color(red: 0.15, green: 0.20, blue: 0.22)
         case .tool:
             return Color.primary.opacity(0.05)
         }
@@ -173,6 +176,8 @@ struct MessageBubbleView: View {
             return Color(red: 0.35, green: 0.45, blue: 0.65).opacity(0.5)
         case .assistant:
             return Self.heather.opacity(0.25)
+        case .summary:
+            return Color(red: 0.30, green: 0.45, blue: 0.50).opacity(0.3)
         case .tool:
             return Color.primary.opacity(0.07)
         }

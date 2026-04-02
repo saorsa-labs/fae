@@ -893,6 +893,11 @@ struct CoworkWorkspaceView: View {
             .onChange(of: controller.latestConsensusResults.count) {
                 showConsensusDetails = !activeConsensusResults.isEmpty
             }
+            .onChange(of: controller.isConsensusStreaming) {
+                if controller.isConsensusStreaming {
+                    showConsensusDetails = true
+                }
+            }
             .onChange(of: controller.workspaces.map(\.id)) {
                 draggedWorkspaceID = nil
             }
@@ -1360,6 +1365,18 @@ struct CoworkWorkspaceView: View {
                             if conversation.messages.isEmpty && conversation.streamingText.isEmpty {
                                 emptyConversationState
                             } else {
+                                if controller.workspaceState.conversationMessages.contains(where: { $0.role == "summary" }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "text.badge.minus")
+                                            .font(.system(size: 10, weight: .medium))
+                                        Text("Earlier conversation compressed into summary")
+                                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    }
+                                    .foregroundStyle(.secondary.opacity(0.6))
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 4)
+                                }
+
                                 ForEach(Array(conversation.messages.suffix(40).enumerated()), id: \.element.id) { offset, message in
                                     let absoluteIndex = max(0, conversation.messages.count - 40) + offset
                                     conversationBubble(message, at: absoluteIndex)
@@ -3350,13 +3367,21 @@ struct CoworkWorkspaceView: View {
     private var consensusSummaryStrip: some View {
         let results = activeConsensusResults
         let successCount = results.filter { $0.errorText == nil }.count
+        let isStreaming = controller.isConsensusStreaming
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Fae consensus")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        Text("Fae consensus")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                        if isStreaming {
+                            ProgressView()
+                                .controlSize(.small)
+                                .transition(.opacity)
+                        }
+                    }
                     Text(controller.selectedConsensusParticipantsSummary)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.primary.opacity(0.58))
@@ -3366,7 +3391,10 @@ struct CoworkWorkspaceView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
-                    capsule(text: "\(successCount)/\(results.count) replied", accent: successCount == results.count ? CoworkPalette.mint : CoworkPalette.amber)
+                    capsule(
+                        text: isStreaming ? "\(successCount)/\(results.count) streaming" : "\(successCount)/\(results.count) replied",
+                        accent: isStreaming ? CoworkPalette.cyan : (successCount == results.count ? CoworkPalette.mint : CoworkPalette.amber)
+                    )
 
                     Button(showConsensusDetails ? "Hide answers" : "Show answers") {
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
@@ -3440,37 +3468,71 @@ struct CoworkWorkspaceView: View {
     }
 
     private func consensusResultCard(_ result: WorkWithFaeConsensusResult) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let isStreaming = controller.isConsensusStreaming
+        let agentHasCompleted = result.errorText != nil || (result.responseText != nil && !isStreaming)
+        let agentIsStreaming = isStreaming && !agentHasCompleted && result.errorText == nil
+
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(result.agentName)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(result.agentName)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if agentIsStreaming {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .transition(.opacity)
+                        }
+                    }
                     Text(result.providerLabel)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.primary.opacity(0.56))
                         .lineLimit(2)
                 }
                 Spacer()
-                capsule(
-                    text: result.errorText == nil ? (result.isTrustedLocal ? "Local" : "Remote") : "Issue",
-                    accent: result.errorText == nil ? (result.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan) : CoworkPalette.rose
-                )
+                if result.errorText != nil {
+                    capsule(text: "Issue", accent: CoworkPalette.rose)
+                } else if agentIsStreaming {
+                    capsule(text: "Streaming", accent: CoworkPalette.cyan)
+                } else {
+                    capsule(
+                        text: result.isTrustedLocal ? "Local" : "Remote",
+                        accent: result.isTrustedLocal ? CoworkPalette.mint : CoworkPalette.cyan
+                    )
+                }
             }
 
             Divider().overlay(Color.primary.opacity(0.08))
 
             ScrollView(.vertical, showsIndicators: true) {
-                if let responseText = result.responseText {
+                if let responseText = result.responseText, !responseText.isEmpty {
                     Text(responseText)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.primary.opacity(0.90))
                         .lineSpacing(3)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .animation(.easeInOut(duration: 0.08), value: responseText)
+                } else if let errorText = result.errorText {
+                    Label(errorText, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(CoworkPalette.rose)
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if agentIsStreaming {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Waiting for response")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.primary.opacity(0.45))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
                 } else {
-                    Label(result.errorText ?? "Unknown error", systemImage: "exclamationmark.triangle.fill")
+                    Label("Unknown error", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(CoworkPalette.rose)
                         .lineSpacing(3)
@@ -3486,7 +3548,7 @@ struct CoworkWorkspaceView: View {
                 .fill(Color.primary.opacity(0.045))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        .stroke(agentIsStreaming ? CoworkPalette.cyan.opacity(0.2) : Color.primary.opacity(0.08), lineWidth: 1)
                 )
         )
     }

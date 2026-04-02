@@ -1,5 +1,42 @@
 import Foundation
 
+// MARK: - Per-Request Overrides
+
+/// Ephemeral per-request settings that override workspace defaults without
+/// permanently changing the agent profile. Used for "ask this one question
+/// with a different temperature" or "use a different model just this once".
+///
+/// - TODO(phase-1.2): Wire into `runSingleAgentSubmission` and `runConsensus` to allow
+///   per-request model/temperature/prompt overrides without changing the agent profile binding.
+struct MessageOverride: Sendable, Codable, Hashable {
+    /// Override sampling temperature for this request only.
+    let temperatureOverride: Double?
+    /// Override model identifier for this request only (e.g. "gpt-4o-mini").
+    let modelIDOverride: String?
+    /// Override provider kind for this request only.
+    let providerKindOverride: String?
+    /// Override system prompt for this request only.
+    let systemPromptOverride: String?
+    /// Override max output tokens for this request only.
+    let maxTokensOverride: Int?
+
+    init(
+        temperatureOverride: Double? = nil,
+        modelIDOverride: String? = nil,
+        providerKindOverride: String? = nil,
+        systemPromptOverride: String? = nil,
+        maxTokensOverride: Int? = nil
+    ) {
+        self.temperatureOverride = temperatureOverride
+        self.modelIDOverride = modelIDOverride
+        self.providerKindOverride = providerKindOverride
+        self.systemPromptOverride = systemPromptOverride
+        self.maxTokensOverride = maxTokensOverride
+    }
+}
+
+// MARK: - Workspace Sections
+
 enum CoworkWorkspaceSection: String, CaseIterable, Identifiable, Sendable {
     case workspace
     case scheduler

@@ -85,12 +85,25 @@ struct WorkWithFaeConversationMessage: Identifiable, Codable, Hashable, Sendable
     let role: String
     let content: String
     let timestamp: Date
+    /// Which model generated this message (e.g. "gpt-4o", "claude-opus-4-6"). Nil for user messages.
+    let modelID: String?
+    /// Which provider generated this message. Known values: "faeLocalhost", "openAICompatibleExternal",
+    /// "anthropic", or `ProviderKind.consensusSynthesis`. Nil for user messages.
+    let providerKind: String?
 
-    init(id: UUID = UUID(), role: String, content: String, timestamp: Date = Date()) {
+    init(id: UUID = UUID(), role: String, content: String, timestamp: Date = Date(), modelID: String? = nil, providerKind: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
+        self.modelID = modelID
+        self.providerKind = providerKind
+    }
+
+    // MARK: - Known providerKind values
+    enum ProviderKind {
+        /// A synthesized summary produced by comparing multiple agents (not a single provider).
+        static let consensusSynthesis = "consensus-synthesis"
     }
 }
 
@@ -898,8 +911,26 @@ enum WorkWithFaeWorkspaceStore {
 
     private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
         var sanitized = state
-        sanitized.conversationMessages = Array(sanitized.conversationMessages.suffix(maxConversationMessages))
+        // Hard truncation safety cap — real LLM-based compression runs in CoworkWorkspaceController
+        // before each submission via compressConversationIfNeeded(). This is the last-resort backstop.
+        sanitized.conversationMessages = compressConversation(sanitized.conversationMessages)
         return sanitized
+    }
+
+    /// Hard truncation fallback for persistence. Real LLM-based compression lives in
+    /// CoworkWorkspaceController.compressConversationIfNeeded() and runs before each provider call.
+    private static func compressConversation(
+        _ messages: [WorkWithFaeConversationMessage],
+        maxMessages: Int = maxConversationMessages
+    ) -> [WorkWithFaeConversationMessage] {
+        // Hard safety limit: never keep more than 500 messages
+        let hardCap = 500
+        if messages.count > hardCap {
+            return Array(messages.suffix(hardCap))
+        }
+
+        // Hard truncation — preserves summary messages if they fall within the window
+        return Array(messages.suffix(maxMessages))
     }
 
     private static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {
@@ -1111,18 +1142,22 @@ enum WorkWithFaeWorkspaceStore {
             )
         }
 
+        // Prompt positioning: conversation and context go first, critical instructions
+        // come at the END of the context block (recency bias — 90% follow rate vs 30%
+        // when instructions appear at the start). User prompt is always last.
         var localLines: [String] = [
             "[WORK WITH FAE CONTEXT]",
-            "Use this workspace context to ground your answer. Prefer the selected workspace and attached files before asking the user to re-explain.",
         ]
         var containsLocalOnlyContext = false
 
+        // 1. Conversation history (summaries before recent turns — already ordered by
+        //    formattedConversationHistory).
         if let priorConversation {
             localLines.append("Recent conversation:")
             localLines.append(priorConversation)
-            localLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
         }
 
+        // 2. Workspace and attachment context (reference material).
         if let selectedDirectoryPath = state.selectedDirectoryPath {
             containsLocalOnlyContext = true
             localLines.append("Workspace root: \(selectedDirectoryPath)")
@@ -1175,7 +1210,17 @@ enum WorkWithFaeWorkspaceStore {
             }
         }
 
+        // 3. Critical instructions at END of context (recency bias optimization).
+        //    LLMs follow instructions placed at the end of context significantly more
+        //    reliably than instructions placed at the beginning (~90% vs ~30%).
+        localLines.append("Use this workspace context to ground your answer. Prefer the selected workspace and attached files before asking the user to re-explain.")
+        if priorConversation != nil {
+            localLines.append("Continue naturally from that conversation unless the user is clearly starting a new topic.")
+        }
+
         localLines.append("[/WORK WITH FAE CONTEXT]")
+
+        // 4. User prompt is always the final content (last user message).
         localLines.append(trimmedPrompt)
 
         return WorkWithFaePreparedPrompt(
@@ -1311,11 +1356,19 @@ enum WorkWithFaeWorkspaceStore {
     }
 
     private static func formattedConversationHistory(from messages: [WorkWithFaeConversationMessage], limit: Int = 12) -> String? {
-        let relevant = messages.suffix(limit)
+        // Always include summary messages (compressed history) regardless of limit,
+        // then append the most recent non-summary messages up to the limit.
+        let summaries = messages.filter { $0.role == "summary" }
+        let nonSummaries = messages.filter { $0.role != "summary" }
+        let recentNonSummaries = Array(nonSummaries.suffix(limit))
+        let relevant = summaries + recentNonSummaries
         guard !relevant.isEmpty else { return nil }
         let lines = relevant.compactMap { message -> String? in
             let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+            if message.role == "summary" {
+                return "- [Compressed context]: \(String(trimmed.prefix(2400)))"
+            }
             let role = message.role.capitalized
             return "- \(role): \(String(trimmed.prefix(1200)))"
         }

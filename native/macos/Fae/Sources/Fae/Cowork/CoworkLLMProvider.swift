@@ -260,6 +260,17 @@ enum CoworkNetworkTransport {
     }
 }
 
+/// Selects the appropriate prompt text for each provider kind and reports egress status.
+///
+/// **Prompt positioning rationale (Onyx research):**
+/// Both `faeLocalPrompt` and the shareable `renderedPrompt` use end-positioned
+/// instructions: conversation history and context sections appear first, followed by
+/// critical instructions right before the closing `[/WORK WITH FAE CONTEXT]` tag.
+/// This ordering leverages LLM recency bias — instructions at the end of the context
+/// window are followed ~90% of the time vs ~30% when placed at the beginning.
+///
+/// The user prompt is always the very last content in the message, acting as the
+/// final "user turn" that the model responds to directly.
 enum CoworkPromptEgressPolicy {
     static func prompt(for providerKind: CoworkLLMProviderKind, request: CoworkProviderRequest) -> String {
         switch providerKind {

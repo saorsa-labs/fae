@@ -34,6 +34,12 @@ final class CoworkWorkspaceController: ObservableObject {
     @Published private(set) var latestConsensusResults: [WorkWithFaeConsensusResult] = []
     @Published private(set) var latestConsensusPrompt: String?
     @Published private(set) var latestConsensusWorkspaceID: UUID?
+
+    /// Per-agent accumulated text streamed live during consensus. Keys are agent IDs.
+    @Published private(set) var streamingConsensusChunks: [String: String] = [:]
+
+    /// `true` while a streaming consensus run is actively receiving chunks.
+    @Published private(set) var isConsensusStreaming: Bool = false
     @Published private(set) var blockedRemoteEgressRequest: BlockedRemoteEgressRequest?
 
     private let faeCore: FaeCore
@@ -41,12 +47,15 @@ final class CoworkWorkspaceController: ObservableObject {
     private let runtimeDescriptor: FaeLocalRuntimeDescriptor?
     private let chatProvider: (any CoworkLLMProvider)?
     private let remoteModelCatalog = CoworkRemoteModelCatalog.shared
+    private let compressor: ConversationCompressor
     private var observations: [NSObjectProtocol] = []
     private var refreshTask: Task<Void, Never>?
     private var refreshTimer: Timer?
     private var cancellables: Set<AnyCancellable> = []
     private var isRestoringWorkspaceConversation = false
     private var conversationBindingWorkspaceID: UUID?
+    private var consensusTask: Task<Void, Never>?
+    private let streamingConsensusEngine = StreamingConsensusEngine()
 
     init(faeCore: FaeCore, conversation: ConversationController, runtimeDescriptor: FaeLocalRuntimeDescriptor? = nil) {
         self.faeCore = faeCore
@@ -57,6 +66,7 @@ final class CoworkWorkspaceController: ObservableObject {
         } else {
             self.chatProvider = nil
         }
+        self.compressor = ConversationCompressor()
         self.workspaceRegistry = WorkWithFaeWorkspaceStore.loadRegistry()
         self.workspaceState = WorkWithFaeWorkspaceStore.selectedWorkspace(in: self.workspaceRegistry)?.state ?? .empty
         installObservers()
@@ -1324,6 +1334,56 @@ final class CoworkWorkspaceController: ObservableObject {
         }
     }
 
+    /// Compresses the workspace conversation if token count exceeds the model's context window threshold.
+    /// Uses the local LLM to generate a summary when a provider is available; otherwise falls back gracefully.
+    private func compressConversationIfNeeded(modelID: String) async {
+        let messages = await MainActor.run { self.workspaceState.conversationMessages }
+        guard messages.count > 10 else { return }
+
+        // Look up context window from the known model registry (in K tokens)
+        let contextWindowTokens: Int
+        if let meta = CoworkKnownModelRegistry.metadata(for: modelID), let ctxK = meta.contextWindowK {
+            contextWindowTokens = ctxK * 1_000
+        } else {
+            // Default to 32K for unknown models
+            contextWindowTokens = 32_000
+        }
+
+        let compressed: [WorkWithFaeConversationMessage]
+        if let runtimeDescriptor {
+            let provider = FaeLocalhostCoworkProvider(descriptor: runtimeDescriptor)
+            compressed = await compressor.compressIfNeeded(
+                messages: messages,
+                contextWindowTokens: contextWindowTokens,
+                modelID: modelID,
+                provider: provider,
+                runtimeDescriptor: runtimeDescriptor
+            )
+        } else {
+            compressed = await compressor.compressIfNeeded(
+                messages: messages,
+                contextWindowTokens: contextWindowTokens,
+                modelID: modelID
+            )
+        }
+
+        // Only persist if compression actually changed the messages
+        if compressed.count != messages.count {
+            await MainActor.run {
+                self.workspaceState.conversationMessages = compressed
+                // Sync the compressed result back to the live conversation buffer
+                // so the Combine persistence sink doesn't overwrite with stale data.
+                self.isRestoringWorkspaceConversation = true
+                let restoredMessages = compressed.compactMap(Self.chatMessage(from:))
+                self.conversation.replaceMessages(restoredMessages)
+                DispatchQueue.main.async { [weak self] in
+                    self?.isRestoringWorkspaceConversation = false
+                }
+                self.persistWorkspaceState()
+            }
+        }
+    }
+
     private func blockRemoteEgressIfNeeded(
         for preparedPrompt: WorkWithFaePreparedPrompt,
         targetAgents: [WorkWithFaeAgentProfile],
@@ -1372,6 +1432,7 @@ final class CoworkWorkspaceController: ObservableObject {
 
         Task { [weak self] in
             guard let self else { return }
+            await self.compressConversationIfNeeded(modelID: executionAgent.modelIdentifier)
             let requestStartedAt = Date()
             let thinkingLevel = await MainActor.run { self.faeCore.thinkingLevel }
             let externalSystemPrompt: String? = executionAgent.providerKind == .faeLocalhost ? nil : {
@@ -1388,6 +1449,9 @@ final class CoworkWorkspaceController: ObservableObject {
                 thinkingLevel: thinkingLevel,
                 systemPrompt: externalSystemPrompt
             )
+
+            let agentModelID = executionAgent.modelIdentifier
+            let agentProviderKind = executionAgent.providerKind.rawValue
 
             if executionAgent.providerKind == .faeLocalhost {
                 await MainActor.run {
@@ -1408,11 +1472,11 @@ final class CoworkWorkspaceController: ObservableObject {
                                     && message.timestamp >= requestStartedAt.addingTimeInterval(-0.25)
                             }
                             if !hasFreshAssistantReply {
-                                self.conversation.appendMessage(role: .assistant, content: response.content)
+                                self.conversation.appendMessage(role: .assistant, content: response.content, modelID: agentModelID, providerKind: agentProviderKind)
                             }
                             self.conversation.isGenerating = false
                             if self.conversation.isStreaming {
-                                self.conversation.finalizeStreaming()
+                                self.conversation.finalizeStreaming(modelID: agentModelID, providerKind: agentProviderKind)
                             } else {
                                 self.conversation.finalizeThinkingTrace()
                             }
@@ -1465,7 +1529,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 let provider = try CoworkProviderFactory.provider(for: executionAgent, runtimeDescriptor: self.runtimeDescriptor)
                 let usesWebSearch = provider is any CoworkWebSearchProvider
                 await MainActor.run {
-                    self.conversation.appendMessage(role: .user, content: prompt)
+                    self.conversation.appendMessage(role: .user, content: prompt, modelID: nil, providerKind: nil)
                     self.conversation.beginThinkingTurn(
                         placeholderTrace: Self.remoteThinkingTrace(
                             for: executionAgent,
@@ -1510,10 +1574,10 @@ final class CoworkWorkspaceController: ObservableObject {
                 await MainActor.run {
                     self.conversation.isGenerating = false
                     if self.conversation.isStreaming {
-                        self.conversation.finalizeStreaming()
+                        self.conversation.finalizeStreaming(modelID: agentModelID, providerKind: agentProviderKind)
                     } else {
                         self.conversation.finalizeThinkingTrace()
-                        self.conversation.appendMessage(role: .assistant, content: response.content)
+                        self.conversation.appendMessage(role: .assistant, content: response.content, modelID: agentModelID, providerKind: agentProviderKind)
                     }
                     self.providerStatus = "\(executionAgent.backendDisplayName) replied"
                     self.conversationBindingWorkspaceID = nil
@@ -1532,7 +1596,7 @@ final class CoworkWorkspaceController: ObservableObject {
                     self.conversationBindingWorkspaceID = nil
                     let hadPartial = !self.conversation.streamingText.isEmpty
                     if self.conversation.isStreaming {
-                        self.conversation.cancelStreaming()
+                        self.conversation.cancelStreaming(modelID: agentModelID, providerKind: agentProviderKind)
                     }
                     self.conversation.clearThinkingTrace()
                     if !hadPartial {
@@ -1575,13 +1639,18 @@ final class CoworkWorkspaceController: ObservableObject {
             return
         }
 
+        // Cancel any in-flight consensus before starting a new one.
+        consensusTask?.cancel()
+
         beginWorkspaceTurn(for: prompt)
 
-        Task { [weak self] in
+        consensusTask = Task { [weak self] in
             guard let self else { return }
+            let primaryModelID = participants.first?.modelIdentifier ?? "unknown"
+            await self.compressConversationIfNeeded(modelID: primaryModelID)
             let thinkingLevel = await MainActor.run { self.faeCore.thinkingLevel }
             await MainActor.run {
-                self.conversation.appendMessage(role: .user, content: prompt)
+                self.conversation.appendMessage(role: .user, content: prompt, modelID: nil, providerKind: nil)
                 self.conversation.isGenerating = true
                 self.prependActivity(
                     title: triggeredAutomatically ? "Auto-compare started" : "Consensus run started",
@@ -1591,55 +1660,94 @@ final class CoworkWorkspaceController: ObservableObject {
             }
 
             let securityExecutor = await self.faeCore.coworkToolExecutor
-            let results = await withTaskGroup(of: WorkWithFaeConsensusResult.self, returning: [WorkWithFaeConsensusResult].self) { group in
-                for agent in participants {
-                    group.addTask { [runtimeDescriptor = self.runtimeDescriptor, chatProvider = self.chatProvider, thinkingLevel] in
-                        let request = CoworkProviderRequest(
-                            model: agent.modelIdentifier,
-                            preparedPrompt: preparedPrompt,
-                            thinkingLevel: thinkingLevel
-                        )
-                        do {
-                            let response: CoworkProviderResponse
-                            if agent.providerKind == .faeLocalhost, let chatProvider {
-                                response = try await chatProvider.submit(request: request)
-                            } else {
-                                let provider = try CoworkProviderFactory.provider(for: agent, runtimeDescriptor: runtimeDescriptor)
-                                guard let securityExecutor else {
-                                    throw CoworkToolExecutorError.pipelineNotReady
-                                }
-                                response = try await securityExecutor.submit(request: request, provider: provider)
-                            }
-                            return WorkWithFaeConsensusResult(
-                                agentID: agent.id,
-                                agentName: agent.name,
-                                providerLabel: agent.backendDisplayName,
-                                isTrustedLocal: agent.isTrustedLocal,
-                                responseText: response.content,
-                                errorText: nil
-                            )
-                        } catch {
-                            return WorkWithFaeConsensusResult(
-                                agentID: agent.id,
-                                agentName: agent.name,
-                                providerLabel: agent.backendDisplayName,
-                                isTrustedLocal: agent.isTrustedLocal,
-                                responseText: nil,
-                                errorText: error.localizedDescription
-                            )
-                        }
-                    }
+
+            // Resolve providers upfront so the streaming engine can run off MainActor.
+            let resolvedParticipants: [StreamingConsensusEngine.Participant] = participants.map { agent in
+                if agent.providerKind == .faeLocalhost {
+                    return StreamingConsensusEngine.Participant(agent: agent, provider: nil, useChatProvider: true)
+                }
+                let resolved = try? CoworkProviderFactory.provider(for: agent, runtimeDescriptor: self.runtimeDescriptor)
+                return StreamingConsensusEngine.Participant(agent: agent, provider: resolved, useChatProvider: false)
+            }
+
+            // Accumulate results progressively as chunks stream in.
+            var partialResults: [String: WorkWithFaeConsensusResult] = [:]
+            var streamingTexts: [String: String] = [:]
+
+            await MainActor.run {
+                self.streamingConsensusChunks = [:]
+                self.isConsensusStreaming = true
+            }
+
+            let stream = await self.streamingConsensusEngine.streamConsensus(
+                participants: resolvedParticipants,
+                preparedPrompt: preparedPrompt,
+                thinkingLevel: thinkingLevel,
+                chatProvider: self.chatProvider,
+                securityExecutor: securityExecutor
+            )
+
+            for await chunk in stream {
+                guard !Task.isCancelled else { break }
+
+                let agent = participants.first(where: { $0.id == chunk.agentID })
+                let providerLabel = agent?.backendDisplayName ?? chunk.agentName
+                let isTrustedLocal = agent?.isTrustedLocal ?? false
+
+                if chunk.isComplete {
+                    partialResults[chunk.agentID] = WorkWithFaeConsensusResult(
+                        agentID: chunk.agentID,
+                        agentName: chunk.agentName,
+                        providerLabel: providerLabel,
+                        isTrustedLocal: isTrustedLocal,
+                        responseText: chunk.errorText == nil ? chunk.text : nil,
+                        errorText: chunk.errorText
+                    )
+                    streamingTexts[chunk.agentID] = chunk.errorText == nil ? chunk.text : nil
+                } else {
+                    // Streaming partial — update the in-progress result.
+                    partialResults[chunk.agentID] = WorkWithFaeConsensusResult(
+                        agentID: chunk.agentID,
+                        agentName: chunk.agentName,
+                        providerLabel: providerLabel,
+                        isTrustedLocal: isTrustedLocal,
+                        responseText: chunk.text,
+                        errorText: nil
+                    )
+                    streamingTexts[chunk.agentID] = chunk.text
                 }
 
-                var collected: [WorkWithFaeConsensusResult] = []
-                for await result in group {
-                    collected.append(result)
+                // Publish sorted results and streaming text on MainActor for live UI updates.
+                let sortedResults = participants.compactMap { p in partialResults[p.id] }
+                let updatedStreamingTexts = streamingTexts
+                await MainActor.run {
+                    self.latestConsensusResults = sortedResults
+                    self.streamingConsensusChunks = updatedStreamingTexts
                 }
-                return collected.sorted { lhs, rhs in
-                    let leftIndex = participants.firstIndex(where: { $0.id == lhs.agentID }) ?? .max
-                    let rightIndex = participants.firstIndex(where: { $0.id == rhs.agentID }) ?? .max
-                    return leftIndex < rightIndex
+            }
+
+            await MainActor.run {
+                self.isConsensusStreaming = false
+                self.streamingConsensusChunks = [:]
+            }
+
+            // Final sorted results after all agents complete.
+            let results = participants.compactMap { p in partialResults[p.id] }
+
+            guard !Task.isCancelled else {
+                // Preserve whatever completed results we have.
+                await MainActor.run {
+                    self.latestConsensusResults = results
+                    self.conversation.isGenerating = false
+                    self.providerStatus = "Consensus cancelled"
+                    self.conversationBindingWorkspaceID = nil
+                    self.prependActivity(
+                        title: "Consensus cancelled",
+                        detail: "Preserved \(results.count) partial results.",
+                        tone: .warning
+                    )
                 }
+                return
             }
 
             let summary = await self.buildConsensusSummary(for: prompt, results: results)
@@ -1648,7 +1756,7 @@ final class CoworkWorkspaceController: ObservableObject {
                 self.latestConsensusPrompt = prompt
                 self.latestConsensusWorkspaceID = self.selectedWorkspace?.id
                 self.conversation.isGenerating = false
-                self.conversation.appendMessage(role: .assistant, content: summary)
+                self.conversation.appendMessage(role: .assistant, content: summary, modelID: nil, providerKind: WorkWithFaeConversationMessage.ProviderKind.consensusSynthesis)
                 self.providerStatus = triggeredAutomatically ? "Auto-compare ready" : "Consensus ready"
                 self.conversationBindingWorkspaceID = nil
                 self.prependActivity(
@@ -1658,6 +1766,12 @@ final class CoworkWorkspaceController: ObservableObject {
                 )
             }
         }
+    }
+
+    /// Cancels any in-flight consensus run, preserving partial results.
+    func cancelConsensus() {
+        consensusTask?.cancel()
+        consensusTask = nil
     }
 
     private func refresh() async {
@@ -1924,11 +2038,13 @@ final class CoworkWorkspaceController: ObservableObject {
         else {
             return
         }
-        let persistedMessages = Array(
-            conversation.messages
-                .suffix(WorkWithFaeWorkspaceStore.maxConversationMessages)
-                .map(Self.workspaceConversationMessage(from:))
-        )
+        // Preserve summary messages at the front when truncating, so compressed
+        // history survives the Combine persistence sink.
+        let summaries = conversation.messages.filter { $0.role == .summary }
+        let nonSummaries = conversation.messages.filter { $0.role != .summary }
+        let truncatedNonSummaries = Array(nonSummaries.suffix(WorkWithFaeWorkspaceStore.maxConversationMessages - summaries.count))
+        let combined = summaries + truncatedNonSummaries
+        let persistedMessages = combined.map(Self.workspaceConversationMessage(from:))
         guard workspaceRegistry.workspaces[index].state.conversationMessages != persistedMessages else {
             return
         }
@@ -1945,13 +2061,15 @@ final class CoworkWorkspaceController: ObservableObject {
             id: message.id,
             role: message.role.rawValue,
             content: message.content,
-            timestamp: message.timestamp
+            timestamp: message.timestamp,
+            modelID: message.modelID,
+            providerKind: message.providerKind
         )
     }
 
     private static func chatMessage(from message: WorkWithFaeConversationMessage) -> ChatMessage? {
         guard let role = ChatRole(rawValue: message.role) else { return nil }
-        return ChatMessage(id: message.id, role: role, content: message.content, timestamp: message.timestamp)
+        return ChatMessage(id: message.id, role: role, content: message.content, timestamp: message.timestamp, modelID: message.modelID, providerKind: message.providerKind)
     }
 
     private func persistWorkspaceRegistry() {

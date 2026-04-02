@@ -1,20 +1,29 @@
-# Error Handling Review
-**Date**: 2026-03-31
-**Mode**: gsd-phase (Phase 1.2)
+# Error Handling Review — Phase 1.1
 
-## Scope
-Changed files: SpeakerEnrollmentView.swift, EchoSuppressor.swift
+## Reviewer: Error Handling Hunter
+## Focus: Error paths, nil handling, optional chaining
 
-## Findings
+### Findings
 
-- [OK] SpeakerEnrollmentView.recordWakePhrase() — catches errors in do/catch, sets errorMessage
-- [OK] SpeakerEnrollmentView.recordConversationalSample() — catches errors with do/catch, sets errorMessage
-- [OK] SpeakerEnrollmentView.recordRoomNoise() — catches errors, resets noiseProgress, sets errorMessage
-- [OK] SpeakerEnrollmentView.commitAndComplete() — NO do/catch (calls only actor methods that don't throw)
-- [OK] No fatalError(), preconditionFailure(), or try! in changed files
-- [MEDIUM] recordRoomNoise() uses captureSegment(durationSeconds: 20.0) which waits for speech onset before its timer starts. If no speech is detected, capture hangs silently until maxSamples (26s) is reached. No timeout indicator or user-facing messaging for this scenario.
-- [LOW] startPulsingProgress() uses try? Task.sleep — swallowing errors is fine for UI animation.
-- [LOW] Wake template generation silently continues if makeTemplate returns nil (advances wakePhraseIndex without adding a template), resulting in fewer templates than wakePhraseCount. User is not informed.
-- [OK] commitAndComplete() guards on !conversationalEmbeddings.isEmpty before bulkEnroll
+**FINDING 1 — CRITICAL: Streaming path loses metadata**
+- File: `ConversationController.swift` lines 206-211
+- `finalizeStreaming()` calls `appendMessage(role: .assistant, content: streamingText)` with NO modelID/providerKind
+- `cancelStreaming()` (line 214-220) has the same problem
+- This means ALL streaming responses from external providers (OpenAI, Anthropic) have nil metadata
+- The metadata IS captured in `agentModelID`/`agentProviderKind` variables but never reaches `finalizeStreaming()`
+- Vote: MUST FIX
 
-## Grade: B
+**FINDING 2 — HIGH: Error path drops metadata**
+- File: `CoworkWorkspaceController.swift` lines 1541-1545
+- When streaming fails with partial content, `cancelStreaming()` is called which calls `appendMessage()` with no metadata
+- The partial content is committed as a message with no model attribution
+- Vote: SHOULD FIX
+
+**FINDING 3 — LOW: faeLocalhost user message inconsistency**
+- Line 1397: `appendMessage(role: .user, content: prompt)` — uses old signature (no explicit nil args)
+- Lines 1471, 1587: both use `appendMessage(role: .user, content: prompt, modelID: nil, providerKind: nil)` explicitly
+- Functionally identical due to defaults, but inconsistent style in same class
+- Vote: MINOR
+
+### Summary
+2 MUST/SHOULD FIX findings. The streaming path is the critical gap.

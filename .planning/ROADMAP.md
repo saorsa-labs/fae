@@ -1,70 +1,152 @@
-# Roadmap: Voice Experience Overhaul
+# CoWork Evolution — Onyx-Inspired Improvements
 
-## Design Documents
-- Design doc: `~/.gstack/projects/saorsa-labs-fae/davidirvine-main-design-20260331-151032.md`
-- Status: APPROVED (2026-03-31)
+> Evolve Fae's CoWork module with battle-tested patterns from Onyx's chat architecture,
+> preserving workspace isolation, threading, mid-conversation model switching, and security egress.
+
+## Problem
+
+Users can't maintain long conversation context (120-msg hard cap drops silently), consensus comparison is batch-mode (waits for all agents), and there's no audit trail of which model generated which response. Missing functionality that limits CoWork's usefulness for real work sessions.
 
 ## Success Criteria
-- Wake word >95% detection at 2m, <1% false positive, <200ms response
-- PTT works 100% regardless of RAM
-- Enrollment complete in <2 minutes
-- Shadow mode: zero regressions during rollout
-- The mom test: non-technical person says "Fae" and gets a response first try
+
+Production ready — all features complete, tested, documented, with unit and integration coverage.
 
 ---
 
-## Milestone 1: Push-to-Talk + Fused Enrollment
+## Milestone 1: CoWork Intelligence
 
-### Phase 1.1: Push-to-Talk Button ✅ COMPLETE
-- Add 2s ring buffer to AudioCaptureManager (32,000 samples at 16kHz)
-- Extend GlobalHotkeyManager: keyUp events for hold-to-talk (Right Option default)
-- Wire orb click in collapsed mode to start listening
-- Missed-wake capture: log preceding audio when PTT after failed wake
-- Storage: ~/Library/Application Support/fae/wake_training/missed/ (max 500, FIFO)
-- Tests: ring buffer, hold/release, missed-wake logging
+Foundation improvements: message metadata, context compression, and long-session support.
 
-### Phase 1.2: Fused Enrollment Flow ✅ COMPLETE
-- Replace SpeakerEnrollmentView 4-step with 6-step:
-  1. Name, 2. Wake phrases (4x), 3. Conversational (3x 8s), 4. Room noise (20s), 5. Photo, 6. Complete
-- Atomic commit on step 6 completion
-- Generate acoustic templates + reference embeddings from wake phrases
-- Tests: completion, abandonment, template generation
+### Phase 1.1: Per-Message Model Metadata
 
-### Phase 1.3: Bundle Keyword Classifier ✅ COMPLETE
-- Train MLXKeywordClassifier offline (~10K synthetic + LibriSpeech negatives)
-- Bundle model.safetensors + config.json
-- Score fusion: 0.7 * classifier + 0.3 * max(template_cosine)
-- Tests: loading, inference, fusion, threshold
+**Goal:** Add model provenance to every conversation message.
 
-### Phase 1.4: Shadow-Mode Evaluator ✅ COMPLETE
-- ShadowWakeWordEvaluator: parallel detector comparison
-- Promotion: 200 attempts + FP < 1% + FN < 5%
-- Demotion: FP > 2% over 50-utterance window
-- Thermal gate, Voice Diagnostics screen
-- Tests: promotion, demotion, thermal pause
+- Add `modelID: String?`, `providerKind: String?` to `WorkWithFaeConversationMessage`
+- Add optional `MessageOverride` struct for ephemeral per-request settings (temperature, model)
+- Populate metadata on every submission path (single agent, consensus, synthesis)
+- Backward-compatible: existing conversations load with nil metadata (no migration crash)
+- Support per-request model/temperature overrides without changing workspace agent binding
+
+**Key files:**
+- `Cowork/WorkWithFaeWorkspace.swift` (message type, store)
+- `Cowork/CoworkWorkspaceController.swift` (submission paths)
+
+### Phase 1.2: Context Compression Engine
+
+**Goal:** Build the compression actor that summarizes old messages using the local LLM.
+
+- Create `ConversationCompressor` actor
+- Progressive summarization: when history exceeds 75% of model context, compress older messages
+- Keep recent 20% of messages verbatim
+- Summary stored as special message with `role: "summary"` and metadata
+- Subsequent compressions incorporate previous summary + new messages
+- Branch-aware: workspace duplication preserves/respects compression state
+- Uses `FaeLocalhostCoworkProvider` to invoke local LLM for summarization
+
+**Key files:**
+- New: `Cowork/ConversationCompressor.swift`
+- `Cowork/WorkWithFaeWorkspace.swift` (summary message type, constants)
+- `Cowork/CoworkLLMProvider.swift` (local LLM invocation)
+
+### Phase 1.3: Context Compression Integration
+
+**Goal:** Wire the compressor into the submit flow and add UI feedback.
+
+- Auto-compress before provider calls when history exceeds threshold
+- Replace hard 120-message cap with compression-first, then cap as fallback safety
+- UI indicator showing compression state (e.g., "42 messages compressed into summary")
+- Configurable ratios via `WorkWithFaeWorkspacePolicy`
+- Compression respects model context window from `CoworkKnownModelRegistry`
+
+**Key files:**
+- `Cowork/CoworkWorkspaceController.swift` (submit flow)
+- `Cowork/CoworkWorkspaceView.swift` (UI indicator)
+- `Cowork/CoworkModelRegistry.swift` (context window lookup)
+- `Cowork/WorkWithFaeWorkspace.swift` (policy fields)
+
+### Phase 1.4: Tests for Milestone 1
+
+**Goal:** Full test coverage for metadata and compression.
+
+- Unit tests: message serialization with new fields, backward compatibility
+- Unit tests: compression trigger logic, ratio calculations, summary message creation
+- Unit tests: workspace duplication with compression state
+- Integration tests: submit-with-compression flow (mock provider)
+- Property tests: compression preserves most recent messages invariant
+
+**Key files:**
+- New/updated test files in Tests/
 
 ---
 
-## Milestone 2: Proactive Vocabulary Learning
+## Milestone 2: CoWork Streaming
 
-### Phase 2.1: PersonalLexicon Actor ✅ COMPLETE
-- PersonalLexicon actor with JSON persistence at ~/Library/Application Support/fae/personal_lexicon.json
-- DynamicVocabularyCorrector.ingestLexicon() integration
-- Git Vault backup (personal_lexicon.json added to configFiles)
-- PipelineCoordinator loads lexicon at startup, feeds into DVC rebuild
-- Name corrections auto-saved to lexicon + DVC
-- Tests: 14 (CRUD, persistence, snapshot, bulk merge, DVC integration)
+Real-time streaming consensus and prompt optimization.
 
-### Phase 2.2: Vocabulary Harvesting ✅ COMPLETE
-- VocabularyHarvester: harvests Contacts (CNContactStore) + Calendar (EKEventStore, next 30 days)
-- Scheduler task vocabulary_harvest: daily at 04:00
-- Post-enrollment trigger: vocabulary harvest runs after primary user enrollment
-- Graceful permission handling: skips sources without access, no crashes
-- Tests: 4 (harvest integration, dedup, persistence, permission handling)
+### Phase 2.1: Streaming Consensus Engine
 
-### Phase 2.3: Enhanced Correction Loop ✅ COMPLETE
-- ASRConfidenceDetector: phonetic clustering, spelling divergence detection across utterances
-- Max 1 correction prompt per conversation to avoid annoyance
-- Typed correction flow: applyTypedSpellingCorrection() feeds PersonalLexicon + DVC
-- PipelineCoordinator integration: feeds transcriptions into detector, schedules prompts
-- Tests: 8 (divergence detection, consistent spellings, prompt limits, reset, common/short words, typed correction)
+**Goal:** Replace batch `runConsensus()` with streaming multi-agent comparison.
+
+- Create `TaggedChunk` type with agent ID + content delta
+- Replace `TaskGroup` batch collection with `AsyncStream<TaggedChunk>`
+- Each agent streams independently; fastest shows immediately
+- Independent failure: one agent error doesn't block others
+- Cancel propagation: `Task.cancel()` + `withTaskCancellationHandler` for all in-flight requests
+- Partial result preservation: completed agents keep results on cancel
+
+**Key files:**
+- `Cowork/CoworkWorkspaceController.swift` (runConsensus replacement)
+- New: `Cowork/CoworkStreamingConsensus.swift` (engine)
+- `Cowork/CoworkLLMProvider.swift` (streaming protocol usage)
+
+### Phase 2.2: Streaming Consensus UI
+
+**Goal:** Live multi-column rendering as tokens arrive.
+
+- Multi-column view with per-agent streaming text
+- Loading/error/complete states per agent column
+- Partial results preserved visually on cancel
+- Per-agent error display (not blocking other columns)
+- Smooth scrolling during streaming
+
+**Key files:**
+- `Cowork/CoworkWorkspaceView.swift` (consensus UI)
+- `Cowork/CoworkWorkspaceModels.swift` (streaming state models)
+
+### Phase 2.3: Prompt Positioning Optimization
+
+**Goal:** Apply research findings to improve external provider instruction following.
+
+- Place critical instructions at end of context (90% vs 30% follow rate)
+- Reminders as last user message in prompt construction
+- Topic change boundaries at message splits
+- Update `CoworkPromptEgressPolicy` for optimized positioning
+
+**Key files:**
+- `Cowork/CoworkExportPacket.swift` (prompt assembly)
+- `Cowork/CoworkLLMProvider.swift` (system prompt positioning)
+
+### Phase 2.4: Tests for Milestone 2
+
+**Goal:** Full test coverage for streaming and positioning.
+
+- Unit tests: streaming consensus with mock providers (fast/slow/error scenarios)
+- Unit tests: cancel propagation and partial result preservation
+- Unit tests: prompt positioning order verification
+- Integration tests: multi-agent streaming end-to-end
+
+**Key files:**
+- New/updated test files in Tests/
+
+---
+
+## Auto-Selected Standards
+
+| Decision | Selection |
+|----------|-----------|
+| Testing | Unit + Integration + Property |
+| Error handling | Typed Swift errors (existing CoworkToolExecutorError pattern) |
+| Task size | ~50 lines per task |
+| Approach | TDD — tests first |
+| Async | async/await + TaskGroup + AsyncStream (match existing) |
+| Docs | Full public API docs on new types |

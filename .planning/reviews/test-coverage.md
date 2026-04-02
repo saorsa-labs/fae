@@ -1,20 +1,40 @@
-# Test Coverage Review
-**Date**: 2026-03-31
+# Test Coverage Review — Phase 1.1
 
-## Statistics
-- Test files: 130+ across HandoffTests, IntegrationTests, SearchTests, EvalTests
-- Test functions: ~1800 total
-- Relevant new test file: FusedEnrollmentFlowTests.swift (14 test functions)
-- Tests pass (filtered run): WakeWordAcousticDetectorTests (4/4), EchoTextOverlapTests (26/26)
+## Reviewer: Test Coverage Analyst
+## Focus: Unit tests, integration tests, backward compat tests
 
-## Findings
-- [CRITICAL] FusedEnrollmentFlowTests.swift:154 — COMPILE ERROR: `speakerStore.profiles()` is inaccessible (private var). The test calls `await speakerStore.profiles()` as a function but `profiles` is a private stored property, not a public function. The correct API is `speakerStore.profileSummaries()` which returns [SpeakerProfileSummary].
-- [HIGH] Tests at lines 78, 139, 154 attempt to read internal state via `speakerStore.profiles()` which does not compile — these tests cannot run until fixed.
-- [OK] WakeWordAcousticDetector.makeTemplate tests (lines 15-55) are well-structured and cover happy path, silence, and too-short audio
-- [OK] Atomic commit logic (lines 89-141) tests the correct public API for WakeWordProfileStore
-- [OK] Noise floor RMS tests (lines 169-191) are self-contained and don't require hardware
-- [OK] Consistency score tests (lines 195-208) match SpeakerProfileStore.consistencyScore API correctly
-- [MEDIUM] No test for the scenario where makeTemplate returns nil (e.g. wake phrase too long) — wakePhraseIndex advances but wakeTemplates stays short. The complete step shows fewer templates but enrollment isn't blocked.
-- [LOW] FusedEnrollmentFlowTests references WakeWordAcousticDetectorTests.syntheticWakePhrase() — that helper must be accessible (internal/public). Likely fine given @testable import.
+### Findings
 
-## Grade: D (due to compile error blocking test execution)
+**FINDING 1 — CRITICAL: Zero tests added for new feature**
+- No `Tests/CoworkTests/` directory exists
+- No backward-compatibility decoding tests (plan Task 1 not done)
+- No persistence round-trip tests (plan Task 10 not done)
+- The plan explicitly required TDD with tests first — not followed
+- Vote: MUST FIX
+
+**FINDING 2 — HIGH: Backward compatibility not automatically verified**
+- The code is correct (Swift auto-synthesizes decodeIfPresent for Optional) 
+- But there's no regression test to catch if someone adds a CodingKeys enum in future and forgets to use decodeIfPresent
+- A test with old-format JSON literal would lock in this guarantee
+- Vote: SHOULD FIX
+
+**FINDING 3 — HIGH: Streaming metadata loss untested**
+- The critical bug (finalizeStreaming loses metadata) would be caught by a unit test
+- `ConversationController` is testable without the full pipeline
+- A test calling `startStreamingReply()`, `updateStreaming()`, `finalizeStreaming(modelID: "gpt-4", providerKind: "openai")` would validate the fix
+- Vote: SHOULD FIX (after fix is applied)
+
+**FINDING 4 — MEDIUM: MessageOverride has no tests**
+- Struct is Codable, Hashable — should have a round-trip encode/decode test
+- Especially important to verify Hashable behavior with nil fields
+- Vote: SHOULD FIX
+
+### Minimum Required Tests
+1. `WorkWithFaeConversationMessage` backward compat decode (old JSON → nil fields)
+2. `WorkWithFaeConversationMessage` encode/decode round-trip with values
+3. `ConversationController.appendMessage` stores modelID/providerKind
+4. `ConversationController.finalizeStreaming` commits message with metadata
+5. `MessageOverride` Codable round-trip
+
+### Summary
+Zero tests for this feature is a critical gap. The plan called for TDD but tests were skipped.

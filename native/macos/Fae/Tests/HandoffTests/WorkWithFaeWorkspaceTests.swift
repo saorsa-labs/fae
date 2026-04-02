@@ -980,4 +980,201 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
             XCTAssertEqual(restoredConversation.messages.map(\.content), expectedByWorkspaceID[workspaceID])
         }
     }
+
+    // MARK: - Per-Message Model Metadata — Backward Compatibility (Phase 1.1)
+
+    func testConversationMessageDecodesWithoutMetadataFields() throws {
+        // Old-format JSON without modelID/providerKind must decode with nil for new fields.
+        let oldJSON = """
+        {
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "role": "assistant",
+            "content": "Hello from the past",
+            "timestamp": 0
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        let message = try decoder.decode(WorkWithFaeConversationMessage.self, from: oldJSON)
+        XCTAssertEqual(message.content, "Hello from the past")
+        XCTAssertNil(message.modelID, "Old messages must decode with nil modelID")
+        XCTAssertNil(message.providerKind, "Old messages must decode with nil providerKind")
+    }
+
+    func testConversationMessageEncodesAndDecodesWithMetadata() throws {
+        // New messages with metadata must round-trip cleanly.
+        let original = WorkWithFaeConversationMessage(
+            role: "assistant",
+            content: "Model response",
+            modelID: "gpt-4o",
+            providerKind: "openAICompatibleExternal"
+        )
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(original)
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(WorkWithFaeConversationMessage.self, from: data)
+        XCTAssertEqual(decoded.modelID, "gpt-4o")
+        XCTAssertEqual(decoded.providerKind, "openAICompatibleExternal")
+        XCTAssertEqual(decoded.content, "Model response")
+    }
+
+    func testConversationMessageHashableWithNilMetadata() {
+        // WorkWithFaeConversationMessage must be Hashable with nil optional fields.
+        let id = UUID()
+        let ts = Date(timeIntervalSince1970: 1_700_000_000)
+        let msg1 = WorkWithFaeConversationMessage(id: id, role: "user", content: "hi", timestamp: ts)
+        let msg2 = WorkWithFaeConversationMessage(id: id, role: "user", content: "hi", timestamp: ts)
+        var set = Set<WorkWithFaeConversationMessage>()
+        set.insert(msg1)
+        set.insert(msg2)
+        XCTAssertEqual(set.count, 1, "Identical messages must hash to same bucket")
+    }
+
+    func testConsensusSynthesisConstantMatchesMagicString() {
+        // Ensure the ProviderKind constant stays in sync with any historical hard-coded value.
+        XCTAssertEqual(WorkWithFaeConversationMessage.ProviderKind.consensusSynthesis, "consensus-synthesis")
+    }
+
+    // MARK: - Prompt Positioning (Phase 2.3)
+
+    func testPreparePromptPlacesCriticalInstructionsAfterContext() {
+        let state = WorkWithFaeWorkspaceState(
+            selectedDirectoryPath: "/tmp/project",
+            indexedFiles: [
+                WorkWithFaeFileEntry(
+                    id: "/tmp/project/README.md",
+                    relativePath: "README.md",
+                    absolutePath: "/tmp/project/README.md",
+                    kind: "text",
+                    sizeBytes: 12,
+                    modifiedAt: nil
+                ),
+            ],
+            attachments: [],
+            conversationMessages: [
+                WorkWithFaeConversationMessage(role: "user", content: "Earlier question"),
+                WorkWithFaeConversationMessage(role: "assistant", content: "Earlier answer"),
+            ]
+        )
+
+        let prepared = WorkWithFaeWorkspaceStore.preparePrompt(
+            userPrompt: "What should I do next?",
+            state: state,
+            focusedPreview: nil
+        )
+
+        let prompt = prepared.faeLocalPrompt
+        let contextOpenRange = prompt.range(of: "[WORK WITH FAE CONTEXT]")
+        let contextCloseRange = prompt.range(of: "[/WORK WITH FAE CONTEXT]")
+        let instructionRange = prompt.range(of: "Use this workspace context to ground your answer.")
+        let conversationRange = prompt.range(of: "Recent conversation:")
+        let workspaceRange = prompt.range(of: "Workspace root:")
+
+        // All required sections are present.
+        XCTAssertNotNil(contextOpenRange)
+        XCTAssertNotNil(contextCloseRange)
+        XCTAssertNotNil(instructionRange)
+        XCTAssertNotNil(conversationRange)
+        XCTAssertNotNil(workspaceRange)
+
+        // Verify ordering: conversation < workspace < instructions < close tag < user prompt.
+        XCTAssertTrue(conversationRange!.lowerBound < workspaceRange!.lowerBound,
+                      "Conversation history should appear before workspace context")
+        XCTAssertTrue(workspaceRange!.lowerBound < instructionRange!.lowerBound,
+                      "Workspace context should appear before critical instructions")
+        XCTAssertTrue(instructionRange!.lowerBound < contextCloseRange!.lowerBound,
+                      "Critical instructions should appear before context close tag")
+
+        // Continuation instruction present since there is prior conversation.
+        XCTAssertTrue(prompt.contains("Continue naturally from that conversation"))
+
+        // User prompt is last.
+        XCTAssertTrue(prompt.hasSuffix("What should I do next?"))
+    }
+
+    func testPreparePromptOmitsContinuationInstructionWithoutConversation() {
+        let state = WorkWithFaeWorkspaceState(
+            selectedDirectoryPath: "/tmp/project",
+            indexedFiles: [],
+            attachments: []
+        )
+
+        let prepared = WorkWithFaeWorkspaceStore.preparePrompt(
+            userPrompt: "Hello",
+            state: state,
+            focusedPreview: nil
+        )
+
+        XCTAssertFalse(prepared.faeLocalPrompt.contains("Continue naturally from that conversation"))
+        XCTAssertTrue(prepared.faeLocalPrompt.contains("Use this workspace context to ground your answer."))
+    }
+
+    func testShareableRenderedPromptPlacesInstructionsAfterContext() {
+        let export = CoworkExportPacket(
+            destinationTrustTier: .thirdPartyCloud,
+            mode: .redactedRemote,
+            sections: [
+                CoworkExportSection(
+                    id: "attachments",
+                    kind: .attachmentSummary,
+                    dataClass: .shareableContext,
+                    transforms: [.userSelected],
+                    artifactHandle: nil,
+                    content: "Attached items:\n- text: notes"
+                ),
+                CoworkExportSection(
+                    id: "user_prompt",
+                    kind: .userPrompt,
+                    dataClass: .generalPublic,
+                    transforms: [.trimmed],
+                    artifactHandle: nil,
+                    content: "Summarize these notes"
+                ),
+            ],
+            excludedDataClasses: [.privateLocalOnly],
+            excludedContext: ["recent conversation history"]
+        )
+
+        let rendered = export.renderedPrompt
+        let contextOpenRange = rendered.range(of: "[WORK WITH FAE CONTEXT]")
+        let contextCloseRange = rendered.range(of: "[/WORK WITH FAE CONTEXT]")
+        let attachmentRange = rendered.range(of: "Attached items:")
+        let excludedRange = rendered.range(of: "Context kept on this Mac:")
+        let instructionRange = rendered.range(of: "Use only the explicit exported context above.")
+
+        XCTAssertNotNil(contextOpenRange)
+        XCTAssertNotNil(contextCloseRange)
+        XCTAssertNotNil(attachmentRange)
+        XCTAssertNotNil(excludedRange)
+        XCTAssertNotNil(instructionRange)
+
+        // Ordering: attachments < excluded context < instructions < close tag.
+        XCTAssertTrue(attachmentRange!.lowerBound < excludedRange!.lowerBound)
+        XCTAssertTrue(excludedRange!.lowerBound < instructionRange!.lowerBound)
+        XCTAssertTrue(instructionRange!.lowerBound < contextCloseRange!.lowerBound)
+
+        // User prompt is last.
+        XCTAssertTrue(rendered.hasSuffix("Summarize these notes"))
+    }
+
+    func testShareableRenderedPromptWithNoContextReturnsBarePrompt() {
+        let export = CoworkExportPacket(
+            destinationTrustTier: .thirdPartyCloud,
+            mode: .redactedRemote,
+            sections: [
+                CoworkExportSection(
+                    id: "user_prompt",
+                    kind: .userPrompt,
+                    dataClass: .generalPublic,
+                    transforms: [.trimmed],
+                    artifactHandle: nil,
+                    content: "Hello world"
+                ),
+            ],
+            excludedDataClasses: [],
+            excludedContext: []
+        )
+
+        XCTAssertEqual(export.renderedPrompt, "Hello world")
+    }
 }

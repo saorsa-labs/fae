@@ -1,13 +1,37 @@
-# Type Safety Review
-**Date**: 2026-03-31
+# Type Safety Review — Phase 1.1
 
-## Findings
-- [OK] EnrollmentStep now conforms to Equatable — required for stepIndicator firstIndex(of:) and used correctly
-- [OK] All @State vars are typed appropriately ([WakeWordAcousticDetector.Template] for wakeTemplates etc.)
-- [OK] No force casts (as!) in changed files
-- [OK] WakeWordAcousticDetector.Template uses [Float] embedding — consistent with how WakeWordProfileStore stores it
-- [OK] noiseFloorRMS typed as Float — consistent with AudioCaptureManager.SegmentSpeechQuality.rms type
-- [LOW] captureSegment returns [Float] at targetSampleRate (16kHz), but makeTemplate is called with AudioCaptureManager.targetSampleRate = 16_000. WakeWordAcousticDetector.prepare() resamples internally to legacySampleRate (24kHz) via CoreMLSpeakerEncoder.sharedLogMelSpectrogram. This is correct but the call site (recordWakePhrase) could benefit from a comment explaining the sample rate hand-off.
-- [OK] commitAndComplete is non-throwing — appropriate since it only calls actor methods which handle their own errors internally
+## Reviewer: Type Safety Analyst
+## Focus: Swift type system usage, optionality, type correctness
 
-## Grade: A
+### Findings
+
+**FINDING 1 — HIGH: providerKind stored as String instead of typed enum**
+- `CoworkLLMProviderKind` enum already exists with cases: faeLocalhost, openAICompatibleExternal, anthropic
+- But `WorkWithFaeConversationMessage.providerKind` is `String?` not `CoworkLLMProviderKind?`
+- This allows invalid values like "consensus-synthesis" (which isn't in the enum — by design, but still untyped)
+- The rawValue conversion `executionAgent.providerKind.rawValue` is correct but loses the enum type on storage
+- Two options: (a) keep String? but define known constants, or (b) use a more inclusive enum with a `custom(String)` case
+- For now acceptable since "consensus-synthesis" needs to be distinguished from typed providers
+- Vote: MINOR (would prefer typed but String? is justifiable)
+
+**FINDING 2 — PASS: Optional fields are correctly typed**
+- `String?` for both new fields on both structs — correct for optional metadata
+- Default parameters `= nil` throughout — correct Swift idiom
+
+**FINDING 3 — PASS: Sendable conformance maintained**
+- `WorkWithFaeConversationMessage: Sendable` — all fields are value types or Sendable
+- `MessageOverride: Sendable` — all fields are value types
+- `ChatMessage` is a struct (implicitly Sendable for value types in Swift 5.7+)
+
+**FINDING 4 — PASS: Codable synthesis handles Optional correctly**
+- Swift auto-synthesizes `encodeIfPresent`/`decodeIfPresent` for Optional properties
+- Verified: old JSON without new keys decodes successfully with nil for new fields
+- No custom CodingKeys needed and none added — correct choice
+
+**FINDING 5 — PASS: Hashable correctly synthesized**
+- `WorkWithFaeConversationMessage: Hashable` — Swift synthesizes hash from all stored properties
+- `String?` is Hashable (Optional<String> is Hashable when String is Hashable)
+- No manual hashValue implementation needed
+
+### Summary
+1 MINOR concern about string vs enum typing. All type safety fundamentals are correct.
