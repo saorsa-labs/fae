@@ -48,6 +48,8 @@ final class CoworkWorkspaceController: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var isRestoringWorkspaceConversation = false
     private var conversationBindingWorkspaceID: UUID?
+    private var consensusTask: Task<Void, Never>?
+    private let streamingConsensusEngine = StreamingConsensusEngine()
 
     init(faeCore: FaeCore, conversation: ConversationController, runtimeDescriptor: FaeLocalRuntimeDescriptor? = nil) {
         self.faeCore = faeCore
@@ -1631,9 +1633,12 @@ final class CoworkWorkspaceController: ObservableObject {
             return
         }
 
+        // Cancel any in-flight consensus before starting a new one.
+        consensusTask?.cancel()
+
         beginWorkspaceTurn(for: prompt)
 
-        Task { [weak self] in
+        consensusTask = Task { [weak self] in
             guard let self else { return }
             let primaryModelID = participants.first?.modelIdentifier ?? "unknown"
             await self.compressConversationIfNeeded(modelID: primaryModelID)
@@ -1649,55 +1654,78 @@ final class CoworkWorkspaceController: ObservableObject {
             }
 
             let securityExecutor = await self.faeCore.coworkToolExecutor
-            let results = await withTaskGroup(of: WorkWithFaeConsensusResult.self, returning: [WorkWithFaeConsensusResult].self) { group in
-                for agent in participants {
-                    group.addTask { [runtimeDescriptor = self.runtimeDescriptor, chatProvider = self.chatProvider, thinkingLevel] in
-                        let request = CoworkProviderRequest(
-                            model: agent.modelIdentifier,
-                            preparedPrompt: preparedPrompt,
-                            thinkingLevel: thinkingLevel
-                        )
-                        do {
-                            let response: CoworkProviderResponse
-                            if agent.providerKind == .faeLocalhost, let chatProvider {
-                                response = try await chatProvider.submit(request: request)
-                            } else {
-                                let provider = try CoworkProviderFactory.provider(for: agent, runtimeDescriptor: runtimeDescriptor)
-                                guard let securityExecutor else {
-                                    throw CoworkToolExecutorError.pipelineNotReady
-                                }
-                                response = try await securityExecutor.submit(request: request, provider: provider)
-                            }
-                            return WorkWithFaeConsensusResult(
-                                agentID: agent.id,
-                                agentName: agent.name,
-                                providerLabel: agent.backendDisplayName,
-                                isTrustedLocal: agent.isTrustedLocal,
-                                responseText: response.content,
-                                errorText: nil
-                            )
-                        } catch {
-                            return WorkWithFaeConsensusResult(
-                                agentID: agent.id,
-                                agentName: agent.name,
-                                providerLabel: agent.backendDisplayName,
-                                isTrustedLocal: agent.isTrustedLocal,
-                                responseText: nil,
-                                errorText: error.localizedDescription
-                            )
-                        }
-                    }
+
+            // Resolve providers upfront so the streaming engine can run off MainActor.
+            let resolvedParticipants: [StreamingConsensusEngine.Participant] = participants.map { agent in
+                if agent.providerKind == .faeLocalhost {
+                    return StreamingConsensusEngine.Participant(agent: agent, provider: nil, useChatProvider: true)
+                }
+                let resolved = try? CoworkProviderFactory.provider(for: agent, runtimeDescriptor: self.runtimeDescriptor)
+                return StreamingConsensusEngine.Participant(agent: agent, provider: resolved, useChatProvider: false)
+            }
+
+            // Accumulate results progressively as chunks stream in.
+            var partialResults: [String: WorkWithFaeConsensusResult] = [:]
+            let stream = await self.streamingConsensusEngine.streamConsensus(
+                participants: resolvedParticipants,
+                preparedPrompt: preparedPrompt,
+                thinkingLevel: thinkingLevel,
+                chatProvider: self.chatProvider,
+                securityExecutor: securityExecutor
+            )
+
+            for await chunk in stream {
+                guard !Task.isCancelled else { break }
+
+                let agent = participants.first(where: { $0.id == chunk.agentID })
+                let providerLabel = agent?.backendDisplayName ?? chunk.agentName
+                let isTrustedLocal = agent?.isTrustedLocal ?? false
+
+                if chunk.isComplete {
+                    partialResults[chunk.agentID] = WorkWithFaeConsensusResult(
+                        agentID: chunk.agentID,
+                        agentName: chunk.agentName,
+                        providerLabel: providerLabel,
+                        isTrustedLocal: isTrustedLocal,
+                        responseText: chunk.errorText == nil ? chunk.text : nil,
+                        errorText: chunk.errorText
+                    )
+                } else {
+                    // Streaming partial — update the in-progress result.
+                    partialResults[chunk.agentID] = WorkWithFaeConsensusResult(
+                        agentID: chunk.agentID,
+                        agentName: chunk.agentName,
+                        providerLabel: providerLabel,
+                        isTrustedLocal: isTrustedLocal,
+                        responseText: chunk.text,
+                        errorText: nil
+                    )
                 }
 
-                var collected: [WorkWithFaeConsensusResult] = []
-                for await result in group {
-                    collected.append(result)
+                // Publish sorted results on MainActor for live UI updates.
+                let sortedResults = participants.compactMap { p in partialResults[p.id] }
+                await MainActor.run {
+                    self.latestConsensusResults = sortedResults
                 }
-                return collected.sorted { lhs, rhs in
-                    let leftIndex = participants.firstIndex(where: { $0.id == lhs.agentID }) ?? .max
-                    let rightIndex = participants.firstIndex(where: { $0.id == rhs.agentID }) ?? .max
-                    return leftIndex < rightIndex
+            }
+
+            // Final sorted results after all agents complete.
+            let results = participants.compactMap { p in partialResults[p.id] }
+
+            guard !Task.isCancelled else {
+                // Preserve whatever completed results we have.
+                await MainActor.run {
+                    self.latestConsensusResults = results
+                    self.conversation.isGenerating = false
+                    self.providerStatus = "Consensus cancelled"
+                    self.conversationBindingWorkspaceID = nil
+                    self.prependActivity(
+                        title: "Consensus cancelled",
+                        detail: "Preserved \(results.count) partial results.",
+                        tone: .warning
+                    )
                 }
+                return
             }
 
             let summary = await self.buildConsensusSummary(for: prompt, results: results)
@@ -1716,6 +1744,12 @@ final class CoworkWorkspaceController: ObservableObject {
                 )
             }
         }
+    }
+
+    /// Cancels any in-flight consensus run, preserving partial results.
+    func cancelConsensus() {
+        consensusTask?.cancel()
+        consensusTask = nil
     }
 
     private func refresh() async {
