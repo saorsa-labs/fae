@@ -19,10 +19,7 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         // MLX ecosystem — local ML inference on Apple Silicon.
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMinor(from: "0.31.1")),
-        // mlx-swift-lm: pinned to pre-d1b1478 commit (before Downloader/TokenizerLoader
-        // decoupling broke the convenience `loadContainer(configuration:)` API).
-        // TODO: adopt the new Downloader + TokenizerLoader protocol and unpin.
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", revision: "25b00d4"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMinor(from: "2.31.0")),
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", from: "0.1.2"),
         // SQLite with ORM — memory store.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
