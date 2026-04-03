@@ -4,7 +4,7 @@ import XCTest
 
 final class RuntimeContractTests: XCTestCase {
 
-    func testRuntimeProgressBackendEventRoutedToTypedNotification() {
+    func testRuntimeProgressBackendEventRoutedToTypedNotification() async {
         let router = BackendEventRouter()
         _ = router
 
@@ -32,12 +32,12 @@ final class RuntimeContractTests: XCTestCase {
             ]
         )
 
-        wait(for: [exp], timeout: 2.0)
+        await fulfillment(of: [exp], timeout: 2.0)
         XCTAssertEqual(capturedStage, "verify_started")
         XCTAssertEqual(capturedProgress ?? -1, 0.98, accuracy: 0.000_001)
     }
 
-    func testPipelineDegradedModeEventRoutedToPipelineState() {
+    func testPipelineDegradedModeEventRoutedToPipelineState() async {
         let router = BackendEventRouter()
         _ = router
 
@@ -68,7 +68,7 @@ final class RuntimeContractTests: XCTestCase {
             ]
         )
 
-        wait(for: [exp], timeout: 2.0)
+        await fulfillment(of: [exp], timeout: 2.0)
         XCTAssertEqual(capturedEvent, "pipeline.degraded_mode")
         XCTAssertEqual(capturedMode, "noTTS")
     }
@@ -709,7 +709,7 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
-    func testPipelineAuxBridgeTracksLocalModelStackDiagnostics() {
+    func testPipelineAuxBridgeTracksLocalModelStackDiagnostics() async {
         let controller = PipelineAuxBridgeController()
 
         controller.localStack = .init()
@@ -730,7 +730,7 @@ final class RuntimeContractTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             expectation.fulfill()
         }
-        wait(for: [expectation], timeout: 1.0)
+        await fulfillment(of: [expectation], timeout: 1.0)
 
         XCTAssertTrue(controller.localStack.operatorLoaded)
         XCTAssertEqual(controller.localStack.currentRoute, "operator")

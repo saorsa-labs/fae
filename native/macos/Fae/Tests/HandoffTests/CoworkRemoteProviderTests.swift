@@ -1033,7 +1033,7 @@ final class CoworkToolExecutorTests: XCTestCase {
             provider: provider
         )
 
-        wait(for: [exp], timeout: 2.0)
+        await fulfillment(of: [exp], timeout: 2.0)
         XCTAssertEqual(capturedProvider, CoworkLLMProviderKind.openAICompatibleExternal.rawValue)
         XCTAssertEqual(capturedFields, ["workspace inventory", "private memory"])
     }
