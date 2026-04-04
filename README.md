@@ -121,12 +121,13 @@ The most ambitious improvement loop: Fae can train improved versions of herself 
 - `fuse_and_benchmark_candidate.sh` — evaluate and merge candidate models
 - Personalised benchmark generation from the user's own memory records
 
-**The autonomous pipeline (designed, not yet orchestrated):**
-1. Weekly: export high-quality conversation turns + implicit correction pairs (DPO)
-2. Overnight: LoRA training during quiet hours, resource-gated (power + thermal)
-3. Morning: benchmark new checkpoint against current model on both standard and personalised tests
-4. Proposal: "I trained an improved model overnight. It scores 82% vs 76% on our benchmarks — especially better at the Rust questions you've been asking. Want me to switch?"
-5. User decides. Never auto-deployed.
+**The autonomous pipeline (implemented v0.8.183):**
+1. Nightly (03:00): collect corrections + implicit feedback, export SFT/DPO data via `TrainingBridge`
+2. Overnight: LoRA training via mlx-tune during quiet hours, resource-gated (power + thermal)
+3. Evaluate: benchmark adapter against baseline (FaeBenchmark or loss-based proxy)
+4. External review: Codex/Claude/internal validation gate
+5. Morning proposal: "I trained an improved model overnight. Want me to switch?"
+6. Earned auto-deploy after 5 approved cycles. Rollback always available.
 
 Over months, the weights absorb the user's communication style, domain expertise, emotional calibration, and working patterns. The system prompt does less work because the model *thinks* in the user's style. This is the three-layer design (weights → soul → prompt) fully realised.
 
@@ -263,7 +264,7 @@ Fae is a **pure Swift app** powered by [MLX](https://github.com/ml-explore/mlx-s
 │  Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker │
 │                         │              │                      │
 │                         │              ├── Memory (SQLite)     │
-│                         │              ├── Tools (33 built-in) │
+│                         │              ├── Tools (37 built-in) │
 │                         │              ├── Scheduler           │
 │                         │              └── Self-Config         │
 │                         │                                     │
@@ -470,8 +471,8 @@ Config file: `~/Library/Application Support/fae/config.toml` (macOS)
 
 ```toml
 [llm]
-maxTokens = 512
-contextSizeTokens = 16384
+maxTokens = 4096
+contextSizeTokens = 0    # auto-sized by RAM
 temperature = 0.7
 voiceModelPreset = "auto"
 thinkingLevel = "balanced" # fast | balanced | deep
@@ -509,6 +510,8 @@ modelPreset = "auto"
 - [ADR-003: Local-Only LLM Inference](docs/adr/003-local-llm-inference.md)
 - [ADR-004: Fae Identity and Personality](docs/adr/004-fae-identity-and-personality.md)
 - [ADR-005: Self-Modification Safety](docs/adr/005-self-modification-safety.md)
+- [ADR-006: Voice Privilege Escalation](docs/adr/006-voice-privilege-escalation.md)
+- [ADR-007: Companion Device Handoff](docs/adr/007-companion-device-handoff.md)
 
 ### Guides
 
@@ -523,12 +526,7 @@ modelPreset = "auto"
 - [Security Launch SLOs](docs/guides/security-autonomy-launch-slos.md)
 - [Security Contributor Guidelines](docs/guides/security-contributor-guidelines.md)
 - [User Security Behavior Contract](docs/guides/user-security-behavior-contract.md)
-- [Skills Manifest Migration Plan](docs/guides/skills-manifest-migration-plan.md)
 - [Security Confirmation Copy](docs/guides/security-confirmation-copy.md)
-- [Shadow Mode Dogfood Runbook](docs/guides/shadow-mode-dogfood-runbook.md)
-- [Shadow Mode Threshold Tuning](docs/guides/shadow-mode-threshold-tuning.md)
-- [Security Rollout Plan](docs/guides/security-rollout-plan.md)
-- [Security Post-Release Iteration Loop](docs/guides/security-postrelease-iteration-loop.md)
 - [Security PR Review Checklist](docs/checklists/security-pr-review-checklist.md)
 - [Adversarial Security Suite Plan](docs/tests/adversarial-security-suite-plan.md)
 

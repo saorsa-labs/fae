@@ -1,0 +1,18 @@
+# Architecture Decision Records
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [001](001-cascaded-voice-pipeline.md) | Cascaded Voice Pipeline | Accepted | 2026-02-10 |
+| [002](002-embedded-rust-core.md) | Embedded Rust Core | Superseded | 2026-02-11 |
+| [003](003-local-llm-inference.md) | Local-Only LLM Inference | Accepted (evolved) | 2026-02-13 |
+| [004](004-fae-identity-and-personality.md) | Fae Identity and Personality | Accepted | 2026-02-10 |
+| [005](005-self-modification-safety.md) | Self-Modification Safety | Accepted (conceptual) | 2026-02-21 |
+| [006](006-voice-privilege-escalation.md) | Voice Privilege Escalation | Accepted | 2026-02-23 |
+| [007](007-companion-device-handoff.md) | Companion Device Handoff | In Progress | 2026-02-23 |
+
+## Notes
+
+- ADRs 001-007 were originally written for the Rust-era architecture (Feb 2026)
+- The codebase was rebuilt in pure Swift/MLX; ADR statuses updated 2026-04-05
+- ADR-002 is the only fully superseded decision (Rust core replaced by Swift)
+- All other architectural decisions remain valid; implementations ported to Swift

@@ -1,11 +1,12 @@
 # ADR-005: Self-Modification Safety Model
 
-**Status:** Superseded (historical)
+**Status:** Accepted (conceptual model; enforcement evolved)
 **Date:** 2026-02-21
-**Scope:** Rust-era safety architecture (`src/**`, `~/.fae/skills/`, `SOUL.md`)
+**Scope:** Self-modification safety model — originally Rust (`src/**`), now Swift (`Tools/DamageControlPolicy.swift`, `Tools/ToolExecutor.swift`, `Tools/ReversibilityEngine.swift`, `Backup/GitVaultManager.swift`)
 
-> Historical note: this ADR references Rust paths from the prior architecture.
-> Current production safety/approval/runtime logic is in `native/macos/Fae/Sources/Fae/`.
+> The 4-layer conceptual model (PK/GSL/SAL/ERS) remains the design intent.
+> Enforcement in Swift uses DamageControlPolicy (catastrophic op blocking), ReversibilityEngine (snapshots/undo),
+> PathPolicy (write-path validation), and Git Vault (rollback). Rust paths no longer exist.
 
 ## Context
 

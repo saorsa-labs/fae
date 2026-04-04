@@ -1,11 +1,11 @@
 # ADR-006: Voice Privilege Escalation (Tool Approval System)
 
-**Status:** Superseded (historical)
+**Status:** Accepted
 **Date:** 2026-02-23
-**Scope:** Rust-era tool safety architecture across pipeline, agent, host, and UI layers
+**Scope:** Tool approval system — originally Rust, now Swift (`Tools/ToolExecutor.swift`, `ApprovalOverlayController.swift`, `ApprovalOverlayView.swift`, `Pipeline/PipelineCoordinator.swift`)
 
-> Historical note: this ADR captures the pre-Swift-rebuild implementation details.
-> Current approval and tool-risk flow is implemented in Swift under `native/macos/Fae/Sources/Fae/`.
+> The approval-gated tool architecture is actively implemented in Swift.
+> Voice/button/timeout approval paths work as designed. See also ADR-005 for safety model.
 
 ## Context
 

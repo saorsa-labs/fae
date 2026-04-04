@@ -1,11 +1,11 @@
 # ADR-003: Local-Only LLM Inference
 
-**Status:** Superseded (historical)
+**Status:** Accepted (implementation evolved)
 **Date:** 2026-02-13
-**Scope:** Rust-era LLM backend (`src/llm/`, `src/config.rs`, `src/personality.rs`, `src/fae_llm/`)
+**Scope:** Local-only LLM inference — originally Rust/ONNX (`src/llm/`), now Swift/MLX (`Sources/FaeInference/`, `Sources/Fae/Core/FaeConfig.swift`)
 
-> Historical note: this ADR documents the earlier Rust stack.
-> Current production model orchestration is Swift-native in `native/macos/Fae`.
+> The core decision (local-only, no API keys, privacy-first) remains active and implemented.
+> Implementation changed from Rust/mistralrs/ONNX to Swift/MLX. Models evolved from Qwen3 to Qwen3.5, with Gemma 4 migration pending.
 
 ## Context
 

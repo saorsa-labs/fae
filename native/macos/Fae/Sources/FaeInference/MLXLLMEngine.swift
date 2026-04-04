@@ -82,9 +82,11 @@ public actor MLXLLMEngine: LLMEngine {
                 config = ModelConfiguration(id: modelID)
                 NSLog("MLXLLMEngine: model not cached locally — download will begin")
             }
-            if usesQwenCompatibleToolCallFormat(modelID: modelID) {
-                config.toolCallFormat = .xmlFunction
-                NSLog("MLXLLMEngine: set toolCallFormat=xmlFunction for Qwen-compatible model")
+            if let formatStr = toolCallFormatOverride(modelID: modelID),
+               let format = ToolCallFormat(rawValue: formatStr)
+            {
+                config.toolCallFormat = format
+                NSLog("MLXLLMEngine: set toolCallFormat=%@ for model", formatStr)
             }
             container = try await LLMModelFactory.shared.loadContainer(
                 configuration: config,
@@ -667,15 +669,8 @@ public actor MLXLLMEngine: LLMEngine {
         }
         // KV cache disk persistence disabled — savePromptCache crashes with
         // concurrent MLXArray access during TTS even with a 10s delay.
-        // TODO: Save cache explicitly from a scheduler task during idle time,
-        // or serialize on a dedicated Metal queue that doesn't conflict with TTS.
-        // if !hasPersistedCache, !kvCache.isEmpty {
-        //     hasPersistedCache = true
-        //     Task.detached { [weak self] in
-        //         try? await Task.sleep(nanoseconds: 30_000_000_000)
-        //         await self?.savePromptCacheToDisk()
-        //     }
-        // }
+        // Needs: save from a scheduler task during idle, or serialize on a
+        // dedicated Metal queue that doesn't conflict with TTS.
     }
 
     // MARK: - KV Cache Disk Persistence

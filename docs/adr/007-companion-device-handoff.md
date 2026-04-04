@@ -1,11 +1,12 @@
 # ADR-007: Companion Device Handoff (iPhone, iPad, Apple Watch)
 
-**Status:** Historical proposal (pre-Swift-rebuild)
+**Status:** In Progress (Phases 1-2 complete)
 **Date:** 2026-02-23
-**Scope:** Rust-era cross-device architecture proposal
+**Scope:** Cross-device architecture — FaeOrbKit (`native/apple/FaeOrbKit/`), FaeRelayKit (`native/apple/FaeRelayKit/`), FaeCompanion (`native/apple/FaeCompanion/`)
 
-> Historical note: this proposal references embedded-Rust/Mode-B assumptions from the prior stack.
-> Current companion integration should be designed against the Swift runtime in `native/macos/Fae`.
+> Phases 1-2 (orb extraction, relay service) are built. FaeRelayServer.swift exists in the main app.
+> Remaining phases (iOS/iPadOS app, audio bridging, watchOS) are deferred.
+> Original Rust/libfae assumptions no longer apply — design against Swift runtime.
 
 ## Context
 

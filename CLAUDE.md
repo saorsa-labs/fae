@@ -113,7 +113,17 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
 | Turn Detector | SmartTurn (Whisper-encoder classifier) | MLXAudioVAD float32 | Audio-based end-of-utterance prediction for adaptive endpointing (falls back to rule-based heuristics) |
 
-**Auto model selection** (single LLM, via `voiceModelPreset: "auto"`):
+**Auto model selection** (via `voiceModelPreset: "auto"`):
+
+Target (Gemma 4 — pending [mlx-swift-lm#180](https://github.com/ml-explore/mlx-swift-lm/pull/180)):
+
+| System RAM | Model | Mode | Context |
+|------------|-------|------|---------|
+| <16 GB | Gemma 4 E2B 4-bit (2.3B eff) | Unified: audio-direct ASR+LLM | 128K |
+| 16-31 GB | Gemma 4 E4B 4-bit (4.5B eff) | Unified: audio-direct ASR+LLM | 128K |
+| ≥32 GB | Gemma 4 E2B (ASR) + 26B-A4B (LLM) | Dual: dedicated ASR + quality LLM | 256K |
+
+Current fallback (Qwen3.5 — active until Gemma 4 ships in mlx-swift-lm):
 
 | System RAM | Model | HuggingFace ID | Context |
 |------------|-------|----------------|---------|
@@ -121,9 +131,9 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | ≥8 GB | Qwen3.5-4B (uniform 4-bit) | `mlx-community/Qwen3.5-4B-4bit` | 32K |
 | <8 GB | Qwen3.5-2B OptiQ | `mlx-community/Qwen3.5-2B-OptiQ-4bit` | 32K |
 
-Benchmarked 2026-03-28: 9B Unsloth scores 100% on tool calling, assistant fit, Fae capability, and serialization. 4B OptiQ was catastrophically broken (0% across all evals) — replaced with uniform 4-bit (100% tool calling, 95% assistant fit). 35B-A3B removed from auto-select: 9B Unsloth matches or exceeds it on all Fae-relevant quality metrics at 2x speed and 1/3 memory.
+Benchmarked 2026-04-02: Gemma 4 E4B 4-bit scores 100% on tool calling, Fae capability, assistant fit, and serialization (90% MMLU). Matches Qwen3.5-9B at half the effective params with native audio input. E2B scores 100% tool calling, 90% cap, 85% fit. 26B-A4B scores 98% MMLU, 100% on all Fae metrics.
 
-Presets: `qwen3_5_35b_a3b`, `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`. Unknown presets → auto. Legacy presets (`saorsa_1_1_tiny`) silently resolve to `qwen3_5_2b`.
+Presets: `gemma_4_e2b`, `gemma_4_e4b`, `gemma_4_26b_a4b`, `qwen3_5_35b_a3b`, `qwen3_5_9b`, `qwen3_5_4b`, `qwen3_5_2b`. Unknown presets → auto. Legacy presets (`saorsa_1_1_tiny`) silently resolve to `qwen3_5_2b`.
 
 Context scaling: `FaeConfig.recommendedMaxHistory()` = `(contextSize - 5000 - maxTokens) / 400`, clamped [6, 100]. `maxTokens` capped at `contextSize / 2`.
 
@@ -185,27 +195,37 @@ Tick interval: 60s. Tasks are spread across repeating timers and daily checks.
 
 **Proactive tasks** (via `proactiveQueryHandler`): `overnight_work` (22:00-06:00), `enhanced_morning_briefing` (deferred until user detected after 07:00), `training_data_export`, `training_cycle`.
 
-**Improvement cycle** (via `ImprovementCycleCoordinator`): `improvement_cycle` runs nightly at 03:00 after backups complete. Alternates between training nights and shadow eval nights. Minimum data thresholds: 20 feedback events or 5 corrections required before training triggers.
+**Improvement cycle** (via `ImprovementCycleCoordinator`): `improvement_cycle` runs nightly at 03:00 after backups complete. Runs meta-optimization first (fast, minutes), then optional weight training (slow, hours). Minimum data thresholds: 20 feedback events required to trigger cycle.
 
 ## Autonomous Self-Improvement Loop
 
 Fae autonomously improves via a deterministic overnight loop. No human intervention for routine improvement.
 
 ```
-Collect corrections → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
+Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
+    → Export SFT/DPO data → Train LoRA adapter (mlx-tune)
     → Evaluate (FaeBenchmark, pure Swift) → External review (Codex/Claude)
     → Propose next morning → Deploy after approval
 ```
 
 **Key components:**
-- `ImprovementCycleCoordinator` (actor): State machine IDLE -> COLLECTING -> TRAINING -> EVALUATING -> PROPOSING -> DEPLOYING with rollback
+- `ImprovementCycleCoordinator` (actor): State machine IDLE -> COLLECTING -> META_OPTIMIZING -> TRAINING -> EVALUATING -> PROPOSING -> DEPLOYING with rollback
+- `MetaOptimizer` (actor): AutoAgent-inspired hill-climbing on runtime-mutable surfaces. Tests candidate changes against FaeBenchmark, keeps improvements, rolls back regressions. Budget: 10 benchmark runs, 30 min wall clock per cycle.
+- `MetaOptHypothesisGenerator`: Pattern-based hypotheses for directive amendments and config knob adjustments from feedback clusters.
+- `MetaOptSkillGenerator`: Generates instruction-only skills from capability gaps (5 templates: tool routing, formatting, memory precision, execution, conversation quality). Names prefixed `auto-`.
+- `MetaOptMemorySeedGenerator`: Seeds strategic facts into memory recall (6 templates). Capped at 10 active seeds, 30-day expiry.
 - `TrainingBridge` (actor): Calls mlx-tune Python scripts via `uv run --script`. Methods: `exportTrainingData()`, `launchTraining()`, `pollUntilComplete()`, `evaluateAdapter()`, `runBenchmark()`. Scripts from training-orchestrator and training-data-bridge skills. Optional FaeBenchmark binary for real accuracy eval.
-- `ImprovementStore` (improvement.db): Separate SQLite database with 5 tables (feedback_events, improvement_baselines, improvement_state, capability_gaps, shadow_eval)
+- `ImprovementStore` (improvement.db): Separate SQLite database with 6 tables (feedback_events, improvement_baselines, improvement_state, capability_gaps, shadow_eval, meta_optimization_log)
 - `ImplicitFeedbackDetector`: 7 signal types captured after each turn (re-ask, abandonment, follow-through, interruption, praise, topic_change, silence_acceptance)
 - `ExternalReviewGate`: 3-provider fallback (Codex -> Claude -> internal), PASS/FAIL/CONCERN with 3-deferral max
-- `DirectiveFastTuner`: Pattern-based directive amendments every 7th cycle (faster than model training)
 - `ShadowEvaluator`: Overnight replay on alternate nights, 60% win rate promotion gate
 - `AdapterDeploymentManager`: Semi-automatic mode (morning proposals), earned auto-deploy after 5 approved cycles
+
+**Meta-optimization surfaces** (tested via FaeBenchmark hill-climbing):
+- **Directive** (Layer 4): Conciseness, clarification, relevance-first, understanding amendments
+- **Config knobs**: `llm.temperature` (0.1–1.0), `memory.maxRecallResults` (2–12)
+- **Skills**: Auto-generated instruction skills from capability gaps and feedback patterns
+- **Memory seeds**: Strategic facts (`meta_opt_seed` tagged) that shape recall behavior
 
 **Training pipeline flow** (nightly at 03:00, requires 20+ feedback events with 5+ corrections):
 1. `TrainingBridge.exportTrainingData()` → calls `build_dataset.py` → writes `train.jsonl` + `dpo_pairs.jsonl`
@@ -329,7 +349,7 @@ cd native/macos/Fae/Sources/Fae/Resources/Skills/<skill-name>
 for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d' ' -f1)\""; done
 ```
 
-## Built-in skills (22)
+## Built-in skills (29)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -355,6 +375,13 @@ for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d
 | `channel-discord` | Executable | Discord channel integration |
 | `channel-whatsapp` | Executable | WhatsApp channel integration |
 | `channel-imessage` | Executable | iMessage channel integration |
+| `channel-hub` | Executable | Unified channel management hub |
+| `document-analyst` | Executable | Document analysis and processing |
+| `email-triage` | Executable | Email prioritization and triage |
+| `file-organizer` | Executable | File organization and management |
+| `focus-defender` | Executable | Focus mode and distraction blocking |
+| `smart-home` | Executable | Smart home device control |
+| `system-health` | Executable | System health monitoring and reporting |
 
 Skills use **progressive disclosure**: names + descriptions in system prompt, full SKILL.md body loaded on `activate_skill`.
 
@@ -700,7 +727,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `DirectiveFastTuner.swift` | Pattern-based directive amendments from feedback analysis |
 | `ShadowEvaluator.swift` | Overnight shadow eval with 60% win rate promotion gate |
 
-### Scheduler/ (11 files)
+### Scheduler/ (16 files)
 
 | File | Role |
 |------|------|
@@ -715,6 +742,11 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `TrainingBridge.swift` | Calls mlx-tune Python scripts via uv for export, train, poll, evaluate |
 | `AdapterDeploymentManager.swift` | Semi-auto deploy with earned auto-deploy after 5 cycles |
 | `ImprovementHealthReporter.swift` | Self-diagnostic integration for improvement loop health |
+| `MetaOptimizer.swift` | AutoAgent-inspired hill-climbing on directive, config, skills, memory seeds |
+| `MetaOptTypes.swift` | Types for meta-optimization: DimensionScores, hypotheses, budgets, changes |
+| `MetaOptHypothesisGenerator.swift` | Pattern-based hypothesis generation (directive + config) |
+| `MetaOptSkillGenerator.swift` | Skill template matching + feedback-based skill generation |
+| `MetaOptMemorySeedGenerator.swift` | Strategic memory seeding from feedback patterns |
 
 ### Skills/ (7 files)
 

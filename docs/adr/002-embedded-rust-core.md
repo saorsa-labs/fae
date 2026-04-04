@@ -1,11 +1,11 @@
 # ADR-002: Embedded Rust Core Architecture
 
-**Status:** Superseded (historical)
+**Status:** Superseded
 **Date:** 2026-02-11
-**Scope:** Rust-era host architecture (`src/ffi.rs`, `src/host/`, `native/macos/`)
+**Scope:** Rust-era host architecture (`src/ffi.rs`, `src/host/`, `native/macos/`) — **no longer applicable**
 
-> Historical note: this ADR describes the previous embedded-Rust model.
-> Current production runtime is Swift-native under `native/macos/Fae`.
+> **Superseded by pure Swift architecture.** There is no Rust core, no libfae.a, no C ABI.
+> Current production runtime is Swift-native under `native/macos/Fae/`. See CURRENT_STATE.md.
 
 ## Context
 

@@ -1,11 +1,11 @@
 # ADR-001: Cascaded Voice Pipeline
 
-**Status:** Superseded (historical)
+**Status:** Accepted
 **Date:** 2026-02-10
-**Scope:** Rust-era voice pipeline architecture (`src/pipeline/`, `src/stt/`, `src/tts/`, `src/vad/`, `src/audio/`)
+**Scope:** Voice pipeline architecture — originally Rust (`src/pipeline/`), now Swift (`native/macos/Fae/Sources/Fae/Pipeline/`, `Audio/`, `ML/`)
 
-> Historical note: this ADR documents the pre-Swift-rebuild architecture.
-> Active production implementation lives in `native/macos/Fae/Sources/Fae/`.
+> The cascaded pipeline architecture remains the active production design.
+> Implementation was ported from Rust to Swift/MLX but the architectural decisions are unchanged.
 
 ## Context
 
