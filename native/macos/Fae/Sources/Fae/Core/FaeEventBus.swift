@@ -159,6 +159,11 @@ final class FaeEventBus: @unchecked Sendable {
             eventName = "cowork.injection_flagged"
             payload["provider"] = provider
             payload["pattern"] = pattern
+
+        case .coworkPIIRedacted(let provider, let categories):
+            eventName = "cowork.pii_detected"
+            payload["provider"] = provider
+            payload["categories"] = categories
         }
 
         let userInfo: [String: Any] = [

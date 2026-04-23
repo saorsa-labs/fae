@@ -64,6 +64,8 @@ actor CoworkToolExecutor {
         var allowed: Int = 0
         var blocked: Int = 0
         var flagged: Int = 0
+        /// Outbound requests where the privacy filter detected PII.
+        var piiDetected: Int = 0
     }
 
     // MARK: - Properties
@@ -88,6 +90,13 @@ actor CoworkToolExecutor {
     /// Optional event bus for publishing CoWork security events to the UI.
     private let eventBus: FaeEventBus?
 
+    /// Optional privacy filter for scanning outbound prompts for PII.
+    /// When set, each submit call scans `request.preparedPrompt.shareablePrompt`;
+    /// detected PII emits `coworkPIIRedacted` and increments `metrics.piiDetected`.
+    /// The outbound prompt is NOT mutated — this is a detect-only surface until
+    /// a section-level redaction design ships.
+    private let privacyFilter: (any PrivacyFilterScanning)?
+
     /// Per-provider security metrics (allowed/blocked/flagged counts).
     private var metrics: [String: ProviderMetrics] = [:]
 
@@ -110,13 +119,15 @@ actor CoworkToolExecutor {
         inboundScanPatterns: [String]? = nil,
         isReady: Bool = true,
         securityLogger: (any SecurityEventLogging)? = nil,
-        eventBus: FaeEventBus? = nil
+        eventBus: FaeEventBus? = nil,
+        privacyFilter: (any PrivacyFilterScanning)? = nil
     ) {
         self.damageControlPolicy = damageControlPolicy
         self.inboundScanPatterns = inboundScanPatterns ?? Self.defaultInboundPatterns
         self.isReady = isReady
         self.securityLogger = securityLogger
         self.eventBus = eventBus
+        self.privacyFilter = privacyFilter
     }
 
     /// Mark this executor as fully initialized and ready to handle requests.
@@ -149,6 +160,7 @@ actor CoworkToolExecutor {
     ) async throws -> CoworkProviderResponse {
         let providerKind = provider.kind.rawValue
         try await performSecurityCheck(toolName: "external_llm", providerKind: providerKind, request: request)
+        await scanOutboundForPII(providerKind: providerKind, request: request)
 
         do {
             let response = try await provider.submit(request: request)
@@ -188,6 +200,7 @@ actor CoworkToolExecutor {
     ) async throws -> CoworkProviderResponse {
         let providerKind = provider.kind.rawValue
         try await performSecurityCheck(toolName: "external_llm_streaming", providerKind: providerKind, request: request)
+        await scanOutboundForPII(providerKind: providerKind, request: request)
 
         var finalResponse: CoworkProviderResponse?
         var finalError: Error?
@@ -243,6 +256,7 @@ actor CoworkToolExecutor {
     ) async throws -> CoworkProviderResponse {
         let providerKind = provider.kind.rawValue
         try await performSecurityCheck(toolName: "external_llm_websearch", providerKind: providerKind, request: request)
+        await scanOutboundForPII(providerKind: providerKind, request: request)
 
         do {
             let response = try await provider.submitWithWebSearch(request: request)
@@ -256,6 +270,51 @@ actor CoworkToolExecutor {
             throw CoworkToolExecutorError.providerError(underlying: error)
         } catch {
             throw CoworkToolExecutorError.networkError(underlying: error)
+        }
+    }
+
+    // MARK: - Outbound PII Detection
+
+    /// Scan an outbound prompt for PII using the configured privacy filter.
+    ///
+    /// Runs detect-only: emits `coworkPIIRedacted` and logs via securityLogger
+    /// when PII is found, but does NOT mutate the prompt. Section-level
+    /// redaction is a follow-up since mutating `CoworkExportPacket` content
+    /// risks mangling legitimate text (e.g. test data in code snippets).
+    ///
+    /// Fail-open: bridge errors return `unavailable: true` and scanning is a no-op.
+    private func scanOutboundForPII(
+        providerKind: String,
+        request: CoworkProviderRequest
+    ) async {
+        guard let filter = privacyFilter else { return }
+        let outbound = request.preparedPrompt.shareableExport?.renderedPrompt
+            ?? request.preparedPrompt.shareablePrompt
+        let result = await filter.scan(outbound)
+        guard !result.unavailable, result.hasPII else { return }
+
+        // Deduplicate categories while preserving first-seen order.
+        var seen = Set<String>()
+        let categories = result.spans.compactMap { span -> String? in
+            guard !seen.contains(span.category) else { return nil }
+            seen.insert(span.category)
+            return span.category
+        }
+
+        metrics[providerKind, default: ProviderMetrics()].piiDetected += 1
+        eventBus?.send(.coworkPIIRedacted(provider: providerKind, categories: categories))
+        Task {
+            await securityLogger?.log(
+                event: "cowork_pii_detected",
+                toolName: "external_llm",
+                decision: "observe",
+                arguments: [
+                    "provider": providerKind,
+                    "model": request.model,
+                    "categories": categories.joined(separator: ","),
+                    "span_count": String(result.spans.count),
+                ]
+            )
         }
     }
 

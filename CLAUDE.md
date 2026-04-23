@@ -90,7 +90,7 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
                        │              │
                        │              ├── Memory (SQLite + ANN + FTS5)
                        │              ├── Tools (37 built-in)
-                       │              ├── Skills (22 built-in)
+                       │              ├── Skills (29 built-in)
                        │              ├── Scheduler (~23 tasks)
                        │              ├── Backup (Git Vault)
                        │              └── Self-Config
@@ -322,7 +322,7 @@ Voice identity is the security model. Owner gets full access; DamageControlPolic
 
 All external (non-local) LLM calls from CoWork are gated by `CoworkToolExecutor`, which calls `DamageControlPolicy.evaluate()` directly with `locality: .nonLocal`. This is a **provider-level** security gate, not a full ToolExecutor pipeline — CoWork provider calls are not individual tool dispatches and do not go through ToolRegistry, TrustedActionBroker, or OutboundExfiltrationGuard.
 
-**What is enforced**: DamageControlPolicy zero-access paths, inbound injection scan, fail-closed startup gate, SecurityEventLogger audit, per-provider metrics.
+**What is enforced**: DamageControlPolicy zero-access paths, inbound injection scan, outbound PII detection, fail-closed startup gate, SecurityEventLogger audit, per-provider metrics.
 
 **What is NOT enforced (by design)**: ToolRegistry mode filtering, approval overlay. CoWork provider calls are not individual tool dispatches.
 
@@ -336,6 +336,8 @@ All external (non-local) LLM calls from CoWork are gated by `CoworkToolExecutor`
 - `~/Library/Application Support/fae/directive.md` — system directive
 
 **Inbound response scan**: 10 prompt injection patterns checked on every response. Flagged responses emit `FaeEvent.coworkInjectionFlagged`.
+
+**Outbound PII detection**: When `config.privacy.piiFilterEnabled` (default on), every outbound prompt is scanned by `PrivacyFilterBridge` — a subprocess daemon that runs OpenAI Privacy Filter (1.5B / 50M-active encoder) via `mlx-embeddings`. Detected spans across 8 categories (person, email, phone, address, date, URL, account_number, secret) emit `FaeEvent.coworkPIIRedacted` + bump the `piiDetected` counter + write a `cowork_pii_detected` security log entry. **Detect-only**: the prompt is not mutated yet. **Fail-open**: if the daemon can't start or times out, CoWork proceeds without the scan — PII scrub is a best-effort enhancement, never a hard gate.
 
 **Fail-closed**: if `coworkToolExecutor` is nil (pipeline not started), calls throw `.pipelineNotReady` — no silent fallback to unguarded provider access.
 
@@ -475,6 +477,8 @@ Adjustable settings (bidirectional with Settings UI, via `FaeCore.patchConfig()`
 **Always-on (no toggle):** `barge_in`, `awareness.enabled`, `awareness.camera_enabled`, `awareness.screen_enabled`, `awareness.overnight_work`, `awareness.enhanced_briefing`, `memory.enabled`, `memory.generateDigests`, `vision.enabled`, `conversation.require_direct_address` (after primary enrollment).
 
 Directives: `get_directive`, `set_directive`, `append_directive`, `clear_directive`. Path: `~/Library/Application Support/fae/directive.md`.
+
+Rollback: `rollback_improvement` action undoes the most recent overnight meta-optimization change. User says "undo the last change you made to yourself" → LLM invokes `self_config(action: "rollback_improvement")`. Confirmation in companion language via `MetaOptNarrator.describeRollback()`.
 
 ## Rescue mode
 
@@ -654,7 +658,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `ConversationState.swift` | History management; `removeMessages(taggedWith:)` |
 | `TextProcessing.swift` | ThinkTagStripper, text cleanup utilities |
 
-### Runtime/ (11 files)
+### Runtime/ (12 files)
 
 | File | Role |
 |------|------|
@@ -669,6 +673,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `DependencyInstaller.swift` | Python/uv dependency installation |
 | `UVRuntime.swift` | Python uv runtime for package-heavy skills |
 | `FaeLocalRuntimeServer.swift` | Local HTTP runtime server |
+| `PrivacyFilterBridge.swift` | Long-lived daemon for OpenAI Privacy Filter (PII detection via mlx-embeddings subprocess, fail-open) |
 
 ### Tools/ (25 files)
 
@@ -727,7 +732,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `DirectiveFastTuner.swift` | Pattern-based directive amendments from feedback analysis |
 | `ShadowEvaluator.swift` | Overnight shadow eval with 60% win rate promotion gate |
 
-### Scheduler/ (16 files)
+### Scheduler/ (18 files)
 
 | File | Role |
 |------|------|
@@ -742,11 +747,13 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `TrainingBridge.swift` | Calls mlx-tune Python scripts via uv for export, train, poll, evaluate |
 | `AdapterDeploymentManager.swift` | Semi-auto deploy with earned auto-deploy after 5 cycles |
 | `ImprovementHealthReporter.swift` | Self-diagnostic integration for improvement loop health |
+| `DirectiveTuner.swift` | Legacy pattern detection for directive amendments (used by MetaOptHypothesisGenerator) |
 | `MetaOptimizer.swift` | AutoAgent-inspired hill-climbing on directive, config, skills, memory seeds |
 | `MetaOptTypes.swift` | Types for meta-optimization: DimensionScores, hypotheses, budgets, changes |
 | `MetaOptHypothesisGenerator.swift` | Pattern-based hypothesis generation (directive + config) |
 | `MetaOptSkillGenerator.swift` | Skill template matching + feedback-based skill generation |
 | `MetaOptMemorySeedGenerator.swift` | Strategic memory seeding from feedback patterns |
+| `MetaOptNarrator.swift` | Technical→companion-language translator for briefing + Settings UI + rollback |
 
 ### Skills/ (7 files)
 
@@ -803,7 +810,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `Audio/WAVParser.swift` | Lightweight WAV file parser (PCM 16-bit mono) |
 | `Backup/GitVaultManager.swift` | Git-based rolling backup at `~/.fae-vault/` |
 
-### Top-level files (74 files)
+### Top-level files (75 files)
 
 Key top-level files (all under `Sources/Fae/`):
 
@@ -864,7 +871,7 @@ Known blockers: dependency fetch requires network; first app run blocks on model
 
 See `docs/CHANGELOG.md` for detailed milestone history.
 
-Current: v0.8.183 — Autonomous self-improvement loop, LoRA adapter loading, implicit feedback, shadow eval.
+Current: v0.8.189 — Single-model Qwen3.5 path active; Gemma 4 E4B/E2B target pending mlx-swift-lm.
 
 ## Design System
 

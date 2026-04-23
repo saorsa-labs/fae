@@ -433,6 +433,13 @@ struct FaeConfig: Codable {
         /// local_preferred: local-first with optional connected features.
         /// connected: enable connected features when allowed by tool mode.
         var mode: String = "local_preferred"
+
+        /// PII filter (OpenAI Privacy Filter via mlx-embeddings).
+        /// When on, outbound CoWork prompts are scanned for personally
+        /// identifying information; detected spans emit UI events and
+        /// security log entries. Scan is detect-only; the outbound prompt
+        /// is not mutated.
+        var piiFilterEnabled: Bool = true
     }
 
     static func recommendedTrainingTarget() -> String {

@@ -702,13 +702,35 @@ actor PipelineCoordinator {
     /// Called once by ``FaeCore`` after the pipeline has started. Subsequent
     /// calls are no-ops (returns the existing instance).
     @discardableResult
-    func makeCoworkToolExecutor() -> CoworkToolExecutor {
+    func makeCoworkToolExecutor() async -> CoworkToolExecutor {
         if let existing = coworkToolExecutor { return existing }
+
+        // Build the privacy filter bridge if enabled. Fail-soft: if the daemon
+        // cannot start (uv missing, script missing, install blocked), continue
+        // without the filter. PII scrub is best-effort and must never block
+        // CoWork from working.
+        let privacyFilter: (any PrivacyFilterScanning)?
+        if config.privacy.piiFilterEnabled {
+            do {
+                privacyFilter = try await PrivacyFilterBridge.createDefault()
+                NSLog("PipelineCoordinator: privacy filter bridge attached")
+            } catch {
+                NSLog(
+                    "PipelineCoordinator: privacy filter unavailable (%@) — continuing without PII scan",
+                    String(describing: error)
+                )
+                privacyFilter = nil
+            }
+        } else {
+            privacyFilter = nil
+        }
+
         let executor = CoworkToolExecutor(
             damageControlPolicy: toolExecutor.damageControlPolicy,
             isReady: true,
             securityLogger: SecurityEventLogger.shared,
-            eventBus: eventBus
+            eventBus: eventBus,
+            privacyFilter: privacyFilter
         )
         coworkToolExecutor = executor
         return executor

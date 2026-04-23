@@ -5,6 +5,7 @@ struct SettingsPrivacySecurityTab: View {
         case tools = "Tools"
         case voiceIdentity = "Voice Identity"
         case personality = "Personality"
+        case piiFilter = "Privacy Filter"
 
         var id: String { rawValue }
     }
@@ -37,6 +38,8 @@ struct SettingsPrivacySecurityTab: View {
                         personalityEditor: personalityEditor,
                         onToggleRescue: onToggleRescue
                     )
+                case .piiFilter:
+                    SettingsPrivacyFilterTab()
                 }
             }
         }

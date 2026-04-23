@@ -99,7 +99,10 @@ _ensure-benchmark:
 #        just benchmark qwen3-8b
 #        just benchmark qwen3-4b
 # Available models: qwen3-0.6b, qwen3-1.7b, qwen3-4b, qwen3-8b,
-#                   qwen3.5-35b-a3b, qwen3.5-27b
+#                   qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, qwen3.5-9b,
+#                   qwen3.5-27b, qwen3.5-35b-a3b, qwen3.5-122b-a10b,
+#                   gemma-4-e2b-4bit, gemma-4-e4b-4bit, gemma-4-31b-4bit (pending mlx-swift-lm#177)
+# Gemma 4 VLM models: use `just benchmark-gemma <model>` (mlx-vlm, temporary)
 benchmark model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
@@ -292,6 +295,67 @@ benchmark-compare model1 model2:
         ratio = f'{v1/v2:.1f}x' if v2 > 0 else '-'
         print(f'{label:<18} {v1:>12.1f}T/s {v2:>12.1f}T/s {ratio:>8}')
     PYEOF
+
+# Benchmark Gemma 4 models (uses mlx-vlm for VLM architecture)
+# Usage: just benchmark-gemma gemma-4-e2b-4bit
+#        just benchmark-gemma gemma-4-e4b-4bit
+#        just benchmark-gemma gemma-4-31b-bf16
+benchmark-gemma model:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Benchmarking Gemma 4: {{model}} (via mlx-vlm)"
+    uv run --no-project --with mlx-vlm python3 ../../../scripts/benchmark_gemma4.py --model "{{model}}"
+
+# Benchmark all Gemma 4 models
+benchmark-gemma-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Benchmarking ALL Gemma 4 models (via mlx-vlm)"
+    uv run --no-project --with mlx-vlm python3 ../../../scripts/benchmark_gemma4.py --all
+
+# Benchmark production tier models only (E2B, E4B, 26B-A4B)
+# These are the exact models Fae auto-selects per RAM tier:
+#   <8GB:  E2B unified    8-24GB: E4B unified    >=32GB: E2B(ASR) + 26B-A4B(LLM)
+benchmark-gemma-tiers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Benchmarking production tier models (via mlx-vlm)"
+    uv run --no-project --with mlx-vlm python3 ../../../scripts/benchmark_gemma4.py --tiers
+
+# ─── Qwen3.6 Eval (via mlx-vlm, mlx-swift-lm doesn't yet support Qwen3.6 arch) ────
+# Usage: just benchmark-qwen36 qwen3.6-35b-a3b-4bit
+#        just benchmark-qwen36 qwen3.6-35b-a3b-mxfp4
+#        just benchmark-qwen36-all
+benchmark-qwen36 model:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Benchmarking Qwen3.6: {{model}} (via mlx-vlm)"
+    # torch + torchvision required: transformers 5.x video_processing_auto
+    # module fails to import without them, even for text-only eval.
+    uv run --no-project --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --model "{{model}}"
+
+benchmark-qwen36-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Benchmarking ALL Qwen3.6 quants (via mlx-vlm)"
+    uv run --no-project --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --all
+
+# ─── Privacy Filter (OpenAI PII classifier via mlx-embeddings) ────────────
+# Usage: just privacy-filter "My email is alice@example.com"
+#        echo "Ring me on 555-1234" | just privacy-filter-stdin
+privacy-filter text:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    uv run --no-project --python 3.13 \
+        --with 'mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings' \
+        python3 ../../../scripts/privacy_filter.py --text "{{text}}" --pretty
+
+privacy-filter-stdin:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    uv run --no-project --python 3.13 \
+        --with 'mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings' \
+        python3 ../../../scripts/privacy_filter.py --stdin --pretty
 
 # ─── Audio Eval ────────────────────────────────────────────────────────────
 

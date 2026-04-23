@@ -56,6 +56,7 @@ enum FaeEvent: Sendable {
     case coworkRedactionApplied(provider: String, strippedFields: [String])
     case coworkSecurityBlocked(provider: String, reason: String)
     case coworkInjectionFlagged(provider: String, pattern: String)
+    case coworkPIIRedacted(provider: String, categories: [String])
 
     // MARK: Capability
 
