@@ -34,9 +34,12 @@ build-acpx:
     rm -rf "$TMPDIR"
     echo "Built acpx: $(du -h "$OLDPWD/$OUTDIR/acpx" | cut -f1)"
 
-# Build benchmark tool (requires xcodebuild for Metal shader compilation)
+# Build benchmark tool (requires xcodebuild for Metal shader compilation).
+# RELEASE config — Debug builds disable optimisations and crater MLX throughput
+# (robertmsale measured Qwen3.5-35B-A3B at 11.7 T/s in Debug vs 41.7 T/s in
+# Release on the same hardware, see mlx-swift-lm#124).
 build-benchmark:
-    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -derivedDataPath ".build/xcode-benchmark-derived" -quiet
+    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Release -derivedDataPath ".build/xcode-benchmark-derived" -quiet
 
 # Clean build artifacts
 clean:
@@ -86,9 +89,12 @@ benchmark_derived_data := ".build/xcode-benchmark-derived"
 _ensure-benchmark:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Build via xcodebuild (compiles Metal shaders that swift run cannot)
-    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Debug -derivedDataPath "{{benchmark_derived_data}}" -quiet 2>&1 | grep -v "^$" || true
-    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    # Build via xcodebuild (compiles Metal shaders that swift run cannot).
+    # RELEASE config — Debug builds disable optimisations and crater MLX
+    # throughput. See mlx-swift-lm#124 (Debug 11.7 → Release 41.7 T/s on
+    # Qwen3.5-35B-A3B-4bit, same hardware).
+    xcodebuild build -scheme FaeBenchmark -destination 'platform=macOS' -configuration Release -derivedDataPath "{{benchmark_derived_data}}" -quiet 2>&1 | grep -v "^$" || true
+    BIN="{{benchmark_derived_data}}/Build/Products/Release/FaeBenchmark"
     if [ ! -x "${BIN}" ]; then
         echo "ERROR: FaeBenchmark binary not built at ${BIN}"
         exit 1
@@ -107,7 +113,7 @@ benchmark model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    BIN="{{benchmark_derived_data}}/Build/Products/Release/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{model}}_${TIMESTAMP}.json"
     echo "Benchmarking {{model}} → ${OUTPUT}"
@@ -122,7 +128,7 @@ benchmark-all: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    BIN="{{benchmark_derived_data}}/Build/Products/Release/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/all_${TIMESTAMP}.json"
     echo "Benchmarking ALL models → ${OUTPUT}"
@@ -135,7 +141,7 @@ benchmark-throughput model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    BIN="{{benchmark_derived_data}}/Build/Products/Release/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{model}}_throughput_${TIMESTAMP}.json"
     "${BIN}" --model "{{model}}" --throughput --ram --output "${OUTPUT}"
@@ -146,7 +152,7 @@ benchmark-tools model: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    BIN="{{benchmark_derived_data}}/Build/Products/Release/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{model}}_tools_${TIMESTAMP}.json"
     "${BIN}" --model "{{model}}" --tools --output "${OUTPUT}"
@@ -158,7 +164,7 @@ benchmark-custom model_id short_name: _ensure-benchmark
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "{{benchmark_dir}}"
-    BIN="{{benchmark_derived_data}}/Build/Products/Debug/FaeBenchmark"
+    BIN="{{benchmark_derived_data}}/Build/Products/Release/FaeBenchmark"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUTPUT="{{benchmark_dir}}/{{short_name}}_${TIMESTAMP}.json"
     echo "Benchmarking {{model_id}} → ${OUTPUT}"
@@ -332,13 +338,13 @@ benchmark-qwen36 model:
     echo "Benchmarking Qwen3.6: {{model}} (via mlx-vlm)"
     # torch + torchvision required: transformers 5.x video_processing_auto
     # module fails to import without them, even for text-only eval.
-    uv run --no-project --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --model "{{model}}"
+    uv run --no-project --python 3.13 --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --model "{{model}}"
 
 benchmark-qwen36-all:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Benchmarking ALL Qwen3.6 quants (via mlx-vlm)"
-    uv run --no-project --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --all
+    uv run --no-project --python 3.13 --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --all
 
 # ─── Privacy Filter (OpenAI PII classifier via mlx-embeddings) ────────────
 # Usage: just privacy-filter "My email is alice@example.com"
@@ -510,14 +516,17 @@ bundle:
     fi
 
     # Build via xcodebuild (required for Metal shader compilation).
+    # RELEASE config — Debug builds disable optimisations and crater MLX
+    # throughput by ~3.5x on MoE models (mlx-swift-lm#124). Production
+    # bundles MUST be Release.
     xcodebuild build \
         -scheme Fae \
-        -configuration Debug \
+        -configuration Release \
         -destination 'platform=macOS,arch=arm64' \
         -derivedDataPath .build/xcode \
         -quiet
 
-    PRODUCTS=".build/xcode/Build/Products/Debug"
+    PRODUCTS=".build/xcode/Build/Products/Release"
     PKG_FW_DIR="$PRODUCTS/PackageFrameworks"
 
     # Place the bundle at the project root (consistent with CI artifact location).
@@ -532,10 +541,10 @@ bundle:
     # For local dev, run `just build-acpx` then copy manually if needed.
 
     # Fix rpaths: remove absolute xcode build-dir paths, add @executable_path/../Frameworks.
-    # The debug binary has LC_RPATH entries like /Users/.../Debug/PackageFrameworks baked in
-    # at build time. When the binary is moved into a standalone app bundle, those absolute paths
-    # no longer apply. Replace them with the standard @executable_path/../Frameworks rpath so
-    # dyld finds the frameworks we embed in Contents/Frameworks/.
+    # The xcodebuild binary has LC_RPATH entries like /Users/.../Release/PackageFrameworks
+    # baked in at build time. When the binary is moved into a standalone app bundle, those
+    # absolute paths no longer apply. Replace them with the standard @executable_path/../Frameworks
+    # rpath so dyld finds the frameworks we embed in Contents/Frameworks/.
     BINARY="$APP_BUNDLE/Contents/MacOS/Fae"
     while read -r rpath; do
         if [[ "$rpath" == /Users/* ]] || [[ "$rpath" == /var/* ]]; then

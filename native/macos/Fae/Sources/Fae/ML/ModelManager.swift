@@ -368,6 +368,21 @@ actor ModelManager {
                         measurement.tokenCount
                     )
                 }
+
+                // Install wired-memory ticket provider so each generation pins
+                // the working set size and prevents Metal cache eviction under
+                // memory pressure (mlx-swift-lm#124, robertmsale measurements
+                // showed up to 77x speedup on memory-pressured BF16 models).
+                // The engine calls this with (promptTokens, expectedNewTokens)
+                // before each generation; the ticket auto-releases via
+                // withWiredLimit when the generation finishes or is cancelled.
+                await measurableLLM.setWiredMemoryTicketProvider { [weak self] promptTokens, expectedNewTokens in
+                    await self?.generationTicket(
+                        promptTokens: promptTokens,
+                        expectedNewTokens: expectedNewTokens
+                    )
+                }
+                NSLog("ModelManager: installed wired-memory ticket provider on LLM engine")
             } else {
                 memoryMeasurement = nil
             }
