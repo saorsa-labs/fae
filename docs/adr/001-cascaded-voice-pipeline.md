@@ -47,19 +47,23 @@ Moshi uses a dual-codebook architecture (Mimi codec) with 12.5 Hz semantic token
 Fae uses a **cascaded pipeline** with independent, swappable components:
 
 ```
-Mic (16kHz) -> AEC -> Silero VAD -> Parakeet STT (ONNX) -> LLM Agent -> Kokoro TTS (ONNX) -> Speaker
+Mic (16kHz) -> VAD -> Speaker ID -> STT -> LLM Agent -> TTS -> Speaker
 ```
 
 ### Component stack
 
+> **Note (2026-04-05):** Original ADR described ONNX Runtime stack. Current implementation is
+> pure Swift with MLX on Apple Silicon. Updated below to reflect actual state.
+
 | Component | Implementation | Runtime | Size |
 |-----------|---------------|---------|------|
-| VAD | Silero VAD v5 | ONNX Runtime (`ort`) | ~2 MB |
-| STT | Parakeet TDT 0.6B | ONNX Runtime (`ort`) | ~600 MB |
-| LLM | Qwen3 (1.7B/4B) GGUF | mistral.rs (Metal) | ~1-3 GB |
-| TTS | Kokoro-82M | ONNX Runtime (`ort`) | ~350 MB |
-| Embedding | all-MiniLM-L6-v2 | ONNX Runtime (`ort`) | ~23 MB |
-| AEC | Custom ring buffer | Pure Rust | - |
+| VAD | Silero VAD v5 | MLX | ~2 MB |
+| STT | Qwen3-ASR-1.7B | MLX 4-bit | ~1 GB |
+| LLM | Qwen3.5 (2B/4B/9B) or Gemma 4 | MLX 4-bit | ~1-5 GB |
+| TTS | Kokoro-82M | MLXAudioTTS float32 | ~350 MB |
+| Embedding | Hash-384 | MLX | minimal |
+| Speaker ID | ECAPA-TDNN | Core ML fp16 | ~40 MB |
+| Echo suppression | Time + text overlap + voice ID | Pure Swift | - |
 
 ### Pipeline characteristics
 

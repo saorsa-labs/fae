@@ -583,28 +583,48 @@ enum TextProcessing {
     ///
     /// The LLM may emit reasoning in think tags that should not be spoken.
     /// This processes incrementally as tokens arrive.
+    ///
+    /// Supported formats:
+    /// - Qwen: `<think>reasoning</think>` (response follows immediately)
+    /// - Gemma 4: `<|channel>thought\nreasoning\n<|channel>response\n` (visible text follows)
     struct ThinkTagStripper {
         private var buffer: String = ""
         private var insideThink: Bool = false
         private var tagBuffer: String = ""
 
+        /// The open tag that entered the current think block. Used to match the
+        /// correct closing tag (Qwen vs Gemma format).
+        private var activeOpenTag: String = ""
+
+        // Qwen format tags.
+        private static let qwenOpen = "<think>"
+        private static let qwenClose = "</think>"
+
+        // Gemma 4 format tags.
+        private static let gemmaThinkOpen = "<|channel>thought"
+        private static let gemmaResponseOpen = "<|channel>response"
+
+        /// All possible open tags — used for prefix matching in the tag buffer.
+        /// Ordered longest-first so the buffer is kept when it could still match either.
+        private static let openTags = [gemmaThinkOpen, qwenOpen]
+
         /// Set to `true` on the call to `process(_:)` that transitions out of a think block.
         ///
-        /// Use this in `PipelineCoordinator` to detect when Qwen3.5-35B-A3B (which emits
-        /// `<think>` as literal text) has finished its reasoning block.  The coordinator
-        /// sets `thinkEndSeen = true` so that subsequent response tokens flow to TTS.
+        /// Use this in `PipelineCoordinator` to detect when the model has finished
+        /// its reasoning block.  The coordinator sets `thinkEndSeen = true` so that
+        /// subsequent response tokens flow to TTS.
         private(set) var hasExitedThinkBlock: Bool = false
 
         /// New think content captured during this `process(_:)` call.
         ///
-        /// Populated while inside a `<think>` block; reset to `""` on each call.
-        /// The closing `</think>` tag is excluded.  Use this in `PipelineCoordinator`
+        /// Populated while inside a think block; reset to `""` on each call.
+        /// The closing tag is excluded.  Use this in `PipelineCoordinator`
         /// to stream live think text to the UI without buffering the whole block.
         private(set) var thinkChunk: String = ""
 
         /// Process a new token and return any visible (non-think) text.
         ///
-        /// Only characters starting with `<` are buffered (as potential `<think>` tags).
+        /// Only characters starting with `<` are buffered (as potential tag prefixes).
         /// All other characters are emitted immediately, fixing the edge case where
         /// text like `"world<think>"` would flush the buffer before the tag was matched.
         mutating func process(_ token: String) -> String {
@@ -615,14 +635,32 @@ enum TextProcessing {
             for ch in token {
                 if insideThink {
                     tagBuffer.append(ch)
-                    if tagBuffer.hasSuffix("</think>") {
-                        // Strip the closing tag from any accumulated chunk this call
-                        let closeTag = "</think>"
-                        if thinkChunk.hasSuffix(closeTag) {
-                            thinkChunk.removeLast(closeTag.count)
+
+                    // Check for the matching close tag.
+                    let exited: Bool
+                    if activeOpenTag == Self.qwenOpen {
+                        exited = tagBuffer.hasSuffix(Self.qwenClose)
+                        if exited {
+                            let closeTag = Self.qwenClose
+                            if thinkChunk.hasSuffix(closeTag) {
+                                thinkChunk.removeLast(closeTag.count)
+                            }
                         }
+                    } else {
+                        // Gemma: thinking ends when <|channel>response appears.
+                        exited = tagBuffer.hasSuffix(Self.gemmaResponseOpen)
+                        if exited {
+                            let closeTag = Self.gemmaResponseOpen
+                            if thinkChunk.hasSuffix(closeTag) {
+                                thinkChunk.removeLast(closeTag.count)
+                            }
+                        }
+                    }
+
+                    if exited {
                         insideThink = false
                         tagBuffer = ""
+                        activeOpenTag = ""
                         hasExitedThinkBlock = true
                     } else {
                         thinkChunk.append(ch)
@@ -634,21 +672,26 @@ enum TextProcessing {
                         visible.append(ch)
                     }
                 } else {
-                    // tagBuffer starts with '<' — building potential <think> prefix.
+                    // tagBuffer starts with '<' — building a potential open tag.
                     tagBuffer.append(ch)
-                    if tagBuffer == "<think>" {
+
+                    // Check if the buffer exactly matches any open tag.
+                    if let matchedTag = Self.openTags.first(where: { tagBuffer == $0 }) {
                         insideThink = true
+                        activeOpenTag = matchedTag
                         tagBuffer = ""
-                    } else if !"<think>".hasPrefix(tagBuffer) {
-                        // Can't be <think> — flush buffer to visible.
+                    } else if !Self.openTags.contains(where: { $0.hasPrefix(tagBuffer) }) {
+                        // Can't match any open tag — flush buffer to visible.
                         visible += tagBuffer
                         tagBuffer = ""
                     }
                 }
             }
 
-            // Flush anything that provably can't start a <think> tag.
-            if !insideThink && !tagBuffer.isEmpty && !"<think>".hasPrefix(tagBuffer) {
+            // Flush anything that provably can't start any open tag.
+            if !insideThink && !tagBuffer.isEmpty
+                && !Self.openTags.contains(where: { $0.hasPrefix(tagBuffer) })
+            {
                 visible += tagBuffer
                 tagBuffer = ""
             }
@@ -661,6 +704,7 @@ enum TextProcessing {
             let remaining = insideThink ? "" : tagBuffer
             tagBuffer = ""
             insideThink = false
+            activeOpenTag = ""
             return remaining
         }
     }

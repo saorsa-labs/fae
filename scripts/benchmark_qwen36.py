@@ -39,8 +39,15 @@ from benchmark_gemma4 import (  # noqa: E402
     normalize_fields,
 )
 
-# Model registry — mlx-community quants uploaded 2026-04-16.
+# Model registry — mlx-community quants.
+#
+# Qwen3.6-35B-A3B (VLM MoE, uploaded 2026-04-16) — 3B active of 36B total.
+# Qwen3.6-27B    (VLM dense, uploaded 2026-04-22) — dense 27B claimed to
+#                 approach Opus 4.5 on agentic coding; 53.5 SWE-bench Pro vs
+#                 Qwen3.5-397B-A17B's 50.9. Same hybrid Gated DeltaNet +
+#                 Gated Attention arch as 35B-A3B (model_type: qwen3_5).
 MODELS = {
+    # 35B-A3B MoE (3B active)
     "qwen3.6-35b-a3b-4bit": "mlx-community/Qwen3.6-35B-A3B-4bit",
     "qwen3.6-35b-a3b-5bit": "mlx-community/Qwen3.6-35B-A3B-5bit",
     "qwen3.6-35b-a3b-6bit": "mlx-community/Qwen3.6-35B-A3B-6bit",
@@ -50,10 +57,20 @@ MODELS = {
     "qwen3.6-35b-a3b-mxfp8": "mlx-community/Qwen3.6-35B-A3B-mxfp8",
     "qwen3.6-35b-a3b-nvfp4": "mlx-community/Qwen3.6-35B-A3B-nvfp4",
     "qwen3.6-35b-a3b-msq": "mlx-community/Qwen3.6-35B-A3B-4.4bit-msq",
+    # 27B dense — new 2026-04-22
+    "qwen3.6-27b-4bit": "mlx-community/Qwen3.6-27B-4bit",
+    "qwen3.6-27b-5bit": "mlx-community/Qwen3.6-27B-5bit",
+    "qwen3.6-27b-6bit": "mlx-community/Qwen3.6-27B-6bit",
+    "qwen3.6-27b-8bit": "mlx-community/Qwen3.6-27B-8bit",
+    "qwen3.6-27b-bf16": "mlx-community/Qwen3.6-27B-bf16",
+    "qwen3.6-27b-mxfp4": "mlx-community/Qwen3.6-27B-mxfp4",
+    "qwen3.6-27b-mxfp8": "mlx-community/Qwen3.6-27B-mxfp8",
+    "qwen3.6-27b-nvfp4": "mlx-community/Qwen3.6-27B-nvfp4",
 }
 
 TIER_MODELS = {
     "tier-32gb": "mlx-community/Qwen3.6-35B-A3B-4bit",
+    "tier-16gb": "mlx-community/Qwen3.6-27B-4bit",
 }
 
 

@@ -51,6 +51,20 @@ let models: [ModelEntry] = [
     ),
     // MoE: 122B total params, 10B active per token. ~70GB at 4-bit.
     ModelEntry(shortName: "qwen3.5-122b-a10b", modelID: "mlx-community/Qwen3.5-122B-A10B-4bit"),
+    // Gemma 4 — Google's multimodal family (Apr 2026).
+    // E2B/E4B have native audio via USM conformer encoder; 31B/26B-A4B are text+vision only.
+    // 31B dense (bf16 = ~62GB, 4-bit = ~16GB)
+    ModelEntry(shortName: "gemma-4-31b-bf16", modelID: "mlx-community/gemma-4-31b-it-bf16"),
+    ModelEntry(shortName: "gemma-4-31b-4bit", modelID: "mlx-community/gemma-4-31b-it-4bit"),
+    ModelEntry(shortName: "gemma-4-31b-8bit", modelID: "mlx-community/gemma-4-31b-it-8bit"),
+    // 26B MoE (4B active per token)
+    ModelEntry(shortName: "gemma-4-26b-a4b-4bit", modelID: "mlx-community/gemma-4-26b-a4b-it-4bit"),
+    // E4B: 8B total, 4.5B effective — audio-capable, 128K context
+    ModelEntry(shortName: "gemma-4-e4b-bf16", modelID: "mlx-community/gemma-4-e4b-it-bf16"),
+    ModelEntry(shortName: "gemma-4-e4b-4bit", modelID: "mlx-community/gemma-4-e4b-it-4bit"),
+    // E2B: 5.1B total, 2.3B effective — audio-capable, 128K context
+    ModelEntry(shortName: "gemma-4-e2b-bf16", modelID: "mlx-community/gemma-4-e2b-it-bf16"),
+    ModelEntry(shortName: "gemma-4-e2b-4bit", modelID: "mlx-community/gemma-4-e2b-it-4bit"),
 ]
 
 // MARK: - Result Types

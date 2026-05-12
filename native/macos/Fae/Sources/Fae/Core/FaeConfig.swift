@@ -150,15 +150,16 @@ struct FaeConfig: Codable {
     /// This reclaims ~1,100 tokens and gives the model more headroom for generation
     /// and conversation history without changing tool availability.
     ///
-    /// Applies to Qwen3.5-2B (and legacy saorsa-1.1-tiny). 4B and larger receive the full prompt.
+    /// Applies to Qwen3.5-2B (and legacy saorsa-1.1-tiny) and Gemma 4 E2B.
+    /// 4B-class and larger receive the full prompt.
     var isLightweightContext: Bool {
         let preset = FaeConfig.canonicalVoiceModelPreset(llm.voiceModelPreset)
         switch preset {
-        case "qwen3_5_2b":
+        case "qwen3_5_2b", "gemma_4_e2b":
             return true
         case "auto":
             let totalGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
-            return totalGB < 16  // Auto selects Qwen3.5-2B below 16 GB
+            return totalGB < 8  // Auto selects E2B/Qwen3.5-2B below 8 GB
         default:
             // Also honour manually configured very small contexts (e.g. developer overrides).
             return llm.contextSizeTokens > 0 && llm.contextSizeTokens <= 16_384
@@ -495,6 +496,12 @@ struct FaeConfig: Codable {
             return "qwen3_5_2b"
         case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
             return "qwen3_5_2b"  // legacy alias → Qwen3.5-2B-OptiQ
+        case "gemma_4_e2b":
+            return "gemma_4_e2b"
+        case "gemma_4_e4b":
+            return "gemma_4_e4b"
+        case "gemma_4_26b_a4b":
+            return "gemma_4_26b_a4b"
         case "auto":
             return "auto"
         default:
@@ -537,19 +544,46 @@ struct FaeConfig: Codable {
         case "qwen3_5_2b":
             // Qwen3.5-2B with OptiQ mixed-precision. Compact, fast.
             return ("mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768)
+        case "gemma_4_e2b":
+            // Gemma 4 E2B: 5.1B total, 2.3B effective. 128K context. Audio-capable.
+            // Benchmarked 2026-04-02: 100% tool calling, 90% Fae cap, 85% assistant fit.
+            return ("mlx-community/gemma-4-e2b-it-4bit", 131_072)
+        case "gemma_4_e4b":
+            // Gemma 4 E4B: 8B total, 4.5B effective. 128K context. Audio-capable.
+            // Benchmarked 2026-04-02: 100% tool/cap/fit/serial, 90% MMLU. Matches Qwen 9B.
+            return ("mlx-community/gemma-4-e4b-it-4bit", 131_072)
+        case "gemma_4_26b_a4b":
+            // Gemma 4 26B-A4B MoE: 4B active per token. 256K context.
+            // Benchmarked 2026-04-02: 98% MMLU, 100% cap/fit/serial. Highest quality.
+            return ("mlx-community/gemma-4-26b-a4b-it-4bit", 262_144)
         default: // "auto"
-            if totalGB >= 16 {
-                // 9B Unsloth: per-tensor mixed-bit quantization (imatrix-calibrated).
-                // Benchmarked 2026-03-28: 100% tool calling, 100% assistant fit,
-                // 100% Fae capability, 100% serialization. Best quality at any size.
-                // ~6 GB VRAM + ~3GB for STT/TTS/speaker = ~9GB total pipeline.
+            // Gemma 4 tier strategy (pending mlx-swift-lm Gemma 4 support — #177):
+            //
+            //   >=32 GB: Gemma 4 26B-A4B MoE (14GB) + E2B as dedicated ASR (3.6GB)
+            //            98% MMLU, 100% Fae cap/fit/serial. Best quality.
+            //   16-31 GB: Gemma 4 E4B unified — audio-direct, one model does ASR+LLM.
+            //             100% tool/cap/fit/serial, 90% MMLU. ~8.5GB total pipeline.
+            //    8-15 GB: Gemma 4 E2B unified — audio-direct, compact.
+            //             100% tool, 90% cap, 85% fit. ~6.9GB total pipeline.
+            //      <8 GB: Gemma 4 E2B — tight fit at ~6.9GB.
+            //
+            // Until Gemma 4 lands in mlx-swift-lm, fall back to Qwen3.5:
+            if totalGB >= 32 {
+                // Quality tier: 26B-A4B as LLM. E2B loaded separately as STT
+                // by recommendedSTTModel(). Total: ~20.9GB + pipeline overhead.
+                // Fallback: Qwen3.5-9B (until Gemma 4 supported in mlx-swift-lm).
+                return ("Brooooooklyn/Qwen3.5-9B-unsloth-mlx", 32_768)
+            } else if totalGB >= 16 {
+                // E4B unified tier: audio-direct, one model for ASR+LLM.
+                // Fallback: Qwen3.5-9B (until Gemma 4 supported).
                 return ("Brooooooklyn/Qwen3.5-9B-unsloth-mlx", 32_768)
             } else if totalGB >= 8 {
-                // 4B uniform: reliable tool calling (100%), 95% assistant fit.
-                // ~2.3 GB VRAM. OptiQ variant was broken — use plain uniform.
+                // E2B unified tier: compact audio-direct.
+                // Fallback: Qwen3.5-4B (until Gemma 4 supported).
                 return ("mlx-community/Qwen3.5-4B-4bit", 32_768)
             } else {
-                // Qwen3.5-2B with OptiQ mixed-precision for low-RAM Macs.
+                // Minimal tier.
+                // Fallback: Qwen3.5-2B (until Gemma 4 supported).
                 return ("mlx-community/Qwen3.5-2B-OptiQ-4bit", 32_768)
             }
         }
@@ -594,13 +628,38 @@ struct FaeConfig: Codable {
 
     // MARK: - STT Model Selection
 
-    /// Select the appropriate STT model based on system RAM.
+    /// Select the appropriate STT model based on system RAM and LLM preset.
     ///
-    /// - >=16 GiB: 1.7B (full quality — smaller LLMs free up RAM for STT)
-    /// - <16 GiB: 0.6B (compact)
+    /// Gemma 4 tier strategy (pending mlx-swift-lm Gemma 4 support):
+    /// - **>=32 GB**: Gemma 4 E2B as dedicated ASR (3.6GB). The LLM is 26B-A4B.
+    /// - **<32 GB**: No separate STT — Gemma 4 E4B/E2B handles audio-direct in the LLM.
+    ///
+    /// Current (Qwen fallback):
+    /// - >=16 GiB: Qwen3-ASR 1.7B (full quality)
+    /// - <16 GiB: Qwen3-ASR 0.6B (compact)
+    ///
+    /// When Gemma 4 audio-direct mode is active (E2B/E4B unified), this method
+    /// returns `nil` to signal that no separate STT model is needed — the LLM
+    /// handles ASR internally via structured `<transcript>` output.
     static func recommendedSTTModel(
-        totalMemoryBytes: UInt64? = nil
-    ) -> String {
+        totalMemoryBytes: UInt64? = nil,
+        llmPreset: String = "auto"
+    ) -> String? {
+        let canonical = canonicalVoiceModelPreset(llmPreset)
+
+        // Gemma unified tiers: LLM handles ASR directly — no separate STT needed.
+        // (Pending mlx-swift-lm Gemma 4 support; until then, falls through to Qwen.)
+        switch canonical {
+        case "gemma_4_e2b", "gemma_4_e4b":
+            return nil  // Audio-direct: LLM does ASR
+        case "gemma_4_26b_a4b":
+            // Quality tier: E2B as dedicated ASR alongside 26B-A4B LLM.
+            return "mlx-community/gemma-4-e2b-it-4bit"
+        default:
+            break
+        }
+
+        // Qwen fallback (current default path).
         let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
         if totalGB >= 16 {
             return "mlx-community/Qwen3-ASR-1.7B-4bit"

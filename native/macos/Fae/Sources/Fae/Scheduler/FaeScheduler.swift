@@ -53,6 +53,14 @@ actor FaeScheduler {
     /// Action receipt store for GC — set by FaeCore.
     private var receiptStore: ReceiptStore?
 
+    /// Config value reader for meta-optimization — set by FaeCore.
+    /// Maps config key (e.g. "llm.temperature") to current string value.
+    private var metaOptConfigReader: ((_ key: String) -> String?)?
+
+    /// Config value writer for meta-optimization — set by FaeCore.
+    /// Applies a config change by key + new value string.
+    private var metaOptConfigWriter: ((_ key: String, _ value: String) throws -> Void)?
+
     /// Shared personal lexicon — single actor instance shared with PipelineCoordinator.
     private var personalLexicon: PersonalLexicon?
 
@@ -188,6 +196,16 @@ actor FaeScheduler {
 
     func setSpeakerProfileStore(_ store: SpeakerProfileStore) {
         speakerProfileStore = store
+    }
+
+    /// Set the config reader/writer closures for meta-optimization.
+    /// Called by FaeCore after config is loaded.
+    func setMetaOptConfigAccessors(
+        reader: @escaping (_ key: String) -> String?,
+        writer: @escaping (_ key: String, _ value: String) throws -> Void
+    ) {
+        metaOptConfigReader = reader
+        metaOptConfigWriter = writer
     }
 
     /// Record that the user was seen (called from camera presence observations).
@@ -1600,12 +1618,47 @@ actor FaeScheduler {
             return
         }
         // Wire training bridge if not already set.
+        var bridge: TrainingBridge?
         do {
-            let bridge = try await TrainingBridge.createDefault()
-            await coordinator.setTrainingBridge(bridge)
+            bridge = try await TrainingBridge.createDefault()
+            await coordinator.setTrainingBridge(bridge!)
         } catch {
             NSLog("FaeScheduler: improvement_cycle — training bridge unavailable (%@), cycle will skip training", error.localizedDescription)
         }
+
+        // Wire meta-optimizer with all available dependencies.
+        if let store = improvementStore {
+            let optimizer = MetaOptimizer(store: store)
+
+            // Directive reader/writer: read/write ~/Library/Application Support/fae/directive.md.
+            let directiveURL = FaeDirectories.directiveFile
+            await optimizer.setDirectiveReader {
+                try? String(contentsOf: directiveURL, encoding: .utf8)
+            }
+            await optimizer.setDirectiveWriter { text in
+                try text.write(to: directiveURL, atomically: true, encoding: .utf8)
+            }
+
+            // Config reader/writer: delegated from FaeCore via stored closures.
+            if let configReader = metaOptConfigReader, let configWriter = metaOptConfigWriter {
+                await optimizer.setConfigReader(configReader)
+                await optimizer.setConfigWriter { key, value in
+                    try configWriter(key, value)
+                }
+            }
+
+            if let bridge {
+                await optimizer.setTrainingBridge(bridge)
+            }
+            if let skillMgr = skillManager {
+                await optimizer.setSkillManager(skillMgr)
+            }
+            if let memStore = memoryStore {
+                await optimizer.setMemoryStore(memStore)
+            }
+            await coordinator.setMetaOptimizer(optimizer)
+        }
+
         do {
             try await coordinator.runCycle()
         } catch {
@@ -1633,7 +1686,14 @@ actor FaeScheduler {
             break
         }
 
-        let prompt = "[ENHANCED MORNING BRIEFING] [USER_JUST_ARRIVED] Deliver a warm, conversational morning briefing. Follow the morning-briefing-v2 skill instructions."
+        // Collect overnight improvement narrative if available.
+        var metaOptContext = ""
+        if let coordinator = improvementCycleCoordinator,
+           let narrative = await coordinator.consumeMetaOptNarrative() {
+            metaOptContext = "\n\n[OVERNIGHT SELF-IMPROVEMENT CONTEXT]\nFae made the following adjustments overnight. Weave this naturally into the briefing — don't read it verbatim, summarise warmly in 1-2 sentences. If the user seems busy, skip it.\n\(narrative)"
+        }
+
+        let prompt = "[ENHANCED MORNING BRIEFING] [USER_JUST_ARRIVED] Deliver a warm, conversational morning briefing. Follow the morning-briefing-v2 skill instructions.\(metaOptContext)"
         let dispatched = await dispatchProactiveTask(
             taskId: "enhanced_morning_briefing",
             prompt: prompt,

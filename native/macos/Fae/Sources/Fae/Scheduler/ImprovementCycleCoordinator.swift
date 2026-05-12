@@ -15,6 +15,7 @@ import Foundation
 enum CycleState: String, Sendable {
     case idle
     case collecting
+    case metaOptimizing
     case training
     case evaluating
     case proposing
@@ -23,12 +24,13 @@ enum CycleState: String, Sendable {
     /// Valid successor states (forward progress or error recovery to idle).
     var validSuccessors: Set<CycleState> {
         switch self {
-        case .idle:       return [.collecting]
-        case .collecting: return [.training, .idle]
-        case .training:   return [.evaluating, .idle]
-        case .evaluating: return [.proposing, .idle]
-        case .proposing:  return [.deploying, .idle]
-        case .deploying:  return [.idle]
+        case .idle:            return [.collecting]
+        case .collecting:      return [.metaOptimizing, .idle]
+        case .metaOptimizing:  return [.training, .idle]
+        case .training:        return [.evaluating, .idle]
+        case .evaluating:      return [.proposing, .idle]
+        case .proposing:       return [.deploying, .idle]
+        case .deploying:       return [.idle]
         }
     }
 }
@@ -117,6 +119,16 @@ actor ImprovementCycleCoordinator {
     /// is skipped gracefully (pre-Phase 2.3 behaviour).
     private var trainingBridge: TrainingBridge?
 
+    /// Meta-optimizer for hill-climbing on directive and config knobs.
+    ///
+    /// Set by FaeScheduler during wiring. When nil, the meta-optimization step
+    /// is skipped and the cycle proceeds directly to training.
+    private var metaOptimizer: MetaOptimizer?
+
+    /// The most recent meta-optimization narrative for the morning briefing.
+    /// Set after each meta-optimization run, cleared when consumed by the briefing.
+    private(set) var pendingMetaOptNarrative: String?
+
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
 
@@ -156,6 +168,23 @@ actor ImprovementCycleCoordinator {
     /// Set the training bridge. Called by FaeScheduler after wiring.
     func setTrainingBridge(_ bridge: TrainingBridge) {
         trainingBridge = bridge
+    }
+
+    /// Set the meta-optimizer. Called by FaeScheduler after wiring.
+    ///
+    /// The optimizer should have its dependencies (directive reader/writer,
+    /// config reader/writer, training bridge, skill manager) already configured.
+    func setMetaOptimizer(_ optimizer: MetaOptimizer) {
+        metaOptimizer = optimizer
+    }
+
+    /// Consume the pending meta-optimization narrative for the morning briefing.
+    ///
+    /// Returns the narrative string and clears it so it's only delivered once.
+    func consumeMetaOptNarrative() -> String? {
+        let narrative = pendingMetaOptNarrative
+        pendingMetaOptNarrative = nil
+        return narrative
     }
 
     // MARK: - State Machine
@@ -352,13 +381,8 @@ actor ImprovementCycleCoordinator {
             )
             return
         }
-        guard correctionCount >= Self.minCorrectionEvents else {
-            NSLog(
-                "ImprovementCycleCoordinator: insufficient corrections (%d/%d), skipping",
-                correctionCount, Self.minCorrectionEvents
-            )
-            return
-        }
+        // Note: correction count is checked later to decide whether to run training.
+        // Meta-optimization can proceed with any feedback signals (re-asks, abandonments, etc.).
 
         // Step 4: COLLECTING — gather feedback events.
         do {
@@ -376,19 +400,47 @@ actor ImprovementCycleCoordinator {
             return
         }
 
-        // Step 4b: DIRECTIVE TUNING — every 7th cycle, apply directive amendments instead of training.
-        if try await isDirectiveTuningCycle() {
-            NSLog("ImprovementCycleCoordinator: directive tuning cycle (every %d cycles)", Self.directiveTuningInterval)
-            do {
+        // Step 4b: META-OPTIMIZATION — hill-climb on directive + config knobs.
+        // Subsumes the legacy directive-tuning cycle. Runs every cycle (not just every 7th).
+        var metaOptSummary: MetaOptSummary?
+        do {
+            try await transition(to: .metaOptimizing)
+            if let optimizer = metaOptimizer {
+                NSLog("ImprovementCycleCoordinator: starting meta-optimization phase")
+                let summary = try await optimizer.run(events: pendingEvents)
+                metaOptSummary = summary
+                NSLog(
+                    "ImprovementCycleCoordinator: meta-optimization complete — tested %d, kept %d (%.0fs)",
+                    summary.hypothesesTested, summary.keptCount, summary.wallClockSeconds
+                )
+                // Generate human-readable narrative for morning briefing.
+                pendingMetaOptNarrative = MetaOptNarrator.narrate(summary)
+            } else if try await isDirectiveTuningCycle() {
+                // Fallback: legacy directive tuning when MetaOptimizer is not wired.
+                NSLog("ImprovementCycleCoordinator: directive tuning cycle (legacy, every %d cycles)", Self.directiveTuningInterval)
                 let applied = try await runDirectiveTuning(events: pendingEvents)
                 NSLog(
-                    "ImprovementCycleCoordinator: directive tuning %@ — returning to idle",
+                    "ImprovementCycleCoordinator: directive tuning %@",
                     applied ? "applied" : "skipped (no patterns)"
                 )
-            } catch {
-                NSLog("ImprovementCycleCoordinator: directive tuning failed: %@", error.localizedDescription)
             }
-            // Directive tuning cycles skip training/eval/deploy entirely.
+        } catch {
+            NSLog("ImprovementCycleCoordinator: meta-optimization failed: %@", error.localizedDescription)
+            // Non-fatal: proceed to training regardless.
+        }
+
+        // Step 4c: Check if we should skip training (e.g., insufficient correction data).
+        // Meta-optimization may be sufficient for this cycle.
+        let skipTraining = correctionCount < Self.minCorrectionEvents
+        if skipTraining {
+            if let summary = metaOptSummary, summary.keptCount > 0 {
+                // Meta-opt made changes — count as a completed cycle.
+                var state = try await store.readState()
+                state.completedCycles += 1
+                state.lastCycleAt = ISO8601DateFormatter().string(from: Date())
+                try await store.writeState(state)
+                NSLog("ImprovementCycleCoordinator: meta-opt only cycle (insufficient corrections for training)")
+            }
             try await transition(to: .idle)
             return
         }
@@ -586,7 +638,9 @@ actor ImprovementCycleCoordinator {
             currentAdapterPath: nil, previousAdapterPath: nil,
             trainingStartedAt: nil, lastCycleError: nil,
             deferralCount: 0,
-            previousDirective: nil
+            previousDirective: nil,
+            metaOptKeptTotal: 0, metaOptTestedTotal: 0,
+            metaOptLastRunAt: nil, metaOptConsecutiveNoImprovement: 0
         )
         let approved = storeStateForPropose.userApprovedCycles >= Self.minCyclesForAutoDeploy
 

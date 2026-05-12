@@ -126,20 +126,36 @@ private func localModelType(from directory: URL) -> String? {
     return object["model_type"] as? String
 }
 
-public func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
+/// Returns the raw `ToolCallFormat` string value for models that need an explicit
+/// format hint, or `nil` to let mlx-swift-lm auto-detect from `config.json` model_type.
+///
+/// Covers cases where:
+/// - The model isn't cached yet (no config.json to read) but the HF ID is recognizable.
+/// - The library's `ToolCallFormat.infer(from:)` doesn't match the exact model_type
+///   (e.g. `"gemma4"` vs `"gemma"`).
+public func toolCallFormatOverride(modelID: String) -> String? {
     if let directory = localModelDirectoryURL(from: modelID),
        let modelType = localModelType(from: directory)?.lowercased()
     {
-        if modelType.contains("qwen") {
-            return true
-        }
+        if modelType.contains("qwen") { return "xml_function" }
+        if modelType.hasPrefix("gemma") { return "gemma" }
     }
 
     let lower = modelID.lowercased()
-    return lower.contains("qwen")
+    if lower.contains("qwen")
         || lower.contains("saorsa-1.1")
         || lower.contains("saorsa1-worker")
         || lower.contains("saorsa1-tiny")
+    {
+        return "xml_function"
+    }
+    if lower.contains("gemma") { return "gemma" }
+    return nil
+}
+
+/// Legacy convenience — returns `true` when the model should use Qwen's xmlFunction format.
+public func usesQwenCompatibleToolCallFormat(modelID: String) -> Bool {
+    toolCallFormatOverride(modelID: modelID) == "xml_function"
 }
 
 public enum MLEngineError: LocalizedError {

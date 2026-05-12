@@ -33,13 +33,15 @@ The strategic goal is **controlled self-evolution**: maximize self-authorship wi
 
 These modules are PK — Fae may not modify them autonomously:
 
-- **Runtime authority**: `src/pipeline/coordinator.rs`, `src/runtime.rs`, `src/ffi.rs`, `src/host/contract.rs`, `src/host/channel.rs`
-- **Safety policy**: `src/permissions.rs`, `src/approval.rs`, `src/agent/approval_tool.rs`, `src/error.rs`
-- **Boot/model integrity**: `src/startup.rs`, `src/model_integrity.rs`, `src/models/mod.rs`, `src/llm/mod.rs`
-- **Memory durability**: `src/memory/sqlite.rs`, `src/memory/schema.rs`, `src/memory/backup.rs`, `src/memory/migrate.rs`
-- **Scheduler authority**: `src/scheduler/runner.rs`, `src/scheduler/authority.rs`
-- **Secrets and updates**: `src/credentials/*`, `src/update/applier.rs`
-- **Trust roots**: `src/fae_dirs.rs`, `src/platform/*`
+> **Note (2026-04-05):** Original Rust paths moved to `legacy/rust-core/`. Below shows the current Swift equivalents.
+
+- **Runtime authority**: `Pipeline/PipelineCoordinator.swift`, `Core/FaeCore.swift`, `Core/FaeConfig.swift`
+- **Safety policy**: `Tools/DamageControlPolicy.swift`, `Tools/ToolExecutor.swift`, `Tools/ReversibilityEngine.swift`
+- **Boot/model integrity**: `ML/ModelManager.swift`, `Core/FaeEnvironment.swift`, `Core/RescueMode.swift`
+- **Memory durability**: `Memory/SQLiteMemoryStore.swift`, `Memory/MemoryOrchestrator.swift`, `Backup/GitVaultManager.swift`
+- **Scheduler authority**: `Scheduler/FaeScheduler.swift`, `Scheduler/ImprovementCycleCoordinator.swift`
+- **Secrets and auth**: `Core/CredentialManager.swift`, `ML/SpeakerProfileStore.swift`
+- **Trust roots**: `Core/FaeDirectories.swift` (implicit), `Core/SoulManager.swift`
 
 Policy: PK changes require human-authored review and explicit promotion. Fae may propose PK changes but may not apply them autonomously.
 
@@ -129,6 +131,6 @@ Optional integrity verification for PK modules:
 
 ## References
 
-- `src/permissions.rs`, `src/approval.rs` — Safety policy implementation
-- `src/skills/` — Skill runtime and lifecycle
-- `src/startup.rs` — Boot sequence and integrity checks
+- `Tools/DamageControlPolicy.swift`, `Tools/ToolExecutor.swift` — Safety policy implementation
+- `Skills/SkillManager.swift` — Skill runtime and lifecycle
+- `Core/FaeCore.swift`, `Core/RescueMode.swift` — Boot sequence and rescue mode

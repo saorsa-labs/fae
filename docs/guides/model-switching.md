@@ -3,7 +3,7 @@
 Fae's primary local architecture is now:
 
 - one active Qwen3.5 text model
-- one optional on-demand Qwen3-VL vision model
+- one optional on-demand SmolVLM2 vision model
 
 The dual / concierge path is no longer the recommended local setup.
 
@@ -25,21 +25,25 @@ Examples:
 
 User-facing text model presets:
 
+**Gemma 4 (target — pending mlx-swift-lm support):**
+- `gemma_4_e2b` — Gemma 4 E2B unified (audio-direct ASR+LLM, 128K context)
+- `gemma_4_e4b` — Gemma 4 E4B unified (audio-direct ASR+LLM, 128K context) — **recommended**
+- `gemma_4_26b_a4b` — Gemma 4 26B-A4B MoE (quality LLM, paired with E2B ASR, 256K context)
+
+**Qwen 3.5 (current fallback):**
+- `qwen3_5_2b`, `qwen3_5_4b`, `qwen3_5_9b`, `qwen3_5_35b_a3b`
 - `auto`
-- `qwen3_5_2b`
-- `qwen3_5_4b`
-- `qwen3_5_9b` (default for 16+ GB — Unsloth mixed-bit quantization)
-- `qwen3_5_35b_a3b` (MoE: 35B total, 3B active per token — manual only)
 
-`Auto (Recommended)` resolves by RAM:
+`Auto (Recommended)` resolves by RAM (Gemma 4 pending mlx-swift-lm; Qwen3.5 is the active fallback per `FaeConfig.recommendedModel()`):
 
-| System RAM | Auto text model | Context |
-|---|---|---|
-| `<8 GB` | `Qwen3.5 2B` OptiQ | 32K |
-| `8–15 GB` | `Qwen3.5 4B` (uniform 4-bit) | 32K |
-| `16+ GB` | `Qwen3.5 9B Unsloth` (mixed-bit) | 32K |
+| System RAM | Active model (Qwen fallback) | Context | Target (Gemma 4) |
+|---|---|---|---|
+| `<8 GB` | Qwen3.5-2B OptiQ | 32K | Gemma 4 E2B unified |
+| `8–15 GB` | Qwen3.5-4B | 32K | Gemma 4 E2B unified |
+| `16–31 GB` | Qwen3.5-9B Unsloth | 32K | Gemma 4 E4B unified |
+| `≥32 GB` | Qwen3.5-9B Unsloth | 32K | Gemma 4 26B-A4B + E2B ASR |
 
-The 9B Unsloth model uses per-tensor mixed-bit quantization (imatrix-calibrated) from Unsloth Dynamic 2.0. Benchmarked 2026-03-28: 100% tool calling, 100% assistant fit, 100% Fae capability, 100% serialization. Outperforms 35B-A3B on all Fae-relevant quality metrics at 2x speed and 1/3 memory.
+Gemma 4 E4B benchmarked 2026-04-02: 100% tool calling, 100% assistant fit, 100% Fae capability, 100% serialization, 90% MMLU. Matches Qwen3.5-9B at half the effective params with native audio input and 128K context.
 
 Legacy compatibility aliases:
 

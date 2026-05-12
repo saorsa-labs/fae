@@ -38,13 +38,15 @@ enum ToolCallParser {
 
     /// Parse tool calls from response text.
     ///
-    /// Supports two formats:
+    /// Supports three format families:
     /// - JSON (Qwen3): `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
     /// - XML (Qwen3.5): `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
+    /// - Gemma 4: `<|tool_call>call:name{key:<|"|>value<|"|>}<tool_call|>`
     static func parseToolCalls(from text: String) -> [ToolCall] {
         var calls: [ToolCall] = []
         var searchStart = text.startIndex
 
+        // Qwen format: <tool_call>...</tool_call>
         while let openRange = text.range(of: "<tool_call>", range: searchStart..<text.endIndex) {
             let closeRange = text.range(of: "</tool_call>", range: openRange.upperBound..<text.endIndex)
             let contentEnd = closeRange?.lowerBound ?? text.endIndex
@@ -61,6 +63,28 @@ enum ToolCallParser {
             }
 
             searchStart = closeRange?.upperBound ?? text.endIndex
+        }
+
+        // Gemma format: <|tool_call>call:name{...}<tool_call|>
+        if calls.isEmpty {
+            searchStart = text.startIndex
+            while let openRange = text.range(of: "<|tool_call>", range: searchStart..<text.endIndex) {
+                let closeRange = text.range(of: "<tool_call|>", range: openRange.upperBound..<text.endIndex)
+                let contentEnd = closeRange?.lowerBound ?? text.endIndex
+                let content = String(text[openRange.upperBound..<contentEnd])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if let call = parseGemmaToolCall(content) {
+                    calls.append(call)
+                }
+
+                searchStart = closeRange?.upperBound ?? text.endIndex
+            }
+        }
+
+        // Bare Gemma format without tags: call:name{...} (e.g. from streaming)
+        if calls.isEmpty, text.contains("call:"), let call = parseGemmaToolCall(text) {
+            calls.append(call)
         }
 
         return calls
@@ -146,6 +170,8 @@ enum ToolCallParser {
     /// Strip tool call markup from response text, leaving only human-readable content.
     static func stripToolCallMarkup(_ text: String) -> String {
         var result = text
+
+        // Strip Qwen format: <tool_call>...</tool_call>
         while let open = result.range(of: "<tool_call>") {
             if let close = result.range(of: "</tool_call>", range: open.upperBound..<result.endIndex) {
                 result.removeSubrange(open.lowerBound..<close.upperBound)
@@ -154,6 +180,17 @@ enum ToolCallParser {
                 break
             }
         }
+
+        // Strip Gemma format: <|tool_call>...<tool_call|>
+        while let open = result.range(of: "<|tool_call>") {
+            if let close = result.range(of: "<tool_call|>", range: open.upperBound..<result.endIndex) {
+                result.removeSubrange(open.lowerBound..<close.upperBound)
+            } else {
+                result.removeSubrange(open.lowerBound..<result.endIndex)
+                break
+            }
+        }
+
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -217,5 +254,76 @@ enum ToolCallParser {
         return [parameterOpen, functionClose, content.endIndex]
             .compactMap { $0 }
             .min() ?? content.endIndex
+    }
+
+    /// Parse Gemma tool call format: `call:name{key:<|"|>value<|"|>,key2:value2}`
+    ///
+    /// Gemma 4 uses `<|"|>` as string delimiters in tool call arguments.
+    /// Older Gemma models use `<escape>` markers. Both are supported.
+    private static func parseGemmaToolCall(_ content: String) -> ToolCall? {
+        guard let callRange = content.range(of: "call:") else { return nil }
+        let remaining = String(content[callRange.upperBound...])
+
+        guard let braceStart = remaining.firstIndex(of: "{") else { return nil }
+        let funcName = String(remaining[remaining.startIndex..<braceStart])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !funcName.isEmpty else { return nil }
+
+        guard let braceEnd = remaining.lastIndex(of: "}") else { return nil }
+        var argsStr = String(remaining[remaining.index(after: braceStart)..<braceEnd])
+
+        var args: [String: Any] = [:]
+        let gemmaStringDelimiter = "<|\"|>"
+        let legacyEscape = "<escape>"
+
+        while !argsStr.isEmpty {
+            argsStr = argsStr.trimmingCharacters(in: .whitespaces)
+            guard let colonIdx = argsStr.firstIndex(of: ":") else { break }
+            let key = String(argsStr[argsStr.startIndex..<colonIdx])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            argsStr = String(argsStr[argsStr.index(after: colonIdx)...])
+
+            // Gemma 4 string delimiter: <|"|>value<|"|>
+            if argsStr.hasPrefix(gemmaStringDelimiter) {
+                argsStr = String(argsStr.dropFirst(gemmaStringDelimiter.count))
+                if let endDelim = argsStr.range(of: gemmaStringDelimiter) {
+                    let value = String(argsStr[argsStr.startIndex..<endDelim.lowerBound])
+                    args[key] = value
+                    argsStr = String(argsStr[endDelim.upperBound...])
+                    if argsStr.hasPrefix(",") { argsStr = String(argsStr.dropFirst()) }
+                    continue
+                }
+            }
+
+            // Legacy escape marker: <escape>value<escape>
+            if argsStr.hasPrefix(legacyEscape) {
+                argsStr = String(argsStr.dropFirst(legacyEscape.count))
+                if let endEscape = argsStr.range(of: legacyEscape) {
+                    let value = String(argsStr[argsStr.startIndex..<endEscape.lowerBound])
+                    args[key] = value
+                    argsStr = String(argsStr[endEscape.upperBound...])
+                    if argsStr.hasPrefix(",") { argsStr = String(argsStr.dropFirst()) }
+                    continue
+                }
+            }
+
+            // Unquoted value: read until comma or end
+            let commaIdx = argsStr.firstIndex(of: ",") ?? argsStr.endIndex
+            let value = String(argsStr[argsStr.startIndex..<commaIdx])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            argsStr = commaIdx < argsStr.endIndex
+                ? String(argsStr[argsStr.index(after: commaIdx)...]) : ""
+
+            // Try JSON parse for numbers/booleans, fall back to string.
+            if let data = value.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data)
+            {
+                args[key] = parsed
+            } else {
+                args[key] = value
+            }
+        }
+
+        return ToolCall(name: funcName, arguments: args)
     }
 }

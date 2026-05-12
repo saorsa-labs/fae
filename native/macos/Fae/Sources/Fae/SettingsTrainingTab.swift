@@ -12,6 +12,7 @@ struct SettingsTrainingTab: View {
     @State private var personalAdapterPath: String = ""
 
     @State private var showingConsentAlert = false
+    @State private var improvementTimeline: [MetaOptNarrator.TimelineItem] = []
 
     var body: some View {
         Form {
@@ -77,6 +78,51 @@ struct SettingsTrainingTab: View {
                         }
                     }
                 }
+
+                if !improvementTimeline.isEmpty {
+                    Section("Recent Adjustments") {
+                        ForEach(improvementTimeline) { item in
+                            HStack(spacing: 8) {
+                                Image(systemName: MetaOptNarrator.surfaceIcon(item.surface))
+                                    .foregroundStyle(item.kept ? FaeDesign.statusSuccess : .secondary)
+                                    .frame(width: 20)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.description)
+                                        .font(.callout)
+                                        .lineLimit(2)
+
+                                    HStack(spacing: 4) {
+                                        Text(MetaOptNarrator.surfaceDisplayName(item.surface))
+                                            .font(.caption2)
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 1)
+                                            .background(.quaternary)
+                                            .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                                        Text(item.date, style: .relative)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+
+                                Spacer()
+
+                                if item.kept {
+                                    Button("Undo") {
+                                        commandSender?.sendCommand(
+                                            name: "conversation.inject_text",
+                                            payload: ["text": "Undo the overnight adjustment: \(item.description)"]
+                                        )
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
@@ -118,6 +164,16 @@ struct SettingsTrainingTab: View {
                 if let adapterPath = training["personal_adapter_path"] as? String {
                     personalAdapterPath = adapterPath
                 }
+            }
+        }
+
+        // Load recent meta-optimization results for the timeline.
+        if let response = await sender.queryCommand(
+            name: "improvement.recent_meta_opt",
+            payload: [:]
+        ) {
+            if let entries = response["payload"] as? [[String: Any]] {
+                improvementTimeline = MetaOptNarrator.buildTimeline(from: entries)
             }
         }
     }

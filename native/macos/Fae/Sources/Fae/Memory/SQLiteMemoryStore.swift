@@ -639,6 +639,30 @@ actor SQLiteMemoryStore {
         }
     }
 
+    /// Count active records of a given kind that contain a specific tag.
+    ///
+    /// Used by the meta-optimizer to check how many auto-generated memory seeds exist.
+    func countRecords(kind: MemoryKind, withTag tag: String) throws -> Int {
+        try dbQueue.read { db in
+            let count = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM memory_records
+                WHERE kind = ? AND status = 'active' AND tags LIKE ?
+            """, arguments: [kind.rawValue, "%\"\(tag)\"%"])
+            return count ?? 0
+        }
+    }
+
+    /// Hard-delete a record by ID. Used for meta-optimization rollback.
+    ///
+    /// Prefer `forgetSoftRecord` for user-facing deletions; this is for cleanup
+    /// of auto-generated records that were never meant to persist.
+    func deleteRecord(id: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM memory_records WHERE id = ?", arguments: [id])
+            try Self.insertAudit(db: db, op: .forgetHard, targetId: id, note: "meta_opt_rollback")
+        }
+    }
+
     // MARK: - Search (FTS5 + Lexical Scoring)
 
     func search(query: String, limit: Int, includeInactive: Bool = false) throws -> [MemorySearchHit] {

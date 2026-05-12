@@ -1,6 +1,6 @@
 # ADR-007: Companion Device Handoff (iPhone, iPad, Apple Watch)
 
-**Status:** In Progress (Phases 1-2 complete)
+**Status:** Deferred (Phases 1-2 complete, 3-7 pending)
 **Date:** 2026-02-23
 **Scope:** Cross-device architecture — FaeOrbKit (`native/apple/FaeOrbKit/`), FaeRelayKit (`native/apple/FaeRelayKit/`), FaeCompanion (`native/apple/FaeCompanion/`)
 

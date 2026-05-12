@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: March 16, 2026
+Last updated: April 7, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae.
 
@@ -60,7 +60,7 @@ Suggested screenshot root:
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
 - [ ] The active local text model and configured vision model are visible in Settings without truncation.
 - [ ] The runtime reports the expected local text model, context size, and tool mode.
-- [ ] The active local text model matches the current auto-select ladder: `Qwen3.5-9B-Unsloth` (16+ GB) / `Qwen3.5-4B` (8–15 GB) / `Qwen3.5-2B-OptiQ` (< 8 GB). Manual presets also include `Qwen3.5-35B-A3B`.
+- [ ] The active local text model matches `FaeConfig.recommendedModel()`. Active (Qwen fallback — Gemma 4 pending mlx-swift-lm): `Qwen3.5-9B-Unsloth` (≥16 GB) / `Qwen3.5-4B` (8–15 GB) / `Qwen3.5-2B-OptiQ` (<8 GB). Target (Gemma 4, not yet available): `E4B` (16–31 GB) / `E2B` (<16 GB) / `26B-A4B` (≥32 GB).
 - [ ] On a cache-cleared or clean-install machine, first local text-model load completes without `Worker command timed out: load` while model download is in progress.
 - [ ] Any stale onboarding, memory, scheduler, or approval state needed for the scenario is reset intentionally through the test server.
 
@@ -261,14 +261,12 @@ For live UI validation, keep using the real app plus screenshots, the test serve
 - Verify Settings model changes do not require a full app restart.
 - In Settings, switch from one cached local model to another and confirm the pipeline reloads in-app and returns to `running`.
 - If selecting an uncached model, verify the app communicates that the model will download during the reload flow and that the current session is replaced only by the new pipeline, not by a full application restart.
-- Validate `Auto (Recommended)` model selection against available RAM tiers:
-  - under `16 GB` available RAM: `Qwen3.5 2B · 4bit`
-  - `16–31 GB` available RAM: `Qwen3.5 4B · 4bit`
-  - `32 GB+` available RAM: `Qwen3.5 9B · 4bit`
+- Validate `Auto (Recommended)` model selection against available RAM tiers (per `FaeConfig.recommendedModel()`):
+  - Active (Qwen — Gemma 4 pending mlx-swift-lm): `<8 GB` → Qwen3.5 2B, `8-15 GB` → Qwen3.5 4B, `16+ GB` → Qwen3.5 9B
+  - Target (Gemma 4 — not yet available): `<16 GB` → E2B unified, `16-31 GB` → E4B unified, `≥32 GB` → E2B (ASR) + 26B-A4B (LLM)
 - Validate `Auto (Recommended)` vision selection against available RAM tiers:
   - under `16 GB` available RAM: vision model remains off by default
-  - `16–31 GB` available RAM: `Qwen3-VL 4B · 4bit`
-  - `32 GB+` available RAM: `Qwen3-VL 4B · 8bit`
+  - `16+ GB` available RAM: `SmolVLM2-500M` (4bit, on-demand deep path); `SmolVLM2-256M` (always-on proactive awareness)
 - In `--test-server` or other low-memory validation flows, confirm the runtime clamp is actually applied and reported consistently:
   - operator model resolves to `Qwen3.5 2B · 4bit`
   - effective context is `8192`

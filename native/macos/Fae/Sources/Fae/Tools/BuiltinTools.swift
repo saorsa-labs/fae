@@ -179,11 +179,12 @@ struct SelfConfigTool: Tool {
         Manage Fae's behavior settings and standing directives. \
         Actions: adjust_setting (change a live setting like speed, temperature, thinking mode), \
         get_settings (view all adjustable settings and current values), \
-        get_directive, set_directive, append_directive, clear_directive (manage standing orders). \
+        get_directive, set_directive, append_directive, clear_directive (manage standing orders), \
+        rollback_improvement (undo the most recent overnight self-improvement change). \
         Legacy aliases: get_instructions, set_instructions, append_instructions, clear_instructions.
         """
     let parametersSchema = #"""
-        {"action": "string (required: adjust_setting|get_settings|get_directive|set_directive|append_directive|clear_directive)", "key": "string (required for adjust_setting)", "value": "any (required for adjust_setting and set/append)"}
+        {"action": "string (required: adjust_setting|get_settings|get_directive|set_directive|append_directive|clear_directive|rollback_improvement)", "key": "string (required for adjust_setting)", "value": "any (required for adjust_setting and set/append)"}
         """#
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
@@ -194,6 +195,9 @@ struct SelfConfigTool: Tool {
 
     /// Callback to FaeCore.patchConfig — set by FaeCore at startup.
     @MainActor static var configPatcher: ((String, Any) -> Void)?
+
+    /// Callback to rollback the most recent meta-optimization change — set by FaeCore.
+    @MainActor static var metaOptRollbackHandler: (() async -> String)?
 
     /// Specification for an adjustable setting — type, range, and human description.
     private struct SettingSpec {
@@ -445,9 +449,17 @@ struct SelfConfigTool: Tool {
             Self.writeInstructions("")
             return .success("Directive cleared. Reverting to default personality.")
 
+        case "rollback_improvement":
+            let handler = await MainActor.run { Self.metaOptRollbackHandler }
+            guard let handler else {
+                return .error("Improvement rollback is not available right now.")
+            }
+            let message = await handler()
+            return .success(message)
+
         default:
             return .error(
-                "Unknown action: \(action). Use: adjust_setting, get_settings, get_directive, set_directive, append_directive, clear_directive"
+                "Unknown action: \(action). Use: adjust_setting, get_settings, get_directive, set_directive, append_directive, clear_directive, rollback_improvement"
             )
         }
     }

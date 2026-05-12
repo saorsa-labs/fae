@@ -1,7 +1,7 @@
 # Fae — Current State
 
 > What fae actually is today, not what was planned.
-> Last updated: 2026-04-03
+> Last updated: 2026-04-07
 
 ## Tech Stack (v0.8.189)
 
@@ -13,26 +13,53 @@
 
 ## Voice Pipeline
 
+**Current (Qwen fallback — active until mlx-swift-lm ships Gemma 4 support):**
 ```
 Microphone (16kHz) → VAD (Silero v6) → Speaker ID (ECAPA-TDNN)
   → STT (Qwen3-ASR 1.7B) → LLM (Qwen3.5) → TTS (Kokoro-82M) → Speaker
 ```
 
-Auto model selection by RAM:
-- >=16 GB: Qwen3.5-9B Unsloth (32K context)
-- >=8 GB: Qwen3.5-4B (32K context)
-- <8 GB: Qwen3.5-2B OptiQ (32K context)
+**Target (Gemma 4 — pending [mlx-swift-lm#180](https://github.com/ml-explore/mlx-swift-lm/pull/180)):**
+```
+<32GB:  Mic → VAD → Speaker ID → Gemma 4 E4B/E2B (audio-direct, ASR+LLM unified)
+          → TTS (Kokoro-82M) → Speaker
+≥32GB:  Mic → VAD → Speaker ID → Gemma 4 E2B (ASR) → Gemma 4 26B-A4B (LLM)
+          → TTS (Kokoro-82M) → Speaker
+```
+
+Auto model selection by RAM (current Qwen fallback → Gemma 4 target):
+
+| RAM | Current (Qwen) | Target (Gemma 4) | Context |
+|-----|---------------|------------------|---------|
+| <8 GB | Qwen3.5-2B OptiQ | Gemma 4 E2B unified | 32K → 128K |
+| 8-15 GB | Qwen3.5-4B | Gemma 4 E2B unified | 32K → 128K |
+| 16-24 GB | Qwen3.5-9B Unsloth | Gemma 4 E4B unified | 32K → 128K |
+| 24-31 GB | Qwen3.5-9B Unsloth | Gemma 4 E4B unified | 32K → 128K |
+| ≥32 GB | Qwen3.5-9B Unsloth | E2B (ASR) + 26B-A4B (LLM) | 256K |
+
+Gemma 4 E4B benchmarked 2026-04-02: 100% tool calling, 100% Fae capability, 100% assistant fit, 100% serialization, 90% MMLU. Matches Qwen3.5-9B at half the params with native audio input.
 
 ## Key Capabilities
 
 - **37 built-in tools** (bash, calendar, mail, web_search, screenshot, click, etc.)
-- **22 skills** (voice-identity, forge, toolbox, channels, training-orchestrator, etc.)
+- **29 built-in skills** (voice-identity, forge, toolbox, channels, training-orchestrator, etc.)
 - **~23 scheduled tasks** (memory reflection, overnight research, morning briefing, etc.)
 - **Memory**: hybrid ANN (60%) + FTS5 (40%) search, entity graph (persons/orgs/locations)
-- **Self-improvement**: implicit feedback → SFT/DPO export → LoRA training → evaluation → deploy
+- **Self-improvement**: implicit feedback → meta-optimization (directive, config, skills, memory seeds via hill-climbing) → SFT/DPO export → LoRA training → evaluation → deploy
 - **Channels**: Discord, WhatsApp, iMessage
 - **Agent delegation**: Claude Code, Codex, Gemini, Copilot via ACP
 - **Proactive**: always-on camera presence detection, screen monitoring, overnight research
+
+## Vision Models
+
+Dual-VLM stack for progressive visual awareness:
+
+| RAM | Fast VLM (always-on) | Deep VLM (on-demand) |
+|-----|----------------------|----------------------|
+| <16 GB | disabled | disabled |
+| 16+ GB | SmolVLM2-256M (<1GB, presence detection, screen triage) | SmolVLM2-500M (1.8GB, detailed screenshot/camera analysis) |
+
+Both VLMs load alongside STT/LLM/TTS. SmolVLM2-500M scored 73% on Fae's 15-scenario vision eval (2026-03-26); Qwen3-VL-4B is legacy.
 
 ## x0x Integration
 

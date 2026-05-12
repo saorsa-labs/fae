@@ -65,6 +65,17 @@ struct ImprovementState: Sendable {
     var deferralCount: Int
     /// The directive text before the last directive-tuning amendment, for rollback.
     var previousDirective: String?
+
+    // Meta-optimization tracking (Phase 1).
+
+    /// Lifetime count of kept meta-optimization changes.
+    var metaOptKeptTotal: Int
+    /// Lifetime count of tested meta-optimization hypotheses.
+    var metaOptTestedTotal: Int
+    /// ISO-8601 timestamp of last meta-optimization run.
+    var metaOptLastRunAt: String?
+    /// Consecutive cycles with zero kept changes (plateau detection).
+    var metaOptConsecutiveNoImprovement: Int
 }
 
 /// A detected gap between current Fae capabilities and desired behaviour.
@@ -217,6 +228,19 @@ actor ImprovementStore {
         if !columnNames.contains("previous_directive") {
             try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN previous_directive TEXT")
         }
+        // Migration: meta-optimization tracking columns (Phase 1).
+        if !columnNames.contains("meta_opt_kept_total") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN meta_opt_kept_total INTEGER NOT NULL DEFAULT 0")
+        }
+        if !columnNames.contains("meta_opt_tested_total") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN meta_opt_tested_total INTEGER NOT NULL DEFAULT 0")
+        }
+        if !columnNames.contains("meta_opt_last_run_at") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN meta_opt_last_run_at TEXT")
+        }
+        if !columnNames.contains("meta_opt_consecutive_no_improvement") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN meta_opt_consecutive_no_improvement INTEGER NOT NULL DEFAULT 0")
+        }
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS capability_gaps (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,6 +263,27 @@ actor ImprovementStore {
                 eval_outcome      TEXT
             )
         """)
+        // Meta-optimization results log (Phase 1).
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS meta_optimization_log (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                cycle_number     INTEGER NOT NULL,
+                hypothesis_id    TEXT    NOT NULL,
+                surface          TEXT    NOT NULL,
+                description      TEXT    NOT NULL,
+                target_dimension TEXT    NOT NULL,
+                before_scores    TEXT    NOT NULL,
+                after_scores     TEXT    NOT NULL,
+                delta            TEXT    NOT NULL,
+                kept             INTEGER NOT NULL DEFAULT 0,
+                reason           TEXT    NOT NULL,
+                created_at       TEXT    NOT NULL
+            )
+        """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_mol_cycle
+            ON meta_optimization_log (cycle_number, kept)
+        """)
     }
 
     // MARK: - Singleton State Row
@@ -253,8 +298,9 @@ actor ImprovementStore {
             if count == 0 {
                 try db.execute(sql: """
                     INSERT INTO improvement_state
-                        (cycle_state, completed_cycles, user_approved_cycles, deferral_count)
-                    VALUES ('idle', 0, 0, 0)
+                        (cycle_state, completed_cycles, user_approved_cycles, deferral_count,
+                         meta_opt_kept_total, meta_opt_tested_total, meta_opt_consecutive_no_improvement)
+                    VALUES ('idle', 0, 0, 0, 0, 0, 0)
                 """)
             }
         }
@@ -396,7 +442,9 @@ actor ImprovementStore {
                 SELECT id, cycle_state, last_cycle_at, completed_cycles,
                        user_approved_cycles, current_adapter_path,
                        previous_adapter_path, training_started_at, last_cycle_error,
-                       deferral_count, previous_directive
+                       deferral_count, previous_directive,
+                       meta_opt_kept_total, meta_opt_tested_total,
+                       meta_opt_last_run_at, meta_opt_consecutive_no_improvement
                 FROM improvement_state LIMIT 1
             """) else {
                 throw ImprovementStoreError.stateNotInitialised
@@ -417,7 +465,9 @@ actor ImprovementStore {
                             user_approved_cycles = ?, current_adapter_path = ?,
                             previous_adapter_path = ?, training_started_at = ?,
                             last_cycle_error = ?, deferral_count = ?,
-                            previous_directive = ?
+                            previous_directive = ?,
+                            meta_opt_kept_total = ?, meta_opt_tested_total = ?,
+                            meta_opt_last_run_at = ?, meta_opt_consecutive_no_improvement = ?
                         WHERE id = ?
                     """,
                     arguments: [
@@ -425,7 +475,10 @@ actor ImprovementStore {
                         state.completedCycles, state.userApprovedCycles,
                         state.currentAdapterPath, state.previousAdapterPath,
                         state.trainingStartedAt, state.lastCycleError,
-                        state.deferralCount, state.previousDirective, id,
+                        state.deferralCount, state.previousDirective,
+                        state.metaOptKeptTotal, state.metaOptTestedTotal,
+                        state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
+                        id,
                     ]
                 )
             } else {
@@ -435,8 +488,10 @@ actor ImprovementStore {
                             (cycle_state, last_cycle_at, completed_cycles,
                              user_approved_cycles, current_adapter_path,
                              previous_adapter_path, training_started_at, last_cycle_error,
-                             deferral_count, previous_directive)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             deferral_count, previous_directive,
+                             meta_opt_kept_total, meta_opt_tested_total,
+                             meta_opt_last_run_at, meta_opt_consecutive_no_improvement)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         state.cycleState, state.lastCycleAt,
@@ -444,6 +499,8 @@ actor ImprovementStore {
                         state.currentAdapterPath, state.previousAdapterPath,
                         state.trainingStartedAt, state.lastCycleError,
                         state.deferralCount, state.previousDirective,
+                        state.metaOptKeptTotal, state.metaOptTestedTotal,
+                        state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
                     ]
                 )
             }
@@ -594,6 +651,70 @@ actor ImprovementStore {
         }
     }
 
+    // MARK: - MetaOptimization CRUD
+
+    /// Insert a meta-optimization result into the log.
+    func insertMetaOptResult(
+        cycleNumber: Int,
+        hypothesisId: String,
+        surface: String,
+        description: String,
+        targetDimension: String,
+        beforeScores: String,
+        afterScores: String,
+        delta: String,
+        kept: Bool,
+        reason: String,
+        createdAt: String
+    ) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO meta_optimization_log
+                        (cycle_number, hypothesis_id, surface, description,
+                         target_dimension, before_scores, after_scores, delta,
+                         kept, reason, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [
+                    cycleNumber, hypothesisId, surface, description,
+                    targetDimension, beforeScores, afterScores, delta,
+                    kept ? 1 : 0, reason, createdAt,
+                ]
+            )
+        }
+    }
+
+    /// Fetch the most recent meta-optimization results for morning briefing or analysis.
+    ///
+    /// - Parameter limit: Maximum number of results to return.
+    /// - Returns: Recent results ordered newest-first.
+    func recentMetaOptResults(limit: Int = 20) throws -> [[String: Any]] {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT cycle_number, hypothesis_id, surface, description,
+                       target_dimension, before_scores, after_scores, delta,
+                       kept, reason, created_at
+                FROM meta_optimization_log
+                ORDER BY created_at DESC
+                LIMIT \(limit)
+            """)
+            return rows.map { row in
+                [
+                    "cycle_number": row["cycle_number"] as Any,
+                    "surface": row["surface"] as Any,
+                    "description": row["description"] as Any,
+                    "kept": (row["kept"] as? Int64 ?? 0) != 0,
+                    "reason": row["reason"] as Any,
+                    "delta": row["delta"] as Any,
+                    "created_at": row["created_at"] as Any,
+                ]
+            }
+        }
+    }
+
     // MARK: - Row Mappers (private, static, sync)
 
     private static func feedbackEvent(from row: Row) -> FeedbackEvent {
@@ -637,7 +758,11 @@ actor ImprovementStore {
             trainingStartedAt: row["training_started_at"],
             lastCycleError: row["last_cycle_error"],
             deferralCount: Int(row["deferral_count"] as? Int64 ?? 0),
-            previousDirective: row["previous_directive"]
+            previousDirective: row["previous_directive"],
+            metaOptKeptTotal: Int(row["meta_opt_kept_total"] as? Int64 ?? 0),
+            metaOptTestedTotal: Int(row["meta_opt_tested_total"] as? Int64 ?? 0),
+            metaOptLastRunAt: row["meta_opt_last_run_at"],
+            metaOptConsecutiveNoImprovement: Int(row["meta_opt_consecutive_no_improvement"] as? Int64 ?? 0)
         )
     }
 

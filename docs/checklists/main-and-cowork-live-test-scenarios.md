@@ -315,7 +315,7 @@ Only mark the build release-ready when all of the following are true:
 1. With vision set to `Auto (Recommended)`, verify:
    - under `16 GB`: vision remains off by default
    - `16–31 GB`: `Qwen3-VL 4B · 4bit` is selected
-   - `32 GB+`: `Qwen3-VL 4B · 8bit` is selected
+   - `32 GB+`: `SmolVLM2-500M` is selected (deep, on-demand)
 2. Run one `screenshot`, `read_screen`, or `camera` turn and confirm the VLM loads on demand and unload/reload behavior remains stable.
 
 ### Low-memory test-server verification

@@ -1,11 +1,15 @@
 # ADR-006: Voice Privilege Escalation (Tool Approval System)
 
-**Status:** Accepted
+**Status:** Accepted (implementation evolved — approval overlay removed, replaced by governance model)
 **Date:** 2026-02-23
-**Scope:** Tool approval system — originally Rust, now Swift (`Tools/ToolExecutor.swift`, `ApprovalOverlayController.swift`, `ApprovalOverlayView.swift`, `Pipeline/PipelineCoordinator.swift`)
+**Updated:** 2026-04-05 — Tool-level approval gating removed. Security now enforced by voice identity (Speaker ID), DamageControlPolicy, and tool modes.
+**Scope:** Tool governance — `Tools/ToolExecutor.swift`, `Tools/DamageControlPolicy.swift`, `Pipeline/PipelineCoordinator.swift`
 
-> The approval-gated tool architecture is actively implemented in Swift.
-> Voice/button/timeout approval paths work as designed. See also ADR-005 for safety model.
+> **2026-04-05 update:** The per-tool `ApprovalTool` wrapper and approval overlay UI have been removed.
+> The current security model uses voice identity as the primary gate (owner verification before tool access),
+> DamageControlPolicy for catastrophic operation blocking, and tool modes (`read_only` / `full` / `full_no_approval`)
+> for access control. The conceptual trust model described below remains valid; the concrete implementation
+> has changed. See CLAUDE.md "Tool security (4-layer model)" for the current stack.
 
 ## Context
 

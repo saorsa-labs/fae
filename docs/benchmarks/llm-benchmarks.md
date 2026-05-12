@@ -1,8 +1,52 @@
 # LLM Benchmarks — Local Inference on Apple Silicon
 
-Benchmark results for Qwen3 models running locally via mistral.rs with Metal acceleration.
-These numbers directly inform Fae's model selection, context budget, and dual-channel
-pipeline architecture.
+> **Current benchmark tool: `FaeBenchmark` (native Swift, MLX)**
+>
+> All new benchmarks use the native Swift binary at `Sources/FaeBenchmark/`.
+> Run via justfile: `just benchmark <model>`, `just benchmark-tools <model>`, `just benchmark-all`.
+> Results are cached as JSON in `scripts/benchmark-results/`.
+>
+> The Python scripts (`mlx_benchmark.py`, `mlx_deep_benchmark.py`) below are **legacy** —
+> kept for historical reference only. Do not use them for new evaluations.
+
+---
+
+## Current Results (2026-04-02)
+
+**Backend:** mlx-swift-lm (native Swift, Metal), FaeBenchmark binary
+**Hardware:** Apple Silicon M2 Ultra, 96 GB unified memory
+
+| Model | Params (eff) | Modality | Tool | MMLU | Fae Cap | Asst Fit | Serial | Size |
+|-------|-------------|----------|------|------|---------|----------|--------|------|
+| Qwen3.5-2B OptiQ | 2B | text | 90% | 74% | 75% | 70% | 100% | ~1.5GB |
+| **Gemma 4 E2B 4-bit** | 2.3B | txt+img+aud | **100%** | 80% | **90%** | **85%** | 100% | ~3.6GB |
+| Gemma 4 E2B 8-bit | 2.3B | txt+img+aud | 90% | 90% | 90% | 95% | 100% | ~5.5GB |
+| Qwen3.5-4B 4-bit | 4B | text | 100% | **92%** | 90% | 95% | 100% | ~2.5GB |
+| **Gemma 4 E4B 4-bit** | 4.5B | txt+img+aud | **100%** | 90% | **100%** | **100%** | **100%** | ~5.2GB |
+| Gemma 4 E4B 8-bit | 4.5B | txt+img+aud | 70% | 90% | 100% | 100% | 100% | ~10GB |
+| Gemma 4 E4B bf16 | 4.5B | txt+img+aud | 70% | 90% | 100% | 100% | 100% | ~16GB |
+| Gemma 4 E4B mxfp4 | 4.5B | txt+img+aud | 40% | 86% | 100% | 100% | 100% | ~5.2GB |
+| Qwen3.5-9B Unsloth | 9B | text | 100% | 90% | 100% | 100% | 100% | ~5.5GB |
+| Qwen3.5-35B-A3B Unsloth | 3B active | text | 100% | 94% | 95% | 95% | 100% | ~18GB |
+| **Gemma 4 26B-A4B 4-bit** | 4B active | txt+img | 90% | **98%** | **100%** | **100%** | 100% | ~14GB |
+| Gemma 4 31B 4-bit | 31B | txt+img | 90% | 96% | 95% | 100% | 100% | ~16GB |
+| Gemma 4 31B 8-bit | 31B | txt+img | 90% | **98%** | **100%** | **100%** | 100% | ~32GB |
+| Gemma 4 31B bf16 | 31B | txt+img | 90% | **98%** | **100%** | **100%** | 100% | ~62GB |
+
+Notes:
+- Gemma 4 benchmarks run via `scripts/benchmark_gemma4.py` (mlx-vlm, temporary — pending mlx-swift-lm Gemma 4 support in [ml-explore/mlx-swift-lm#177](https://github.com/ml-explore/mlx-swift-lm/issues/177)).
+- Gemma 4 E2B/E4B have native audio (USM conformer) — ASR eval pending mlx-vlm audio fix.
+- **4-bit is the best quantization for Gemma tool calling** — higher precision models ask clarifying questions instead of calling tools.
+- 8-bit matches bf16 quality everywhere — no reason to use bf16 for eval purposes.
+- MXFP4 is worse than uniform 4-bit for E4B — avoid it.
+- 26B-A4B 4-bit is the best large model value (98% MMLU at 14GB = same as 31B bf16 at 62GB).
+
+---
+
+## Historical Results
+
+> Everything below is from legacy Python/mistral.rs benchmarks (2026-02-23 to 2026-03-15).
+> Kept for reference. Use FaeBenchmark for current numbers.
 
 **Hardware:** Apple Silicon, 96 GB unified memory
 **Quantization:** Q4_K_M (GGUF)
