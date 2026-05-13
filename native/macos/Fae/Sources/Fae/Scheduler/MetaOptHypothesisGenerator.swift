@@ -192,7 +192,7 @@ enum MetaOptHypothesisGenerator {
     // MARK: - Signal Classification
 
     /// Heuristic: does this feedback event relate to tool calling?
-    private static func isToolRelated(_ event: FeedbackEvent) -> Bool {
+    static func isToolRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("tool") ||
@@ -206,7 +206,7 @@ enum MetaOptHypothesisGenerator {
     }
 
     /// Heuristic: does this feedback event relate to structured output?
-    private static func isSerializationRelated(_ event: FeedbackEvent) -> Bool {
+    static func isSerializationRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("json") ||
@@ -218,7 +218,7 @@ enum MetaOptHypothesisGenerator {
     }
 
     /// Check if the current directive already contains keywords suggesting a similar amendment.
-    private static func directiveAlreadyContains(_ directive: String?, keywords: [String]) -> Bool {
+    static func directiveAlreadyContains(_ directive: String?, keywords: [String]) -> Bool {
         guard let directive, !directive.isEmpty else { return false }
         let lower = directive.lowercased()
         return keywords.contains { lower.contains($0.lowercased()) }
