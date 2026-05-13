@@ -123,7 +123,7 @@ enum PersonQueryDetector {
 
     /// Extract a name and optional relation label from a candidate string.
     /// E.g. "my sister Sarah" → ("Sarah", "sister"); "Sarah" → ("Sarah", nil)
-    private static func extractNameAndLabel(from text: String) -> (String?, String?) {
+    static func extractNameAndLabel(from text: String) -> (String?, String?) {
         let lower = text.lowercased()
         var detectedLabel: String?
         var remainder = text
