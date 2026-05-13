@@ -173,7 +173,7 @@ enum ChannelSettingsStore {
         "channels.\(normalizeChannelKey(channelKey)).\(normalizeFieldID(fieldID))"
     }
 
-    private static func normalizeChannelKey(_ raw: String) -> String {
+    static func normalizeChannelKey(_ raw: String) -> String {
         raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -181,7 +181,7 @@ enum ChannelSettingsStore {
             .replacingOccurrences(of: "-", with: "")
     }
 
-    private static func normalizeFieldID(_ raw: String) -> String {
+    static func normalizeFieldID(_ raw: String) -> String {
         raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -312,7 +312,7 @@ enum ChannelSettingsStore {
         try config.save()
     }
 
-    private static func parseList(_ value: String?) -> [String] {
+    static func parseList(_ value: String?) -> [String] {
         guard let value else { return [] }
         return value
             .split(separator: ",")
@@ -320,7 +320,7 @@ enum ChannelSettingsStore {
             .filter { !$0.isEmpty }
     }
 
-    private static func parsePort(_ value: String?) -> UInt16? {
+    static func parsePort(_ value: String?) -> UInt16? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               let parsed = Int(trimmed),
               (1...65_535).contains(parsed)
