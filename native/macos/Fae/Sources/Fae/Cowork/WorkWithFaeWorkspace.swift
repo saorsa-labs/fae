@@ -909,7 +909,7 @@ enum WorkWithFaeWorkspaceStore {
         return copy
     }
 
-    private static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
+    static func sanitizedConversationState(_ state: WorkWithFaeWorkspaceState) -> WorkWithFaeWorkspaceState {
         var sanitized = state
         // Hard truncation safety cap — real LLM-based compression runs in CoworkWorkspaceController
         // before each submission via compressConversationIfNeeded(). This is the last-resort backstop.
@@ -1416,7 +1416,7 @@ enum WorkWithFaeWorkspaceStore {
         return transforms.filter { seen.insert($0).inserted }
     }
 
-    private static func appendUnique(_ value: String, to values: inout [String]) {
+    static func appendUnique(_ value: String, to values: inout [String]) {
         guard !values.contains(value) else { return }
         values.append(value)
     }

@@ -140,4 +140,34 @@ final class WorkWithFaeWorkspaceTests: XCTestCase {
         let result = WorkWithFaeWorkspaceStore.deduplicatedTransforms(transforms)
         XCTAssertEqual(result.count, 2)
     }
+
+    // MARK: - sanitizedConversationState
+
+    func testSanitizedConversationStateTruncatesLong() {
+        var state = WorkWithFaeWorkspaceState.empty
+        state.conversationMessages = (1...600).map { WorkWithFaeConversationMessage(id: UUID(), role: "user", content: "msg \($0)") }
+        let sanitized = WorkWithFaeWorkspaceStore.sanitizedConversationState(state)
+        XCTAssertLessThanOrEqual(sanitized.conversationMessages.count, 500)
+    }
+
+    func testSanitizedConversationStateShort() {
+        var state = WorkWithFaeWorkspaceState.empty
+        state.conversationMessages = (1...10).map { WorkWithFaeConversationMessage(id: UUID(), role: "user", content: "msg \($0)") }
+        let sanitized = WorkWithFaeWorkspaceStore.sanitizedConversationState(state)
+        XCTAssertEqual(sanitized.conversationMessages.count, 10)
+    }
+
+    // MARK: - appendUnique
+
+    func testAppendUnique() {
+        var values: [String] = ["a", "b"]
+        WorkWithFaeWorkspaceStore.appendUnique("c", to: &values)
+        XCTAssertEqual(values, ["a", "b", "c"])
+    }
+
+    func testAppendUniqueDuplicate() {
+        var values: [String] = ["a", "b"]
+        WorkWithFaeWorkspaceStore.appendUnique("a", to: &values)
+        XCTAssertEqual(values, ["a", "b"])
+    }
 }
