@@ -19,19 +19,21 @@ SUITES=$(swift test --list-tests 2>&1 | grep -E "^(IntegrationTests|HandoffTests
 SUITE_COUNT=$(echo "$SUITES" | wc -l | tr -d ' ')
 echo "Found $SUITE_COUNT test suites"
 
-# Run each suite with coverage, saving profraws after each run
-echo "==> Running test suites with coverage..."
+# Batch suites into groups of 10 to reduce overhead
+BATCH_SIZE=10
 RUN=0
+BATCH=""
 for SUITE in $SUITES; do
+  BATCH="$BATCH --filter $SUITE"
   RUN=$((RUN + 1))
-  if [ $((RUN % 20)) -eq 0 ]; then
-    echo "  Progress: $RUN/$SUITE_COUNT suites..."
+  if [ $((RUN % BATCH_SIZE)) -eq 0 ] || [ $RUN -eq $SUITE_COUNT ]; then
+    echo "  Running batch $RUN/$SUITE_COUNT..."
+    swift test --enable-code-coverage $BATCH > /dev/null 2>&1 || true
+    for f in "$PROFRAW_DIR"/*.profraw; do
+      [ -f "$f" ] && cp "$f" "$ACCUM_DIR/batch${RUN}_$(basename "$f")"
+    done
+    BATCH=""
   fi
-  swift test --enable-code-coverage --filter "$SUITE" > /dev/null 2>&1 || true
-  # Save profraws with unique names before next run overwrites them
-  for f in "$PROFRAW_DIR"/*.profraw; do
-    [ -f "$f" ] && cp "$f" "$ACCUM_DIR/run${RUN}_$(basename "$f")"
-  done
 done
 
 echo "==> Done running $SUITE_COUNT suites"
@@ -75,7 +77,6 @@ print(f'METRIC total_lines={total_lines}')
 print(f'METRIC exec_lines={exec_lines}')
 print(f'METRIC files_covered={covered_files}')
 print(f'METRIC zero_cov_files={zero_cov}')
-print(f'METRIC fae_file_count={len(fae_files)}')
 PYEOF
 
 echo "METRIC test_count=0"
