@@ -284,4 +284,64 @@ final class ToolRoutingHelpersTests: XCTestCase {
         // Should return a tool call for the appropriate action
         XCTAssertFalse(call.name.isEmpty)
     }
+
+    // MARK: - repairedToolCallForSkippedTurn
+
+    func testRepairedReadFile() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("read /tmp/file.txt")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "read")
+        XCTAssertEqual(call?.arguments["path"] as? String, "/tmp/file.txt")
+    }
+
+    func testRepairedWriteFile() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("write 'hello world' to /tmp/out.txt")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "write")
+    }
+
+    func testRepairedFetchURL() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("fetch https://example.com")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "fetch_url")
+    }
+
+    func testRepairedWebSearch() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("search for weather forecast")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "web_search")
+    }
+
+    func testRepairedSelfConfig() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("use self_config to get settings")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "self_config")
+    }
+
+    func testRepairedVoiceIdentity() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("check voice identity status")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "voice_identity")
+    }
+
+    func testRepairedCameraIntent() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("can you see me on camera")
+        XCTAssertNotNil(call)
+        XCTAssertEqual(call?.name, "camera")
+    }
+
+    func testRepairedNoMatch() {
+        let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("just a normal sentence")
+        XCTAssertNil(call)
+    }
+
+
+
+    // MARK: - normalizeSearchRepairQuery
+
+    func testNormalizeSearchQuery() {
+        let normalized = ToolRoutingHelpers.normalizeSearchRepairQuery("  What's the weather today?  ")
+        XCTAssertFalse(normalized.hasPrefix(" "))
+        XCTAssertFalse(normalized.hasSuffix(" "))
+    }
 }
