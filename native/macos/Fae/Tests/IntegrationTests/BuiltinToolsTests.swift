@@ -1,0 +1,189 @@
+import XCTest
+@testable import Fae
+
+final class BuiltinToolsTests: XCTestCase {
+
+    private let fm = FileManager.default
+    private var tempDir: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("fae-builtin-tools-\(UUID().uuidString)")
+    }
+
+    override func tearDown() {
+        try? fm.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    private func createTempFile(named name: String, content: String) -> String {
+        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let path = tempDir.appendingPathComponent(name).path
+        try? content.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    // MARK: - ReadTool
+
+    func testReadToolProperties() {
+        let tool = ReadTool()
+        XCTAssertEqual(tool.name, "read")
+        XCTAssertFalse(tool.requiresApproval)
+        XCTAssertEqual(tool.riskLevel, .low)
+    }
+
+    func testReadToolMissingPath() async throws {
+        let tool = ReadTool()
+        let result = try await tool.execute(input: [:])
+        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.output.contains("path"))
+    }
+
+    func testReadToolFileNotFound() async throws {
+        let tool = ReadTool()
+        let result = try await tool.execute(input: ["path": "/nonexistent/file.txt"])
+        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.output.contains("not found"))
+    }
+
+    func testReadToolSuccess() async throws {
+        let path = createTempFile(named: "test.txt", content: "Hello world from read tool")
+        let tool = ReadTool()
+        let result = try await tool.execute(input: ["path": path])
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(result.output.contains("Hello world"))
+    }
+
+    func testReadToolTruncation() async throws {
+        let largeContent = String(repeating: "x", count: 51_000)
+        let path = createTempFile(named: "large.txt", content: largeContent)
+        let tool = ReadTool()
+        let result = try await tool.execute(input: ["path": path])
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(result.output.hasSuffix("[truncated]"))
+    }
+
+    // MARK: - WriteTool
+
+    func testWriteToolProperties() {
+        let tool = WriteTool()
+        XCTAssertEqual(tool.name, "write")
+        XCTAssertTrue(tool.requiresApproval)
+        XCTAssertEqual(tool.riskLevel, .high)
+    }
+
+    func testWriteToolMissingParams() async throws {
+        let tool = WriteTool()
+        let result = try await tool.execute(input: ["path": "/tmp/test.txt"])
+        XCTAssertTrue(result.isError)
+        XCTAssertTrue(result.output.contains("Missing"))
+    }
+
+    func testWriteToolBlockedPath() async throws {
+        let tool = WriteTool()
+        let result = try await tool.execute(input: ["path": "/etc/passwd", "content": "hacked"])
+        XCTAssertTrue(result.isError)
+    }
+
+    // MARK: - EditTool
+
+    func testEditToolProperties() {
+        let tool = EditTool()
+        XCTAssertEqual(tool.name, "edit")
+        XCTAssertTrue(tool.requiresApproval)
+        XCTAssertEqual(tool.riskLevel, .high)
+    }
+
+    func testEditToolMissingParams() async throws {
+        let tool = EditTool()
+        let result = try await tool.execute(input: [:])
+        XCTAssertTrue(result.isError)
+    }
+
+    // MARK: - BashTool
+
+    func testBashToolProperties() {
+        let tool = BashTool()
+        XCTAssertEqual(tool.name, "bash")
+        XCTAssertTrue(tool.requiresApproval)
+    }
+
+    func testBashToolMissingCommand() async throws {
+        let tool = BashTool()
+        let result = try await tool.execute(input: [:])
+        XCTAssertTrue(result.isError)
+    }
+
+    // MARK: - SelfConfigTool
+
+    func testSelfConfigToolProperties() {
+        let tool = SelfConfigTool()
+        XCTAssertEqual(tool.name, "self_config")
+        XCTAssertFalse(tool.requiresApproval)
+        XCTAssertEqual(tool.riskLevel, .low)
+    }
+
+    // MARK: - WebSearchTool
+
+    func testWebSearchToolProperties() {
+        let tool = WebSearchTool()
+        XCTAssertEqual(tool.name, "web_search")
+        XCTAssertFalse(tool.requiresApproval)
+    }
+
+    // MARK: - FetchURLTool
+
+    func testFetchURLToolProperties() {
+        let tool = FetchURLTool()
+        XCTAssertEqual(tool.name, "fetch_url")
+        XCTAssertFalse(tool.requiresApproval)
+    }
+
+    // MARK: - InputRequestTool
+
+    func testInputRequestToolProperties() {
+        let tool = InputRequestTool()
+        XCTAssertEqual(tool.name, "input_request")
+    }
+
+    // MARK: - Tool protocol conformance
+
+    func testAllToolsConformToProtocol() {
+        let tools: [any Tool] = [
+            ReadTool(), WriteTool(), EditTool(), BashTool(),
+            SelfConfigTool(), WebSearchTool(), FetchURLTool(), InputRequestTool(),
+        ]
+        for tool in tools {
+            XCTAssertFalse(tool.name.isEmpty)
+            XCTAssertFalse(tool.description.isEmpty)
+        }
+    }
+
+    func testAllToolsHaveUniqueNames() {
+        let tools: [any Tool] = [
+            ReadTool(), WriteTool(), EditTool(), BashTool(),
+            SelfConfigTool(), WebSearchTool(), FetchURLTool(), InputRequestTool(),
+        ]
+        let names = tools.map(\.name)
+        XCTAssertEqual(Set(names).count, names.count)
+    }
+
+    // MARK: - ToolResult
+
+    func testToolResultSuccess() {
+        let result = ToolResult.success("All good")
+        XCTAssertFalse(result.isError)
+        XCTAssertEqual(result.output, "All good")
+    }
+
+    func testToolResultError() {
+        let result = ToolResult.error("Something went wrong")
+        XCTAssertTrue(result.isError)
+        XCTAssertEqual(result.output, "Something went wrong")
+    }
+
+    // MARK: - ToolRiskLevel
+
+    func testToolRiskLevelCases() {
+        XCTAssertEqual(ToolRiskLevel.low.rawValue, "low")
+        XCTAssertEqual(ToolRiskLevel.medium.rawValue, "medium")
+        XCTAssertEqual(ToolRiskLevel.high.rawValue, "high")
+    }
+}
