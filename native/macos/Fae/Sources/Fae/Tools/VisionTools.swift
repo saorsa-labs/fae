@@ -9,7 +9,7 @@ import ScreenCaptureKit
 /// which triggers model loading if needed.
 typealias VLMProvider = @Sendable () async throws -> (any VLMEngine)?
 
-private enum ComputerUseSafety {
+enum ComputerUseSafety {
     static func validateElementTarget(_ element: AccessibilityBridge.UIElement) -> ToolResult? {
         if AccessibilityBridge.isDeniedAutomationTarget(pid: element.pid) {
             return .error("Refusing to automate protected system surfaces for safety.")
@@ -855,7 +855,7 @@ struct TypeTextTool: Tool {
         preferredTextElement(appName: appName)?.value
     }
 
-    private static func didVerifyTypedText(
+    static func didVerifyTypedText(
         _ text: String,
         beforeValue: String?,
         afterValue: String?
@@ -871,7 +871,7 @@ struct TypeTextTool: Tool {
         return normalizedBeforeValue != normalizedAfterValue
     }
 
-    private static func normalize(_ value: String?) -> String? {
+    static func normalize(_ value: String?) -> String? {
         value?
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
