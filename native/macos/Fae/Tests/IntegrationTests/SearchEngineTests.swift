@@ -204,4 +204,84 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(SearchEngine.google.rawValue, "google")
         XCTAssertEqual(SearchEngine.duckDuckGo.rawValue, "duckduckgo")
     }
+
+    // MARK: - GoogleEngine — parseGoogleResults
+
+    func testGoogleParseResults() {
+        let engine = GoogleEngine()
+        let html = """
+        <div class="g">
+            <h3><a href="/url?q=https://example.com/page">Example Title</a></h3>
+            <span class="VwiC3b">This is a snippet.</span>
+        </div>
+        """
+        let results = engine.parseGoogleResults(html: html, maxResults: 10)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].title, "Example Title")
+        XCTAssertEqual(results[0].url, "https://example.com/page")
+        XCTAssertTrue(results[0].snippet.contains("snippet"))
+    }
+
+    func testGoogleParseEmpty() {
+        let engine = GoogleEngine()
+        let results = engine.parseGoogleResults(html: "<html></html>", maxResults: 10)
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testGoogleUnwrapRedirect() {
+        let engine = GoogleEngine()
+        let url = engine.unwrapGoogleRedirect("/url?q=https://example.com&r=ab")
+        XCTAssertEqual(url, "https://example.com")
+    }
+
+    func testGoogleUnwrapDirectURL() {
+        let engine = GoogleEngine()
+        let url = engine.unwrapGoogleRedirect("https://example.com/direct")
+        XCTAssertEqual(url, "https://example.com/direct")
+    }
+
+    // MARK: - DuckDuckGoEngine — parseDDGResults
+
+    func testDDGParseResults() {
+        let engine = DuckDuckGoEngine()
+        let html = """
+        <div class="result results_links_deep">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Example Title</a>
+            <a class="result__snippet">This is a snippet.</a>
+        </div>
+        """
+        let results = engine.parseDDGResults(html: html, maxResults: 10)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].title, "Example Title")
+        XCTAssertEqual(results[0].url, "https://example.com")
+    }
+
+    func testDDGParseEmpty() {
+        let engine = DuckDuckGoEngine()
+        let results = engine.parseDDGResults(html: "<html></html>", maxResults: 10)
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testDDGExtractURLRedirect() {
+        let engine = DuckDuckGoEngine()
+        let url = engine.extractURL(from: "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com")
+        XCTAssertEqual(url, "https://example.com")
+    }
+
+    func testDDGExtractURLDirect() {
+        let engine = DuckDuckGoEngine()
+        let url = engine.extractURL(from: "https://example.com/direct")
+        XCTAssertEqual(url, "https://example.com/direct")
+    }
+
+    func testDDGExtractURLProtocolRelative() {
+        let engine = DuckDuckGoEngine()
+        let url = engine.extractURL(from: "//example.com/path")
+        XCTAssertEqual(url, "https://example.com/path")
+    }
+
+    func testDDGExtractURLOtherwise() {
+        let engine = DuckDuckGoEngine()
+        XCTAssertNil(engine.extractURL(from: "relative/path"))
+    }
 }
