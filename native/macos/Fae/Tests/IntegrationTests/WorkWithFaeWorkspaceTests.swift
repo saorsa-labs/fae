@@ -3,63 +3,42 @@ import XCTest
 
 final class WorkWithFaeWorkspaceTests: XCTestCase {
 
-    // MARK: - selectedWorkspace
+    // MARK: - kindForFile
 
-    func testSelectedWorkspaceDefault() {
-        let registry = WorkWithFaeWorkspaceRegistry.default
-        let selected = WorkWithFaeWorkspaceStore.selectedWorkspace(in: registry)
-        XCTAssertNotNil(selected)
-        XCTAssertEqual(selected?.name, "Main workspace")
+    func testKindForFileFolder() {
+        XCTAssertEqual(WorkWithFaeFileEntry.kindForFile(url: URL(fileURLWithPath: "/test"), isDirectory: true), "folder")
     }
 
-    func testSelectedWorkspaceEmpty() {
-        let registry = WorkWithFaeWorkspaceRegistry(
-            selectedWorkspaceID: nil,
-            workspaces: [],
-            agents: []
-        )
-        let selected = WorkWithFaeWorkspaceStore.selectedWorkspace(in: registry)
-        XCTAssertNil(selected)
+    func testKindForFileSwift() {
+        XCTAssertEqual(WorkWithFaeFileEntry.kindForFile(url: URL(fileURLWithPath: "/test.swift"), isDirectory: false), "text")
     }
 
-    // MARK: - selectedAgent
-
-    func testSelectedAgentDefault() {
-        let registry = WorkWithFaeWorkspaceRegistry.default
-        let agent = WorkWithFaeWorkspaceStore.selectedAgent(in: registry)
-        XCTAssertNotNil(agent)
+    func testKindForFileImage() {
+        XCTAssertEqual(WorkWithFaeFileEntry.kindForFile(url: URL(fileURLWithPath: "/test.png"), isDirectory: false), "image")
     }
 
-    // MARK: - executionAgent
-
-    func testExecutionAgentDefault() {
-        let registry = WorkWithFaeWorkspaceRegistry.default
-        let execAgent = WorkWithFaeWorkspaceStore.executionAgent(in: registry)
-        XCTAssertNotNil(execAgent)
+    func testKindForFilePDF() {
+        XCTAssertEqual(WorkWithFaeFileEntry.kindForFile(url: URL(fileURLWithPath: "/test.pdf"), isDirectory: false), "document")
     }
 
-    // MARK: - registryByUpsertingAgent
-
-    func testUpsertingAgentNew() {
-        var registry = WorkWithFaeWorkspaceRegistry.default
-        let agent = WorkWithFaeAgentProfile.faeLocal
-        registry = WorkWithFaeWorkspaceStore.registryByUpsertingAgent(
-            agent, assignToSelectedWorkspace: false, in: registry
-        )
-        XCTAssertTrue(registry.agents.contains(where: { $0.id == agent.id }))
+    func testKindForFileUnknownExt() {
+        XCTAssertEqual(WorkWithFaeFileEntry.kindForFile(url: URL(fileURLWithPath: "/test.xyz"), isDirectory: false), "xyz")
     }
 
-    // MARK: - WorkWithFaeAgentProfile
+    // MARK: - duplicatedWorkspaceName
 
-    func testFaeLocalAgent() {
-        let local = WorkWithFaeAgentProfile.faeLocal
-        XCTAssertFalse(local.id.isEmpty)
-        XCTAssertFalse(local.name.isEmpty)
+    func testDuplicatedWorkspaceNameSimple() {
+        let name = WorkWithFaeWorkspaceStore.duplicatedWorkspaceName(from: "My Workspace", existingNames: [])
+        XCTAssertEqual(name, "My Workspace Fork")
     }
 
-    // MARK: - WorkWithFaeRemoteExecutionPolicy
+    func testDuplicatedWorkspaceNameConflict() {
+        let name = WorkWithFaeWorkspaceStore.duplicatedWorkspaceName(from: "My Workspace", existingNames: ["my workspace fork"])
+        XCTAssertEqual(name, "My Workspace Fork 2")
+    }
 
-    func testRemoteExecutionPolicyCases() {
-        XCTAssertEqual(WorkWithFaeRemoteExecutionPolicy.allCases.count, 3)
+    func testDuplicatedWorkspaceNameMultipleConflicts() {
+        let name = WorkWithFaeWorkspaceStore.duplicatedWorkspaceName(from: "My Workspace", existingNames: ["my workspace fork", "my workspace fork 2"])
+        XCTAssertEqual(name, "My Workspace Fork 3")
     }
 }

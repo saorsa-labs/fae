@@ -40,7 +40,7 @@ struct WorkWithFaeFileEntry: Identifiable, Codable, Hashable, Sendable {
         self.modifiedAt = values?.contentModificationDate
     }
 
-    private static func kindForFile(url: URL, isDirectory: Bool) -> String {
+    static func kindForFile(url: URL, isDirectory: Bool) -> String {
         if isDirectory { return "folder" }
         let ext = url.pathExtension.lowercased()
         if ["swift", "rs", "py", "js", "ts", "tsx", "jsx", "json", "toml", "yaml", "yml", "md", "txt", "html", "css", "c", "h", "cpp", "hpp", "go", "java", "kt"].contains(ext) {
@@ -941,7 +941,7 @@ enum WorkWithFaeWorkspaceStore {
         }
     }
 
-    private static func duplicatedWorkspaceName(from baseName: String, existingNames: [String]) -> String {
+    static func duplicatedWorkspaceName(from baseName: String, existingNames: [String]) -> String {
         let normalizedExisting = Set(existingNames.map { $0.lowercased() })
         let firstCandidate = "\(baseName) Fork"
         if !normalizedExisting.contains(firstCandidate.lowercased()) {
