@@ -431,7 +431,7 @@ final class ConversationBridgeController: ObservableObject {
     // MARK: - Friendly Labels
 
     /// Human-friendly label for model loading progress (non-technical users).
-    private static func friendlyLoadingLabel(model: String) -> (String, Int) {
+    static func friendlyLoadingLabel(model: String) -> (String, Int) {
         let lower = model.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
             return ("Loading ears to listen…", 10)
@@ -445,7 +445,7 @@ final class ConversationBridgeController: ObservableObject {
     }
 
     /// Human-friendly label when a model finishes loading.
-    private static func friendlyLoadCompleteLabel(model: String) -> String {
+    static func friendlyLoadCompleteLabel(model: String) -> String {
         let lower = model.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
             return "Ears ready — Fae can listen ✓"
@@ -497,7 +497,7 @@ final class ConversationBridgeController: ObservableObject {
     }
 
     /// Human-friendly label for download progress.
-    private static func friendlyDownloadLabel(repoId: String) -> String {
+    static func friendlyDownloadLabel(repoId: String) -> String {
         let lower = repoId.lowercased()
         if lower.contains("parakeet") || lower.contains("stt") || lower.contains("speech") {
             return "Downloading speech recognition…"
