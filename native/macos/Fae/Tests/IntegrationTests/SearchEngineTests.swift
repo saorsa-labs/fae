@@ -205,6 +205,77 @@ final class SearchEngineTests: XCTestCase {
         XCTAssertEqual(SearchEngine.duckDuckGo.rawValue, "duckduckgo")
     }
 
+    func testSearchEngineWeights() {
+        XCTAssertGreaterThanOrEqual(SearchEngine.duckDuckGo.weight, 0)
+        XCTAssertGreaterThanOrEqual(SearchEngine.bing.weight, 0)
+        XCTAssertGreaterThanOrEqual(SearchEngine.google.weight, 0)
+    }
+
+    // MARK: - URLNormalizer
+
+    func testURLNormalizerStripUTM() {
+        let url = "https://example.com/page?utm_source=google&real=param"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertFalse(normalized.contains("utm_source"))
+        XCTAssertTrue(normalized.contains("real=param"))
+    }
+
+    func testURLNormalizerStripDefaultPort() {
+        let url = "https://example.com:443/page"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertFalse(normalized.contains(":443"))
+    }
+
+    func testURLNormalizerKeepNonDefaultPort() {
+        let url = "https://example.com:8080/page"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertTrue(normalized.contains(":8080"))
+    }
+
+    func testURLNormalizerStripFragment() {
+        let url = "https://example.com/page#section"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertFalse(normalized.contains("#"))
+    }
+
+    func testURLNormalizerRemoveTrailingSlash() {
+        let url = "https://example.com/path/"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertEqual(normalized, "https://example.com/path")
+    }
+
+    func testURLNormalizerKeepRootSlash() {
+        let url = "https://example.com/"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertTrue(normalized.hasSuffix("/"))
+    }
+
+    func testURLNormalizerLowercaseHost() {
+        let url = "https://Example.COM/page"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertTrue(normalized.contains("example.com"))
+    }
+
+    func testURLNormalizerSortQueryParams() {
+        let url = "https://example.com/?z=1&a=2&m=3"
+        let normalized = URLNormalizer.normalize(url)
+        // Params should be sorted: a, m, z
+        let aRange = normalized.range(of: "a=2")
+        let zRange = normalized.range(of: "z=1")
+        XCTAssertLessThan(aRange!.lowerBound, zRange!.lowerBound)
+    }
+
+    func testURLNormalizerStripAllTracking() {
+        let url = "https://example.com/?utm_source=x&fbclid=y&gclid=z"
+        let normalized = URLNormalizer.normalize(url)
+        XCTAssertFalse(normalized.contains("?") ?? true)
+    }
+
+    func testURLNormalizerInvalidURL() {
+        let normalized = URLNormalizer.normalize("not a url at all")
+        XCTAssertEqual(normalized, "not a url at all")
+    }
+
     // MARK: - GoogleEngine — parseGoogleResults
 
     func testGoogleParseResults() {
