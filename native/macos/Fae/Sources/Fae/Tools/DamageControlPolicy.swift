@@ -324,13 +324,13 @@ actor DamageControlPolicy {
     }
 
     /// Returns true if the command includes a destructive shell verb (rm, mv).
-    private static func isDestructiveShellCommand(_ command: String) -> Bool {
+    static func isDestructiveShellCommand(_ command: String) -> Bool {
         let lower = command.lowercased()
         // Match "rm " or "rm\t" or "rm;" to avoid false positives on "remove_file.sh"
         return lower.range(of: #"\brm\b|\bmv\b"#, options: .regularExpression) != nil
     }
 
-    private static func matches(pattern: String, in text: String) -> Bool {
+    static func matches(pattern: String, in text: String) -> Bool {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return false
         }
