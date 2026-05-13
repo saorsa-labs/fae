@@ -56,4 +56,30 @@ These are SwiftUI views / AppKit controllers that require production code change
 - If code cannot be tested as-is, write it to `autoresearch/untestable-report.md`
 
 ## What's Been Tried
-- Baseline measured: 27.8% coverage across 298 files
+
+### Results
+- **Baseline**: 27.8% (33,278/119,699 lines)
+- **Achieved**: 28.1% (33,633/119,699 lines) — +0.3%, +7 files covered
+- **Realistic ceiling without production changes**: ~30-35%
+
+### New Test Files Created
+| File | Tests | Coverage Impact |
+|------|-------|----------------|
+| CoreLogicTests.swift | SentimentClassifier, ToolPermissionSnapshot, DiagnosticsManager, SpeakerGateState, TTSState | +4 files |
+| PipelineTypesTests.swift | PendingBargeIn, PlaybackBargeInCandidate, GenerationTakeoverCandidate, IntroCrawl, RescueMode | +2 files |
+| ToolTypesTests.swift | ToolResult, ToolRiskLevel, ActionSource, Tool protocol extensions | +1 file |
+| SpeechInputStageTests.swift | SpeechInputStage, ClassificationResult, FaeEvent enum (all cases), etc. | +2 files |
+| BargeInStateTests.swift | BargeInDecisions pure functions, BargeInState state mgmt | +1 file |
+
+### Key Learnings
+1. **Coverage denominator is huge** — 119K instrumented lines. Each 1% point requires ~1,200 additional executed lines.
+2. **~35K lines are untestable without refactoring** — pure SwiftUI views, framework-dependent modules (AVFoundation, MLX, SoundAnalysis), and complex async coordinators.
+3. **Read source before writing tests** — many assumed type names/APIs don't match actual code.
+4. **Coverage toolchain**: `swift test --enable-code-coverage` → find `.profraw` in `.build/arm64-apple-macosx/debug/codecov/` → `llvm-profdata merge` → Xcode's `llvm-cov export -format=text`.
+
+### Dead Ends
+- FalseInterruptionRecoveryTests — too many API mismatches, discarded after repeated compilation failures.
+- PipelineLogicTests — assumed types (VoiceTagParser.parse, ConversationState) don't exist with those APIs.
+
+### Report
+See `autoresearch/untestable-report.md` for detailed analysis of untestable code and recommendations.
