@@ -503,7 +503,7 @@ actor MemoryInboxService {
         return text
     }
 
-    private static func normalizeImportedText(_ text: String) -> String {
+    static func normalizeImportedText(_ text: String) -> String {
         let collapsed = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -511,12 +511,12 @@ actor MemoryInboxService {
         return String(collapsed.prefix(MemoryConstants.maxArtifactTextLen))
     }
 
-    private static func sha256Hex(_ text: String) -> String {
+    static func sha256Hex(_ text: String) -> String {
         let digest = SHA256.hash(data: Data(text.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func sourceLabel(for sourceType: MemoryArtifactSourceType) -> String {
+    static func sourceLabel(for sourceType: MemoryArtifactSourceType) -> String {
         sourceType.rawValue.replacingOccurrences(of: "_", with: " ")
     }
 
