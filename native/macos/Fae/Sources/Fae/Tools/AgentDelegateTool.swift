@@ -86,7 +86,7 @@ private enum DelegateProvider: String {
     case copilot
 }
 
-private enum DelegateMode: String {
+enum DelegateMode: String {
     case readOnly = "read_only"
     case readWrite = "read_write"
 }

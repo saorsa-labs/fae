@@ -97,7 +97,7 @@ enum EntityContextFormatter {
 
     // MARK: - Private
 
-    private static func formatRelationType(_ raw: String) -> String {
+    static func formatRelationType(_ raw: String) -> String {
         switch raw {
         case "works_at": return "Works at"
         case "lives_in": return "Lives in"
