@@ -19,21 +19,17 @@ SUITES=$(swift test --list-tests 2>&1 | grep -E "^(IntegrationTests|HandoffTests
 SUITE_COUNT=$(echo "$SUITES" | wc -l | tr -d ' ')
 echo "Found $SUITE_COUNT test suites"
 
-# Batch suites into groups of 10 to reduce overhead
-BATCH_SIZE=10
+# Run each suite individually to avoid profraw corruption when multiple
+# XCTest suites share a process. Each suite gets its own clean profraw.
 RUN=0
-BATCH=""
 for SUITE in $SUITES; do
-  BATCH="$BATCH --filter $SUITE"
   RUN=$((RUN + 1))
-  if [ $((RUN % BATCH_SIZE)) -eq 0 ] || [ $RUN -eq $SUITE_COUNT ]; then
-    echo "  Running batch $RUN/$SUITE_COUNT..."
-    swift test --enable-code-coverage $BATCH > /dev/null 2>&1 || true
-    for f in "$PROFRAW_DIR"/*.profraw; do
-      [ -f "$f" ] && cp "$f" "$ACCUM_DIR/batch${RUN}_$(basename "$f")"
-    done
-    BATCH=""
-  fi
+  # Remove old profraws before each run to avoid stale data
+  rm -f "$PROFRAW_DIR"/*.profraw
+  swift test --enable-code-coverage --filter "$SUITE" > /dev/null 2>&1 || true
+  for f in "$PROFRAW_DIR"/*.profraw; do
+    [ -f "$f" ] && cp "$f" "$ACCUM_DIR/run${RUN}_$(basename "$f")"
+  done
 done
 
 echo "==> Done running $SUITE_COUNT suites"
