@@ -541,4 +541,101 @@ final class FaeTypesTests: XCTestCase {
         XCTAssertTrue(allRoles.contains(.owner))
         XCTAssertTrue(allRoles.contains(.guest))
     }
+
+    // MARK: - FaeThinkingLevel
+
+    func testFaeThinkingLevelCases() {
+        XCTAssertEqual(FaeThinkingLevel.allCases.count, 3)
+    }
+
+    func testFaeThinkingLevelDisplayNames() {
+        XCTAssertEqual(FaeThinkingLevel.fast.displayName, "Fast")
+        XCTAssertEqual(FaeThinkingLevel.balanced.displayName, "Balanced")
+        XCTAssertEqual(FaeThinkingLevel.deep.displayName, "Deep")
+    }
+
+    func testFaeThinkingLevelSystemImages() {
+        XCTAssertEqual(FaeThinkingLevel.fast.systemImage, "bolt.fill")
+        XCTAssertEqual(FaeThinkingLevel.balanced.systemImage, "sparkles")
+        XCTAssertEqual(FaeThinkingLevel.deep.systemImage, "brain.head.profile")
+    }
+
+    func testFaeThinkingLevelEnablesThinking() {
+        XCTAssertFalse(FaeThinkingLevel.fast.enablesThinking)
+        XCTAssertTrue(FaeThinkingLevel.balanced.enablesThinking)
+        XCTAssertTrue(FaeThinkingLevel.deep.enablesThinking)
+    }
+
+    func testFaeThinkingLevelOpenAIReasoningEffort() {
+        XCTAssertEqual(FaeThinkingLevel.fast.openAIReasoningEffort, "low")
+        XCTAssertEqual(FaeThinkingLevel.balanced.openAIReasoningEffort, "medium")
+        XCTAssertEqual(FaeThinkingLevel.deep.openAIReasoningEffort, "high")
+    }
+
+    func testFaeThinkingLevelAnthropicEffort() {
+        XCTAssertEqual(FaeThinkingLevel.fast.anthropicEffort, "low")
+        XCTAssertEqual(FaeThinkingLevel.balanced.anthropicEffort, "medium")
+        XCTAssertEqual(FaeThinkingLevel.deep.anthropicEffort, "high")
+    }
+
+    func testFaeThinkingLevelLocalReasoningDirective() {
+        XCTAssertNil(FaeThinkingLevel.fast.localReasoningDirective)
+        XCTAssertNil(FaeThinkingLevel.balanced.localReasoningDirective)
+        XCTAssertNotNil(FaeThinkingLevel.deep.localReasoningDirective)
+    }
+
+    func testFaeThinkingLevelAdditionalLocalMaxTokens() {
+        XCTAssertEqual(FaeThinkingLevel.fast.additionalLocalMaxTokens, 0)
+        XCTAssertEqual(FaeThinkingLevel.balanced.additionalLocalMaxTokens, 0)
+        XCTAssertEqual(FaeThinkingLevel.deep.additionalLocalMaxTokens, 2048)
+    }
+
+    func testFaeThinkingLevelNext() {
+        XCTAssertEqual(FaeThinkingLevel.fast.next, .balanced)
+        XCTAssertEqual(FaeThinkingLevel.balanced.next, .deep)
+        XCTAssertEqual(FaeThinkingLevel.deep.next, .fast)
+    }
+
+    func testFaeThinkingLevelCycle() {
+        var level: FaeThinkingLevel = .fast
+        level = level.next; level = level.next; level = level.next
+        XCTAssertEqual(level, .fast)
+    }
+
+    func testFaeThinkingLevelCodable() throws {
+        for level in FaeThinkingLevel.allCases {
+            let data = try JSONEncoder().encode(level)
+            let decoded = try JSONDecoder().decode(FaeThinkingLevel.self, from: data)
+            XCTAssertEqual(decoded, level)
+        }
+    }
+
+    // MARK: - Audio/STT types
+
+    func testAudioChunk() {
+        let chunk = AudioChunk(samples: [0.1, 0.2], sampleRate: 16000)
+        XCTAssertEqual(chunk.samples.count, 2)
+    }
+
+    func testSpeechSegment() {
+        let seg = SpeechSegment(samples: [0.1], sampleRate: 16000, durationSeconds: 0.5, capturedAt: Date())
+        XCTAssertEqual(seg.durationSeconds, 0.5)
+    }
+
+    func testSentenceChunk() {
+        let chunk = SentenceChunk(text: "Hello", isFinal: true)
+        XCTAssertTrue(chunk.isFinal)
+    }
+
+    func testConversationTurn() {
+        let turn = ConversationTurn(userText: "Hi", assistantText: "Hey", timestamp: Date(), toolsUsed: ["web"])
+        XCTAssertEqual(turn.toolsUsed.count, 1)
+    }
+
+    func testSTTResult() {
+        var result = STTResult(text: "Hello", language: "en", confidence: 0.95)
+        XCTAssertEqual(result.confidence, 0.95)
+        result.capturedAt = Date()
+        XCTAssertNotNil(result.capturedAt)
+    }
 }
