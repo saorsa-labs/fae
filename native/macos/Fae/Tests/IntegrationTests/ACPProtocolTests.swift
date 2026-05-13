@@ -282,6 +282,135 @@ final class ACPProtocolTests: XCTestCase {
         XCTAssertNil(try parser.parse(line: line))
     }
 
+    // MARK: - JSON-RPC additional methods
+
+    func testParseJSONRPCToolCall() throws {
+        let line = "{\"jsonrpc\":\"2.0\",\"method\":\"tool_call\",\"params\":{\"sessionId\":\"s1\",\"toolName\":\"read\",\"toolCallId\":\"tc1\",\"input\":\"{}\"}}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .toolCall(let sid, let name, let callId, _):
+            XCTAssertEqual(sid, "s1")
+            XCTAssertEqual(name, "read")
+            XCTAssertEqual(callId, "tc1")
+        default:
+            XCTFail("Expected toolCall")
+        }
+    }
+
+    func testParseJSONRPCSessionComplete() throws {
+        let line = "{\"jsonrpc\":\"2.0\",\"method\":\"session_complete\",\"params\":{\"sessionId\":\"s1\",\"stopReason\":\"end_turn\"}}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .sessionComplete(let sid, let reason):
+            XCTAssertEqual(sid, "s1")
+            XCTAssertEqual(reason, "end_turn")
+        default:
+            XCTFail("Expected sessionComplete")
+        }
+    }
+
+    func testParseJSONRPCRequestPermission() throws {
+        let line = "{\"jsonrpc\":\"2.0\",\"method\":\"request_permission\",\"params\":{\"sessionId\":\"s1\",\"toolName\":\"bash\",\"description\":\"run cmd\",\"requestId\":\"r1\"}}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .requestPermission(let sid, let name, let desc, let reqId):
+            XCTAssertEqual(sid, "s1")
+            XCTAssertEqual(name, "bash")
+            XCTAssertEqual(reqId, "r1")
+        default:
+            XCTFail("Expected requestPermission")
+        }
+    }
+
+    func testParseJSONRPCToolUpdate() throws {
+        let line = "{\"jsonrpc\":\"2.0\",\"method\":\"tool_call_update\",\"params\":{\"sessionId\":\"s1\",\"toolCallId\":\"tc1\",\"output\":\"done\",\"isComplete\":true}}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .toolUpdate(let sid, let callId, let output, let isComplete):
+            XCTAssertEqual(sid, "s1")
+            XCTAssertEqual(callId, "tc1")
+            XCTAssertTrue(isComplete)
+        default:
+            XCTFail("Expected toolUpdate")
+        }
+    }
+
+    func testParseJSONRPCSlashVariants() throws {
+        // Test slash-separated method names like "agent/message_chunk"
+        let line = "{\"jsonrpc\":\"2.0\",\"method\":\"agent/message_chunk\",\"params\":{\"sessionId\":\"s1\",\"text\":\"hi\"}}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .agentMessageChunk: break
+        default:
+            XCTFail("Expected agentMessageChunk")
+        }
+    }
+
+    func testParseNDJSONToolCallWithSnakeCase() throws {
+        let line = "{\"type\":\"tool_call\",\"session_id\":\"s1\",\"tool_name\":\"web_search\",\"tool_call_id\":\"tc1\",\"input_json\":\"{\\\"q\\\":\\\"weather\\\"}\"}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .toolCall(let sid, let name, let callId, _):
+            XCTAssertEqual(sid, "s1")
+            XCTAssertEqual(name, "web_search")
+        default:
+            XCTFail("Expected toolCall")
+        }
+    }
+
+    func testParseApprovalRequestedAlias() throws {
+        let line = "{\"type\":\"approval_requested\",\"sessionId\":\"s1\",\"toolName\":\"write\",\"reason\":\"save file\",\"requestId\":\"r1\"}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .requestPermission: break
+        default:
+            XCTFail("Expected requestPermission")
+        }
+    }
+
+    func testParsePromptCompleteAlias() throws {
+        let line = "{\"type\":\"prompt_complete\",\"sessionId\":\"s1\",\"stop_reason\":\"end_turn\"}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .sessionComplete(let sid, let reason):
+            XCTAssertEqual(sid, "s1")
+            XCTAssertEqual(reason, "end_turn")
+        default:
+            XCTFail("Expected sessionComplete")
+        }
+    }
+
+    func testParseToolCallUpdateAlias() throws {
+        let line = "{\"type\":\"tool_call_update\",\"sessionId\":\"s1\",\"id\":\"tc1\",\"result\":\"ok\",\"completed\":true}"
+        guard let event = try parser.parse(line: line) else { XCTFail(); return }
+        switch event {
+        case .toolUpdate(_, _, _, let isComplete):
+            XCTAssertTrue(isComplete)
+        default:
+            XCTFail("Expected toolUpdate")
+        }
+    }
+
+    // MARK: - ACPRequest edge cases
+
+    func testACPRequestPromptWithImageAttachments() throws {
+        let req = ACPRequest.prompt(
+            sessionId: "s1",
+            text: "Hello",
+            attachments: [ACPContentBlock.image(source: "img.png", mimeType: "image/png")]
+        )
+        let data = try req.serializedData(id: "test-id")
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(obj?["method"] as? String, "prompt")
+    }
+
+    func testACPRequestApprovePermissionTrue() throws {
+        let req = ACPRequest.approvePermission(requestId: "r1", approved: true)
+        let data = try req.serializedData(id: "test-id")
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(obj?["method"] as? String, "approve_permission")
+    }
+
     // MARK: - ACPEvent Equatable
 
     func testACPEventEquatable() {
