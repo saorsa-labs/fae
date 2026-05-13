@@ -1044,7 +1044,7 @@ actor SkillManager {
         }
     }
 
-    private static func tierPriority(_ tier: SkillTier) -> Int {
+    static func tierPriority(_ tier: SkillTier) -> Int {
         switch tier {
         case .builtin:
             return 0
@@ -1520,7 +1520,7 @@ actor SkillManager {
 
     /// Conservative skill-name validation to prevent path traversal and
     /// ambiguous filesystem behavior.
-    private static func isSafeSkillName(_ name: String) -> Bool {
+    static func isSafeSkillName(_ name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if trimmed.contains("/") || trimmed.contains("\\") { return false }
