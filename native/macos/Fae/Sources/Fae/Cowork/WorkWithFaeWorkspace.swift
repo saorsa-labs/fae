@@ -919,7 +919,7 @@ enum WorkWithFaeWorkspaceStore {
 
     /// Hard truncation fallback for persistence. Real LLM-based compression lives in
     /// CoworkWorkspaceController.compressConversationIfNeeded() and runs before each provider call.
-    private static func compressConversation(
+    static func compressConversation(
         _ messages: [WorkWithFaeConversationMessage],
         maxMessages: Int = maxConversationMessages
     ) -> [WorkWithFaeConversationMessage] {
@@ -933,7 +933,7 @@ enum WorkWithFaeWorkspaceStore {
         return Array(messages.suffix(maxMessages))
     }
 
-    private static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {
+    static func reindexed(_ workspaces: [WorkWithFaeWorkspaceRecord]) -> [WorkWithFaeWorkspaceRecord] {
         workspaces.enumerated().map { index, workspace in
             var mutable = workspace
             mutable.sortOrder = index
@@ -1355,7 +1355,7 @@ enum WorkWithFaeWorkspaceStore {
         )
     }
 
-    private static func formattedConversationHistory(from messages: [WorkWithFaeConversationMessage], limit: Int = 12) -> String? {
+    static func formattedConversationHistory(from messages: [WorkWithFaeConversationMessage], limit: Int = 12) -> String? {
         // Always include summary messages (compressed history) regardless of limit,
         // then append the most recent non-summary messages up to the limit.
         let summaries = messages.filter { $0.role == "summary" }
@@ -1394,11 +1394,11 @@ enum WorkWithFaeWorkspaceStore {
         return nil
     }
 
-    private static func attachmentHandle(for attachment: WorkWithFaeAttachment) -> String {
+    static func attachmentHandle(for attachment: WorkWithFaeAttachment) -> String {
         attachmentHandle(for: attachment.displayName, fallback: attachment.id.uuidString)
     }
 
-    private static func attachmentHandle(for title: String, fallback: String = "") -> String {
+    static func attachmentHandle(for title: String, fallback: String = "") -> String {
         let slug = title.lowercased()
             .map { $0.isLetter || $0.isNumber ? String($0) : "-" }
             .joined()
@@ -1411,7 +1411,7 @@ enum WorkWithFaeWorkspaceStore {
         return suffix.isEmpty ? "attachment-\(slug)" : "attachment-\(slug)-\(suffix)"
     }
 
-    private static func deduplicatedTransforms(_ transforms: [CoworkExportTransform]) -> [CoworkExportTransform] {
+    static func deduplicatedTransforms(_ transforms: [CoworkExportTransform]) -> [CoworkExportTransform] {
         var seen: Set<CoworkExportTransform> = []
         return transforms.filter { seen.insert($0).inserted }
     }
