@@ -290,7 +290,7 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
         )
     }
 
-    private static func scheduleDescription(
+    static func scheduleDescription(
         for id: String,
         legacySchedule: Any?,
         scheduleType: String?,
@@ -376,7 +376,7 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
         }
     }
 
-    private static func title(from identifier: String) -> String {
+    static func title(from identifier: String) -> String {
         identifier
             .split(separator: "_")
             .map { part in
@@ -386,7 +386,7 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
             .joined(separator: " ")
     }
 
-    private static func iso8601Date(from raw: String) -> Date? {
+    static func iso8601Date(from raw: String) -> Date? {
         ISO8601DateFormatter().date(from: raw)
     }
 }
