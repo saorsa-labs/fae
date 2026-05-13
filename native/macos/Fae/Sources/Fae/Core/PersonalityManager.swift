@@ -725,7 +725,7 @@ enum PersonalityManager {
     // MARK: - Private Helpers
 
     /// Extract a JSON field value (simple string extraction, not full parsing).
-    private static func extractField(_ field: String, from json: String) -> String {
+    static func extractField(_ field: String, from json: String) -> String {
         // Simple pattern: "field": "value"
         let pattern = "\"\(field)\"\\s*:\\s*\"([^\"]*)\""
         guard let regex = try? NSRegularExpression(pattern: pattern),
