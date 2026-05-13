@@ -42,7 +42,7 @@ enum NetworkTargetPolicy {
         return nil
     }
 
-    private static func isBlockedIPAddress(_ host: String) -> Bool {
+    static func isBlockedIPAddress(_ host: String) -> Bool {
         if host.contains(":") {
             // IPv6 (literal)
             let h = host.lowercased()
