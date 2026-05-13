@@ -2224,7 +2224,7 @@ actor PipelineCoordinator {
         voiceIdentityLockLive ?? config.tts.voiceIdentityLock
     }
 
-    private static func normalizeForPhraseMatch(_ text: String) -> String {
+    static func normalizeForPhraseMatch(_ text: String) -> String {
         let lower = text.lowercased()
         let mapped = lower.map { ch -> Character in
             if ch.isLetter || ch.isNumber {
@@ -4587,7 +4587,7 @@ actor PipelineCoordinator {
             || lower.hasPrefix("please")
     }
 
-    private static func detectExplicitUserAuthorization(in text: String) -> Bool {
+    static func detectExplicitUserAuthorization(in text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lower.isEmpty else { return false }
 
