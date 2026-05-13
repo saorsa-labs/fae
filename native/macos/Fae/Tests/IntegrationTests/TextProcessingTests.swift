@@ -187,4 +187,34 @@ final class TextProcessingTests: XCTestCase {
         let result = TextProcessing.correctNameRecognition(text)
         XCTAssertEqual(result, text)
     }
+
+    // MARK: - monthName
+
+    func testMonthNameJanuary() {
+        XCTAssertEqual(TextProcessing.monthName(1), "January")
+    }
+
+    func testMonthNameDecember() {
+        XCTAssertEqual(TextProcessing.monthName(12), "December")
+    }
+
+    func testMonthNameInvalid() {
+        let name = TextProcessing.monthName(13)
+        XCTAssertTrue(name.isEmpty || !name.hasPrefix("January"))
+    }
+
+    // MARK: - editDistance
+
+    func testEditDistanceIdentical() {
+        XCTAssertEqual(TextProcessing.editDistance("hello", "hello"), 0)
+    }
+
+    func testEditDistanceDifferent() {
+        let dist = TextProcessing.editDistance("kitten", "sitting")
+        XCTAssertGreaterThan(dist, 0)
+    }
+
+    func testEditDistanceEmpty() {
+        XCTAssertEqual(TextProcessing.editDistance("", "hello"), 5)
+    }
 }

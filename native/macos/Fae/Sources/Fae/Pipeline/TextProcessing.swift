@@ -546,7 +546,7 @@ enum TextProcessing {
         return result
     }
 
-    private static func monthName(_ month: Int) -> String {
+    static func monthName(_ month: Int) -> String {
         let months = [
             "January", "February", "March", "April", "May", "June",
             "July", "August", "September", "October", "November", "December",
@@ -1348,7 +1348,7 @@ enum TextProcessing {
         return tokens
     }
 
-    private static func editDistance(_ lhs: String, _ rhs: String) -> Int {
+    static func editDistance(_ lhs: String, _ rhs: String) -> Int {
         let a = Array(lhs)
         let b = Array(rhs)
         if a.isEmpty { return b.count }
