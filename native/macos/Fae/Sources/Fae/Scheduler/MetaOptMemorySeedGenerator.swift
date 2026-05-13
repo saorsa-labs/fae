@@ -179,21 +179,21 @@ enum MetaOptMemorySeedGenerator {
         )
     }
 
-    private static func isToolRelated(_ event: FeedbackEvent) -> Bool {
+    static func isToolRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("tool") || lower.contains("calendar") ||
                lower.contains("search") || lower.contains("tool_call")
     }
 
-    private static func isScheduleRelated(_ event: FeedbackEvent) -> Bool {
+    static func isScheduleRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("schedule") || lower.contains("calendar") ||
                lower.contains("meeting") || lower.contains("appointment")
     }
 
-    private static func isSerializationRelated(_ event: FeedbackEvent) -> Bool {
+    static func isSerializationRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("json") || lower.contains("xml") ||
