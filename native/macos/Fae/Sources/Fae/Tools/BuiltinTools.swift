@@ -372,7 +372,7 @@ struct SelfConfigTool: Tool {
     }
 
     /// Validate instruction content before saving.
-    private static func validateInstructions(_ text: String) -> ToolResult? {
+    static func validateInstructions(_ text: String) -> ToolResult? {
         if text.count > maxInstructionLength {
             return .error(
                 "Instructions too long (\(text.count) chars). Maximum is \(maxInstructionLength) characters."
@@ -521,7 +521,7 @@ struct WebSearchTool: Tool {
     private static let orchestrator = SearchOrchestrator()
 
     /// Categorize a URL's domain for quality indication.
-    private static func domainCategory(for urlString: String) -> String {
+    static func domainCategory(for urlString: String) -> String {
         guard let url = URL(string: urlString),
               let host = url.host?.lowercased()
         else { return "" }
@@ -581,7 +581,7 @@ struct WebSearchTool: Tool {
     }
 
     /// Extract the display domain from a URL string.
-    private static func displayDomain(for urlString: String) -> String {
+    static func displayDomain(for urlString: String) -> String {
         guard let url = URL(string: urlString), let host = url.host else { return "" }
         let domain = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         return domain
