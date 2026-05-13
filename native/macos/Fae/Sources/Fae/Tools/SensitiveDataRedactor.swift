@@ -31,7 +31,7 @@ enum SensitiveDataRedactor {
         return output
     }
 
-    private static func redactLongOpaqueTokens(_ input: String) -> String {
+    static func redactLongOpaqueTokens(_ input: String) -> String {
         let parts = input.split(separator: " ", omittingEmptySubsequences: false)
         let redacted = parts.map { part -> String in
             let token = String(part)

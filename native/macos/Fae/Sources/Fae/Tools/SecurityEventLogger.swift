@@ -143,7 +143,7 @@ actor SecurityEventLogger: SecurityEventLogging {
         fm.createFile(atPath: fileURL.path, contents: nil)
     }
 
-    private static func hashArguments(_ args: [String: Any]) -> String? {
+    static func hashArguments(_ args: [String: Any]) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: args, options: [.sortedKeys]) else {
             return nil
         }

@@ -338,7 +338,7 @@ actor TillDoneManager {
 
     // MARK: - Private
 
-    private static func escapeHTML(_ s: String) -> String {
+    static func escapeHTML(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
          .replacingOccurrences(of: "<", with: "&lt;")
          .replacingOccurrences(of: ">", with: "&gt;")

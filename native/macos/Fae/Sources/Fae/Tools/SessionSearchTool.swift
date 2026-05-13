@@ -39,7 +39,7 @@ struct SessionSearchTool: Tool {
         return .success(Self.format(matches: matches, query: query, days: days))
     }
 
-    private static func clampInteger(
+    static func clampInteger(
         _ value: Any?,
         defaultValue: Int,
         lower: Int,

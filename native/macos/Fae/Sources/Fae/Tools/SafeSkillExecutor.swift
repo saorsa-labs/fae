@@ -107,7 +107,7 @@ enum SafeSkillExecutor {
         return process.terminationStatus
     }
 
-    private static func shellEscape(_ input: String) -> String {
+    static func shellEscape(_ input: String) -> String {
         "'" + input.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
