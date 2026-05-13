@@ -70,4 +70,24 @@ final class ToolStaticTests: XCTestCase {
         let result = SessionSearchTool.clampInteger("7", defaultValue: 10, lower: 0, upper: 10)
         XCTAssertEqual(result, 7)
     }
+
+    // MARK: - inferJSONSchemaType (Tool)
+
+    func testInferJSONSchemaTypeInteger() {
+        let (type, required) = ReadTool.inferJSONSchemaType(from: "integer value")
+        XCTAssertEqual(type, "integer")
+        XCTAssertFalse(required)
+    }
+
+    func testInferJSONSchemaTypeBoolean() {
+        let (type, required) = ReadTool.inferJSONSchemaType(from: "bool flag required")
+        XCTAssertEqual(type, "boolean")
+        XCTAssertTrue(required)
+    }
+
+    func testInferJSONSchemaTypeDefault() {
+        let (type, required) = ReadTool.inferJSONSchemaType(from: "some description")
+        XCTAssertEqual(type, "string")
+        XCTAssertFalse(required)
+    }
 }

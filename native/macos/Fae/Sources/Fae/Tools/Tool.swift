@@ -197,7 +197,7 @@ extension Tool {
     ///
     /// Examples: `"string (required)"` → `("string", true)`,
     ///           `"integer (optional, default 10)"` → `("integer", false)`.
-    private static func inferJSONSchemaType(from desc: String) -> (String, Bool) {
+    static func inferJSONSchemaType(from desc: String) -> (String, Bool) {
         let lower = desc.lowercased()
         let isRequired = lower.contains("required")
 
