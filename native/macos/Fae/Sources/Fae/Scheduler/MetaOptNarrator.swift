@@ -211,7 +211,7 @@ enum MetaOptNarrator {
     }
 
     /// Extract a topic hint from a description for generic fallback messages.
-    private static func extractTopicHint(_ description: String) -> String {
+    static func extractTopicHint(_ description: String) -> String {
         if description.contains("tool") { return "how I use tools" }
         if description.contains("format") { return "formatting" }
         if description.contains("memory") { return "how I use our conversation history" }
@@ -220,7 +220,7 @@ enum MetaOptNarrator {
     }
 
     /// Describe a change using keywords from the hypothesis description.
-    private static func describeFromKeywords(_ description: String) -> String {
+    static func describeFromKeywords(_ description: String) -> String {
         let lower = description.lowercased()
         if lower.contains("brevity") || lower.contains("interruption") {
             return "I trimmed how much I say — you seemed to prefer shorter answers."
