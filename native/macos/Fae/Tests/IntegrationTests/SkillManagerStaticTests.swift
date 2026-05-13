@@ -75,4 +75,35 @@ final class SkillManagerStaticTests: XCTestCase {
         let draft = try SkillManager.parseSkillMarkdown(content, fallbackName: "fallback-name")
         XCTAssertEqual(draft.name, "fallback-name")
     }
+
+    // MARK: - validateSkillName
+
+    func testValidateSkillNameValid() throws {
+        try SkillManager.validateSkillName("my-skill")
+        // Should not throw
+    }
+
+    func testValidateSkillNameInvalidPath() {
+        XCTAssertThrowsError(try SkillManager.validateSkillName("../evil"))
+    }
+
+    func testValidateSkillNameEmpty() {
+        XCTAssertThrowsError(try SkillManager.validateSkillName(""))
+    }
+
+    // MARK: - validateScriptFileName
+
+    func testValidateScriptFileNameValid() throws {
+        try SkillManager.validateScriptFileName("script.py")
+    }
+
+    func testValidateScriptFileNameInvalid() {
+        XCTAssertThrowsError(try SkillManager.validateScriptFileName("../evil.py"))
+    }
+
+    // MARK: - validateScriptContent
+
+    func testValidateScriptContentValid() throws {
+        try SkillManager.validateScriptContent("print('hello')")
+    }
 }

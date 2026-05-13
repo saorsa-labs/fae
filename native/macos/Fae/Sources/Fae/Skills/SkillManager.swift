@@ -1349,7 +1349,7 @@ actor SkillManager {
         return updatedMetadata
     }
 
-    private static func validateSkillName(_ name: String) throws {
+    static func validateSkillName(_ name: String) throws {
         guard isSafeSkillName(name) else {
             throw SkillError.invalidName(name)
         }
@@ -1420,7 +1420,7 @@ actor SkillManager {
         }
     }
 
-    private static func validateScriptContent(_ script: String) throws {
+    static func validateScriptContent(_ script: String) throws {
         let forbiddenPatterns: [String] = [
             "os.system(",
             "subprocess.popen(",
@@ -1437,7 +1437,7 @@ actor SkillManager {
         }
     }
 
-    private static func validateScriptFileName(_ name: String) throws {
+    static func validateScriptFileName(_ name: String) throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw SkillError.policyViolation("script_name must not be empty")
