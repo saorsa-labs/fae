@@ -82,6 +82,25 @@ final class BuiltinToolsTests: XCTestCase {
         XCTAssertTrue(result.isError)
     }
 
+    func testWriteToolSuccess() async throws {
+        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let path = tempDir.appendingPathComponent("output.txt").path
+        let tool = WriteTool()
+        let result = try await tool.execute(input: ["path": path, "content": "Written content"])
+        XCTAssertFalse(result.isError)
+        XCTAssertTrue(result.output.contains("Written") || result.output.contains("bytes"))
+        // Verify file was actually written
+        let fileContent = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertEqual(fileContent, "Written content")
+    }
+
+    func testWriteToolCreatesDirectory() async throws {
+        let nestedPath = tempDir.appendingPathComponent("sub/dir/file.txt").path
+        let tool = WriteTool()
+        let result = try await tool.execute(input: ["path": nestedPath, "content": "nested"])
+        XCTAssertFalse(result.isError)
+    }
+
     // MARK: - EditTool
 
     func testEditToolProperties() {
@@ -94,6 +113,31 @@ final class BuiltinToolsTests: XCTestCase {
     func testEditToolMissingParams() async throws {
         let tool = EditTool()
         let result = try await tool.execute(input: [:])
+        XCTAssertTrue(result.isError)
+    }
+
+    func testEditToolSuccess() async throws {
+        let path = createTempFile(named: "edit.txt", content: "line1\nold_value\nline3")
+        let tool = EditTool()
+        let result = try await tool.execute(input: [
+            "path": path,
+            "old_string": "old_value",
+            "new_string": "new_value"
+        ])
+        XCTAssertFalse(result.isError)
+        let fileContent = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(fileContent.contains("new_value"))
+        XCTAssertFalse(fileContent.contains("old_value"))
+    }
+
+    func testEditToolOldStringNotFound() async throws {
+        let path = createTempFile(named: "edit2.txt", content: "no match here")
+        let tool = EditTool()
+        let result = try await tool.execute(input: [
+            "path": path,
+            "old_string": "does_not_exist",
+            "new_string": "replacement"
+        ])
         XCTAssertTrue(result.isError)
     }
 
