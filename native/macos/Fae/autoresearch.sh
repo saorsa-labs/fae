@@ -5,13 +5,10 @@ cd "$(dirname "$0")"
 
 LLVM_COV="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-cov"
 
-# Fast pre-check: does it compile? (skip if recent)
-if [ ! -f .build/debug/FaePackageTests.xctest/Contents/MacOS/FaePackageTests ]; then
-  echo "==> swift build..."
-  swift build
-fi
+# Clean only the merged profdata, keep raw profraws from all test runs
+rm -f default.profraw default.profdata
 
-# Run tests with coverage
+# Run tests with coverage (this also compiles)
 echo "==> Running tests with coverage..."
 rm -f default.profraw default.profdata
 swift test --skip EvalTests --enable-code-coverage > /tmp/fae_test_output.txt 2>&1 || true
