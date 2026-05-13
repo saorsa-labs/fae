@@ -262,7 +262,7 @@ enum ImplicitFeedbackDetector {
     }
 
     /// Extract word bigrams from text.
-    private static func wordBigrams(_ text: String) -> Set<String> {
+    static func wordBigrams(_ text: String) -> Set<String> {
         let words = text.lowercased()
             .components(separatedBy: .alphanumerics.inverted)
             .filter { !$0.isEmpty }

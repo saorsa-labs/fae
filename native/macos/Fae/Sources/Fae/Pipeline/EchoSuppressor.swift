@@ -829,7 +829,7 @@ struct EchoSuppressor {
     }
 
     /// Extract all digit sequences from text: "the answer is 546" → ["546"].
-    private static func extractNumbersFromText(_ text: String) -> [String] {
+    static func extractNumbersFromText(_ text: String) -> [String] {
         var numbers: [String] = []
         var current = ""
         for ch in text {
@@ -845,7 +845,7 @@ struct EchoSuppressor {
     }
 
     /// Fuzzy number match — allows off-by-one digits (ASR might hear "556" instead of "546").
-    private static func numbersFuzzyMatch(_ a: String, _ b: String) -> Bool {
+    static func numbersFuzzyMatch(_ a: String, _ b: String) -> Bool {
         if a == b { return true }
         // Same length, at most 1 digit different
         guard a.count == b.count, a.count <= 6 else { return false }
@@ -863,7 +863,7 @@ struct EchoSuppressor {
     }
 
     /// Normalize text for overlap comparison: lowercase, hyphens→spaces, strip punctuation, collapse whitespace.
-    private static func normalizeForOverlap(_ text: String) -> String {
+    static func normalizeForOverlap(_ text: String) -> String {
         text.lowercased()
             .replacingOccurrences(of: "-", with: " ")
             .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
