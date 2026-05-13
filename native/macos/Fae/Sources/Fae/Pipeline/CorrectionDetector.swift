@@ -211,7 +211,7 @@ enum CorrectionDetector {
     }
 
     /// Capitalize the first character of a string.
-    private static func capitalizeFirst(_ str: String) -> String {
+    static func capitalizeFirst(_ str: String) -> String {
         guard let first = str.first else { return str }
         return first.uppercased() + str.dropFirst()
     }
@@ -219,7 +219,7 @@ enum CorrectionDetector {
     /// Whether a string looks plausible as a person's name.
     /// Rejects strings that are too long, contain common non-name words,
     /// or have punctuation beyond hyphens and apostrophes.
-    private static func isPlausibleName(_ candidate: String) -> Bool {
+    static func isPlausibleName(_ candidate: String) -> Bool {
         guard candidate.count >= 2, candidate.count <= 25 else { return false }
         let nonNameWords: Set<String> = [
             "peer", "the", "and", "to", "is", "it", "just", "like",
