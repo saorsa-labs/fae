@@ -377,7 +377,7 @@ actor FaeScheduler {
     }
 
     /// Cosine similarity between two float vectors.
-    private func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
+    func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
         let length = min(lhs.count, rhs.count)
         guard length > 0 else { return 0 }
 
@@ -782,7 +782,7 @@ actor FaeScheduler {
         "conversation", "conversations", "session", "sessions", "draft", "skill", "fae",
     ]
 
-    private static func derivedDistilledSkillName(userGoals: [String], signature: String) -> String {
+    static func derivedDistilledSkillName(userGoals: [String], signature: String) -> String {
         var counts: [String: Int] = [:]
         for token in userGoals
             .flatMap(tokenizeForSearch)
@@ -814,7 +814,7 @@ actor FaeScheduler {
         return "workflow-\(UUID().uuidString.prefix(8).lowercased())"
     }
 
-    private static func distilledSkillDescription(
+    static func distilledSkillDescription(
         skillName: String,
         userGoals: [String],
         signature: String
@@ -825,7 +825,7 @@ actor FaeScheduler {
         return "Reusable workflow for repeated \(skillName) tasks using \(signature)."
     }
 
-    private static func distilledSkillBody(
+    static func distilledSkillBody(
         userGoals: [String],
         signature: String,
         outcomes: [String]
@@ -863,7 +863,7 @@ actor FaeScheduler {
         return sections.joined(separator: "\n")
     }
 
-    private static func distilledInstruction(for toolName: String) -> String {
+    static func distilledInstruction(for toolName: String) -> String {
         switch toolName {
         case "session_search":
             return "Use `session_search` to recover exact prior transcript details before answering."
@@ -890,7 +890,7 @@ actor FaeScheduler {
         }
     }
 
-    private static func distilledSkillRationale(
+    static func distilledSkillRationale(
         runs: [WorkflowRunRecord],
         signature: String,
         findings: [SkillSecurityReviewFinding]
@@ -907,7 +907,7 @@ actor FaeScheduler {
         return "Observed \(runs.count) successful runs with tool sequence \(signature) across \(goalsSummary). Reviewer findings: \(findingsSummary)."
     }
 
-    private static func distilledEvidenceJSON(
+    static func distilledEvidenceJSON(
         runs: [WorkflowRunRecord],
         signature: String,
         findings: [SkillSecurityReviewFinding]
@@ -935,7 +935,7 @@ actor FaeScheduler {
         return text
     }
 
-    private static func renderDistilledSkillMarkdown(
+    static func renderDistilledSkillMarkdown(
         name: String,
         description: String,
         body: String
@@ -952,7 +952,7 @@ actor FaeScheduler {
         return frontmatter + "\n" + body + "\n"
     }
 
-    private static func distilledConfidence(
+    static func distilledConfidence(
         runCount: Int,
         findings: [SkillSecurityReviewFinding]
     ) -> Double {
