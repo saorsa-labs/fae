@@ -141,7 +141,7 @@ actor MemoryDigestService {
             .map(\.key)
     }
 
-    private static func compactSnippet(from text: String, maxLength: Int) -> String {
+    static func compactSnippet(from text: String, maxLength: Int) -> String {
         let collapsed = text
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "  ", with: " ")
@@ -152,7 +152,7 @@ actor MemoryDigestService {
         return String(collapsed.prefix(maxLength - 3)).trimmingCharacters(in: .whitespaces) + "..."
     }
 
-    private static func digestMetadataJSON(sourceRecordIDs: [String], generatedAt: Date) -> String? {
+    static func digestMetadataJSON(sourceRecordIDs: [String], generatedAt: Date) -> String? {
         let payload: [String: Any] = [
             "generated_at": isoFormatter.string(from: generatedAt),
             "source_record_ids": sourceRecordIDs,
@@ -164,7 +164,7 @@ actor MemoryDigestService {
         return String(data: data, encoding: .utf8)
     }
 
-    private static func digestSourceRecordIDs(from metadata: String?) -> [String] {
+    static func digestSourceRecordIDs(from metadata: String?) -> [String] {
         guard let metadata,
               let data = metadata.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -175,7 +175,7 @@ actor MemoryDigestService {
         return ids
     }
 
-    private static func digestSourceKey(_ sourceRecordIDs: [String]) -> String {
+    static func digestSourceKey(_ sourceRecordIDs: [String]) -> String {
         sourceRecordIDs.sorted().joined(separator: "|")
     }
 
