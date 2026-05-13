@@ -112,4 +112,32 @@ final class CoworkLLMProviderTests: XCTestCase {
         let status = CoworkPromptEgressPolicy.statusText(for: request)
         XCTAssertTrue(status.contains("shareable"))
     }
+
+    // MARK: - errorMessage (OpenAICompatibleCoworkProvider)
+
+    func testErrorMessageString() {
+        let json = "{\"error\": \"Rate limit exceeded\"}"
+        let data = json.data(using: .utf8)!
+        let msg = OpenAICompatibleCoworkProvider.errorMessage(from: data)
+        XCTAssertEqual(msg, "Rate limit exceeded")
+    }
+
+    func testErrorMessageObject() {
+        let json = "{\"error\": {\"message\": \"Invalid API key\"}}"
+        let data = json.data(using: .utf8)!
+        let msg = OpenAICompatibleCoworkProvider.errorMessage(from: data)
+        XCTAssertEqual(msg, "Invalid API key")
+    }
+
+    func testErrorMessageNone() {
+        let json = "{\"choices\": []}"
+        let data = json.data(using: .utf8)!
+        let msg = OpenAICompatibleCoworkProvider.errorMessage(from: data)
+        XCTAssertNil(msg)
+    }
+
+    func testErrorMessageInvalidJSON() {
+        let msg = OpenAICompatibleCoworkProvider.errorMessage(from: "not json".data(using: .utf8)!)
+        XCTAssertNil(msg)
+    }
 }

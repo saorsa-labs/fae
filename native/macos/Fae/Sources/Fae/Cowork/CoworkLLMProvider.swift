@@ -632,7 +632,7 @@ struct OpenAICompatibleCoworkProvider: CoworkLLMProvider, CoworkStreamingProvide
         return nil
     }
 
-    private static func errorMessage(from data: Data) -> String? {
+    static func errorMessage(from data: Data) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         if let error = json["error"] as? String {
             return error
@@ -889,7 +889,7 @@ struct AnthropicCoworkProvider: CoworkLLMProvider, CoworkStreamingProvider, Cowo
         return nil
     }
 
-    private static func errorMessage(from data: Data) -> String? {
+    static func errorMessage(from data: Data) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         if let error = json["error"] as? String {
             return error
