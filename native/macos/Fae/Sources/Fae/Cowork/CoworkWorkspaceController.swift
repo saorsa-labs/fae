@@ -2056,7 +2056,7 @@ final class CoworkWorkspaceController: ObservableObject {
         persistWorkspaceRegistry()
     }
 
-    private static func workspaceConversationMessage(from message: ChatMessage) -> WorkWithFaeConversationMessage {
+    static func workspaceConversationMessage(from message: ChatMessage) -> WorkWithFaeConversationMessage {
         WorkWithFaeConversationMessage(
             id: message.id,
             role: message.role.rawValue,
@@ -2067,7 +2067,7 @@ final class CoworkWorkspaceController: ObservableObject {
         )
     }
 
-    private static func chatMessage(from message: WorkWithFaeConversationMessage) -> ChatMessage? {
+    static func chatMessage(from message: WorkWithFaeConversationMessage) -> ChatMessage? {
         guard let role = ChatRole(rawValue: message.role) else { return nil }
         return ChatMessage(id: message.id, role: role, content: message.content, timestamp: message.timestamp, modelID: message.modelID, providerKind: message.providerKind)
     }
