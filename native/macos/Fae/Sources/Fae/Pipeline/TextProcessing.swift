@@ -445,7 +445,7 @@ enum TextProcessing {
     }
 
     /// Normalize common token-stream artifacts into more natural spoken text.
-    private static func normalizeForSpeechOutput(_ text: String) -> String {
+    static func normalizeForSpeechOutput(_ text: String) -> String {
         var result = text
 
         // Historical-token merge fixes observed in streamed generations.
@@ -557,7 +557,7 @@ enum TextProcessing {
         return "month \(month)"
     }
 
-    private static func replaceRegexMatches(
+    static func replaceRegexMatches(
         in text: String,
         pattern: String,
         transform: (NSTextCheckingResult, String) -> String?
@@ -1373,7 +1373,7 @@ enum TextProcessing {
         return previous[b.count]
     }
 
-    private static func isAliasCandidate(_ candidate: String) -> Bool {
+    static func isAliasCandidate(_ candidate: String) -> Bool {
         let normalized = normalizeWakeAlias(candidate)
         guard normalized.count >= 2, normalized.count <= 8, !normalized.contains(" ") else {
             return false
