@@ -196,7 +196,7 @@ enum ToolCallParser {
 
     // MARK: - Private Parsing Helpers
 
-    private static func parseJSONToolCall(_ content: String) -> ToolCall? {
+    static func parseJSONToolCall(_ content: String) -> ToolCall? {
         guard let data = content.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let name = json["name"] as? String
@@ -206,7 +206,7 @@ enum ToolCallParser {
     }
 
     /// Parse Qwen3.5 XML parameter format: `<function=name><parameter=key>value</parameter></function>`
-    private static func parseXMLToolCall(_ content: String) -> ToolCall? {
+    static func parseXMLToolCall(_ content: String) -> ToolCall? {
         guard let funcMatch = content.range(of: "<function="),
               let funcEnd = content.range(of: ">", range: funcMatch.upperBound..<content.endIndex)
         else { return nil }
@@ -260,7 +260,7 @@ enum ToolCallParser {
     ///
     /// Gemma 4 uses `<|"|>` as string delimiters in tool call arguments.
     /// Older Gemma models use `<escape>` markers. Both are supported.
-    private static func parseGemmaToolCall(_ content: String) -> ToolCall? {
+    static func parseGemmaToolCall(_ content: String) -> ToolCall? {
         guard let callRange = content.range(of: "call:") else { return nil }
         let remaining = String(content[callRange.upperBound...])
 
