@@ -806,7 +806,7 @@ struct InputRequestTool: Tool {
         return .success(value)
     }
 
-    private static func isSafeKeychainKey(_ key: String) -> Bool {
+    static func isSafeKeychainKey(_ key: String) -> Bool {
         let pattern = "^[A-Za-z0-9._-]{3,128}$"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let range = NSRange(key.startIndex..., in: key)
@@ -952,7 +952,7 @@ actor InputRequestBridge {
         }
     }
 
-    private static func parseFormValues(_ userInfo: [AnyHashable: Any]?) -> [String: String]? {
+    static func parseFormValues(_ userInfo: [AnyHashable: Any]?) -> [String: String]? {
         guard let raw = userInfo?["form_values"] else { return nil }
 
         if let typed = raw as? [String: String] {

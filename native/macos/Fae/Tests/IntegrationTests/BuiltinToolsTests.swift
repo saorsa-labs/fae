@@ -313,4 +313,34 @@ final class BuiltinToolsTests: XCTestCase {
     func testDisplayDomainInvalid() {
         XCTAssertEqual(WebSearchTool.displayDomain(for: "not-a-url"), "")
     }
+
+    // MARK: - isSafeKeychainKey (InputRequestTool)
+
+    func testIsSafeKeychainKeyValid() {
+        XCTAssertTrue(InputRequestTool.isSafeKeychainKey("my_app.key"))
+    }
+
+    func testIsSafeKeychainKeyTooShort() {
+        XCTAssertFalse(InputRequestTool.isSafeKeychainKey("ab"))
+    }
+
+    func testIsSafeKeychainKeyInvalidChars() {
+        XCTAssertFalse(InputRequestTool.isSafeKeychainKey("my/key!"))
+    }
+
+    // MARK: - parseFormValues (InputRequestTool)
+
+    func testParseFormValuesTyped() {
+        let result = InputRequestBridge.parseFormValues(["form_values": ["name": "Alice", "age": "30"]])
+        XCTAssertEqual(result?["name"], "Alice")
+    }
+
+    func testParseFormValuesNil() {
+        XCTAssertNil(InputRequestBridge.parseFormValues(nil))
+    }
+
+    func testParseFormValuesEmpty() {
+        let result = InputRequestBridge.parseFormValues(["form_values": ["name": "  "]])
+        XCTAssertTrue(result?.isEmpty ?? true)
+    }
 }
