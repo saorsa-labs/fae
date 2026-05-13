@@ -142,7 +142,7 @@ enum SkillMigrator {
         }
     }
 
-    private static func normalizeSkillMarkdown(name: String, content: String) -> String {
+    static func normalizeSkillMarkdown(name: String, content: String) -> String {
         if content.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("---") {
             return content
         }
