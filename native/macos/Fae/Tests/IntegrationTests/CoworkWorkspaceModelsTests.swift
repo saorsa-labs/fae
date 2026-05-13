@@ -128,4 +128,18 @@ final class CoworkWorkspaceModelsTests: XCTestCase {
         let date = CoworkSchedulerTask.iso8601Date(from: "not-a-date")
         XCTAssertNil(date)
     }
+
+    // MARK: - defaultScheduleDescription
+
+    func testDefaultScheduleDescriptionMemoryReflect() {
+        XCTAssertEqual(CoworkSchedulerTask.defaultScheduleDescription(for: "memory_reflect"), "Every 6 hours")
+    }
+
+    func testDefaultScheduleDescriptionMemoryGC() {
+        XCTAssertEqual(CoworkSchedulerTask.defaultScheduleDescription(for: "memory_gc"), "Daily at 03:30")
+    }
+
+    func testDefaultScheduleDescriptionUnknown() {
+        XCTAssertEqual(CoworkSchedulerTask.defaultScheduleDescription(for: "unknown_task"), "Managed by Fae")
+    }
 }
