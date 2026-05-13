@@ -2442,7 +2442,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
-    private static func extractPrimaryName(from text: String) -> String? {
+    static func extractPrimaryName(from text: String) -> String? {
         let prefix = "Primary user name is "
         guard text.hasPrefix(prefix) else { return nil }
         let raw = text.dropFirst(prefix.count)
@@ -2951,7 +2951,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         NSLog("FaeCore: channel runtime started (%@)", reason)
     }
 
-    private static func hasConfiguredChannelEndpoints(_ config: ChannelManager.ChannelConfig) -> Bool {
+    static func hasConfiguredChannelEndpoints(_ config: ChannelManager.ChannelConfig) -> Bool {
         let discordReady = config.discord.botToken?.isEmpty == false
         let whatsappReady = config.whatsapp.accessToken?.isEmpty == false
             && config.whatsapp.phoneNumberId?.isEmpty == false
