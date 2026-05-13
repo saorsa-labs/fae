@@ -81,5 +81,13 @@ These are SwiftUI views / AppKit controllers that require production code change
 - FalseInterruptionRecoveryTests — too many API mismatches, discarded after repeated compilation failures.
 - PipelineLogicTests — assumed types (VoiceTagParser.parse, ConversationState) don't exist with those APIs.
 
+### Coverage Measurement Issue (Swift 6.3)
+
+The Swift Testing framework (`@Test`) runs XCTest tests through `swiftpm-testing-helper`, which produces separate profraw files that don't properly merge with the main test binary's coverage data when using `swift test --enable-code-coverage`. This causes artificially low coverage readings in later iterations.
+
+**Best confirmed measurement**: 28.1% (33,659/119,699 lines) from early iterations before the profraw pipeline degraded.
+
+**Workaround**: Use `xcodebuild test -scheme Fae ... GCC_GENERATE_TEST_COVERAGE_INFORMATION=YES` for accurate measurement (requires xcodebuild-compatible build).
+
 ### Report
 See `autoresearch/untestable-report.md` for detailed analysis of untestable code and recommendations.

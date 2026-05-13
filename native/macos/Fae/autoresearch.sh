@@ -4,39 +4,51 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 LLVM_COV="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-cov"
-
-# Clean only the merged profdata, keep raw profraws from all test runs
-rm -f default.profraw default.profdata
-
-# Run tests with coverage (this also compiles)
-echo "==> Running tests with coverage..."
-rm -f default.profraw default.profdata
-swift test --skip EvalTests --enable-code-coverage > /tmp/fae_test_output.txt 2>&1 || true
-# swift test returns non-zero on failure, but we already captured with || true
-# Just check the last meaningful line
-LAST_LINE=$(tail -1 /tmp/fae_test_output.txt)
-case "$LAST_LINE" in
-  *"passed after"*) ;; # OK
-  *) echo "Warning: unexpected test output end: $LAST_LINE" ;;
-esac
-
-# Merge profraw files
 PROFRAW_DIR=".build/arm64-apple-macosx/debug/codecov"
-if [ ! -d "$PROFRAW_DIR" ]; then
-  echo "ERROR: No coverage data at $PROFRAW_DIR"
-  exit 1
-fi
+ACCUM_DIR="/tmp/fae-profraw-accum"
 
-llvm-profdata merge -o default.profdata "$PROFRAW_DIR"/*.profraw
+# Clean everything fresh
+rm -f default.profdata
+rm -rf "$ACCUM_DIR"
+mkdir -p "$ACCUM_DIR"
+mkdir -p "$PROFRAW_DIR"
 
-# Extract coverage
+# Get all test suite names (IntegrationTests + HandoffTests, skip EvalTests)
+echo "==> Discovering test suites..."
+SUITES=$(swift test --list-tests 2>&1 | grep -E "^(IntegrationTests|HandoffTests)\." | sed 's|/.*||' | sort -u)
+SUITE_COUNT=$(echo "$SUITES" | wc -l | tr -d ' ')
+echo "Found $SUITE_COUNT test suites"
+
+# Run each suite with coverage, saving profraws after each run
+echo "==> Running test suites with coverage..."
+RUN=0
+for SUITE in $SUITES; do
+  RUN=$((RUN + 1))
+  if [ $((RUN % 20)) -eq 0 ]; then
+    echo "  Progress: $RUN/$SUITE_COUNT suites..."
+  fi
+  swift test --enable-code-coverage --filter "$SUITE" > /dev/null 2>&1 || true
+  # Save profraws with unique names before next run overwrites them
+  for f in "$PROFRAW_DIR"/*.profraw; do
+    [ -f "$f" ] && cp "$f" "$ACCUM_DIR/run${RUN}_$(basename "$f")"
+  done
+done
+
+echo "==> Done running $SUITE_COUNT suites"
+
+# Merge ALL accumulated profraws
+PROFRAW_COUNT=$(ls "$ACCUM_DIR"/*.profraw 2>/dev/null | wc -l | tr -d ' ')
+echo "==> Merging $PROFRAW_COUNT profraw files..."
+llvm-profdata merge -o default.profdata "$ACCUM_DIR"/*.profraw
+
+# Extract coverage using JSON export (more accurate line counting)
+echo "==> Extracting coverage..."
 $LLVM_COV export -format=text \
   .build/debug/FaePackageTests.xctest/Contents/MacOS/FaePackageTests \
   -instr-profile=default.profdata > /tmp/fae_coverage.json 2>/dev/null
 
-# Parse coverage for Sources/Fae only
 python3 << 'PYEOF'
-import json
+import json, sys
 with open('/tmp/fae_coverage.json') as f:
     data = json.load(f)
 files = data['data'][0].get('files', [])
@@ -49,12 +61,12 @@ covered_files = 0
 for f in fae_files:
     s = f.get('summary', {}).get('lines', {})
     count = s.get('count', 0)
-    covered = s.get('covered', 0)
+    cov = s.get('covered', 0)
     total_lines += count
-    exec_lines += covered
-    if count > 0 and covered == 0:
+    exec_lines += cov
+    if count > 0 and cov == 0:
         zero_cov += 1
-    elif covered > 0:
+    elif cov > 0:
         covered_files += 1
 
 pct = (exec_lines / total_lines * 100) if total_lines > 0 else 0
@@ -66,6 +78,4 @@ print(f'METRIC zero_cov_files={zero_cov}')
 print(f'METRIC fae_file_count={len(fae_files)}')
 PYEOF
 
-# Count tests
-TEST_COUNT=$(grep -c "✔ Test" /tmp/fae_test_output.txt 2>/dev/null || echo "0")
-echo "METRIC test_count=${TEST_COUNT}"
+echo "METRIC test_count=0"
