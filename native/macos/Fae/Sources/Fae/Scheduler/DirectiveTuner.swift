@@ -198,7 +198,7 @@ enum DirectiveTuner {
     ///
     /// Normalisation: lowercased, trimmed, first 50 characters. This groups
     /// events that are "about the same thing" without requiring semantic similarity.
-    private static func groupByContent(
+    static func groupByContent(
         _ events: [FeedbackEvent],
         keyPath: KeyPath<FeedbackEvent, String?>
     ) -> [String: [FeedbackEvent]] {
