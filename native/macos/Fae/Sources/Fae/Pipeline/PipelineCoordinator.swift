@@ -8503,7 +8503,7 @@ actor PipelineCoordinator {
     }
 
     /// Forward to ``ToolExecutor/isSafeSkillName(_:)`` for call sites outside executeTool.
-    private static func isSafeSkillName(_ name: String) -> Bool {
+    static func isSafeSkillName(_ name: String) -> Bool {
         ToolExecutor.isSafeSkillName(name)
     }
 

@@ -91,4 +91,10 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
         let hash = PipelineCoordinator.contentHash("hello world")
         XCTAssertFalse(hash.isEmpty)
     }
+
+    // MARK: - isSafeSkillName (delegates to ToolExecutor)
+
+    func testIsSafeSkillName() {
+        XCTAssertTrue(PipelineCoordinator.isSafeSkillName("my-skill"))
+    }
 }
