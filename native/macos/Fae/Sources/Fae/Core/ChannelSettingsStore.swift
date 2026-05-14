@@ -330,7 +330,7 @@ enum ChannelSettingsStore {
         return UInt16(parsed)
     }
 
-    private static func parseTruthy(_ value: String?) -> Bool {
+    static func parseTruthy(_ value: String?) -> Bool {
         guard let normalized = value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(),

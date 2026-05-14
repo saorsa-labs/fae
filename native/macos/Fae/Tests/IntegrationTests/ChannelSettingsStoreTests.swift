@@ -74,4 +74,34 @@ final class ChannelSettingsStoreTests: XCTestCase {
     func testSerializeEmptyList() {
         XCTAssertNil(ChannelSettingsStore.serialize([] as [String]))
     }
+
+    // MARK: - parseTruthy
+
+    func testParseTruthyTrue() {
+        XCTAssertTrue(ChannelSettingsStore.parseTruthy("true"))
+    }
+
+    func testParseTruthyYes() {
+        XCTAssertTrue(ChannelSettingsStore.parseTruthy("yes"))
+    }
+
+    func testParseTruthyOne() {
+        XCTAssertTrue(ChannelSettingsStore.parseTruthy("1"))
+    }
+
+    func testParseTruthyOn() {
+        XCTAssertTrue(ChannelSettingsStore.parseTruthy("on"))
+    }
+
+    func testParseTruthyFalse() {
+        XCTAssertFalse(ChannelSettingsStore.parseTruthy("false"))
+    }
+
+    func testParseTruthyNil() {
+        XCTAssertFalse(ChannelSettingsStore.parseTruthy(nil))
+    }
+
+    func testParseTruthyWhitespace() {
+        XCTAssertTrue(ChannelSettingsStore.parseTruthy("  TRUE  "))
+    }
 }
