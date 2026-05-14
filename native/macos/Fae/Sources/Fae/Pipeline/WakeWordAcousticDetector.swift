@@ -173,20 +173,20 @@ struct WakeWordAcousticDetector {
         return output
     }
 
-    private static func meanCenter(_ values: [Float]) -> [Float] {
+    static func meanCenter(_ values: [Float]) -> [Float] {
         guard !values.isEmpty else { return [] }
         let mean = values.reduce(Float.zero, +) / Float(values.count)
         return values.map { $0 - mean }
     }
 
-    private static func l2Normalize(_ values: [Float]) -> [Float] {
+    static func l2Normalize(_ values: [Float]) -> [Float] {
         guard !values.isEmpty else { return [] }
         let norm = sqrt(values.reduce(Float.zero) { $0 + ($1 * $1) })
         guard norm > 1e-6 else { return [] }
         return values.map { $0 / norm }
     }
 
-    private static func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
+    static func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Float {
         guard lhs.count == rhs.count, !lhs.isEmpty else { return -.greatestFiniteMagnitude }
         var sum: Float = 0
         for i in lhs.indices {
