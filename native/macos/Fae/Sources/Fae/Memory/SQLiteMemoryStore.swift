@@ -715,7 +715,7 @@ actor SQLiteMemoryStore {
         }
     }
 
-    private static func quotedFTSToken(_ token: String) -> String {
+    static func quotedFTSToken(_ token: String) -> String {
         let escaped = token.replacingOccurrences(of: "\"", with: "\"\"")
         return "\"\(escaped)\""
     }
@@ -1008,7 +1008,7 @@ actor SQLiteMemoryStore {
     // MARK: - Private Helpers
 
     /// Escape SQL LIKE wildcard characters so user-supplied strings are matched literally.
-    private static func escapeLikePattern(_ value: String) -> String {
+    static func escapeLikePattern(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "%", with: "\\%")
@@ -1082,7 +1082,7 @@ actor SQLiteMemoryStore {
         return str
     }
 
-    private static func decodeTags(_ json: String) -> [String] {
+    static func decodeTags(_ json: String) -> [String] {
         guard let data = json.data(using: .utf8),
               let tags = try? JSONDecoder().decode([String].self, from: data)
         else { return [] }

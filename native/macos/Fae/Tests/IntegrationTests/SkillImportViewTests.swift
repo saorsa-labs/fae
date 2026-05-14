@@ -32,4 +32,18 @@ final class SkillImportViewTests: XCTestCase {
         let name = SkillImportView.extractFrontmatterName(from: "no frontmatter")
         XCTAssertNil(name)
     }
+
+    // MARK: - rewriteFrontmatterName
+
+    func testRewriteFrontmatterName() {
+        let content = "---\nname: old-name\nversion: 1\n---\ncontent"
+        let result = SkillImportView.rewriteFrontmatterName(in: content, newName: "new-name")
+        XCTAssertTrue(result.contains("name: new-name"))
+    }
+
+    func testRewriteFrontmatterNameNoFrontmatter() {
+        let content = "no frontmatter"
+        let result = SkillImportView.rewriteFrontmatterName(in: content, newName: "new-name")
+        XCTAssertEqual(result, content)
+    }
 }

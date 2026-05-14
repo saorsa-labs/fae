@@ -360,7 +360,7 @@ struct SkillImportView: View {
     }
 
     /// Rewrite the `name:` line in YAML frontmatter to match the directory name.
-    private static func rewriteFrontmatterName(in content: String, newName: String) -> String {
+    static func rewriteFrontmatterName(in content: String, newName: String) -> String {
         var lines = content.components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return content }
         for i in 1..<lines.count {
