@@ -47,4 +47,36 @@ final class TextProcessingStaticTests: XCTestCase {
     func testIsAliasCandidateWrongLetter() {
         XCTAssertFalse(TextProcessing.isAliasCandidate("bae"))
     }
+
+    // MARK: - verbalizeDates
+
+    func testVerbalizeDatesUSStyle() {
+        let result = TextProcessing.verbalizeDates("Meeting on 12/25/2024")
+        XCTAssertTrue(result.contains("December"))
+    }
+
+    func testVerbalizeDatesNoDates() {
+        let result = TextProcessing.verbalizeDates("hello world")
+        XCTAssertEqual(result, "hello world")
+    }
+
+    // MARK: - applyCommandCorrections
+
+    func testApplyCommandCorrections() {
+        let result = TextProcessing.applyCommandCorrections("run this command")
+        XCTAssertFalse(result.isEmpty)
+    }
+
+    // MARK: - normalizeWakeAlias
+
+    func testNormalizeWakeAlias() {
+        let normalized = TextProcessing.normalizeWakeAlias("Fae-Bot!")
+        XCTAssertEqual(normalized, "fae-bot")
+    }
+
+    func testNormalizeWakeAliasSpecialChars() {
+        let normalized = TextProcessing.normalizeWakeAlias("My @Voice# Agent!")
+        XCTAssertFalse(normalized.contains("@"))
+        XCTAssertFalse(normalized.contains("#"))
+    }
 }

@@ -503,7 +503,7 @@ enum TextProcessing {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func verbalizeDates(_ text: String) -> String {
+    static func verbalizeDates(_ text: String) -> String {
         var result = text
 
         // US style dates: MM/DD/YYYY
@@ -1016,7 +1016,7 @@ enum TextProcessing {
     /// Apply command-phrase corrections to ASR output.
     /// Uses case-insensitive substring matching — these are multi-word phrases
     /// unlikely to appear as false positives in normal speech.
-    private static func applyCommandCorrections(_ text: String) -> String {
+    static func applyCommandCorrections(_ text: String) -> String {
         var result = text
         let lower = result.lowercased()
 
@@ -1294,7 +1294,7 @@ enum TextProcessing {
         return ""
     }
 
-    private static func normalizeWakeAlias(_ text: String) -> String {
+    static func normalizeWakeAlias(_ text: String) -> String {
         let lower = text.lowercased()
         let mapped = lower.map { ch -> Character in
             if ch.isLetter || ch.isNumber {
