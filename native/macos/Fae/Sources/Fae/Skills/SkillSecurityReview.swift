@@ -164,7 +164,7 @@ enum SkillImportService {
         return try EditableSkillDraft.imported(from: text, sourceURL: resolvedURL)
     }
 
-    private static func normalizeSkillURL(_ url: URL) -> URL {
+    static func normalizeSkillURL(_ url: URL) -> URL {
         guard let host = url.host?.lowercased() else { return url }
 
         if host == "github.com" {
