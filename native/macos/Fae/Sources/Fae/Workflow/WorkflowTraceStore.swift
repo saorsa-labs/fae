@@ -601,11 +601,11 @@ actor WorkflowTraceStore {
         )
     }
 
-    private static func newID(prefix: String) -> String {
+    static func newID(prefix: String) -> String {
         "\(prefix)_\(UUID().uuidString)"
     }
 
-    private static func unixTimestamp(_ date: Date) -> Int64 {
+    static func unixTimestamp(_ date: Date) -> Int64 {
         Int64(date.timeIntervalSince1970)
     }
 
@@ -622,30 +622,30 @@ actor WorkflowTraceStore {
         return nil
     }
 
-    private static func redactedAndTrimmed(_ value: String, limit: Int) -> String {
+    static func redactedAndTrimmed(_ value: String, limit: Int) -> String {
         let redacted = SensitiveDataRedactor.redact(value) ?? value
         let trimmed = redacted.trimmingCharacters(in: .whitespacesAndNewlines)
         return String(trimmed.prefix(limit))
     }
 
-    private static func trimmed(_ value: String, limit: Int) -> String {
+    static func trimmed(_ value: String, limit: Int) -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return String(normalized.prefix(limit))
     }
 
-    private static func optionalRedactedAndTrimmed(_ value: String?, limit: Int) -> String? {
+    static func optionalRedactedAndTrimmed(_ value: String?, limit: Int) -> String? {
         guard let value else { return nil }
         let normalized = redactedAndTrimmed(value, limit: limit)
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func optionalTrimmed(_ value: String?, limit: Int) -> String? {
+    static func optionalTrimmed(_ value: String?, limit: Int) -> String? {
         guard let value else { return nil }
         let normalized = trimmed(value, limit: limit)
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func optionalInt(_ value: Bool?) -> Int? {
+    static func optionalInt(_ value: Bool?) -> Int? {
         guard let value else { return nil }
         return value ? 1 : 0
     }
