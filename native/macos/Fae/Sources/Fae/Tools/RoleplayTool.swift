@@ -116,7 +116,7 @@ actor RoleplaySessionStore {
         sessionPersistence.save(state)
     }
 
-    private static func formatDate(_ date: Date) -> String {
+    static func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
