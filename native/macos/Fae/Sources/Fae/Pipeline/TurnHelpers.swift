@@ -549,7 +549,7 @@ enum TurnHelpers {
         return nil
     }
 
-    private static func parseArithmeticOperand(_ text: String) -> Double? {
+    static func parseArithmeticOperand(_ text: String) -> Double? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -597,7 +597,7 @@ enum TurnHelpers {
         return Double(total + current)
     }
 
-    private static func standaloneUserNameDeclaration(in text: String) -> String? {
+    static func standaloneUserNameDeclaration(in text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let patterns = [
             "my name is ", "my name's ", "call me ",
@@ -638,7 +638,7 @@ enum TurnHelpers {
         return true
     }
 
-    private static func isSimpleUserNameRecallQuery(_ text: String) -> Bool {
+    static func isSimpleUserNameRecallQuery(_ text: String) -> Bool {
         let normalized = text
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)

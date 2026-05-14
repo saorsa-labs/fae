@@ -55,4 +55,38 @@ final class TurnHelpersStaticTests: XCTestCase {
     func testIsNotLikelyStandaloneHumanName() {
         XCTAssertFalse(TurnHelpers.isLikelyStandaloneHumanName("12345"))
     }
+
+    // MARK: - parseArithmeticOperand
+
+    func testParseArithmeticOperand() {
+        let result = TurnHelpers.parseArithmeticOperand("42")
+        XCTAssertEqual(result, 42.0)
+    }
+
+    func testParseArithmeticOperandNone() {
+        let result = TurnHelpers.parseArithmeticOperand("hello")
+        XCTAssertNil(result)
+    }
+
+    // MARK: - standaloneUserNameDeclaration
+
+    func testStandaloneUserNameDeclaration() {
+        let name = TurnHelpers.standaloneUserNameDeclaration(in: "my name is Alice")
+        XCTAssertNotNil(name)
+    }
+
+    func testStandaloneUserNameDeclarationNone() {
+        let name = TurnHelpers.standaloneUserNameDeclaration(in: "hello world")
+        XCTAssertNil(name)
+    }
+
+    // MARK: - isSimpleUserNameRecallQuery
+
+    func testIsSimpleUserNameRecallQuery() {
+        XCTAssertTrue(TurnHelpers.isSimpleUserNameRecallQuery("what is my name"))
+    }
+
+    func testIsNotSimpleUserNameRecallQuery() {
+        XCTAssertFalse(TurnHelpers.isSimpleUserNameRecallQuery("hello world"))
+    }
 }
