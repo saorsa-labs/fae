@@ -290,13 +290,13 @@ actor DamageControlPolicy {
 
     // MARK: - Helpers
 
-    private static func expandPath(_ path: String) -> String {
+    static func expandPath(_ path: String) -> String {
         guard path.hasPrefix("~/") || path == "~" else { return path }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return home + path.dropFirst(1)  // drop the "~"
     }
 
-    private static func extractPath(toolName: String, arguments: [String: Any]) -> String? {
+    static func extractPath(toolName: String, arguments: [String: Any]) -> String? {
         switch toolName {
         case "read":
             return arguments["path"] as? String ?? arguments["file_path"] as? String
@@ -311,7 +311,7 @@ actor DamageControlPolicy {
     }
 
     /// Returns true if the shell command looks like it targets the given expanded path.
-    private static func commandTargetsPath(command: String, expandedPath: String) -> Bool {
+    static func commandTargetsPath(command: String, expandedPath: String) -> Bool {
         // Match against both the full expanded path and the tilde form.
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let tildePath: String
