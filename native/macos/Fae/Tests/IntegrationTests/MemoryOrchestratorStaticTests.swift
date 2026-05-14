@@ -141,4 +141,26 @@ final class MemoryOrchestratorStaticTests: XCTestCase {
         let fact = MemoryOrchestrator.extractRememberFact(from: "hello world")
         XCTAssertNil(fact)
     }
+
+    // MARK: - sourceLabel
+
+    func testSourceLabelURL() {
+        let label = MemoryOrchestrator.sourceLabel(sourceType: .url, title: nil, origin: "https://example.com/page")
+        XCTAssertTrue(label.contains("example.com"))
+    }
+
+    func testSourceLabelPDFWithTitle() {
+        let label = MemoryOrchestrator.sourceLabel(sourceType: .pdf, title: "Report.pdf", origin: nil)
+        XCTAssertTrue(label.contains("Report.pdf"))
+    }
+
+    func testSourceLabelFile() {
+        let label = MemoryOrchestrator.sourceLabel(sourceType: .file, title: "notes.txt", origin: nil)
+        XCTAssertTrue(label.contains("notes.txt"))
+    }
+
+    func testSourceLabelCoworkAttachment() {
+        let label = MemoryOrchestrator.sourceLabel(sourceType: .coworkAttachment, title: "image.png", origin: nil)
+        XCTAssertTrue(label.contains("cowork attachment"))
+    }
 }

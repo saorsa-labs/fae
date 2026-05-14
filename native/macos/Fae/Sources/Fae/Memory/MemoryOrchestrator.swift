@@ -1122,7 +1122,7 @@ actor MemoryOrchestrator {
         sourceLabel(sourceType: artifact.sourceType, title: artifact.title, origin: artifact.origin)
     }
 
-    private static func sourceLabel(
+    static func sourceLabel(
         sourceType: MemoryArtifactSourceType,
         title: String?,
         origin: String?
