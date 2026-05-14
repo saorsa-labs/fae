@@ -106,4 +106,37 @@ final class SkillManagerStaticTests: XCTestCase {
     func testValidateScriptContentValid() throws {
         try SkillManager.validateScriptContent("print('hello')")
     }
+
+    // MARK: - isSafeEnvironmentVariableName
+
+    func testIsSafeEnvVarValid() {
+        XCTAssertTrue(SkillManager.isSafeEnvironmentVariableName("API_KEY"))
+    }
+
+    func testIsSafeEnvVarInvalid() {
+        XCTAssertFalse(SkillManager.isSafeEnvironmentVariableName("api_key"))
+    }
+
+    // MARK: - isSensitiveKey
+
+    func testIsSensitiveKeyToken() {
+        XCTAssertTrue(SkillManager.isSensitiveKey("auth_token"))
+    }
+
+    func testIsSensitiveKeyPassword() {
+        XCTAssertTrue(SkillManager.isSensitiveKey("password"))
+    }
+
+    func testIsSensitiveKeyNormal() {
+        XCTAssertFalse(SkillManager.isSensitiveKey("filename"))
+    }
+
+    // MARK: - renderSkillMarkdown
+
+    func testRenderSkillMarkdown() {
+        let markdown = SkillManager.renderSkillMarkdown(name: "test", description: "A test skill", body: "# Content")
+        XCTAssertTrue(markdown.contains("---"))
+        XCTAssertTrue(markdown.contains("name: test"))
+        XCTAssertTrue(markdown.contains("# Content"))
+    }
 }

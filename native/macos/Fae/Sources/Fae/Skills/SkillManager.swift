@@ -1575,7 +1575,7 @@ actor SkillManager {
         return target
     }
 
-    private static func renderSkillMarkdown(name: String, description: String, body: String) -> String {
+    static func renderSkillMarkdown(name: String, description: String, body: String) -> String {
         let frontmatter = """
             ---
             name: \(name)
@@ -1611,7 +1611,7 @@ actor SkillManager {
         return resolved
     }
 
-    private static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
+    static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
         let pattern = "^[A-Z][A-Z0-9_]{1,63}$"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let range = NSRange(value.startIndex..., in: value)
@@ -1644,7 +1644,7 @@ actor SkillManager {
         return value
     }
 
-    private static func isSensitiveKey(_ key: String) -> Bool {
+    static func isSensitiveKey(_ key: String) -> Bool {
         let lowered = key.lowercased()
         return lowered.contains("token")
             || lowered.contains("secret")
