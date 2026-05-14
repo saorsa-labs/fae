@@ -2818,7 +2818,7 @@ actor PipelineCoordinator {
         }
     }
 
-    private static func workflowTraceSignature(for toolSequence: [String]) -> String? {
+    static func workflowTraceSignature(for toolSequence: [String]) -> String? {
         let normalized = toolSequence
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .filter { !$0.isEmpty }

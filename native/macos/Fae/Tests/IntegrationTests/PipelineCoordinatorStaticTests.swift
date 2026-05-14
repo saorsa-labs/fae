@@ -39,4 +39,21 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
         let stripped = PipelineCoordinator.stripThinkContent("thinking... answer")
         XCTAssertFalse(stripped.isEmpty)
     }
+
+    // MARK: - workflowTraceSignature
+
+    func testWorkflowTraceSignature() {
+        let sig = PipelineCoordinator.workflowTraceSignature(for: ["read", "write", "bash"])
+        XCTAssertEqual(sig, "read -> write -> bash")
+    }
+
+    func testWorkflowTraceSignatureEmpty() {
+        let sig = PipelineCoordinator.workflowTraceSignature(for: [])
+        XCTAssertNil(sig)
+    }
+
+    func testWorkflowTraceSignatureTrimsAndLowercases() {
+        let sig = PipelineCoordinator.workflowTraceSignature(for: [" Read ", " WRITE "])
+        XCTAssertEqual(sig, "read -> write")
+    }
 }
