@@ -51,4 +51,50 @@ final class MemoryOrchestratorStaticTests: XCTestCase {
         let sub = MemoryOrchestrator.substring(in: original, matchingLowerRange: range)
         XCTAssertEqual(sub, "World")
     }
+
+    // MARK: - stripWakePrefix
+
+    func testStripWakePrefixWithComma() {
+        let result = MemoryOrchestrator.stripWakePrefix("fae, what is my name")
+        XCTAssertEqual(result, "what is my name")
+    }
+
+    func testStripWakePrefixNoMatch() {
+        let result = MemoryOrchestrator.stripWakePrefix("hello world")
+        XCTAssertEqual(result, "hello world")
+    }
+
+    // MARK: - extractStoredName
+
+    func testExtractStoredName() {
+        let name = MemoryOrchestrator.extractStoredName(from: "Primary user name is Alice")
+        XCTAssertEqual(name, "Alice")
+    }
+
+    func testExtractStoredNameNoMatch() {
+        let name = MemoryOrchestrator.extractStoredName(from: "random text")
+        XCTAssertNil(name)
+    }
+
+    // MARK: - extractFavoriteColor
+
+    func testExtractFavoriteColor() {
+        let color = MemoryOrchestrator.extractFavoriteColor(from: "my favorite color is blue")
+        XCTAssertEqual(color, "blue")
+    }
+
+    func testExtractFavoriteColorNoMatch() {
+        let color = MemoryOrchestrator.extractFavoriteColor(from: "random text")
+        XCTAssertNil(color)
+    }
+
+    // MARK: - shouldSkipEpisodeCapture
+
+    func testShouldSkipEpisodeCaptureArithmetic() {
+        XCTAssertTrue(MemoryOrchestrator.shouldSkipEpisodeCapture(userText: "2 + 2"))
+    }
+
+    func testShouldSkipEpisodeCaptureNormal() {
+        XCTAssertFalse(MemoryOrchestrator.shouldSkipEpisodeCapture(userText: "hello world"))
+    }
 }

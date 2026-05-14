@@ -420,7 +420,7 @@ actor MemoryOrchestrator {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func stripWakePrefix(_ text: String) -> String {
+    static func stripWakePrefix(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
         for prefix in ["fae, ", "fae "] where lower.hasPrefix(prefix) {
@@ -525,7 +525,7 @@ actor MemoryOrchestrator {
         return nil
     }
 
-    private static func extractStoredName(from text: String) -> String? {
+    static func extractStoredName(from text: String) -> String? {
         let prefix = "Primary user name is "
         guard text.hasPrefix(prefix) else { return nil }
         let remainder = text.dropFirst(prefix.count)
@@ -552,7 +552,7 @@ actor MemoryOrchestrator {
         return nil
     }
 
-    private static func extractFavoriteColor(from text: String) -> String? {
+    static func extractFavoriteColor(from text: String) -> String? {
         let lower = text.lowercased()
         guard let range = lower.range(of: "favorite color is ") else { return nil }
         let original = text[range.upperBound...]
@@ -847,7 +847,7 @@ actor MemoryOrchestrator {
         return stored
     }
 
-    private static func shouldSkipEpisodeCapture(userText: String) -> Bool {
+    static func shouldSkipEpisodeCapture(userText: String) -> Bool {
         let lower = " " + userText.lowercased() + " "
         let operatorHints = [
             " plus ", " minus ", " times ", " multiplied by ", " divided by ",
