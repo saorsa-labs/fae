@@ -1307,7 +1307,7 @@ enum TextProcessing {
             .joined(separator: " ")
     }
 
-    private static func isBoundary(_ index: String.Index, in text: String, before: Bool) -> Bool {
+    static func isBoundary(_ index: String.Index, in text: String, before: Bool) -> Bool {
         if before {
             guard index != text.startIndex else { return true }
             let ch = text[text.index(before: index)]

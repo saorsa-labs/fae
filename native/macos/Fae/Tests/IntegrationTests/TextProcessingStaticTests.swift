@@ -79,4 +79,17 @@ final class TextProcessingStaticTests: XCTestCase {
         XCTAssertFalse(normalized.contains("@"))
         XCTAssertFalse(normalized.contains("#"))
     }
+
+    // MARK: - isBoundary
+
+    func testIsBoundaryStartOfText() {
+        let text = "hello"
+        XCTAssertTrue(TextProcessing.isBoundary(text.startIndex, in: text, before: true))
+    }
+
+    func testIsBoundaryEndOfText() {
+        let text = "hello"
+        XCTAssertTrue(TextProcessing.isBoundary(text.endIndex, in: text, before: false))
+    }
+
 }
