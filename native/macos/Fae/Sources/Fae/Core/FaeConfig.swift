@@ -1388,7 +1388,7 @@ struct FaeConfig: Codable {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    private static func parseString(_ raw: String) -> String? {
+    static func parseString(_ raw: String) -> String? {
         if raw == "nil" {
             return nil
         }
@@ -1399,7 +1399,7 @@ struct FaeConfig: Codable {
         return unescapeString(inner)
     }
 
-    private static func parseBool(_ raw: String) -> Bool? {
+    static func parseBool(_ raw: String) -> Bool? {
         switch raw.lowercased() {
         case "true": return true
         case "false": return false
@@ -1407,11 +1407,11 @@ struct FaeConfig: Codable {
         }
     }
 
-    private static func parseInt(_ raw: String) -> Int? { Int(raw) }
+    static func parseInt(_ raw: String) -> Int? { Int(raw) }
 
-    private static func parseFloat(_ raw: String) -> Float? { Float(raw) }
+    static func parseFloat(_ raw: String) -> Float? { Float(raw) }
 
-    private static func parseStringArray(_ raw: String) -> [String]? {
+    static func parseStringArray(_ raw: String) -> [String]? {
         guard raw.hasPrefix("[") && raw.hasSuffix("]") else {
             return nil
         }
@@ -1473,7 +1473,7 @@ struct FaeConfig: Codable {
         return "[\(encoded.joined(separator: ", "))]"
     }
 
-    private static func escapeString(_ value: String) -> String {
+    static func escapeString(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -1481,7 +1481,7 @@ struct FaeConfig: Codable {
             .replacingOccurrences(of: "\t", with: "\\t")
     }
 
-    private static func unescapeString(_ value: String) -> String {
+    static func unescapeString(_ value: String) -> String {
         var output = ""
         var escaping = false
         for ch in value {
