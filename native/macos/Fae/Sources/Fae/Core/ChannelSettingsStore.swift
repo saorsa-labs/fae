@@ -187,7 +187,7 @@ enum ChannelSettingsStore {
             .lowercased()
     }
 
-    private static func serialize(_ rawValue: Any) -> String? {
+    static func serialize(_ rawValue: Any) -> String? {
         if let list = rawValue as? [String] {
             let cleaned = list
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

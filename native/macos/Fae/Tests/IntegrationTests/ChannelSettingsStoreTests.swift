@@ -55,4 +55,23 @@ final class ChannelSettingsStoreTests: XCTestCase {
         let port = ChannelSettingsStore.parsePort(nil)
         XCTAssertNil(port)
     }
+
+    // MARK: - serialize
+
+    func testSerializeString() {
+        XCTAssertEqual(ChannelSettingsStore.serialize("hello"), "hello")
+    }
+
+    func testSerializeList() {
+        let result = ChannelSettingsStore.serialize(["a", "b", "c"])
+        XCTAssertEqual(result, "a,b,c")
+    }
+
+    func testSerializeEmptyString() {
+        XCTAssertNil(ChannelSettingsStore.serialize("   "))
+    }
+
+    func testSerializeEmptyList() {
+        XCTAssertNil(ChannelSettingsStore.serialize([] as [String]))
+    }
 }
