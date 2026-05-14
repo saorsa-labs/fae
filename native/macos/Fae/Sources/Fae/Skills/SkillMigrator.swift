@@ -161,7 +161,7 @@ enum SkillMigrator {
             """
     }
 
-    private static func inferredSkillName(from content: String) -> String? {
+    static func inferredSkillName(from content: String) -> String? {
         let lines = content.components(separatedBy: .newlines)
         guard lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" else { return nil }
         for line in lines.dropFirst() {
