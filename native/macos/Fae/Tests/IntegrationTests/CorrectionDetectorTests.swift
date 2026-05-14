@@ -28,4 +28,40 @@ final class CorrectionDetectorTests: XCTestCase {
         XCTAssertFalse(CorrectionDetector.isPlausibleName(""))
         XCTAssertFalse(CorrectionDetector.isPlausibleName("12345"))
     }
+
+    // MARK: - nameIsNotPattern
+
+    func testNameIsNotPattern() {
+        let result = CorrectionDetector.nameIsNotPattern("my name is not alice")
+        XCTAssertNotNil(result)
+    }
+
+    func testNameIsNotPatternNoMatch() {
+        let result = CorrectionDetector.nameIsNotPattern("hello world")
+        XCTAssertNil(result)
+    }
+
+    // MARK: - itsNotPattern
+
+    func testItsNotPattern() {
+        let result = CorrectionDetector.itsNotPattern("it's bob not bill")
+        XCTAssertNotNil(result)
+    }
+
+    func testItsNotPatternNoMatch() {
+        let result = CorrectionDetector.itsNotPattern("hello world")
+        XCTAssertNil(result)
+    }
+
+    // MARK: - iSaidPattern
+
+    func testISaidPattern() {
+        let result = CorrectionDetector.iSaidPattern("i said alice not alix")
+        XCTAssertNotNil(result)
+    }
+
+    func testISaidPatternNoMatch() {
+        let result = CorrectionDetector.iSaidPattern("hello world")
+        XCTAssertNil(result)
+    }
 }

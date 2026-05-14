@@ -131,7 +131,7 @@ enum CorrectionDetector {
     // MARK: - Pattern Helpers
 
     /// Match "my name is X not Y" or "my name is X, not Y".
-    private static func nameIsNotPattern(_ lower: String) -> (correct: String, wrong: String?)? {
+    static func nameIsNotPattern(_ lower: String) -> (correct: String, wrong: String?)? {
         // Pattern: "my name is <correct> not <wrong>"
         guard let nameIsRange = lower.range(of: "my name is ") else { return nil }
         let afterNameIs = lower[nameIsRange.upperBound...]
@@ -161,7 +161,7 @@ enum CorrectionDetector {
     }
 
     /// Match "it's X not Y" or "it's X, not Y".
-    private static func itsNotPattern(_ lower: String) -> (correct: String, wrong: String?)? {
+    static func itsNotPattern(_ lower: String) -> (correct: String, wrong: String?)? {
         let prefixes = ["it's ", "its ", "it is "]
         for prefix in prefixes {
             guard let prefixRange = lower.range(of: prefix) else { continue }
@@ -183,7 +183,7 @@ enum CorrectionDetector {
     }
 
     /// Match "I said X" / "no I said X" / "I said X not Y".
-    private static func iSaidPattern(_ lower: String) -> (correct: String, wrong: String?)? {
+    static func iSaidPattern(_ lower: String) -> (correct: String, wrong: String?)? {
         guard let saidRange = lower.range(of: "i said ") else { return nil }
         let afterSaid = lower[saidRange.upperBound...]
         guard !afterSaid.isEmpty else { return nil }
