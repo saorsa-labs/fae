@@ -426,7 +426,7 @@ enum TurnHelpers {
         "sixty", "seventy", "eighty", "ninety", "hundred",
     ]
 
-    private static func isEphemeralArithmeticQuery(_ text: String) -> Bool {
+    static func isEphemeralArithmeticQuery(_ text: String) -> Bool {
         let lower = " " + text.lowercased() + " "
         let operatorHints = [
             " plus ", " minus ", " times ", " multiplied by ", " divided by ",
@@ -470,7 +470,7 @@ enum TurnHelpers {
         return .recallUserName(reply: "I don't know your name yet. Tell me your name and I'll remember it.")
     }
 
-    private static func normalizeEasyTurnInput(_ text: String) -> String {
+    static func normalizeEasyTurnInput(_ text: String) -> String {
         var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         normalized = normalized.replacingOccurrences(
             of: #"^[\s,;:.-]*(hey|hi|hello)\s+fae[\s,;:.-]*"#,
@@ -485,7 +485,7 @@ enum TurnHelpers {
         return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func deterministicArithmeticReply(for text: String) -> String? {
+    static func deterministicArithmeticReply(for text: String) -> String? {
         guard let expression = parseArithmeticExpression(text) else { return nil }
 
         let result: Double
@@ -515,7 +515,7 @@ enum TurnHelpers {
         return "\(formatted)."
     }
 
-    private static func parseArithmeticExpression(_ text: String) -> (lhs: Double, operatorSymbol: String, rhs: Double)? {
+    static func parseArithmeticExpression(_ text: String) -> (lhs: Double, operatorSymbol: String, rhs: Double)? {
         let normalized = text
             .lowercased()
             .replacingOccurrences(of: "what's", with: "what is")
@@ -615,7 +615,7 @@ enum TurnHelpers {
         return nil
     }
 
-    private static func isLikelyStandaloneHumanName(_ candidate: String) -> Bool {
+    static func isLikelyStandaloneHumanName(_ candidate: String) -> Bool {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 50 else { return false }
         let words = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
