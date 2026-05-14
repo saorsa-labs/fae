@@ -638,7 +638,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     // MARK: - Resampling
 
     /// Resample audio using linear interpolation (via vDSP_vlint).
-    private static func resample(_ audio: [Float], from srcRate: Int, to dstRate: Int) -> [Float] {
+    static func resample(_ audio: [Float], from srcRate: Int, to dstRate: Int) -> [Float] {
         guard srcRate != dstRate, audio.count > 1 else { return audio }
 
         let outputLength = Int(Double(audio.count) * Double(dstRate) / Double(srcRate))

@@ -26,4 +26,24 @@ final class CoreMLSpeakerEncoderStaticTests: XCTestCase {
         let normalized = CoreMLSpeakerEncoder.l2Normalize(vec)
         XCTAssertEqual(normalized, vec) // returns input for zero vector
     }
+
+    // MARK: - resample
+
+    func testResampleSameRate() {
+        let audio: [Float] = [1.0, 2.0, 3.0]
+        let result = CoreMLSpeakerEncoder.resample(audio, from: 16000, to: 16000)
+        XCTAssertEqual(result, audio)
+    }
+
+    func testResampleDown() {
+        let audio: [Float] = [1.0, 2.0, 3.0, 4.0]
+        let result = CoreMLSpeakerEncoder.resample(audio, from: 16000, to: 8000)
+        XCTAssertEqual(result.count, 2) // half the samples
+    }
+
+    func testResampleUp() {
+        let audio: [Float] = [1.0, 2.0]
+        let result = CoreMLSpeakerEncoder.resample(audio, from: 8000, to: 16000)
+        XCTAssertEqual(result.count, 2) // same count when input is minimal
+    }
 }
