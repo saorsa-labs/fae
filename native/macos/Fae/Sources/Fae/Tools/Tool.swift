@@ -153,7 +153,7 @@ extension Tool {
     /// Handles two formats:
     /// - Simple:     `{"path": "string (required)"}`
     /// - Structured: `{"prompt":{"type":"string","description":"..."}}`
-    private static func parseParametersSchema(_ schema: String) -> (
+    static func parseParametersSchema(_ schema: String) -> (
         [String: any Sendable], [String]
     ) {
         let trimmed = schema.trimmingCharacters(in: .whitespacesAndNewlines)

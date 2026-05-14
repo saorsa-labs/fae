@@ -90,7 +90,7 @@ struct SessionSearchTool: Tool {
         return lines.joined(separator: "\n")
     }
 
-    private static func formatDate(_ date: Date) -> String {
+    static func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"

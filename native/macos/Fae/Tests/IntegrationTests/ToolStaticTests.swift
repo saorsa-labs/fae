@@ -97,4 +97,25 @@ final class ToolStaticTests: XCTestCase {
         let serialized = ToolExecutor.serializeArguments(["key": "value"])
         XCTAssertFalse(serialized.isEmpty)
     }
+
+    // MARK: - parseParametersSchema (Tool extension)
+
+    func testParseParametersSchemaSimple() {
+        let schema = #"{"path":"string (required)"}"#
+        let (props, required) = ReadTool.parseParametersSchema(schema)
+        XCTAssertFalse(props.isEmpty)
+        XCTAssertTrue(required.contains("path"))
+    }
+
+    func testParseParametersSchemaStructured() {
+        let schema = #"{"provider":{"type":"string","description":"agent provider"}}"#
+        let (props, _) = ReadTool.parseParametersSchema(schema)
+        XCTAssertFalse(props.isEmpty)
+    }
+
+    func testParseParametersSchemaInvalid() {
+        let (props, required) = ReadTool.parseParametersSchema("not json")
+        XCTAssertTrue(props.isEmpty)
+        XCTAssertTrue(required.isEmpty)
+    }
 }
