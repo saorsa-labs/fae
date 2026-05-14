@@ -548,24 +548,24 @@ actor SessionStore {
         )
     }
 
-    private static func unixTimestamp(_ date: Date) -> Int64 {
+    static func unixTimestamp(_ date: Date) -> Int64 {
         Int64(date.timeIntervalSince1970)
     }
 
-    private static func dateFromTimestamp(_ value: Int64?) -> Date {
+    static func dateFromTimestamp(_ value: Int64?) -> Date {
         Date(timeIntervalSince1970: TimeInterval(value ?? 0))
     }
 
-    private static func optionalDateFromTimestamp(_ value: Int64?) -> Date? {
+    static func optionalDateFromTimestamp(_ value: Int64?) -> Date? {
         guard let value else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(value))
     }
 
-    private static func newID(prefix: String) -> String {
+    static func newID(prefix: String) -> String {
         "\(prefix)-\(UUID().uuidString)"
     }
 
-    private static func derivedTitle(from content: String) -> String? {
+    static func derivedTitle(from content: String) -> String? {
         let collapsed = content
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
@@ -574,7 +574,7 @@ actor SessionStore {
         return String(collapsed.prefix(80))
     }
 
-    private static func searchTokens(from query: String) -> [String] {
+    static func searchTokens(from query: String) -> [String] {
         let rawTokens = query.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -601,13 +601,13 @@ actor SessionStore {
         return uniqueTokens
     }
 
-    private static func ftsMatchQuery(from tokens: [String]) -> String {
+    static func ftsMatchQuery(from tokens: [String]) -> String {
         tokens
             .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
             .joined(separator: " OR ")
     }
 
-    private static func matchedTokenCount(in content: String, tokens: [String]) -> Int {
+    static func matchedTokenCount(in content: String, tokens: [String]) -> Int {
         let normalizedContent = normalizeSearchText(content)
         return tokens.reduce(into: 0) { count, token in
             if normalizedContent.contains(token) {
@@ -616,13 +616,13 @@ actor SessionStore {
         }
     }
 
-    private static func normalizeSearchText(_ value: String) -> String {
+    static func normalizeSearchText(_ value: String) -> String {
         value.lowercased()
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func cleanSnippet(_ value: String) -> String {
+    static func cleanSnippet(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
