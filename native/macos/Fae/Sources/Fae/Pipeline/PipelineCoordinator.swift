@@ -8042,7 +8042,7 @@ actor PipelineCoordinator {
         ToolRoutingHelpers.directToolReplyText(for: call, result: result)
     }
 
-    private static func serializeArguments(_ args: [String: Any]) -> String {
+    static func serializeArguments(_ args: [String: Any]) -> String {
         ToolRoutingHelpers.serializeArguments(args)
     }
 

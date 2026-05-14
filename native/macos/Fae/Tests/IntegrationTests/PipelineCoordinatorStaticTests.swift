@@ -97,4 +97,11 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
     func testIsSafeSkillName() {
         XCTAssertTrue(PipelineCoordinator.isSafeSkillName("my-skill"))
     }
+
+    // MARK: - serializeArguments (delegates to ToolRoutingHelpers)
+
+    func testSerializeArguments() {
+        let serialized = PipelineCoordinator.serializeArguments(["key": "value"])
+        XCTAssertFalse(serialized.isEmpty)
+    }
 }
