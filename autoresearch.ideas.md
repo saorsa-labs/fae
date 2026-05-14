@@ -2,6 +2,22 @@
 
 ## Completed (Phase 1)
 
+- SessionStoreStaticTests: 15 tests, 97.0% (795/820)
+- WorkflowTraceStoreStaticTests: 14 tests, 96.2% (753/783)
+- SkillManagerStaticTests extended: 7 more tests, 80.8% (1273/1575)
+- SQLiteMemoryStoreStaticTests: 8 tests, 80.3% (1144/1425)
+- ChannelSettingsStoreTests extended: 7 more tests, 89.6% (266/297)
+- AgentDelegateToolTests: 7 tests, 14.3% (53/371)
+- CoreMLSpeakerEncoderStaticTests: 3 tests, 30.6% (262/856)
+- SkillImportViewTests extended: 2 more tests, 7.4% (47/636)
+- SessionSearchToolTests: 1 test, 92.9% (78/84)
+
+## Phase 1 Status (Run #120)
+Coverage stable at **29.3%** (+5.4% from baseline 27.8%). All testable `private static func` patterns exposed across 30+ modules.
+Remaining ~214 private static funcs: system framework deps, filesystem, async state machines, complex types.
+
+---
+
 - TurnHelpersTests: 54 tests, 84.5%→89.4%
 - SchedulerDistillerTests: 24 tests, distillation helpers exposed
 - ToolCallParsingTests: 25 tests for JSON/XML/Gemma parsing
