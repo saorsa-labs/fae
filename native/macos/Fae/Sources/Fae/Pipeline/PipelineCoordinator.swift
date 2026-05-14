@@ -8058,7 +8058,7 @@ actor PipelineCoordinator {
         ToolRoutingHelpers.extractAudioFilePath(from: output)
     }
 
-    private static func contentHash(_ text: String) -> String {
+    static func contentHash(_ text: String) -> String {
         ToolRoutingHelpers.contentHash(text)
     }
 

@@ -84,4 +84,11 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
     func testShouldShowCapabilitiesCanvasNoMatch() {
         XCTAssertFalse(PipelineCoordinator.shouldShowCapabilitiesCanvas(triggerText: "hello world", modelResponse: "hi there"))
     }
+
+    // MARK: - contentHash (delegates to ToolRoutingHelpers)
+
+    func testContentHash() {
+        let hash = PipelineCoordinator.contentHash("hello world")
+        XCTAssertFalse(hash.isEmpty)
+    }
 }
