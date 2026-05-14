@@ -37,4 +37,21 @@ final class AgentDelegateToolTests: XCTestCase {
     func testIsSafeEnvVarSpecialChars() {
         XCTAssertFalse(AgentDelegateTool.isSafeEnvironmentVariableName("API-KEY"))
     }
+
+    // MARK: - buildPrompt
+
+    func testBuildPromptReadOnly() {
+        let prompt = AgentDelegateTool.buildPrompt(prompt: "fix this", mode: .readOnly, appendSystemPrompt: nil)
+        XCTAssertTrue(prompt.contains("read-only"))
+    }
+
+    func testBuildPromptReadWrite() {
+        let prompt = AgentDelegateTool.buildPrompt(prompt: "fix this", mode: .readWrite, appendSystemPrompt: nil)
+        XCTAssertTrue(prompt.contains("modify files"))
+    }
+
+    func testBuildPromptWithAppendSystemPrompt() {
+        let prompt = AgentDelegateTool.buildPrompt(prompt: "fix this", mode: .readOnly, appendSystemPrompt: "extra context")
+        XCTAssertTrue(prompt.contains("extra context"))
+    }
 }

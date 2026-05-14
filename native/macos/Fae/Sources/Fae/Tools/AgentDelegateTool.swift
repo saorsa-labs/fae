@@ -86,6 +86,10 @@ struct AgentDelegateTool: Tool {
     static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
         ExternalAgentDelegate.isSafeEnvironmentVariableName(value)
     }
+
+    static func buildPrompt(prompt: String, mode: DelegateMode, appendSystemPrompt: String?) -> String {
+        ExternalAgentDelegate.buildPrompt(prompt: prompt, mode: mode, appendSystemPrompt: appendSystemPrompt)
+    }
 }
 
 private enum DelegateProvider: String {
@@ -326,7 +330,7 @@ private enum ExternalAgentDelegate {
         return bestEffortOutput(stdout: result.stdout, stderr: result.stderr)
     }
 
-    private static func buildPrompt(prompt: String, mode: DelegateMode, appendSystemPrompt: String?) -> String {
+    static func buildPrompt(prompt: String, mode: DelegateMode, appendSystemPrompt: String?) -> String {
         let modeInstruction = mode == .readOnly
             ? "Stay read-only. Analyze, explain, and propose changes, but do not modify files."
             : "You may inspect and modify files in the working directory to complete the task."
