@@ -24,6 +24,27 @@
 - CoworkLLMProviderTests: 16 tests for reasoning hints, SSE parsing
 - CoworkWorkspaceModelsTests: 21 tests for displayName/category/scheduleDescription
 - SkillManagerStaticTests: 9 tests for skill name validation, tier priority
+- ChannelSettingsStoreTests: 9 tests, normalizeChannelKey/normalizeFieldID/parseList/parsePort
+- EntityContextFormatterTests: 6 tests, formatRelationType/formatMultiple
+- CorrectionDetectorTests: 5 tests, capitalizeFirst/isPlausibleName (97.3%)
+- EchoSuppressorStaticTests: 5 tests, extractNumbersFromText/numbersFuzzyMatch/normalizeForOverlap (93.0%)
+- ImplicitFeedbackDetectorTests: 3 tests, wordBigrams
+- PipelineCoordinatorStaticTests: 4 tests, normalizeForPhraseMatch/detectExplicitUserAuthorization
+- MetaOptHypothesisGeneratorTests: 7 tests, isToolRelated/isSerializationRelated/directiveAlreadyContains (78.3%)
+- MetaOptMemorySeedGeneratorTests: 6 tests, isToolRelated/isScheduleRelated/isSerializationRelated (86.6%)
+- SkillMigratorTests: 2 tests, normalizeSkillMarkdown
+- DirectiveTunerTests: 4 tests, normaliseGroupKey/groupByContent (96.7%)
+- MemoryDigestServiceTests: 10 tests, compactSnippet/digestMetadataJSON/digestSourceRecordIDs/digestSourceKey (90.9%)
+- CoworkWorkspaceControllerTests: 3 tests, workspaceConversationMessage/chatMessage
+- VisionToolsStaticTests: 6 tests, normalize/didVerifyTypedText (VisionTools 12.0%)
+- PersonQueryDetectorTests: 3 tests, extractNameAndLabel (79.6%)
+- DamageControlPolicyTests: 7 tests, isDestructiveShellCommand/matches (94.2%)
+- NetworkTargetPolicyTests: 8 tests, isBlockedIPAddress (92.9%)
+- ToolStaticTests: 14 tests, shellEscape/hashArguments/redactLongOpaqueTokens/escapeHTML/clampInteger/inferJSONSchemaType
+- MetaOptNarratorTests: 7 tests, extractTopicHint/describeFromKeywords (76.9%)
+- MetaOptSkillGeneratorTests: 4 tests, isToolRelated/isSerializationRelated (98.4%)
+- SkillSecurityReviewTests: 2 tests, normalizeSkillURL (90.0%)
+- TurnHelpersStaticTests: 15 tests, arithmetic/name parsing (91.4%)
 
 ## Measurement Fix
 

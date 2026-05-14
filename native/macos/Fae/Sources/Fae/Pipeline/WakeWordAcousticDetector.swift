@@ -128,7 +128,7 @@ struct WakeWordAcousticDetector {
         return (normalized, durationSeconds)
     }
 
-    private static func trimSilence(_ samples: [Float]) -> [Float] {
+    static func trimSilence(_ samples: [Float]) -> [Float] {
         guard !samples.isEmpty else { return [] }
         let peak = samples.reduce(Float.zero) { max($0, abs($1)) }
         let threshold = max(silenceFloor, peak * 0.12)

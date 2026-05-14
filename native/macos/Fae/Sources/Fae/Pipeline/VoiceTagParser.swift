@@ -210,7 +210,7 @@ struct VoiceTagStripper {
     }
 
     /// Extract character name from tag attributes like `character="Hamlet"`.
-    private static func extractCharacterName(from attributes: String) -> String? {
+    static func extractCharacterName(from attributes: String) -> String? {
         // Match character="..." or character='...'
         let patterns = [
             #"character\s*=\s*"([^"]*)""#,
