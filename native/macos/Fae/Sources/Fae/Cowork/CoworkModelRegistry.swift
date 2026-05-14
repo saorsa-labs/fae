@@ -52,7 +52,7 @@ enum CoworkKnownModelRegistry {
         return catalog[t] ?? catalog[t.lowercased()]
     }
 
-    private static func buildCatalog() -> [String: CoworkModelMetadata] {
+    static func buildCatalog() -> [String: CoworkModelMetadata] {
         var c: [String: CoworkModelMetadata] = [:]
 
         func register(_ m: CoworkModelMetadata, aliases: [String] = []) {
