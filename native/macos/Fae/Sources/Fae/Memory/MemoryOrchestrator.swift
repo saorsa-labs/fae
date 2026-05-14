@@ -380,7 +380,7 @@ actor MemoryOrchestrator {
         return nil
     }
 
-    private static func substring(
+    static func substring(
         in original: String,
         matchingLowerRange range: Range<String.Index>
     ) -> String {
@@ -391,7 +391,7 @@ actor MemoryOrchestrator {
         return String(original[start..<end])
     }
 
-    private static func normalizeForgetQuery(_ text: String) -> String? {
+    static func normalizeForgetQuery(_ text: String) -> String? {
         var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?"))
 
@@ -411,7 +411,7 @@ actor MemoryOrchestrator {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func normalizeRememberFact(_ text: String) -> String? {
+    static func normalizeRememberFact(_ text: String) -> String? {
         var normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         normalized = normalized.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?"))
         if normalized.lowercased().hasPrefix("that ") {
