@@ -781,7 +781,7 @@ struct EchoSuppressor {
     ///
     /// Handles tens+ones combining: "fifty" + "six" = 56, not "506".
     /// Also handles "hundred"/"thousand" multipliers.
-    private static func extractDigitsFromNumberWords(_ words: [String]) -> String {
+    static func extractDigitsFromNumberWords(_ words: [String]) -> String {
         // First pass: convert words to numeric components
         let ones: Set<String> = ["one","two","three","four","five","six","seven","eight","nine"]
         let tens: Set<String> = ["twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"]

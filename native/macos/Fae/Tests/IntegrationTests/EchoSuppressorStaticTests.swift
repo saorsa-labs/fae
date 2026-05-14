@@ -31,4 +31,16 @@ final class EchoSuppressorStaticTests: XCTestCase {
         let normalized = EchoSuppressor.normalizeForOverlap("Hello World!")
         XCTAssertFalse(normalized.isEmpty)
     }
+
+    // MARK: - extractDigitsFromNumberWords
+
+    func testExtractDigitsFromNumberWords() {
+        let digits = EchoSuppressor.extractDigitsFromNumberWords(["one", "two", "three"])
+        XCTAssertFalse(digits.isEmpty)
+    }
+
+    func testExtractDigitsFromNumberWordsEmpty() {
+        let digits = EchoSuppressor.extractDigitsFromNumberWords([])
+        XCTAssertEqual(digits, "0")
+    }
 }
