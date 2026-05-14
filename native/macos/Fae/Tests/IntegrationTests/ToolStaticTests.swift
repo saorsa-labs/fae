@@ -90,4 +90,11 @@ final class ToolStaticTests: XCTestCase {
         XCTAssertEqual(type, "string")
         XCTAssertFalse(required)
     }
+
+    // MARK: - serializeArguments (ToolExecutor)
+
+    func testToolExecutorSerializeArguments() {
+        let serialized = ToolExecutor.serializeArguments(["key": "value"])
+        XCTAssertFalse(serialized.isEmpty)
+    }
 }

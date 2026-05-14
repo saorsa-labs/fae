@@ -475,7 +475,7 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     // MARK: - Workflow Trace Recording
 
-    private static func serializeArguments(_ args: [String: Any]) -> String {
+    static func serializeArguments(_ args: [String: Any]) -> String {
         ToolRoutingHelpers.serializeArguments(args)
     }
 
