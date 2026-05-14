@@ -144,7 +144,7 @@ struct WakeWordAcousticDetector {
         return Array(samples[start...end])
     }
 
-    private static func timeNormalizeMel(
+    static func timeNormalizeMel(
         _ mel: [Float],
         numFrames: Int,
         numMels: Int,

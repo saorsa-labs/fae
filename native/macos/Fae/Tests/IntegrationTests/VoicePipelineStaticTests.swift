@@ -81,4 +81,17 @@ final class VoicePipelineStaticTests: XCTestCase {
         let sim = WakeWordAcousticDetector.cosineSimilarity([1.0].map(Float.init), [1.0, 2.0].map(Float.init))
         XCTAssertEqual(sim, -.greatestFiniteMagnitude)
     }
+
+    // MARK: - timeNormalizeMel (WakeWordAcousticDetector)
+
+    func testTimeNormalizeMel() {
+        let mel = [1.0, 2.0, 3.0].map(Float.init)
+        let result = WakeWordAcousticDetector.timeNormalizeMel(mel, numFrames: 3, numMels: 1, targetFrames: 5)
+        XCTAssertFalse(result.isEmpty)
+    }
+
+    func testTimeNormalizeMelEmpty() {
+        let result = WakeWordAcousticDetector.timeNormalizeMel([], numFrames: 0, numMels: 1, targetFrames: 5)
+        XCTAssertTrue(result.isEmpty)
+    }
 }
