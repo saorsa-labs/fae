@@ -71,6 +71,14 @@
 - ~~Phase 3: SwiftUI ViewModel extraction~~ — too much churn, low ROI
 - Remaining 0% files are SwiftUI views (~35K lines), system-framework-dependent code, or complex actors
 
+## Phase 1 Complete
+
+All testable `private static func` patterns in pure logic files have been exposed and tested. Remaining ~150 private static methods are:
+- In SwiftUI views (can't test without XCUITest)
+- Depend on system frameworks (GRDB, Contacts, Calendar, EventKit, AppKit, Network, MultipeerConnectivity)
+- Thin wrappers around already-tested functions
+- Depend on complex types that can't be easily constructed in tests
+
 ## Realistic Ceiling
 
 **28.8%** is the practical ceiling for Phase 1 (pure logic testing + visibility changes). 
