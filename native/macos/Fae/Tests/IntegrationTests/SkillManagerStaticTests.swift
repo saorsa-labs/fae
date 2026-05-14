@@ -170,6 +170,19 @@ final class SkillManagerStaticTests: XCTestCase {
         }
     }
 
+    // MARK: - sanitizeSkillInput
+
+    func testSanitizeSkillInputRedactsSecrets() {
+        let result = SkillManager.sanitizeSkillInput(["token": "secret", "name": "test"])
+        XCTAssertEqual(result["token"] as? String, "[REDACTED_SECRET]")
+        XCTAssertEqual(result["name"] as? String, "test")
+    }
+
+    func testSanitizeSkillInputEmpty() {
+        let result = SkillManager.sanitizeSkillInput([:])
+        XCTAssertTrue(result.isEmpty)
+    }
+
     // MARK: - firstDisallowedURL
 
     func testFirstDisallowedURLNotAllowed() {

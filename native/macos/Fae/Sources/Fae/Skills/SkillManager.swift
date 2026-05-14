@@ -1589,7 +1589,7 @@ actor SkillManager {
     }
 
     /// Remove obvious secret material from skill input payloads.
-    private static func sanitizeSkillInput(_ input: [String: Any]) -> [String: Any] {
+    static func sanitizeSkillInput(_ input: [String: Any]) -> [String: Any] {
         sanitizeAny(input) as? [String: Any] ?? [:]
     }
 
