@@ -76,6 +76,16 @@ struct AgentDelegateTool: Tool {
         }
         return parsed
     }
+
+    // MARK: - Static helpers (forward to ExternalAgentDelegate)
+
+    static func bestEffortOutput(stdout: String, stderr: String) -> String {
+        ExternalAgentDelegate.bestEffortOutput(stdout: stdout, stderr: stderr)
+    }
+
+    static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
+        ExternalAgentDelegate.isSafeEnvironmentVariableName(value)
+    }
 }
 
 private enum DelegateProvider: String {
@@ -391,7 +401,7 @@ private enum ExternalAgentDelegate {
         return (out, err)
     }
 
-    private static func bestEffortOutput(stdout: String, stderr: String) -> String {
+    static func bestEffortOutput(stdout: String, stderr: String) -> String {
         let trimmedStdout = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedStdout.isEmpty { return trimmedStdout }
         return stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -423,7 +433,7 @@ private enum ExternalAgentDelegate {
         return resolved
     }
 
-    private static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
+    static func isSafeEnvironmentVariableName(_ value: String) -> Bool {
         let pattern = "^[A-Z][A-Z0-9_]{1,63}$"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let range = NSRange(value.startIndex..., in: value)

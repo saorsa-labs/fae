@@ -1115,18 +1115,18 @@ final class TestServer {
         })
     }
 
-    private static func appendNonce(value: String?, nonce: String?) -> String? {
+    static func appendNonce(value: String?, nonce: String?) -> String? {
         guard let value, !value.isEmpty else { return value }
         guard let nonce, !nonce.isEmpty else { return value }
         return "\(value) [\(String(nonce.prefix(8)))]"
     }
 
-    private static func appendNonceToText(_ value: String, nonce: String?) -> String {
+    static func appendNonceToText(_ value: String, nonce: String?) -> String {
         guard let nonce, !nonce.isEmpty else { return value }
         return value + "\n\nTest nonce: \(nonce)"
     }
 
-    private static func digestSourceCount(from metadata: String?) -> Int {
+    static func digestSourceCount(from metadata: String?) -> Int {
         guard let metadata,
               let data = metadata.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
