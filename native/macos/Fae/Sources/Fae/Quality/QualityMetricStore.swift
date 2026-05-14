@@ -221,7 +221,7 @@ actor QualityMetricStore {
         )
     }
 
-    private static func percentile(_ sorted: [Double], _ p: Double) -> Double {
+    static func percentile(_ sorted: [Double], _ p: Double) -> Double {
         guard !sorted.isEmpty else { return 0 }
         let index = p * Double(sorted.count - 1)
         let lower = Int(index)

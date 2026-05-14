@@ -54,7 +54,7 @@ struct QualityThresholdSet: Sendable {
         }
     }
 
-    private static func evaluate(value: Double, threshold: QualityThreshold) -> ThresholdResult {
+    static func evaluate(value: Double, threshold: QualityThreshold) -> ThresholdResult {
         if let maxValue = threshold.maxValue, value > maxValue {
             return ThresholdResult(
                 metricName: threshold.metricName, status: .fail, actualValue: value,

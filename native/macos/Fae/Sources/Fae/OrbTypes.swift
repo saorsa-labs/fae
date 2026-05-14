@@ -363,7 +363,7 @@ enum OrbColor {
     static let islaySunset = hexToRGB(0xE87D3E)
     static let thistleGold = hexToRGB(0xB8962E)
 
-    private static func hexToRGB(_ hex: UInt32) -> SIMD3<Float> {
+    static func hexToRGB(_ hex: UInt32) -> SIMD3<Float> {
         let r = Float((hex >> 16) & 0xFF) / 255.0
         let g = Float((hex >> 8) & 0xFF) / 255.0
         let b = Float(hex & 0xFF) / 255.0
