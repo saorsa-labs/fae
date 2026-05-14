@@ -8,6 +8,7 @@ Fae.app/
 .build/
 .local/
 *.profraw
+*.profdata
 *.xcresult
 
 # Model training artifacts (weights, checkpoints, logs — too large for git)
@@ -18,3 +19,4 @@ hf-space/
 scripts/__pycache__/
 native/macos/Fae/Resources/Binaries/
 .gstack/
+/.planning/
