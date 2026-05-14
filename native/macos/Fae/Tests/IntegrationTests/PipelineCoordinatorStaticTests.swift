@@ -25,4 +25,18 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
     func testDetectExplicitAuthorizationNo() {
         XCTAssertFalse(PipelineCoordinator.detectExplicitUserAuthorization(in: "just a normal sentence"))
     }
+
+    // MARK: - stripVoiceTagMarkup
+
+    func testStripVoiceTagMarkup() {
+        let stripped = PipelineCoordinator.stripVoiceTagMarkup("hello <voice>world</voice>")
+        XCTAssertFalse(stripped.contains("<voice>"))
+    }
+
+    // MARK: - stripThinkContent
+
+    func testStripThinkContent() {
+        let stripped = PipelineCoordinator.stripThinkContent("thinking... answer")
+        XCTAssertFalse(stripped.isEmpty)
+    }
 }

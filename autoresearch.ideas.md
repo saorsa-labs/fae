@@ -53,6 +53,13 @@
 
 ## Remaining Opportunities (Phase 1 continued)
 
+- **TurnHelpers.swift** `explicitInterestTopic` — last remaining private static func
+- **TextProcessing.swift** `firstSentenceBoundary`, `verbalizeDates`, `applyCommandCorrections`, `normalizeWakeAlias`, `isBoundary`, `tokenizeWords` — pure string processing but likely already covered by existing test flows
+- **PipelineCoordinator.swift** `stripVoiceTagMarkup`, `stripThinkContent`, `isScreenIntentRequest` — pure string processing in massive file (8216 lines)
+- **CorrectionDetector.swift** `nameIsNotPattern`, `itsNotPattern`, `iSaidPattern` — pure pattern matching but small impact
+- **EchoSuppressor.swift** `extractDigitsFromNumberWords` — pure but likely already covered
+- **SkillImportView.swift** `rewriteFrontmatterName` — pure string processing in SwiftUI view
+
 - **BuiltinTools.swift** (38.4%, 528 uncovered): Mostly async execute() methods. Static methods like `containsJailbreakPattern` tested. Could add more integration tests with temp files.
 - **FaeScheduler.swift** (38.5%, 1355 uncovered): Large actor with many instance methods. Distillation helpers exposed and tested. Remaining code is async state machine.
 - **ToolRoutingHelpers.swift** (80.1%, 212 uncovered): `shouldAttemptRepairToolCall` and `preflightToolDenial` require ToolRegistry dependency. Could mock or extract pure logic.

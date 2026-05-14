@@ -7964,11 +7964,11 @@ actor PipelineCoordinator {
     // and result processing) moved to ToolRoutingHelpers.swift.
     // Forwarding methods below preserve internal Self.xxx call sites and test API.
 
-    private static func stripVoiceTagMarkup(_ text: String) -> String {
+    static func stripVoiceTagMarkup(_ text: String) -> String {
         ToolRoutingHelpers.stripVoiceTagMarkup(text)
     }
 
-    private static func stripThinkContent(_ text: String) -> String {
+    static func stripThinkContent(_ text: String) -> String {
         ToolRoutingHelpers.stripThinkContent(text)
     }
 
