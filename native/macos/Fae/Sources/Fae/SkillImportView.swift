@@ -155,7 +155,7 @@ struct SkillImportView: View {
     /// - `github.com/user/repo/blob/main/SKILL.md` → `raw.githubusercontent.com/user/repo/main/SKILL.md`
     /// - `github.com/user/repo` → `raw.githubusercontent.com/user/repo/main/SKILL.md` (guess)
     /// - Already raw URLs pass through unchanged.
-    private static func normalizeGitHubURL(_ urlString: String) -> String {
+    static func normalizeGitHubURL(_ urlString: String) -> String {
         guard let url = URL(string: urlString),
               url.host?.contains("github.com") == true
         else { return urlString }
@@ -343,7 +343,7 @@ struct SkillImportView: View {
     }
 
     /// Extract the `name:` field from SKILL.md YAML frontmatter.
-    private static func extractFrontmatterName(from content: String) -> String? {
+    static func extractFrontmatterName(from content: String) -> String? {
         let lines = content.components(separatedBy: .newlines)
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return nil }
         for line in lines.dropFirst() {
