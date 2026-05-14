@@ -7984,11 +7984,11 @@ actor PipelineCoordinator {
         ToolRoutingHelpers.responseImpliesToolIntent(response)
     }
 
-    private static func isCameraIntentRequest(_ text: String) -> Bool {
+    static func isCameraIntentRequest(_ text: String) -> Bool {
         ToolRoutingHelpers.isCameraIntentRequest(text)
     }
 
-    private static func isScreenIntentRequest(_ text: String) -> Bool {
+    static func isScreenIntentRequest(_ text: String) -> Bool {
         ToolRoutingHelpers.isScreenIntentRequest(text)
     }
 
@@ -7996,11 +7996,11 @@ actor PipelineCoordinator {
         ToolRoutingHelpers.screenRepairToolCall(for: text)
     }
 
-    private static func extractReferencedAppName(from text: String) -> String? {
+    static func extractReferencedAppName(from text: String) -> String? {
         ToolRoutingHelpers.extractReferencedAppName(from: text)
     }
 
-    private static func isToolBackedLookupRequest(_ text: String) -> Bool {
+    static func isToolBackedLookupRequest(_ text: String) -> Bool {
         ToolRoutingHelpers.isToolBackedLookupRequest(text)
     }
 
@@ -8008,7 +8008,7 @@ actor PipelineCoordinator {
         ToolRoutingHelpers.repairedToolCallForSkippedTurn(text)
     }
 
-    private static func extractSessionSearchQuery(from text: String) -> String? {
+    static func extractSessionSearchQuery(from text: String) -> String? {
         ToolRoutingHelpers.extractSessionSearchQuery(from: text)
     }
 
@@ -8046,15 +8046,15 @@ actor PipelineCoordinator {
         ToolRoutingHelpers.serializeArguments(args)
     }
 
-    private static func estimateTokenCount(for text: String) -> Int {
+    static func estimateTokenCount(for text: String) -> Int {
         ToolRoutingHelpers.estimateTokenCount(for: text)
     }
 
-    private static func inferUserPresentFromCameraOutput(_ output: String) -> Bool {
+    static func inferUserPresentFromCameraOutput(_ output: String) -> Bool {
         ToolRoutingHelpers.inferUserPresentFromCameraOutput(output)
     }
 
-    private static func extractAudioFilePath(from output: String) -> String? {
+    static func extractAudioFilePath(from output: String) -> String? {
         ToolRoutingHelpers.extractAudioFilePath(from: output)
     }
 

@@ -56,4 +56,18 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
         let sig = PipelineCoordinator.workflowTraceSignature(for: [" Read ", " WRITE "])
         XCTAssertEqual(sig, "read -> write")
     }
+
+    // MARK: - estimateTokenCount (delegates to ToolRoutingHelpers)
+
+    func testEstimateTokenCount() {
+        let count = PipelineCoordinator.estimateTokenCount(for: "hello world this is a test")
+        XCTAssertGreaterThan(count, 0)
+    }
+
+    // MARK: - inferUserPresentFromCameraOutput (delegates to ToolRoutingHelpers)
+
+    func testInferUserPresentFromCameraOutput() {
+        let present = PipelineCoordinator.inferUserPresentFromCameraOutput("person detected")
+        XCTAssertNotNil(present)
+    }
 }
