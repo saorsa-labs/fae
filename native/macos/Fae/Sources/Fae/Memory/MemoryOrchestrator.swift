@@ -336,7 +336,7 @@ actor MemoryOrchestrator {
         return "No matching stored memory found for this personal question. Do not guess or restate forgotten details; answer that you do not know from memory yet."
     }
 
-    private static func extractForgetQuery(from text: String) -> String? {
+    static func extractForgetQuery(from text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
 
@@ -362,7 +362,7 @@ actor MemoryOrchestrator {
         return nil
     }
 
-    private static func extractRememberFact(from text: String) -> String? {
+    static func extractRememberFact(from text: String) -> String? {
         let trimmed = stripWakePrefix(text)
         let lower = trimmed.lowercased()
 

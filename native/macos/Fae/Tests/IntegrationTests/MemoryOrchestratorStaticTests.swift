@@ -97,4 +97,48 @@ final class MemoryOrchestratorStaticTests: XCTestCase {
     func testShouldSkipEpisodeCaptureNormal() {
         XCTAssertFalse(MemoryOrchestrator.shouldSkipEpisodeCapture(userText: "hello world"))
     }
+
+    // MARK: - extractForgetQuery
+
+    func testExtractForgetQueryForget() {
+        let query = MemoryOrchestrator.extractForgetQuery(from: "forget my old name")
+        XCTAssertEqual(query, "my old name")
+    }
+
+    func testExtractForgetQueryPleaseForget() {
+        let query = MemoryOrchestrator.extractForgetQuery(from: "please forget that I like pizza")
+        XCTAssertEqual(query, "I like pizza")
+    }
+
+    func testExtractForgetQueryDontWantRemember() {
+        let query = MemoryOrchestrator.extractForgetQuery(from: "don't want you to remember my password")
+        XCTAssertEqual(query, "my password")
+    }
+
+    func testExtractForgetQueryNoMatch() {
+        let query = MemoryOrchestrator.extractForgetQuery(from: "hello world")
+        XCTAssertNil(query)
+    }
+
+    // MARK: - extractRememberFact
+
+    func testExtractRememberFactRemember() {
+        let fact = MemoryOrchestrator.extractRememberFact(from: "remember I like tacos")
+        XCTAssertEqual(fact, "I like tacos")
+    }
+
+    func testExtractRememberFactPleaseRemember() {
+        let fact = MemoryOrchestrator.extractRememberFact(from: "please remember my birthday is Jan 1")
+        XCTAssertEqual(fact, "my birthday is Jan 1")
+    }
+
+    func testExtractRememberFactWantYouToRemember() {
+        let fact = MemoryOrchestrator.extractRememberFact(from: "I want you to remember I live in NYC")
+        XCTAssertEqual(fact, "I live in NYC")
+    }
+
+    func testExtractRememberFactNoMatch() {
+        let fact = MemoryOrchestrator.extractRememberFact(from: "hello world")
+        XCTAssertNil(fact)
+    }
 }
