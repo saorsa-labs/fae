@@ -4997,7 +4997,7 @@ actor PipelineCoordinator {
         }
     }
 
-    private static func shouldShowCapabilitiesCanvas(triggerText: String, modelResponse: String) -> Bool {
+    static func shouldShowCapabilitiesCanvas(triggerText: String, modelResponse: String) -> Bool {
         let lowerTrigger = triggerText.lowercased()
         let lowerResponse = stripThinkContent(modelResponse).lowercased()
 
