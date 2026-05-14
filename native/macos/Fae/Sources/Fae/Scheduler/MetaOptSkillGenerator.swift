@@ -296,7 +296,7 @@ enum MetaOptSkillGenerator {
         return nil
     }
 
-    private static func isToolRelated(_ event: FeedbackEvent) -> Bool {
+    static func isToolRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("tool") || lower.contains("calendar") ||
@@ -304,7 +304,7 @@ enum MetaOptSkillGenerator {
                lower.contains("tool_call") || lower.contains("<tool_call>")
     }
 
-    private static func isSerializationRelated(_ event: FeedbackEvent) -> Bool {
+    static func isSerializationRelated(_ event: FeedbackEvent) -> Bool {
         let text = (event.userInput ?? "") + (event.assistantOutput ?? "")
         let lower = text.lowercased()
         return lower.contains("json") || lower.contains("xml") ||
