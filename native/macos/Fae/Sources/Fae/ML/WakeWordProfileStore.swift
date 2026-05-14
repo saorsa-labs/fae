@@ -153,7 +153,7 @@ actor WakeWordProfileStore {
 
     // MARK: - Validation
 
-    private static func sanitize(_ raw: String) -> String? {
+    static func sanitize(_ raw: String) -> String? {
         let lower = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !lower.isEmpty else { return nil }
         let chars = lower.filter { $0.isLetter }
@@ -161,7 +161,7 @@ actor WakeWordProfileStore {
         return String(chars)
     }
 
-    private static func isLikelyFaeAlias(_ alias: String) -> Bool {
+    static func isLikelyFaeAlias(_ alias: String) -> Bool {
         guard alias.count >= 2, alias.count <= 8 else { return false }
         guard alias.first == "f" else { return false }
 
@@ -171,7 +171,7 @@ actor WakeWordProfileStore {
         return bestDistance <= 2
     }
 
-    private static func editDistance(_ lhs: String, _ rhs: String) -> Int {
+    static func editDistance(_ lhs: String, _ rhs: String) -> Int {
         let a = Array(lhs)
         let b = Array(rhs)
         if a.isEmpty { return b.count }

@@ -139,4 +139,58 @@ final class SkillManagerStaticTests: XCTestCase {
         XCTAssertTrue(markdown.contains("name: test"))
         XCTAssertTrue(markdown.contains("# Content"))
     }
+
+    // MARK: - validateSkillMetadata
+
+    func testValidateSkillMetadataValid() throws {
+        try SkillManager.validateSkillMetadata(name: "test-skill", description: "A very good description here", body: "# This is a proper skill body with enough content")
+    }
+
+    func testValidateSkillMetadataShortDesc() {
+        XCTAssertThrowsError(try SkillManager.validateSkillMetadata(name: "test", description: "short", body: "# This is a proper skill body with enough content"))
+    }
+
+    func testValidateSkillMetadataCredentialInBody() {
+        XCTAssertThrowsError(try SkillManager.validateSkillMetadata(name: "test", description: "A very good description here", body: "# Body with api key in it and more text"))
+    }
+
+    // MARK: - sanitizeAny
+
+    func testSanitizeAnyRedactsSensitiveKey() {
+        let result = SkillManager.sanitizeAny(["token": "secret123"])
+        if let dict = result as? [String: Any] {
+            XCTAssertEqual(dict["token"] as? String, "[REDACTED_SECRET]")
+        }
+    }
+
+    func testSanitizeAnyPreservesNormalKey() {
+        let result = SkillManager.sanitizeAny(["filename": "test.txt"])
+        if let dict = result as? [String: Any] {
+            XCTAssertEqual(dict["filename"] as? String, "test.txt")
+        }
+    }
+
+    // MARK: - firstDisallowedURL
+
+    func testFirstDisallowedURLNotAllowed() {
+        let url = SkillManager.firstDisallowedURL(in: "https://evil.com/path", allowedDomains: ["safe.com"])
+        XCTAssertEqual(url, "https://evil.com/path")
+    }
+
+    func testFirstDisallowedURLAllowed() {
+        let url = SkillManager.firstDisallowedURL(in: "https://safe.com/path", allowedDomains: ["safe.com"])
+        XCTAssertNil(url)
+    }
+
+    // MARK: - firstBlockedURL
+
+    func testFirstBlockedURLLocalhost() {
+        let result = SkillManager.firstBlockedURL(in: "http://localhost/path")
+        XCTAssertNotNil(result)
+    }
+
+    func testFirstBlockedURLPublic() {
+        let result = SkillManager.firstBlockedURL(in: "https://example.com/path")
+        XCTAssertNil(result)
+    }
 }

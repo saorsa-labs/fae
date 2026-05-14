@@ -1401,7 +1401,7 @@ actor SkillManager {
         return SkillMarkdownDraft(name: parsedName, description: parsedDescription, body: body)
     }
 
-    private static func validateSkillMetadata(name: String, description: String, body: String) throws {
+    static func validateSkillMetadata(name: String, description: String, body: String) throws {
         if description.trimmingCharacters(in: .whitespacesAndNewlines).count < 10 {
             throw SkillError.policyViolation("description is too short; include concrete behavior")
         }
@@ -1618,7 +1618,7 @@ actor SkillManager {
         return regex.firstMatch(in: value, options: [], range: range) != nil
     }
 
-    private static func sanitizeAny(_ value: Any) -> Any {
+    static func sanitizeAny(_ value: Any) -> Any {
         if let dict = value as? [String: Any] {
             var out: [String: Any] = [:]
             for (key, val) in dict {
@@ -1655,7 +1655,7 @@ actor SkillManager {
     }
 
     /// Scan skill input for URL strings and detect domain-allowlist violations.
-    private static func firstDisallowedURL(in value: Any, allowedDomains: [String]) -> String? {
+    static func firstDisallowedURL(in value: Any, allowedDomains: [String]) -> String? {
         if let string = value as? String,
            (string.hasPrefix("http://") || string.hasPrefix("https://")),
            let host = URL(string: string)?.host?.lowercased()
@@ -1688,7 +1688,7 @@ actor SkillManager {
     }
 
     /// Scan skill input for URL strings and block local/private targets.
-    private static func firstBlockedURL(in value: Any) -> (url: String, reason: String)? {
+    static func firstBlockedURL(in value: Any) -> (url: String, reason: String)? {
         if let string = value as? String,
            (string.hasPrefix("http://") || string.hasPrefix("https://"))
         {
