@@ -310,7 +310,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
     }
 
     /// Find the closest enumerated frame count for WeSpeaker model.
-    private static func closestEnumeratedFrameCount(_ numFrames: Int) -> Int {
+    static func closestEnumeratedFrameCount(_ numFrames: Int) -> Int {
         var closest = weSpeakerEnumeratedFrames[0]
         var minDiff = abs(numFrames - closest)
         for frames in weSpeakerEnumeratedFrames {
@@ -931,7 +931,7 @@ actor CoreMLSpeakerEncoder: SpeakerEmbeddingEngine {
 
     // MARK: - L2 Normalization
 
-    private static func l2Normalize(_ vec: [Float]) -> [Float] {
+    static func l2Normalize(_ vec: [Float]) -> [Float] {
         var sumSq: Float = 0
         vDSP_svesq(vec, 1, &sumSq, vDSP_Length(vec.count))
         let norm = sqrtf(sumSq)
