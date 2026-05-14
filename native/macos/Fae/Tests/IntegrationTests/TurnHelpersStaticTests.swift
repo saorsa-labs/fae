@@ -89,4 +89,38 @@ final class TurnHelpersStaticTests: XCTestCase {
     func testIsNotSimpleUserNameRecallQuery() {
         XCTAssertFalse(TurnHelpers.isSimpleUserNameRecallQuery("hello world"))
     }
+
+    // MARK: - explicitInterestTopic
+
+    func testExplicitInterestTopicInterestedIn() {
+        let topic = TurnHelpers.explicitInterestTopic(in: "I'm interested in quantum physics", lower: "i'm interested in quantum physics")
+        XCTAssertEqual(topic, "quantum physics")
+    }
+
+    func testExplicitInterestTopicLoveLearning() {
+        let topic = TurnHelpers.explicitInterestTopic(in: "I love learning about cooking", lower: "i love learning about cooking")
+        XCTAssertEqual(topic, "cooking")
+    }
+
+    func testExplicitInterestTopicFindFascinating() {
+        let topic = TurnHelpers.explicitInterestTopic(in: "I find machine learning fascinating", lower: "i find machine learning fascinating")
+        XCTAssertEqual(topic, "machine learning")
+    }
+
+    func testExplicitInterestTopicNoMatch() {
+        let topic = TurnHelpers.explicitInterestTopic(in: "hello world", lower: "hello world")
+        XCTAssertNil(topic)
+    }
+
+    // MARK: - cleanInterestTopic
+
+    func testCleanInterestTopic() {
+        let cleaned = TurnHelpers.cleanInterestTopic("  quantum physics. ")
+        XCTAssertEqual(cleaned, "quantum physics")
+    }
+
+    func testCleanInterestTopicEmpty() {
+        let cleaned = TurnHelpers.cleanInterestTopic("   ")
+        XCTAssertNil(cleaned)
+    }
 }

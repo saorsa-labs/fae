@@ -91,7 +91,7 @@ enum TurnHelpers {
         return nil
     }
 
-    private static func explicitInterestTopic(in userText: String, lower: String) -> String? {
+    static func explicitInterestTopic(in userText: String, lower: String) -> String? {
         let anchoredPrefixes = [
             "i'm really interested in ",
             "i am really interested in ",
