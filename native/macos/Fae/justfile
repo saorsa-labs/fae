@@ -302,6 +302,11 @@ benchmark-compare model1 model2:
         print(f'{label:<18} {v1:>12.1f}T/s {v2:>12.1f}T/s {ratio:>8}')
     PYEOF
 
+# Pinned MLX Python stack (must match across all Python benchmarks for reproducibility).
+# Swift side resolves mlx-swift 0.31.3 via mlx-swift-lm; pin Python to the matching mlx-vlm
+# release so quality numbers are comparable across language frontends.
+mlx_vlm_pin := "mlx-vlm==0.5.0"
+
 # Benchmark Gemma 4 models (uses mlx-vlm for VLM architecture)
 # Usage: just benchmark-gemma gemma-4-e2b-4bit
 #        just benchmark-gemma gemma-4-e4b-4bit
@@ -309,15 +314,15 @@ benchmark-compare model1 model2:
 benchmark-gemma model:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Benchmarking Gemma 4: {{model}} (via mlx-vlm)"
-    uv run --no-project --with mlx-vlm python3 ../../../scripts/benchmark_gemma4.py --model "{{model}}"
+    echo "Benchmarking Gemma 4: {{model}} (via {{mlx_vlm_pin}})"
+    uv run --no-project --python 3.13 --with '{{mlx_vlm_pin}}' --with torch --with torchvision python3 ../../../scripts/benchmark_gemma4.py --model "{{model}}"
 
 # Benchmark all Gemma 4 models
 benchmark-gemma-all:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Benchmarking ALL Gemma 4 models (via mlx-vlm)"
-    uv run --no-project --with mlx-vlm python3 ../../../scripts/benchmark_gemma4.py --all
+    echo "Benchmarking ALL Gemma 4 models (via {{mlx_vlm_pin}})"
+    uv run --no-project --python 3.13 --with '{{mlx_vlm_pin}}' --with torch --with torchvision python3 ../../../scripts/benchmark_gemma4.py --all
 
 # Benchmark production tier models only (E2B, E4B, 26B-A4B)
 # These are the exact models Fae auto-selects per RAM tier:
@@ -325,26 +330,26 @@ benchmark-gemma-all:
 benchmark-gemma-tiers:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Benchmarking production tier models (via mlx-vlm)"
-    uv run --no-project --with mlx-vlm python3 ../../../scripts/benchmark_gemma4.py --tiers
+    echo "Benchmarking production tier models (via {{mlx_vlm_pin}})"
+    uv run --no-project --python 3.13 --with '{{mlx_vlm_pin}}' --with torch --with torchvision python3 ../../../scripts/benchmark_gemma4.py --tiers
 
-# ─── Qwen3.6 Eval (via mlx-vlm, mlx-swift-lm doesn't yet support Qwen3.6 arch) ────
+# ─── Qwen3.6 Eval (via mlx-vlm) ─────────────────────────────────────────────
 # Usage: just benchmark-qwen36 qwen3.6-35b-a3b-4bit
-#        just benchmark-qwen36 qwen3.6-35b-a3b-mxfp4
+#        just benchmark-qwen36 qwen3.6-27b-4bit
 #        just benchmark-qwen36-all
 benchmark-qwen36 model:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Benchmarking Qwen3.6: {{model}} (via mlx-vlm)"
+    echo "Benchmarking Qwen3.6: {{model}} (via {{mlx_vlm_pin}})"
     # torch + torchvision required: transformers 5.x video_processing_auto
     # module fails to import without them, even for text-only eval.
-    uv run --no-project --python 3.13 --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --model "{{model}}"
+    uv run --no-project --python 3.13 --with '{{mlx_vlm_pin}}' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --model "{{model}}"
 
 benchmark-qwen36-all:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Benchmarking ALL Qwen3.6 quants (via mlx-vlm)"
-    uv run --no-project --python 3.13 --with 'mlx-vlm>=0.4.4' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --all
+    echo "Benchmarking ALL Qwen3.6 quants (via {{mlx_vlm_pin}})"
+    uv run --no-project --python 3.13 --with '{{mlx_vlm_pin}}' --with torch --with torchvision python3 ../../../scripts/benchmark_qwen36.py --all
 
 # ─── Privacy Filter (OpenAI PII classifier via mlx-embeddings) ────────────
 # Usage: just privacy-filter "My email is alice@example.com"
