@@ -2,8 +2,8 @@ import Foundation
 
 struct AgentSessionTool: Tool {
     let name = "agent_session"
-    let description = "Manage persistent sessions with external AI coding agents (Claude Code, Codex, Gemini, etc.) via ACP. Actions: start (high risk), prompt (medium risk), status/cancel/close/list (low risk)."
-    let parametersSchema = #"{"action":"string (required: start|prompt|status|cancel|close|list)","agent":"string (required for start — claude|codex|gemini or custom command)","prompt":"string (required for start and prompt — task description or follow-up)","session_id":"string (required for prompt|status|cancel|close)","cwd":"string (optional — working directory, defaults to current)","approval_policy":"string (optional — approve_all|approve_reads|deny_all, default approve_reads)","name":"string (optional — session name for identification)"}"#
+    let description = "Manage persistent sessions with external AI coding agents (Claude Code, Codex, Pi, Gemini, etc.) via ACP. Actions: start (high risk), prompt (medium risk), status/cancel/close/list (low risk)."
+    let parametersSchema = #"{"action":"string (required: start|prompt|status|cancel|close|list)","agent":"string (required for start — claude|codex|pi|gemini|copilot|aider or custom command)","prompt":"string (required for start and prompt — task description or follow-up)","session_id":"string (required for prompt|status|cancel|close)","cwd":"string (optional — working directory, defaults to current)","approval_policy":"string (optional — approve_all|approve_reads|deny_all, default approve_reads)","name":"string (optional — session name for identification)"}"#
 
     /// Tool protocol metadata is static, but this tool is conceptually dynamic:
     /// - start requires approval (spawns external process)
@@ -47,11 +47,13 @@ struct AgentSessionTool: Tool {
         }
 
         // Validate agent identifier - must be alphanumeric/hyphens/underscores or a simple path.
-        let allowedBuiltins: Set<String> = ["claude", "codex", "gemini", "copilot", "aider"]
+        // Built-ins must match an acpx subcommand (acpx --help lists: pi, openclaw, codex,
+        // claude, gemini, cursor, copilot, droid, iflow, kilocode, kimi).
+        let allowedBuiltins: Set<String> = ["claude", "codex", "pi", "gemini", "copilot", "aider"]
         let isBuiltin = allowedBuiltins.contains(agent.lowercased())
         let isValidCustom = agent.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "/" || $0 == "." }
         guard isBuiltin || isValidCustom else {
-            return .error("Invalid agent identifier. Use a built-in name (claude, codex, gemini, copilot, aider) or a simple command path.")
+            return .error("Invalid agent identifier. Use a built-in name (claude, codex, pi, gemini, copilot, aider) or a simple command path.")
         }
         if !isBuiltin && (agent.contains("..") || agent.contains(";") || agent.contains("|") || agent.contains("&") || agent.contains("$") || agent.contains("`")) {
             return .error("Agent identifier contains disallowed characters.")

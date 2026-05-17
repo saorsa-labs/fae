@@ -665,3 +665,14 @@ _sign-bundle app_bundle:
     echo "=== Verifying ==="
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "Signed: $APP_BUNDLE"
+
+
+# ─── ACP Smoke Test ────────────────────────────────────────────────────
+# Verify acpx → each local coding agent (codex, claude, pi) round-trips
+# end-to-end. Same contract Fae's AgentSessionTool relies on.
+#
+# Usage:  just smoke-acp                         # all three agents
+#         SMOKE_AGENTS=codex,pi just smoke-acp   # limit
+#         SMOKE_PROMPT='...' just smoke-acp      # custom prompt
+smoke-acp:
+    @../../../scripts/smoke-acp.sh
