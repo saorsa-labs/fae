@@ -10,9 +10,12 @@
 // Run via:  just smoke-acp-swift
 //      or:  RUN_ACP_SMOKE=1 swift test --filter IntegrationTests.ACPSmokeTests
 //
-// Unlike scripts/smoke-acp.sh which uses `acpx <agent> exec <prompt>` (one-shot
-// CLI form), this test exercises the persistent-session daemon path that
-// ACPSessionManager uses in production: `acpx <agent>` + JSON-RPC over stdin.
+// Both layers (scripts/smoke-acp.sh and this XCTest) drive the same underlying
+// `acpx <agent> exec <prompt>` form per turn — the shell harness invokes it
+// directly, while this test goes through ACPSessionManager which composes the
+// args and parses the NDJSON output. The original "persistent-session daemon"
+// design ACPSessionManager once attempted (writing JSON-RPC to acpx's stdin)
+// did not work — see the ACPSessionManager class-level doc for the full story.
 
 import XCTest
 @testable import Fae

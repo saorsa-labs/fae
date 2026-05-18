@@ -228,6 +228,9 @@ actor ACPSessionManager {
         process.executableURL = URL(fileURLWithPath: acpxPath)
         process.arguments = args
         process.currentDirectoryURL = URL(fileURLWithPath: session.cwd)
+        // Signed macOS apps inherit a minimal PATH; without this, acpx itself
+        // (or the node/bun runtime it needs) won't be found at exec time.
+        process.environment = Self.subprocessEnvironment()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
@@ -562,6 +565,11 @@ actor ACPSessionManager {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            process.environment = Self.subprocessEnvironment()
+            // Install commands are chatty (npm/bun progress + tarball logs);
+            // suppress so they don't leak to Fae's stdout/stderr.
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
             process.terminationHandler = { proc in
                 continuation.resume(returning: proc.terminationStatus == 0)
             }
@@ -578,14 +586,18 @@ actor ACPSessionManager {
             let which = Process()
             which.executableURL = URL(fileURLWithPath: "/usr/bin/which")
             which.arguments = [binary]
+            which.environment = Self.subprocessEnvironment()
             let pipe = Pipe()
             which.standardOutput = pipe
             which.standardError = Pipe()
-            which.terminationHandler = { _ in
+            which.terminationHandler = { proc in
                 let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
                 let path = String(data: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                continuation.resume(returning: (path?.isEmpty == false) ? path : nil)
+                // `which` exits 0 on hit, non-zero on miss. Don't trust stdout
+                // unless the process actually succeeded.
+                let valid = proc.terminationStatus == 0 && (path?.isEmpty == false)
+                continuation.resume(returning: valid ? path : nil)
             }
             do {
                 try which.run()
@@ -593,5 +605,39 @@ actor ACPSessionManager {
                 continuation.resume(returning: nil)
             }
         }
+    }
+
+    /// Environment passed to every subprocess we spawn (acpx, the npm/bun
+    /// installers, /usr/bin/which). Signed macOS apps inherit a minimal PATH
+    /// — without this, the subprocess can't find `acpx` itself or the
+    /// `node`/`bun` runtime acpx needs to spawn its underlying agent.
+    /// Mirrors the v0.8.186 fix (commit 3dda558e) that was lost in the
+    /// per-turn exec refactor.
+    ///
+    /// We INHERIT the parent env wholesale and only APPEND our fallback PATH
+    /// entries — putting them last lets dev environments (fnm-managed node,
+    /// custom shells) win, while still providing coverage when the parent
+    /// PATH is minimal (signed-app launch). Replacing PATH outright would
+    /// shadow a working `node` with a brew-managed one whose dylibs may not
+    /// resolve (e.g. uvwasi on this machine had a baked-in rpath to the
+    /// retired /opt/zerobrew/... that only fnm's bundled node sidesteps).
+    private static func subprocessEnvironment() -> [String: String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var env = ProcessInfo.processInfo.environment
+        let fallbacks = [
+            "\(home)/.bun/bin",
+            "\(home)/.local/bin",
+            "\(home)/.cargo/bin",
+            "\(home)/.npm/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ]
+        let existing = env["PATH"].map { $0.split(separator: ":").map(String.init) } ?? []
+        let merged = existing + fallbacks.filter { !existing.contains($0) }
+        env["PATH"] = merged.joined(separator: ":")
+        env["HOME"] = home
+        return env
     }
 }
