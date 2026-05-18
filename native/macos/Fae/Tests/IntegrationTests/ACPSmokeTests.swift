@@ -61,7 +61,9 @@ final class ACPSmokeTests: XCTestCase {
         timeout: TimeInterval = 90
     ) async throws {
         let manager = ACPSessionManager()
-        let cwd = FileManager.default.currentDirectoryPath
+        // Run from /tmp so agents that scan their cwd (e.g. pi) don't go off
+        // exploring the Fae project tree and pad the response with markdown.
+        let cwd = "/tmp"
 
         let sessionId: String
         do {
@@ -110,7 +112,7 @@ final class ACPSmokeTests: XCTestCase {
         timeout: TimeInterval = 90
     ) async throws {
         let tool = AgentDelegateTool()
-        let cwd = FileManager.default.currentDirectoryPath
+        let cwd = "/tmp"
         let input: [String: Any] = [
             "provider": provider,
             "mode": "read_only",

@@ -390,6 +390,20 @@ actor ACPSessionManager {
         var errorMessage: String? = nil
     }
 
+    /// codex-acp emits transport-layer warnings as plain `agent_message_chunk`
+    /// events — they're indistinguishable from real assistant text at the
+    /// protocol level. Filter the known ones so they don't pollute the
+    /// conversation history we re-feed each turn.
+    private static let agentNoiseMarkers: [String] = [
+        "Falling back from WebSockets to HTTPS transport",
+        "stream disconnected before completion",
+        "no native root CA certificates found",
+    ]
+
+    private static func isAgentTransportNoise(_ text: String) -> Bool {
+        agentNoiseMarkers.contains(where: text.contains)
+    }
+
     /// Walk NDJSON output from `acpx --format json <agent> exec`. We only need
     /// the assistant text chunks, optional tool-call updates, and the final
     /// stopReason from the `session/prompt` result.
@@ -421,7 +435,8 @@ actor ACPSessionManager {
             switch kind {
             case "agent_message_chunk":
                 if let content = update["content"] as? [String: Any],
-                   let text = content["text"] as? String {
+                   let text = content["text"] as? String,
+                   !Self.isAgentTransportNoise(text) {
                     result.text += text
                 }
             case "tool_call":
