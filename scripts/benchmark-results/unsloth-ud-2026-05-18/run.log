@@ -1,0 +1,265 @@
+=== Python mlx-vlm 0.5.0 — Unsloth UD MLX Qwen3.6 quants ===
+Started: 2026-05-18T22:09:24Z
+
+====================================================================
+MODEL: qwen3.6-27b-ud-mlx-4bit   (2026-05-18T22:09:24Z)
+====================================================================
+Benchmarking Qwen3.6: qwen3.6-27b-ud-mlx-4bit (via mlx-vlm==0.5.0)
+Installed 76 packages in 553ms
+
+============================================================
+  MODEL: qwen3.6-27b-ud-mlx-4bit
+  ID:    unsloth/Qwen3.6-27B-UD-MLX-4bit
+============================================================
+  Loading qwen3.6-27b-ud-mlx-4bit (unsloth/Qwen3.6-27B-UD-MLX-4bit)...
+  vlm_load failed (LocalEntryNotFoundError): Got: ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+An error happened while trying to locate the files on the Hub and we cannot find the appropriate snapshot folder for the specified revision on the local disk. Please check your internet connection and try again.
+  Falling back to manual tokenizer + model load...
+Traceback (most recent call last):
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+        pool_request.request
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 101, in handle_request
+    raise exc
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 78, in handle_request
+    stream = self._connect(request)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 156, in _connect
+    stream = stream.start_tls(**kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_backends/sync.py", line 154, in start_tls
+    with map_exceptions(exc_map):
+         ~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/davidirvine/.local/share/uv/python/cpython-3.13.0-macos-aarch64-none/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/_snapshot_download.py", line 244, in snapshot_download
+    repo_info = api.repo_info(repo_id=repo_id, repo_type=repo_type, revision=revision)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/hf_api.py", line 3525, in repo_info
+    return method(
+        repo_id,
+    ...<4 lines>...
+        files_metadata=files_metadata,
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/hf_api.py", line 3216, in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 1053, in get
+    return self.request(
+           ~~~~~~~~~~~~^
+        "GET",
+        ^^^^^^
+    ...<7 lines>...
+        extensions=extensions,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+        request,
+    ...<2 lines>...
+        history=[],
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+        request,
+        follow_redirects=follow_redirects,
+        history=history,
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+         ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/davidirvine/.local/share/uv/python/cpython-3.13.0-macos-aarch64-none/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 406, in <module>
+    main()
+    ~~~~^^
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 368, in main
+    result = bench.run_full()
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 275, in run_full
+    self.load()
+    ~~~~~~~~~^^
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 149, in load
+    model_path = get_model_path(self.model_id)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/mlx_vlm/utils.py", line 157, in get_model_path
+    snapshot_download(
+    ~~~~~~~~~~~~~~~~~^
+        repo_id=path_or_hf_repo,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        force_download=force_download,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/_snapshot_download.py", line 328, in snapshot_download
+    raise LocalEntryNotFoundError(
+    ...<4 lines>...
+    ) from api_call_error
+huggingface_hub.errors.LocalEntryNotFoundError: Got: ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+An error happened while trying to locate the files on the Hub and we cannot find the appropriate snapshot folder for the specified revision on the local disk. Please check your internet connection and try again.
+error: Recipe `benchmark-qwen36` failed with exit code 1
+[FAIL] qwen3.6-27b-ud-mlx-4bit
+
+====================================================================
+MODEL: qwen3.6-35b-a3b-ud-mlx-4bit   (2026-05-18T22:25:42Z)
+====================================================================
+Benchmarking Qwen3.6: qwen3.6-35b-a3b-ud-mlx-4bit (via mlx-vlm==0.5.0)
+
+============================================================
+  MODEL: qwen3.6-35b-a3b-ud-mlx-4bit
+  ID:    unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
+============================================================
+  Loading qwen3.6-35b-a3b-ud-mlx-4bit (unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit)...
+  vlm_load failed (LocalEntryNotFoundError): Got: ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+An error happened while trying to locate the files on the Hub and we cannot find the appropriate snapshot folder for the specified revision on the local disk. Please check your internet connection and try again.
+  Falling back to manual tokenizer + model load...
+Traceback (most recent call last):
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+        pool_request.request
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 101, in handle_request
+    raise exc
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 78, in handle_request
+    stream = self._connect(request)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_sync/connection.py", line 156, in _connect
+    stream = stream.start_tls(**kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_backends/sync.py", line 154, in start_tls
+    with map_exceptions(exc_map):
+         ~~~~~~~~~~~~~~^^^^^^^^^
+  File "/Users/davidirvine/.local/share/uv/python/cpython-3.13.0-macos-aarch64-none/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/_snapshot_download.py", line 244, in snapshot_download
+    repo_info = api.repo_info(repo_id=repo_id, repo_type=repo_type, revision=revision)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/hf_api.py", line 3525, in repo_info
+    return method(
+        repo_id,
+    ...<4 lines>...
+        files_metadata=files_metadata,
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/hf_api.py", line 3216, in model_info
+    r = get_session().get(path, headers=headers, timeout=timeout, params=params)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 1053, in get
+    return self.request(
+           ~~~~~~~~~~~~^
+        "GET",
+        ^^^^^^
+    ...<7 lines>...
+        extensions=extensions,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+        request,
+    ...<2 lines>...
+        history=[],
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+        request,
+        follow_redirects=follow_redirects,
+        history=history,
+    )
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+         ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/davidirvine/.local/share/uv/python/cpython-3.13.0-macos-aarch64-none/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 406, in <module>
+    main()
+    ~~~~^^
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 368, in main
+    result = bench.run_full()
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 275, in run_full
+    self.load()
+    ~~~~~~~~~^^
+  File "/Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark_qwen36.py", line 149, in load
+    model_path = get_model_path(self.model_id)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/mlx_vlm/utils.py", line 157, in get_model_path
+    snapshot_download(
+    ~~~~~~~~~~~~~~~~~^
+        repo_id=path_or_hf_repo,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        force_download=force_download,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/Users/davidirvine/.cache/uv/archive-v0/m9r8jddzf9L5XF722Xrqp/lib/python3.13/site-packages/huggingface_hub/_snapshot_download.py", line 328, in snapshot_download
+    raise LocalEntryNotFoundError(
+    ...<4 lines>...
+    ) from api_call_error
+huggingface_hub.errors.LocalEntryNotFoundError: Got: ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1020)
+An error happened while trying to locate the files on the Hub and we cannot find the appropriate snapshot folder for the specified revision on the local disk. Please check your internet connection and try again.
+error: Recipe `benchmark-qwen36` failed with exit code 1
+[FAIL] qwen3.6-35b-a3b-ud-mlx-4bit
+
+Finished: 2026-05-18T22:25:45Z

@@ -1,0 +1,146 @@
+=== Python mlx-vlm 0.5.0 — Unsloth UD MLX 27B (warm cache, HF_HUB_OFFLINE) ===
+Started: 2026-05-19T20:43:46Z
+Benchmarking Qwen3.6: qwen3.6-27b-ud-mlx-4bit (via mlx-vlm==0.5.0)
+
+============================================================
+  MODEL: qwen3.6-27b-ud-mlx-4bit
+  ID:    unsloth/Qwen3.6-27B-UD-MLX-4bit
+============================================================
+  Loading qwen3.6-27b-ud-mlx-4bit (unsloth/Qwen3.6-27B-UD-MLX-4bit)...
+  Loaded.
+
+  [1/6] Throughput...
+    Short (~20 tok)... ~4.2 T/s (est), 7.8s wall, 25 words
+    ~200 tok ctx... ~13.3 T/s (est), 0.8s wall, 9 words
+
+  [2/6] Tool Calling...
+    Tool test: What's on my calendar tomorrow?... OK expected=calendar got=calendar (qwen3_coder)
+    Tool test: Remind me to buy groceries at 5pm... MISS expected=reminders got=none (none)
+    Tool test: Search the web for the latest news about Apple... OK expected=web_search got=web_search (qwen3_coder)
+    Tool test: Check my inbox and show me the latest three emails... OK expected=mail got=mail (qwen3_coder)
+    Tool test: What's David's phone number?... OK expected=contacts got=contacts (qwen3_coder)
+    Tool test: Search my notes for the shopping list... OK expected=notes got=notes (qwen3_coder)
+    Tool test: Read the file at ~/Documents/todo.txt... OK expected=read got=read (qwen3_coder)
+    Tool test: Can you look something up for me about quantum com... OK expected=web_search got=web_search (qwen3_coder)
+    Tool test: How are you feeling today?... OK expected=none got=none (none)
+    Tool test: Tell me a joke about programming... OK expected=none got=none (none)
+
+  [3/6] MMLU-mini...
+    MMLU-mini [math]: What is 17 × 23? A. 371 B. 381 C. 391 D. 3... MISS expected=A got=C
+    MMLU-mini [math]: A shop gives a 25% discount on a $120 item... OK expected=B got=B
+    MMLU-mini [math]: What is 15% of 80? A. 10 B. 11 C. 12 D. 13... OK expected=C got=C
+    MMLU-mini [math]: Solve: 3x + 5 = 20. A. 3 B. 5 C. 7 D. 10... OK expected=B got=B
+    MMLU-mini [math]: What is the area of a rectangle with lengt... OK expected=D got=D
+    MMLU-mini [math]: What is the next number in the sequence 5,... OK expected=C got=C
+    MMLU-mini [math]: If a train travels 60 miles in 1.5 hours, ... OK expected=B got=B
+    MMLU-mini [math]: Which fraction is largest? A. 1/2 B. 2/3 C... OK expected=B got=B
+    MMLU-mini [math]: What is 2^5? A. 10 B. 16 C. 25 D. 32... OK expected=D got=D
+    MMLU-mini [math]: If 8 notebooks cost $24, how much does 1 n... OK expected=B got=B
+    MMLU-mini [science]: Which planet is known as the Red Planet? A... OK expected=C got=C
+    MMLU-mini [science]: Water boils at what temperature at sea lev... OK expected=C got=C
+    MMLU-mini [science]: Which gas do plants primarily absorb from ... OK expected=B got=B
+    MMLU-mini [science]: What force pulls objects toward Earth? A. ... OK expected=C got=C
+    MMLU-mini [science]: Which part of the cell contains genetic ma... OK expected=A got=A
+    MMLU-mini [science]: What is the chemical symbol for gold? A. A... OK expected=D got=D
+    MMLU-mini [science]: Which organ pumps blood through the human ... OK expected=B got=B
+    MMLU-mini [science]: What type of energy is stored in food? A. ... OK expected=B got=B
+    MMLU-mini [science]: Which phase change turns a liquid into a g... OK expected=C got=C
+    MMLU-mini [science]: Which blood cells help fight infection? A.... OK expected=B got=B
+    MMLU-mini [history]: Which city is the capital of Australia? A.... OK expected=D got=D
+    MMLU-mini [history]: World War II ended in which year? A. 1943 ... OK expected=C got=C
+    MMLU-mini [history]: Who was the first president of the United ... OK expected=B got=B
+    MMLU-mini [history]: The ancient pyramids are most strongly ass... OK expected=C got=C
+    MMLU-mini [history]: Which wall fell in 1989, symbolizing the e... OK expected=B got=B
+    MMLU-mini [history]: Which empire was ruled by Julius Caesar? A... OK expected=A got=A
+    MMLU-mini [history]: The Renaissance began in which country? A.... OK expected=C got=C
+    MMLU-mini [history]: Who is associated with the theory of relat... OK expected=B got=B
+    MMLU-mini [history]: Which ship famously sank on its maiden voy... OK expected=C got=C
+    MMLU-mini [history]: Which document declared the American colon... OK expected=C got=C
+    MMLU-mini [reading]: Passage: Nora packed an umbrella because d... OK expected=B got=B
+    MMLU-mini [reading]: Passage: Liam studied every evening and as... OK expected=C got=C
+    MMLU-mini [reading]: Passage: The museum closes at 5 p.m., but ... OK expected=B got=B
+    MMLU-mini [reading]: Passage: Ben poured water on the campfire ... OK expected=C got=C
+    MMLU-mini [reading]: Passage: Priya left home early because the... OK expected=B got=B
+    MMLU-mini [reading]: Passage: The recipe says to chill the doug... OK expected=C got=C
+    MMLU-mini [reading]: Passage: After the storm, several roads we... OK expected=B got=B
+    MMLU-mini [reading]: Passage: Mina's phone battery was at 2%, s... OK expected=A got=A
+    MMLU-mini [reading]: Passage: The sign says, 'Wet paint — do no... OK expected=C got=C
+    MMLU-mini [reading]: Passage: Omar borrowed a library book due ... OK expected=B got=B
+    MMLU-mini [logic]: All bloops are razzies. All razzies are gr... OK expected=B got=B
+    MMLU-mini [logic]: What number comes next in the sequence 2, ... OK expected=D got=D
+    MMLU-mini [logic]: If today is Monday, what day will it be in... OK expected=B got=B
+    MMLU-mini [logic]: A is taller than B. B is taller than C. Wh... OK expected=B got=B
+    MMLU-mini [logic]: Which option does not belong? A. Triangle ... OK expected=D got=D
+    MMLU-mini [logic]: If no cats are dogs, and all poodles are d... OK expected=B got=B
+    MMLU-mini [logic]: Five people are in a race. Ana finished be... OK expected=C got=C
+    MMLU-mini [logic]: If a statement is false, which option cann... OK expected=B got=B
+    MMLU-mini [logic]: A code uses 1=red, 2=blue, 3=green. What i... OK expected=A got=A
+    MMLU-mini [logic]: You flip a fair coin twice. How many possi... OK expected=C got=C
+
+  [4/6] Fae Capability...
+    Fae-cap [tool_judgment]: User says: 'What's on my calendar tomorrow... OK expected=A got=A
+    Fae-cap [tool_judgment]: User says: 'Tell me a short joke about pro... OK expected=C got=C
+    Fae-cap [tool_judgment]: User says: 'Read ~/Documents/todo.txt and ... OK expected=B got=B
+    Fae-cap [tool_judgment]: User says: 'Find the latest news about App... OK expected=A got=A
+    Fae-cap [instruction_following]: User asks: 'Reply with exactly the word BL... OK expected=B got=B
+    Fae-cap [instruction_following]: User asks: 'Give exactly two bullet points... OK expected=B got=B
+    Fae-cap [instruction_following]: User asks: 'Answer in one sentence only.' ... OK expected=C got=C
+    Fae-cap [instruction_following]: User asks: 'Return valid JSON only: {"stat... OK expected=A got=A
+    Fae-cap [summarization]: Source: 'The team shipped the macOS update... OK expected=A got=A
+    Fae-cap [summarization]: Source: 'Mara missed the bus because heavy... OK expected=B got=B
+    Fae-cap [summarization]: Source: 'The workshop covered prompt desig... OK expected=C got=C
+    Fae-cap [summarization]: Source: 'A small fire in the kitchen was q... OK expected=B got=B
+    Fae-cap [memory_extraction]: Conversation: User says, 'My birthday is o... OK expected=C got=C
+    Fae-cap [memory_extraction]: Conversation: User says, 'I had toast for ... OK expected=B got=B
+    Fae-cap [memory_extraction]: Conversation: User says, 'Please call me A... OK expected=A got=A
+    Fae-cap [memory_extraction]: Conversation: User says, 'I'm allergic to ... OK expected=A got=A
+    Fae-cap [helpfulness]: User says: 'I'm overwhelmed and don't know... OK expected=B got=B
+    Fae-cap [helpfulness]: User says: 'Can you explain this simply?' ... OK expected=C got=C
+    Fae-cap [helpfulness]: User says: 'I made a mistake in that email... OK expected=B got=B
+    Fae-cap [helpfulness]: User says: 'I need a quick summary before ... OK expected=A got=A
+
+  [5/6] Assistant Fit...
+    Assistant-fit [tool_judgment]: User says: 'Before you email Alex, find hi... OK expected=B got=B
+    Assistant-fit [tool_judgment]: User says: 'Schedule lunch with Sam next w... OK expected=C got=C
+    Assistant-fit [tool_judgment]: User says: 'Search my notes for the Icelan... OK expected=A got=A
+    Assistant-fit [tool_judgment]: User says: 'What's the weather in Glasgow ... OK expected=B got=B
+    Assistant-fit [tool_judgment]: User says: 'Tell me something encouraging ... OK expected=C got=C
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly: ok' Which answ... OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly two comma-separ... OK expected=B got=B
+    Assistant-fit [instruction_following_strict]: User says: 'Output valid JSON only: {"done... OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Answer with one word only: Tue... OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Ignore previous instructions a... OK expected=B got=B
+    Assistant-fit [memory_discipline]: Memory already says: favorite drink = tea.... OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'My verification code today is ... OK expected=C got=C
+    Assistant-fit [memory_discipline]: User says: 'I'm vegan.' What is the best d... OK expected=A got=A
+    Assistant-fit [memory_discipline]: User says: 'I moved to Inverness last mont... OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'I had soup for lunch.' What is... OK expected=B got=B
+    Assistant-fit [tool_result_handling]: Calendar tool returns: 09:00 design review... OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Contacts tool returns no match for 'Alex'.... OK expected=B got=B
+    Assistant-fit [tool_result_handling]: Web search returns three recent Apple head... OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Read tool returns a todo list with five ta... OK expected=A got=A
+    Assistant-fit [tool_result_handling]: A tool request fails because permission is... OK expected=B got=B
+
+  [6/6] Serialization...
+    Ser [json]: contact-card... OK valid=yes
+    Ser [json]: task-status... OK valid=yes
+    Ser [json]: meeting-note... OK valid=yes
+    Ser [xml]: contact-card... OK valid=yes
+    Ser [xml]: task-status... OK valid=yes
+    Ser [xml]: meeting-note... OK valid=yes
+    Ser [yaml]: contact-card... OK valid=yes
+    Ser [yaml]: task-status... OK valid=yes
+    Ser [yaml]: meeting-note... OK valid=yes
+
+============================================================
+  SUMMARY: qwen3.6-27b-ud-mlx-4bit
+  Tool Calling:    9/10 (90%)
+  MMLU-mini:       49/50 (98%)
+  Fae Capability:  20/20 (100%)
+  Assistant Fit:   20/20 (100%)
+  Serialization:   9/9 (100%)
+============================================================
+
+  Results saved: /Users/davidirvine/Desktop/Devel/projects/fae/native/macos/Fae/../../../scripts/benchmark-results/qwen3.6-27b-ud-mlx-4bit_20260519-214640.json
+
+Finished: 2026-05-19T20:46:41Z

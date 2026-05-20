@@ -1,0 +1,1185 @@
+=== Swift FaeBenchmark Release — Unsloth UD MLX Qwen3.6 (warm cache) ===
+Started: 2026-05-19T21:12:43Z
+
+====================================================================
+MODEL: qwen3.6-27b-ud-mlx-4bit   (2026-05-19T21:12:43Z)
+====================================================================
+2026-05-19 22:12:43.580 FaeBenchmark[83101:131558877] MLXLLMEngine: loading model unsloth/Qwen3.6-27B-UD-MLX-4bit
+2026-05-19 22:12:43.583 FaeBenchmark[83101:131558877] MLXLLMEngine: resolved local model directory /Users/davidirvine/.cache/huggingface/hub/models--unsloth--Qwen3.6-27B-UD-MLX-4bit/snapshots/7baaa18ea869b8f8bd229b82bffd0d00ce5042f3
+2026-05-19 22:12:43.585 FaeBenchmark[83101:131558877] MLXLLMEngine: set toolCallFormat=xml_function for model
+2026-05-19 22:12:45.686 FaeBenchmark[83101:131558877] MLXLLMEngine: model loaded
+2026-05-19 22:12:45.686 FaeBenchmark[83101:131558877] MLXLLMEngine: starting warmup inference...
+2026-05-19 22:12:47.573 FaeBenchmark[83101:131558900] MLXLLMEngine: warmup complete
+FaeBenchmark — 1 model(s)
+Hardware: arm64, 128 GB RAM
+Backend: mlx-swift-lm (native Swift)
+Dimensions: throughput=true, no_think=false, ram=false, tools=true, intelligence=true, fae_capabilities=true, assistant_fit=true, freeform=false, serialization=true
+Contexts: 2k, 500, short
+
+======================================================================
+  qwen3.6-27b-ud-mlx-4bit (unsloth/Qwen3.6-27B-UD-MLX-4bit)
+======================================================================
+  Loading qwen3.6-27b-ud-mlx-4bit (unsloth/Qwen3.6-27B-UD-MLX-4bit)...
+  Qwen-compatible model: shared MLXLLMEngine will use xmlFunction tool-call parsing.
+  Loaded.
+  Warming up (production MLXLLMEngine passes)...
+
+  Throughput (/no_think):
+    Short (~20 tok)...2026-05-19 22:12:47.800 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:12:47.801 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:12:50.142 FaeBenchmark[83101:131558877] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:12:50.142 FaeBenchmark[83101:131558877] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:12:50.142 FaeBenchmark[83101:131558877] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 456 ms TTFT, 18.2 T/s (gen), 72.5 T/s (prompt), 24321 MB
+    ~500 tok ctx...2026-05-19 22:12:52.254 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:12:52.254 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:12:52.254 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:12:58.744 FaeBenchmark[83101:131558877] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:12:58.744 FaeBenchmark[83101:131558877] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:12:58.744 FaeBenchmark[83101:131558877] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 1637 ms TTFT, 18.0 T/s (gen), 252.5 T/s (prompt), 24321 MB
+    ~2K tok ctx...2026-05-19 22:13:05.475 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:13:05.475 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:13:05.475 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:13:18.492 FaeBenchmark[83101:131558877] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:13:18.492 FaeBenchmark[83101:131558877] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:13:18.492 FaeBenchmark[83101:131558877] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 3185 ms TTFT, 18.4 T/s (gen), 530.2 T/s (prompt), 24322 MB
+
+  Throughput (thinking ON):
+    Short (~20 tok)...2026-05-19 22:13:27.320 FaeBenchmark[83101:131558879] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:13:27.320 FaeBenchmark[83101:131558879] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:13:27.320 FaeBenchmark[83101:131558879] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:13:34.547 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:13:34.548 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:13:34.548 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 268 ms TTFT, 18.4 T/s (gen), 116.1 T/s (prompt), 24323 MB
+    ~500 tok ctx...2026-05-19 22:13:41.785 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:13:41.785 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:13:41.785 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:13:57.013 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:13:57.013 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:13:57.013 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 1080 ms TTFT, 18.3 T/s (gen), 383.0 T/s (prompt), 24323 MB
+    ~2K tok ctx...2026-05-19 22:14:12.062 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:14:12.062 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:14:12.062 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:14:28.790 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:14:28.790 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:14:28.790 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 3093 ms TTFT, 18.8 T/s (gen), 545.7 T/s (prompt), 24323 MB
+
+  Tool calling (temp=0.0):
+    Tool test: What's on my calendar tomorrow?...2026-05-19 22:14:45.499 FaeBenchmark[83101:131562562] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:14:45.499 FaeBenchmark[83101:131562562] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:14:45.499 FaeBenchmark[83101:131562562] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:14:45.499 FaeBenchmark[83101:131562562] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=calendar, got=calendar)
+    Tool test: Remind me to buy groceries at 5pm...2026-05-19 22:14:49.216 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:14:49.216 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:14:49.216 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:14:49.217 FaeBenchmark[83101:131558900] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=reminders, got=reminders)
+    Tool test: Search the web for the latest news about Apple...2026-05-19 22:14:52.894 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:14:52.894 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:14:52.894 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:14:52.894 FaeBenchmark[83101:131558878] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=web_search, got=web_search)
+    Tool test: Check my inbox and show me the latest three emails...2026-05-19 22:14:56.734 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:14:56.734 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:14:56.734 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:14:56.734 FaeBenchmark[83101:131565484] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=mail, got=mail)
+    Tool test: What's David's phone number?...2026-05-19 22:15:00.325 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:00.325 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:00.325 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:15:00.325 FaeBenchmark[83101:131564371] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=contacts, got=contacts)
+    Tool test: Search my notes for the shopping list...2026-05-19 22:15:04.002 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:04.002 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:04.002 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:15:04.002 FaeBenchmark[83101:131558878] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=notes, got=notes)
+    Tool test: Read the file at ~/Documents/todo.txt...2026-05-19 22:15:07.614 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:07.614 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:07.614 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:15:07.614 FaeBenchmark[83101:131558878] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=read, got=read)
+    Tool test: Can you look something up for me about quantum com...2026-05-19 22:15:10.898 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:10.899 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:10.899 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:15:10.899 FaeBenchmark[83101:131565484] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=web_search, got=web_search)
+    Tool test: How are you feeling today?...2026-05-19 22:15:15.049 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:15.049 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:15.049 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:15:15.049 FaeBenchmark[83101:131558900] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=none, got=none)
+    Tool test: Tell me a joke about programming...2026-05-19 22:15:18.270 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:18.270 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:18.270 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:15:18.270 FaeBenchmark[83101:131564371] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=none, got=none)
+
+  General intelligence (MMLU-style mini MCQ):
+    MMLU-mini [math]: What is 17 × 23? A. 371 B. 381 C. 391 D. 3...2026-05-19 22:15:20.860 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:20.860 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:20.860 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ MISS expected=A got=C
+    MMLU-mini [math]: A shop gives a 25% discount on a $120 item...2026-05-19 22:15:21.266 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:21.266 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:21.266 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: What is 15% of 80? A. 10 B. 11 C. 12 D. 13...2026-05-19 22:15:21.779 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:21.779 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:21.779 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [math]: Solve: 3x + 5 = 20. A. 3 B. 5 C. 7 D. 10...2026-05-19 22:15:22.322 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:22.322 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:22.322 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: What is the area of a rectangle with lengt...2026-05-19 22:15:22.838 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:22.838 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:22.838 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [math]: What is the next number in the sequence 5,...2026-05-19 22:15:23.330 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:23.330 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:23.330 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [math]: If a train travels 60 miles in 1.5 hours, ...2026-05-19 22:15:23.817 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:23.818 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:23.818 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: Which fraction is largest? A. 1/2 B. 2/3 C...2026-05-19 22:15:24.304 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:24.304 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:24.304 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: What is 2^5? A. 10 B. 16 C. 25 D. 32...2026-05-19 22:15:24.769 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:24.769 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:24.769 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [math]: If 8 notebooks cost $24, how much does 1 n...2026-05-19 22:15:25.237 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:25.237 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:25.237 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: Which planet is known as the Red Planet? A...2026-05-19 22:15:25.705 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:25.705 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:25.705 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Water boils at what temperature at sea lev...2026-05-19 22:15:26.187 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:26.187 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:26.187 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Which gas do plants primarily absorb from ...2026-05-19 22:15:26.656 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:26.656 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:26.656 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: What force pulls objects toward Earth? A. ...2026-05-19 22:15:27.109 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:27.109 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:27.109 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Which part of the cell contains genetic ma...2026-05-19 22:15:27.584 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:27.585 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:27.585 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [science]: What is the chemical symbol for gold? A. A...2026-05-19 22:15:28.040 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:28.040 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:28.040 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [science]: Which organ pumps blood through the human ...2026-05-19 22:15:28.511 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:28.511 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:28.511 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: What type of energy is stored in food? A. ...2026-05-19 22:15:28.986 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:28.986 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:28.986 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: Which phase change turns a liquid into a g...2026-05-19 22:15:29.464 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:29.464 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:29.464 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Which blood cells help fight infection? A....2026-05-19 22:15:29.923 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:29.923 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:29.923 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: Which city is the capital of Australia? A....2026-05-19 22:15:30.376 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:30.376 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:30.376 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [history]: World War II ended in which year? A. 1943 ...2026-05-19 22:15:30.854 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:30.854 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:30.854 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Who was the first president of the United ...2026-05-19 22:15:31.320 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:31.320 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:31.320 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: The ancient pyramids are most strongly ass...2026-05-19 22:15:31.783 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:31.783 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:31.784 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Which wall fell in 1989, symbolizing the e...2026-05-19 22:15:32.244 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:32.244 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:32.244 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: Which empire was ruled by Julius Caesar? A...2026-05-19 22:15:32.713 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:32.713 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:32.713 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [history]: The Renaissance began in which country? A....2026-05-19 22:15:33.190 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:33.190 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:33.190 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Who is associated with the theory of relat...2026-05-19 22:15:33.667 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:33.667 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:33.667 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: Which ship famously sank on its maiden voy...2026-05-19 22:15:34.147 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:34.147 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:34.148 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Which document declared the American colon...2026-05-19 22:15:34.609 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:34.609 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:34.609 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: Nora packed an umbrella because d...2026-05-19 22:15:35.069 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:35.069 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:35.069 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: Liam studied every evening and as...2026-05-19 22:15:35.544 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:35.544 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:35.544 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: The museum closes at 5 p.m., but ...2026-05-19 22:15:36.024 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:36.024 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:36.024 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: Ben poured water on the campfire ...2026-05-19 22:15:36.587 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:36.587 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:36.587 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: Priya left home early because the...2026-05-19 22:15:37.063 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:37.063 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:37.063 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: The recipe says to chill the doug...2026-05-19 22:15:37.537 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:37.537 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:37.537 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: After the storm, several roads we...2026-05-19 22:15:38.009 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:38.009 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:38.009 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: Mina's phone battery was at 2%, s...2026-05-19 22:15:38.465 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:38.466 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:38.466 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [reading]: Passage: The sign says, 'Wet paint — do no...2026-05-19 22:15:38.950 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:38.950 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:38.950 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: Omar borrowed a library book due ...2026-05-19 22:15:39.426 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:39.426 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:39.426 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: All bloops are razzies. All razzies are gr...2026-05-19 22:15:39.907 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:39.908 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:39.908 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: What number comes next in the sequence 2, ...2026-05-19 22:15:40.389 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:40.389 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:40.389 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [logic]: If today is Monday, what day will it be in...2026-05-19 22:15:40.861 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:40.861 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:40.861 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: A is taller than B. B is taller than C. Wh...2026-05-19 22:15:41.321 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:41.321 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:41.321 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: Which option does not belong? A. Triangle ...2026-05-19 22:15:41.795 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:41.796 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:41.796 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [logic]: If no cats are dogs, and all poodles are d...2026-05-19 22:15:42.270 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:42.270 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:42.270 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: Five people are in a race. Ana finished be...2026-05-19 22:15:42.744 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:42.744 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:42.744 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [logic]: If a statement is false, which option cann...2026-05-19 22:15:43.214 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:43.214 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:43.215 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: A code uses 1=red, 2=blue, 3=green. What i...2026-05-19 22:15:43.678 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:43.678 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:43.678 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [logic]: You flip a fair coin twice. How many possi...2026-05-19 22:15:44.158 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:44.158 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:44.158 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+
+  Fae-specific capability eval:
+    Fae-cap [tool_judgment]: User says: 'What's on my calendar tomorrow...2026-05-19 22:15:44.617 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:44.618 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:44.618 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [tool_judgment]: User says: 'Tell me a short joke about pro...2026-05-19 22:15:45.081 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:45.081 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:45.081 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [tool_judgment]: User says: 'Read ~/Documents/todo.txt and ...2026-05-19 22:15:45.543 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:45.543 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:45.544 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [tool_judgment]: User says: 'Find the latest news about App...2026-05-19 22:15:46.009 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:46.009 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:46.009 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [instruction_following]: User asks: 'Reply with exactly the word BL...2026-05-19 22:15:46.477 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:46.477 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:46.477 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [instruction_following]: User asks: 'Give exactly two bullet points...2026-05-19 22:15:46.942 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:46.942 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:46.942 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [instruction_following]: User asks: 'Answer in one sentence only.' ...2026-05-19 22:15:47.422 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:47.422 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:47.422 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [instruction_following]: User asks: 'Return valid JSON only: {"stat...2026-05-19 22:15:47.901 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:47.901 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:47.901 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [summarization]: Source: 'The team shipped the macOS update...2026-05-19 22:15:48.382 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:48.382 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:48.383 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [summarization]: Source: 'Mara missed the bus because heavy...2026-05-19 22:15:48.952 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:48.952 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:48.952 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [summarization]: Source: 'The workshop covered prompt desig...2026-05-19 22:15:49.520 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:49.520 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:49.520 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [summarization]: Source: 'A small fire in the kitchen was q...2026-05-19 22:15:50.084 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:50.084 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:50.084 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [memory_extraction]: Conversation: User says, 'My birthday is o...2026-05-19 22:15:50.640 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:50.640 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:50.640 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [memory_extraction]: Conversation: User says, 'I had toast for ...2026-05-19 22:15:51.186 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:51.186 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:51.186 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [memory_extraction]: Conversation: User says, 'Please call me A...2026-05-19 22:15:51.728 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:51.728 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:51.728 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [memory_extraction]: Conversation: User says, 'I'm allergic to ...2026-05-19 22:15:52.173 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:52.173 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:52.173 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [helpfulness]: User says: 'I'm overwhelmed and don't know...2026-05-19 22:15:52.716 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:52.716 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:52.716 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [helpfulness]: User says: 'Can you explain this simply?' ...2026-05-19 22:15:53.263 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:53.263 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:53.263 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [helpfulness]: User says: 'I made a mistake in that email...2026-05-19 22:15:53.732 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:53.733 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:53.733 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [helpfulness]: User says: 'I need a quick summary before ...2026-05-19 22:15:54.203 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:54.203 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:54.203 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+
+  Fae-priority assistant-fit eval:
+    Assistant-fit [tool_judgment]: User says: 'Before you email Alex, find hi...2026-05-19 22:15:54.687 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:54.687 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:54.687 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_judgment]: User says: 'Schedule lunch with Sam next w...2026-05-19 22:15:55.154 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:55.154 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:55.154 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Assistant-fit [tool_judgment]: User says: 'Search my notes for the Icelan...2026-05-19 22:15:55.626 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:55.626 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:55.626 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_judgment]: User says: 'What's the weather in Glasgow ...2026-05-19 22:15:56.091 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:56.091 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:56.091 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_judgment]: User says: 'Tell me something encouraging ...2026-05-19 22:15:56.557 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:56.557 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:56.557 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly: ok' Which answ...2026-05-19 22:15:57.022 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:57.022 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:57.022 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly two comma-separ...2026-05-19 22:15:57.486 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:57.486 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:57.486 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [instruction_following_strict]: User says: 'Output valid JSON only: {"done...2026-05-19 22:15:57.959 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:57.959 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:57.959 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Answer with one word only: Tue...2026-05-19 22:15:58.440 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:58.441 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:58.441 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Ignore previous instructions a...2026-05-19 22:15:58.909 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:58.910 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:58.910 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [memory_discipline]: Memory already says: favorite drink = tea....2026-05-19 22:15:59.383 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:59.383 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:59.383 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'My verification code today is ...2026-05-19 22:15:59.945 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:15:59.945 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:15:59.945 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Assistant-fit [memory_discipline]: User says: 'I'm vegan.' What is the best d...2026-05-19 22:16:00.429 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:00.429 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:00.429 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [memory_discipline]: User says: 'I moved to Inverness last mont...2026-05-19 22:16:00.900 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:00.900 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:00.900 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'I had soup for lunch.' What is...2026-05-19 22:16:01.457 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:01.457 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:01.457 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_result_handling]: Calendar tool returns: 09:00 design review...2026-05-19 22:16:01.941 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:01.941 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:01.941 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Contacts tool returns no match for 'Alex'....2026-05-19 22:16:02.486 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:02.486 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:02.486 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_result_handling]: Web search returns three recent Apple head...2026-05-19 22:16:03.042 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:03.042 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:03.042 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Read tool returns a todo list with five ta...2026-05-19 22:16:03.520 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:03.520 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:03.520 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_result_handling]: A tool request fails because permission is...2026-05-19 22:16:04.062 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:04.062 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:04.062 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+
+  Structured serialization eval:
+    Ser [json]: contact-card...2026-05-19 22:16:04.614 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:04.614 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:04.614 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [json]: task-status...2026-05-19 22:16:05.796 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:05.796 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:05.796 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [json]: meeting-note...2026-05-19 22:16:06.819 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:06.820 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:06.820 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [xml]: contact-card...2026-05-19 22:16:08.059 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:08.059 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:08.059 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [xml]: task-status...2026-05-19 22:16:09.831 FaeBenchmark[83101:131564371] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:09.831 FaeBenchmark[83101:131564371] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:09.831 FaeBenchmark[83101:131564371] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [xml]: meeting-note...2026-05-19 22:16:11.417 FaeBenchmark[83101:131565484] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:11.417 FaeBenchmark[83101:131565484] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:11.417 FaeBenchmark[83101:131565484] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [yaml]: contact-card...2026-05-19 22:16:13.163 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:13.164 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:13.164 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [yaml]: task-status...2026-05-19 22:16:14.228 FaeBenchmark[83101:131558900] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:14.229 FaeBenchmark[83101:131558900] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:14.229 FaeBenchmark[83101:131558900] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [yaml]: meeting-note...2026-05-19 22:16:15.288 FaeBenchmark[83101:131558878] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:15.288 FaeBenchmark[83101:131558878] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:15.288 FaeBenchmark[83101:131558878] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+
+JSON results saved to: /Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/unsloth-ud-swift-2026-05-19/qwen3.6-27b-ud-mlx-4bit.json
+
+======================================================================
+MARKDOWN OUTPUT
+======================================================================
+## MLX Benchmark Results (Swift)
+
+**Hardware:** Apple Silicon, 128 GB unified memory
+**Quantization:** 4-bit (MLX)
+**Backend:** mlx-swift-lm (native Swift, same stack as Fae)
+**Date:** 2026-05-19
+
+### Model Summary
+
+| Model | Idle RAM | Peak T/s (no_think) | ~500 tok T/s | 8.5K ctx T/s |
+|---|---:|---:|---:|---:|
+| qwen3.6-27b-ud-mlx-4bit | 0 MB | 18 | 18 | 0 |
+
+### Speed by Context Size — /no_think
+
+| Context | qwen3.6-27b-ud-mlx-4bit |
+|---|---:|
+| Short (~20 tok) | 18 |
+| ~500 tok ctx | 18 |
+| ~2K tok ctx | 18 |
+
+### Speed by Context Size — Thinking ON
+
+| Context | qwen3.6-27b-ud-mlx-4bit |
+|---|---:|
+| Short (~20 tok) | 18 |
+| ~500 tok ctx | 18 |
+| ~2K tok ctx | 18 |
+
+### Tool Calling Accuracy
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.6-27b-ud-mlx-4bit | 10 | 10 | 100% |
+
+### General Intelligence (MMLU-style mini MCQ)
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.6-27b-ud-mlx-4bit | 49 | 50 | 98% |
+
+### Fae-specific Capability Eval
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.6-27b-ud-mlx-4bit | 20 | 20 | 100% |
+
+### Fae-priority Assistant Fit Eval
+
+| Model | Tool judgment | Strict instruction | Memory discipline | Tool result handling | Overall |
+|---|---:|---:|---:|---:|---:|
+| qwen3.6-27b-ud-mlx-4bit | 100% | 100% | 100% | 100% | 100% |
+
+### Structured Serialization Eval
+
+| Model | JSON | XML | YAML | Overall |
+|---|---:|---:|---:|---:|
+| qwen3.6-27b-ud-mlx-4bit | 100% | 100% | 100% | 100% |
+
+
+====================================================================
+MODEL: qwen3.6-35b-a3b-ud-mlx-4bit   (2026-05-19T21:16:17Z)
+====================================================================
+2026-05-19 22:16:17.190 FaeBenchmark[89594:131572065] MLXLLMEngine: loading model unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit
+2026-05-19 22:16:17.193 FaeBenchmark[89594:131572065] MLXLLMEngine: resolved local model directory /Users/davidirvine/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-UD-MLX-4bit/snapshots/6700c3e5bdeb050a379c8d2a4133f43f3647f20f
+2026-05-19 22:16:17.196 FaeBenchmark[89594:131572065] MLXLLMEngine: set toolCallFormat=xml_function for model
+2026-05-19 22:16:18.889 FaeBenchmark[89594:131572065] MLXLLMEngine: model loaded
+2026-05-19 22:16:18.889 FaeBenchmark[89594:131572065] MLXLLMEngine: starting warmup inference...
+2026-05-19 22:16:19.428 FaeBenchmark[89594:131572066] MLXLLMEngine: warmup complete
+FaeBenchmark — 1 model(s)
+Hardware: arm64, 128 GB RAM
+Backend: mlx-swift-lm (native Swift)
+Dimensions: throughput=true, no_think=false, ram=false, tools=true, intelligence=true, fae_capabilities=true, assistant_fit=true, freeform=false, serialization=true
+Contexts: 2k, 500, short
+
+======================================================================
+  qwen3.6-35b-a3b-ud-mlx-4bit (unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit)
+======================================================================
+  Loading qwen3.6-35b-a3b-ud-mlx-4bit (unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit)...
+  Qwen-compatible model: shared MLXLLMEngine will use xmlFunction tool-call parsing.
+  Loaded.
+  Warming up (production MLXLLMEngine passes)...
+
+  Throughput (/no_think):
+    Short (~20 tok)...2026-05-19 22:16:19.622 FaeBenchmark[89594:131572066] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:19.623 FaeBenchmark[89594:131572066] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:16:20.040 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:20.041 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:20.041 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 55 ms TTFT, 96.8 T/s (gen), 613.9 T/s (prompt), 20005 MB
+    ~500 tok ctx...2026-05-19 22:16:20.570 FaeBenchmark[89594:131572066] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:20.570 FaeBenchmark[89594:131572066] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:20.571 FaeBenchmark[89594:131572066] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:16:22.788 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:22.788 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:22.788 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 184 ms TTFT, 91.0 T/s (gen), 2284.4 T/s (prompt), 20006 MB
+    ~2K tok ctx...2026-05-19 22:16:24.414 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:24.414 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:24.414 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:16:26.576 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:26.576 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:26.576 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 868 ms TTFT, 77.3 T/s (gen), 1976.9 T/s (prompt), 20007 MB
+
+  Throughput (thinking ON):
+    Short (~20 tok)...2026-05-19 22:16:28.877 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:28.877 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:28.877 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:16:30.398 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:30.398 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:30.398 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 51 ms TTFT, 87.2 T/s (gen), 604.9 T/s (prompt), 20007 MB
+    ~500 tok ctx...2026-05-19 22:16:32.166 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:32.166 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:32.166 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:16:35.965 FaeBenchmark[89594:131572066] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:35.965 FaeBenchmark[89594:131572066] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:35.965 FaeBenchmark[89594:131572066] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 196 ms TTFT, 77.6 T/s (gen), 2150.3 T/s (prompt), 20007 MB
+    ~2K tok ctx...2026-05-19 22:16:39.460 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:39.461 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:39.461 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+2026-05-19 22:16:43.971 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:43.971 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:43.971 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ 1020 ms TTFT, 73.4 T/s (gen), 1667.5 T/s (prompt), 20008 MB
+
+  Tool calling (temp=0.0):
+    Tool test: What's on my calendar tomorrow?...2026-05-19 22:16:49.371 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:49.371 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:49.371 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:49.371 FaeBenchmark[89594:131572067] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=calendar, got=calendar)
+    Tool test: Remind me to buy groceries at 5pm...2026-05-19 22:16:50.223 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:50.223 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:50.223 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:50.223 FaeBenchmark[89594:131572065] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=reminders, got=reminders)
+    Tool test: Search the web for the latest news about Apple...2026-05-19 22:16:51.190 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:51.190 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:51.190 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:51.190 FaeBenchmark[89594:131572171] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=web_search, got=web_search)
+    Tool test: Check my inbox and show me the latest three emails...2026-05-19 22:16:52.199 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:52.199 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:52.199 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:52.199 FaeBenchmark[89594:131572065] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=mail, got=mail)
+    Tool test: What's David's phone number?...2026-05-19 22:16:53.118 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:53.118 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:53.118 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:53.118 FaeBenchmark[89594:131572069] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=contacts, got=contacts)
+    Tool test: Search my notes for the shopping list...2026-05-19 22:16:54.071 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:54.071 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:54.071 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:54.071 FaeBenchmark[89594:131572067] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=notes, got=notes)
+    Tool test: Read the file at ~/Documents/todo.txt...2026-05-19 22:16:54.962 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:54.962 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:54.962 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:54.962 FaeBenchmark[89594:131572065] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=read, got=read)
+    Tool test: Can you look something up for me about quantum com...2026-05-19 22:16:55.740 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:55.740 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:55.740 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:55.740 FaeBenchmark[89594:131572065] MLXLLMEngine: lock acquired — preparing input
+ MISS (expected=web_search, got=none)
+      Native .toolCall events: 0
+      Tool source: none
+      Response: Sure! What would you like to know about quantum computing? For example:\n\n- How does it work?\n- What are its potential applications?\n- Who are the major players in the field?\n- What's the current state of development?\n\nLet me know your focus, and I’ll look it up for you.
+    Tool test: How are you feeling today?...2026-05-19 22:16:56.977 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:56.977 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:56.977 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:56.977 FaeBenchmark[89594:131572069] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=none, got=none)
+    Tool test: Tell me a joke about programming...2026-05-19 22:16:57.593 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:57.593 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:57.593 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=true)
+2026-05-19 22:16:57.593 FaeBenchmark[89594:131572067] MLXLLMEngine: lock acquired — preparing input
+ OK (expected=none, got=none)
+
+  General intelligence (MMLU-style mini MCQ):
+    MMLU-mini [math]: What is 17 × 23? A. 371 B. 381 C. 391 D. 3...2026-05-19 22:16:58.310 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:58.310 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:58.310 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ MISS expected=A got=C
+    MMLU-mini [math]: A shop gives a 25% discount on a $120 item...2026-05-19 22:16:58.501 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:58.502 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:58.502 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: What is 15% of 80? A. 10 B. 11 C. 12 D. 13...2026-05-19 22:16:58.703 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:58.703 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:58.703 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [math]: Solve: 3x + 5 = 20. A. 3 B. 5 C. 7 D. 10...2026-05-19 22:16:58.900 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:58.900 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:58.900 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: What is the area of a rectangle with lengt...2026-05-19 22:16:59.101 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:59.101 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:59.101 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [math]: What is the next number in the sequence 5,...2026-05-19 22:16:59.300 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:59.300 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:59.301 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [math]: If a train travels 60 miles in 1.5 hours, ...2026-05-19 22:16:59.501 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:59.501 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:59.502 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: Which fraction is largest? A. 1/2 B. 2/3 C...2026-05-19 22:16:59.721 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:59.721 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:59.721 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [math]: What is 2^5? A. 10 B. 16 C. 25 D. 32...2026-05-19 22:16:59.905 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:16:59.905 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:16:59.905 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [math]: If 8 notebooks cost $24, how much does 1 n...2026-05-19 22:17:00.092 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:00.092 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:00.092 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: Which planet is known as the Red Planet? A...2026-05-19 22:17:00.281 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:00.281 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:00.281 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Water boils at what temperature at sea lev...2026-05-19 22:17:00.468 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:00.468 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:00.468 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Which gas do plants primarily absorb from ...2026-05-19 22:17:00.661 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:00.661 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:00.661 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: What force pulls objects toward Earth? A. ...2026-05-19 22:17:00.848 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:00.848 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:00.848 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Which part of the cell contains genetic ma...2026-05-19 22:17:01.059 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:01.059 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:01.059 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [science]: What is the chemical symbol for gold? A. A...2026-05-19 22:17:01.243 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:01.243 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:01.243 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [science]: Which organ pumps blood through the human ...2026-05-19 22:17:01.426 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:01.426 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:01.426 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: What type of energy is stored in food? A. ...2026-05-19 22:17:01.633 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:01.633 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:01.633 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [science]: Which phase change turns a liquid into a g...2026-05-19 22:17:01.818 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:01.818 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:01.818 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [science]: Which blood cells help fight infection? A....2026-05-19 22:17:02.004 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:02.004 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:02.004 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: Which city is the capital of Australia? A....2026-05-19 22:17:02.188 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:02.188 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:02.188 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [history]: World War II ended in which year? A. 1943 ...2026-05-19 22:17:02.371 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:02.371 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:02.371 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Who was the first president of the United ...2026-05-19 22:17:02.558 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:02.558 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:02.558 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: The ancient pyramids are most strongly ass...2026-05-19 22:17:02.739 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:02.739 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:02.739 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Which wall fell in 1989, symbolizing the e...2026-05-19 22:17:02.923 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:02.923 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:02.923 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: Which empire was ruled by Julius Caesar? A...2026-05-19 22:17:03.116 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:03.116 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:03.116 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [history]: The Renaissance began in which country? A....2026-05-19 22:17:03.321 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:03.321 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:03.321 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Who is associated with the theory of relat...2026-05-19 22:17:03.504 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:03.504 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:03.504 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [history]: Which ship famously sank on its maiden voy...2026-05-19 22:17:03.687 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:03.687 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:03.687 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [history]: Which document declared the American colon...2026-05-19 22:17:03.870 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:03.870 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:03.870 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: Nora packed an umbrella because d...2026-05-19 22:17:04.056 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:04.056 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:04.056 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: Liam studied every evening and as...2026-05-19 22:17:04.273 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:04.273 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:04.273 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: The museum closes at 5 p.m., but ...2026-05-19 22:17:04.485 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:04.485 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:04.485 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: Ben poured water on the campfire ...2026-05-19 22:17:04.711 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:04.711 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:04.711 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: Priya left home early because the...2026-05-19 22:17:04.925 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:04.926 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:04.926 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: The recipe says to chill the doug...2026-05-19 22:17:05.142 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:05.142 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:05.142 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: After the storm, several roads we...2026-05-19 22:17:05.352 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:05.352 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:05.352 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [reading]: Passage: Mina's phone battery was at 2%, s...2026-05-19 22:17:05.565 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:05.565 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:05.565 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [reading]: Passage: The sign says, 'Wet paint — do no...2026-05-19 22:17:05.782 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:05.782 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:05.782 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [reading]: Passage: Omar borrowed a library book due ...2026-05-19 22:17:05.998 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:05.998 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:05.998 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: All bloops are razzies. All razzies are gr...2026-05-19 22:17:06.211 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:06.211 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:06.211 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: What number comes next in the sequence 2, ...2026-05-19 22:17:06.397 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:06.397 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:06.397 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [logic]: If today is Monday, what day will it be in...2026-05-19 22:17:06.581 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:06.582 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:06.582 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: A is taller than B. B is taller than C. Wh...2026-05-19 22:17:06.767 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:06.767 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:06.767 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: Which option does not belong? A. Triangle ...2026-05-19 22:17:06.958 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:06.958 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:06.958 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=D got=D
+    MMLU-mini [logic]: If no cats are dogs, and all poodles are d...2026-05-19 22:17:07.143 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:07.143 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:07.143 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    MMLU-mini [logic]: Five people are in a race. Ana finished be...2026-05-19 22:17:07.332 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:07.332 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:07.332 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    MMLU-mini [logic]: If a statement is false, which option cann...2026-05-19 22:17:07.521 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:07.521 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:07.521 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ MISS expected=B got=A
+    MMLU-mini [logic]: A code uses 1=red, 2=blue, 3=green. What i...2026-05-19 22:17:07.707 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:07.707 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:07.707 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    MMLU-mini [logic]: You flip a fair coin twice. How many possi...2026-05-19 22:17:07.898 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:07.898 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:07.898 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+
+  Fae-specific capability eval:
+    Fae-cap [tool_judgment]: User says: 'What's on my calendar tomorrow...2026-05-19 22:17:08.081 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:08.081 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:08.081 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [tool_judgment]: User says: 'Tell me a short joke about pro...2026-05-19 22:17:08.267 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:08.267 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:08.267 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [tool_judgment]: User says: 'Read ~/Documents/todo.txt and ...2026-05-19 22:17:08.452 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:08.452 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:08.452 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [tool_judgment]: User says: 'Find the latest news about App...2026-05-19 22:17:08.638 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:08.638 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:08.638 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [instruction_following]: User asks: 'Reply with exactly the word BL...2026-05-19 22:17:08.825 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:08.825 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:08.825 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [instruction_following]: User asks: 'Give exactly two bullet points...2026-05-19 22:17:09.010 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:09.010 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:09.010 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [instruction_following]: User asks: 'Answer in one sentence only.' ...2026-05-19 22:17:09.201 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:09.202 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:09.202 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [instruction_following]: User asks: 'Return valid JSON only: {"stat...2026-05-19 22:17:09.390 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:09.390 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:09.390 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [summarization]: Source: 'The team shipped the macOS update...2026-05-19 22:17:09.582 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:09.583 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:09.583 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [summarization]: Source: 'Mara missed the bus because heavy...2026-05-19 22:17:09.817 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:09.817 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:09.817 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [summarization]: Source: 'The workshop covered prompt desig...2026-05-19 22:17:10.017 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:10.017 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:10.017 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [summarization]: Source: 'A small fire in the kitchen was q...2026-05-19 22:17:10.223 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:10.223 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:10.223 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [memory_extraction]: Conversation: User says, 'My birthday is o...2026-05-19 22:17:10.428 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:10.428 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:10.428 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [memory_extraction]: Conversation: User says, 'I had toast for ...2026-05-19 22:17:10.635 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:10.635 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:10.635 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [memory_extraction]: Conversation: User says, 'Please call me A...2026-05-19 22:17:10.860 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:10.860 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:10.860 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [memory_extraction]: Conversation: User says, 'I'm allergic to ...2026-05-19 22:17:11.053 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:11.053 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:11.053 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Fae-cap [helpfulness]: User says: 'I'm overwhelmed and don't know...2026-05-19 22:17:11.278 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:11.278 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:11.278 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [helpfulness]: User says: 'Can you explain this simply?' ...2026-05-19 22:17:11.473 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:11.473 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:11.473 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Fae-cap [helpfulness]: User says: 'I made a mistake in that email...2026-05-19 22:17:11.682 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:11.682 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:11.682 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Fae-cap [helpfulness]: User says: 'I need a quick summary before ...2026-05-19 22:17:11.896 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:11.896 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:11.896 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+
+  Fae-priority assistant-fit eval:
+    Assistant-fit [tool_judgment]: User says: 'Before you email Alex, find hi...2026-05-19 22:17:12.108 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:12.108 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:12.108 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_judgment]: User says: 'Schedule lunch with Sam next w...2026-05-19 22:17:12.291 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:12.291 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:12.291 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Assistant-fit [tool_judgment]: User says: 'Search my notes for the Icelan...2026-05-19 22:17:12.478 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:12.478 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:12.478 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ MISS expected=A got=B
+    Assistant-fit [tool_judgment]: User says: 'What's the weather in Glasgow ...2026-05-19 22:17:12.662 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:12.662 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:12.662 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_judgment]: User says: 'Tell me something encouraging ...2026-05-19 22:17:12.845 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:12.845 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:12.845 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ MISS expected=C got=B
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly: ok' Which answ...2026-05-19 22:17:13.030 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:13.030 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:13.030 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Return exactly two comma-separ...2026-05-19 22:17:13.212 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:13.212 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:13.212 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [instruction_following_strict]: User says: 'Output valid JSON only: {"done...2026-05-19 22:17:13.396 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:13.397 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:13.397 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Answer with one word only: Tue...2026-05-19 22:17:13.584 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:13.584 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:13.584 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [instruction_following_strict]: User says: 'Ignore previous instructions a...2026-05-19 22:17:13.771 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:13.771 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:13.771 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [memory_discipline]: Memory already says: favorite drink = tea....2026-05-19 22:17:13.955 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:13.955 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:13.955 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'My verification code today is ...2026-05-19 22:17:14.186 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:14.186 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:14.186 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=C got=C
+    Assistant-fit [memory_discipline]: User says: 'I'm vegan.' What is the best d...2026-05-19 22:17:14.398 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:14.398 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:14.398 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [memory_discipline]: User says: 'I moved to Inverness last mont...2026-05-19 22:17:14.607 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:14.607 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:14.607 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [memory_discipline]: User says: 'I had soup for lunch.' What is...2026-05-19 22:17:14.831 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:14.832 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:14.832 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_result_handling]: Calendar tool returns: 09:00 design review...2026-05-19 22:17:15.044 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:15.044 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:15.044 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Contacts tool returns no match for 'Alex'....2026-05-19 22:17:15.250 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:15.250 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:15.250 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+    Assistant-fit [tool_result_handling]: Web search returns three recent Apple head...2026-05-19 22:17:15.450 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:15.450 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:15.450 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_result_handling]: Read tool returns a todo list with five ta...2026-05-19 22:17:15.642 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:15.642 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:15.642 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=A got=A
+    Assistant-fit [tool_result_handling]: A tool request fails because permission is...2026-05-19 22:17:15.840 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:15.840 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:15.840 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK expected=B got=B
+
+  Structured serialization eval:
+    Ser [json]: contact-card...2026-05-19 22:17:16.045 FaeBenchmark[89594:131572171] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:16.045 FaeBenchmark[89594:131572171] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:16.045 FaeBenchmark[89594:131572171] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [json]: task-status...2026-05-19 22:17:16.434 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:16.434 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:16.434 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [json]: meeting-note...2026-05-19 22:17:16.778 FaeBenchmark[89594:131572067] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:16.779 FaeBenchmark[89594:131572067] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:16.779 FaeBenchmark[89594:131572067] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [xml]: contact-card...2026-05-19 22:17:17.128 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:17.128 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:17.128 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [xml]: task-status...2026-05-19 22:17:17.615 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:17.615 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:17.615 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [xml]: meeting-note...2026-05-19 22:17:18.089 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:18.089 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:18.089 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [yaml]: contact-card...2026-05-19 22:17:18.570 FaeBenchmark[89594:131574000] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:18.570 FaeBenchmark[89594:131574000] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:18.570 FaeBenchmark[89594:131574000] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [yaml]: task-status...2026-05-19 22:17:18.875 FaeBenchmark[89594:131572065] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:18.875 FaeBenchmark[89594:131572065] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:18.875 FaeBenchmark[89594:131572065] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+    Ser [yaml]: meeting-note...2026-05-19 22:17:19.183 FaeBenchmark[89594:131572069] MLXLLMEngine: generate() starting — messages=1
+2026-05-19 22:17:19.183 FaeBenchmark[89594:131572069] MLXLLMEngine: session cache invalidated — rebuilding prompt state
+2026-05-19 22:17:19.183 FaeBenchmark[89594:131572069] MLXLLMEngine: about to acquire container lock (parseTools=false)
+ OK valid=yes
+
+JSON results saved to: /Users/davidirvine/Desktop/Devel/projects/fae/scripts/benchmark-results/unsloth-ud-swift-2026-05-19/qwen3.6-35b-a3b-ud-mlx-4bit.json
+
+======================================================================
+MARKDOWN OUTPUT
+======================================================================
+## MLX Benchmark Results (Swift)
+
+**Hardware:** Apple Silicon, 128 GB unified memory
+**Quantization:** 4-bit (MLX)
+**Backend:** mlx-swift-lm (native Swift, same stack as Fae)
+**Date:** 2026-05-19
+
+### Model Summary
+
+| Model | Idle RAM | Peak T/s (no_think) | ~500 tok T/s | 8.5K ctx T/s |
+|---|---:|---:|---:|---:|
+| qwen3.6-35b-a3b-ud-mlx-4bit | 0 MB | 96 | 91 | 0 |
+
+### Speed by Context Size — /no_think
+
+| Context | qwen3.6-35b-a3b-ud-mlx-4bit |
+|---|---:|
+| Short (~20 tok) | 96 |
+| ~500 tok ctx | 91 |
+| ~2K tok ctx | 77 |
+
+### Speed by Context Size — Thinking ON
+
+| Context | qwen3.6-35b-a3b-ud-mlx-4bit |
+|---|---:|
+| Short (~20 tok) | 87 |
+| ~500 tok ctx | 77 |
+| ~2K tok ctx | 73 |
+
+### Tool Calling Accuracy
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.6-35b-a3b-ud-mlx-4bit | 9 | 10 | 90% |
+
+### General Intelligence (MMLU-style mini MCQ)
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.6-35b-a3b-ud-mlx-4bit | 48 | 50 | 96% |
+
+### Fae-specific Capability Eval
+
+| Model | Correct | Total | Accuracy |
+|---|---:|---:|---:|
+| qwen3.6-35b-a3b-ud-mlx-4bit | 20 | 20 | 100% |
+
+### Fae-priority Assistant Fit Eval
+
+| Model | Tool judgment | Strict instruction | Memory discipline | Tool result handling | Overall |
+|---|---:|---:|---:|---:|---:|
+| qwen3.6-35b-a3b-ud-mlx-4bit | 60% | 100% | 100% | 100% | 90% |
+
+### Structured Serialization Eval
+
+| Model | JSON | XML | YAML | Overall |
+|---|---:|---:|---:|---:|
+| qwen3.6-35b-a3b-ud-mlx-4bit | 100% | 100% | 100% | 100% |
+
+
+Finished: 2026-05-19T21:17:19Z

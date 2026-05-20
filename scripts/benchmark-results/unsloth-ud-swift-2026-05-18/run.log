@@ -1,0 +1,9 @@
+=== Swift FaeBenchmark Release — Unsloth UD MLX Qwen3.6 ===
+Started: 2026-05-18T22:26:02Z
+
+====================================================================
+MODEL: qwen3.6-27b-ud-mlx-4bit   (2026-05-18T22:26:02Z)
+====================================================================
+2026-05-18 23:27:46.392 FaeBenchmark[95414:127015822] MLXLLMEngine: loading model unsloth/Qwen3.6-27B-UD-MLX-4bit
+2026-05-18 23:27:46.393 FaeBenchmark[95414:127015822] MLXLLMEngine: model not cached locally — download will begin
+2026-05-18 23:27:46.393 FaeBenchmark[95414:127015822] MLXLLMEngine: set toolCallFormat=xml_function for model
