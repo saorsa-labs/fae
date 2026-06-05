@@ -41,7 +41,12 @@
   - **2b** — pure single-use stream-ticket logic in control-plane (`TicketStore`): issue + replay cache, ≤60 s, endpoint/scope-bound, hashed-at-rest, atomic single-use.
   - **2c** — opt-in TCP-loopback HTTP/WS diagnostic listener (`FAE_DIAGNOSTIC_TCP_PORT`, `127.0.0.1`+`[::1]`, tokio-tungstenite): anti-rebind `Host`/`Origin`, defensive headers, bearer-auth status + scope-bounded ticket issuance (no escalation), WS upgrade consuming a single-use ticket via `Sec-WebSocket-Protocol` (no `?token=`), per-message authorize reusing the shared session core. End-to-end verified incl. bad-Host 403, replay 401, wrong-endpoint 401, ticket-scoped missing_scope. 36 tests, clippy clean.
   - **Carried follow-on:** SSE stream variant; macOS Keychain for the bootstrap secret.
-- **Next: Chunk 3 — engine adapter** (`ProviderAdapter`, mistral.rs E4B + Qwen3-14B dense, llama.cpp fallback, `models.lock` fail-closed loader).
+- **Chunk 3 — engine adapter** (mistral.rs is a HARD dep, owner decision; not feature-gated):
+  - **3a ✅** — `fae-engine` crate: `ProviderAdapter` trait (async, dyn-safe) + types; fail-closed `models.lock` SHA-256 loader (rejects missing/size/hash/placeholder); `MockAdapter`.
+  - **3b ✅** — `LocalMistralrsAdapter` (mistral.rs 0.8): `load_text` + Q4K ISQ; `stream_chat` re-emits `Response` chunks as `ChatEvent`s (S13-validated). Accel target-conditional (Metal on macOS, candle CPU/CUDA elsewhere).
+  - **3c ✅** — wired `conversation.inject_text`: `dispatch`/`handle_frame` async; `Arc<dyn ProviderAdapter>` threaded through both transports; turn collected into `{text, tool_calls, finish_reason}`; real model via `FAE_MODEL_ID` else mock. Live-verified end-to-end over the Unix socket.
+  - **Next: 3d** llama.cpp fallback behind the same `ProviderAdapter` (G2-proven). **Follow-on:** live event streaming (`conversation.subscribe`); gate model load on `models.lock` verify.
+- Owner decisions (2026-06-05): TCP diagnostic path keeps full bootstrap scopes; mistral.rs always-on.
 
 ## 2. Phase 2 — Voice pipeline + parity
 
