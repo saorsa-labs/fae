@@ -1,0 +1,17 @@
+[package]
+name = "fae-control-plane"
+version = "0.1.0"
+description = "Fae daemon local control-plane: capability scopes, per-command authorization, anti-rebind host validation, session tokens, and audit. Pure logic — no network surface."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+hex.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "fae-daemon"
+version = "0.1.0"
+description = "Fae headless-core daemon — Phase 1 skeleton: control-plane bootstrap (run dir 0700, token 0600) + authorization wiring. Network listener (Unix socket/WS) and the mistral.rs engine adapter land in subsequent chunks."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "fae-daemon"
+path = "src/main.rs"
+
+[dependencies]
+fae-control-plane = { path = "../fae-control-plane" }
+fae-envelope-gate = { path = "../fae-envelope-gate" }
+serde_json.workspace = true

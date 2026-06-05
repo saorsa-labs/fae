@@ -1,0 +1,21 @@
+# Fae headless-core workspace (Phase 1). Run from crates/.
+default: check
+
+# Full validation — zero warnings, all tests.
+check:
+    cargo fmt --all -- --check
+    cargo clippy --all-targets --all-features -- -D warnings
+    cargo test --all-features
+
+fmt:
+    cargo fmt --all
+
+test:
+    cargo test --all-features
+
+build-release:
+    cargo build --release
+
+# Run the daemon skeleton (no ports opened; bootstraps run dir + token + demo authz).
+run:
+    cargo run -p fae-daemon

@@ -20,3 +20,6 @@ scripts/__pycache__/
 native/macos/Fae/Resources/Binaries/
 .gstack/
 /.planning/
+
+# Rust build artifacts in any sub-crate (crates/, bench/, ...)
+**/target/

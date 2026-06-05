@@ -1,0 +1,30 @@
+# Fae headless-core — production Rust workspace (Phase 1).
+# Greenfield daemon shell + selective ports (per docs/architecture/legacy-reuse-audit.md).
+# Control-plane-first: the authorization core lands and is fully tested BEFORE any
+# network surface exists, so a half-secure server cannot be created by accident.
+[workspace]
+resolver = "2"
+members = [
+  "fae-control-plane",
+  "fae-envelope-gate",
+  "fae-daemon",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+license = "AGPL-3.0-or-later OR LicenseRef-Commercial"
+repository = "https://github.com/saorsa-labs/fae"
+authors = ["Saorsa Labs"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+getrandom = { version = "0.2", features = ["std"] }
+sha2 = "0.10"
+subtle = "2"
+hex = "0.4"
+
+[profile.release]
+opt-level = 3

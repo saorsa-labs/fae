@@ -1,0 +1,13 @@
+[package]
+name = "fae-envelope-gate"
+version = "0.1.0"
+description = "G5 peer-envelope gate: typed, closed-kind, schema-versioned, signature-checked, audited boundary for untrusted Fae<->Fae input. No free-form peer text reaches the LLM/memory/tools. Promoted from phase0/g5-envelope-gate (reviewed)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
