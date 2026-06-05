@@ -34,6 +34,11 @@
 - **Engine behind `ProviderAdapter`** (the trait already exists in `legacy/rust-core/src/fae_llm/provider.rs`): port `LocalMistralrsAdapter` **0.7→0.8** (trivial per S13: `Delta.content: Option`, error-variant types, inherent `.next()`); load **Gemma-4 E4B** (front) + **Qwen3-14B dense** (driver); wire the **llama.cpp fallback** proven in G2.
 - **Acceptance:** `conversation.inject_text` → streamed tokens + a tool call, on mistral.rs, meeting ADR-002 latency SLOs locally.
 
+**Progress (2026-06-05) — greenfield `crates/` workspace, not a `legacy/rust-core` revival** (per the G3 verdict):
+- **Chunk 1 ✅** — `fae-control-plane` (transport-free authz core: scopes, per-command `authorize`, anti-rebind `Host`, CSPRNG tokens hashed-at-rest + constant-time verify, audit) and `fae-envelope-gate` (G5 boundary, promoted from `phase0/`). `/code-review` hardening applied (signature-verifier test-gating, audited-only public gate entry, envelope size cap, atomic `0700`/`0600` bootstrap, non-secret audit ids).
+- **Chunk 2a ✅ (live-tested)** — `fae-daemon` Unix-socket NDJSON listener: per-connection token auth → `ClientRecord`, per-message `authorize`, read-only dispatch stub (`host.ping`/`host.version`/`runtime.status`), fail-closed audit, socket `0600`. No TCP port. Pure `session::handle_frame` (7 unit tests) under a thin tokio shell. End-to-end verified: auth→ok, missing-scope deny, not_implemented fail-loud, bad-token→close, full audit trail with the token never logged.
+- **Next:** 2b stream-ticket logic (pure, in control-plane); 2c TCP-loopback + WS/SSE diagnostic listener (`Host`/`Origin`, defensive headers, ticket consume, Keychain); then Chunk 3 engine adapter.
+
 ## 2. Phase 2 — Voice pipeline + parity
 
 **Goal:** full local voice loop with Fae's identity intact.
