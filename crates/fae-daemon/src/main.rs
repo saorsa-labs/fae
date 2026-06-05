@@ -1,14 +1,15 @@
-//! Fae headless-core daemon — **Phase 1 skeleton**.
+//! Fae headless-core daemon — **Phase 1, chunk 2a**.
 //!
-//! Control-plane-first discipline: this skeleton wires up the *authorization*
-//! path (bootstrap a session token, build a client record, decide + audit a
-//! command) **before** any network listener exists. The Unix-socket/WebSocket
-//! server and the mistral.rs engine adapter are explicit subsequent chunks
-//! (marked `CHUNK 2` / `CHUNK 3` below) and are gated by the same
-//! `fae-control-plane` authorization the demo exercises here.
+//! Control-plane-first: every byte a client sends is routed through
+//! [`fae_control_plane`]. Chunk 1 built + tested the transport-free
+//! authorization core; chunk 2a adds the **Unix-domain-socket** transport
+//! (NDJSON), per-connection token authentication, per-message `authorize`, a
+//! read-only command dispatch stub, and fail-closed audit. No TCP port is
+//! opened — TCP-loopback + WS/SSE diagnostics with single-use stream tickets
+//! are chunk 2c; the mistral.rs engine adapter is chunk 3.
 //!
-//! Run: `cargo run -p fae-daemon`. It bootstraps a private run directory + token
-//! and prints a sample authorized command flow. No ports are opened.
+//! Run: `cargo run -p fae-daemon`. It bootstraps a private run dir + token,
+//! then serves the socket until killed.
 #![forbid(unsafe_code)]
 #![cfg_attr(
     not(test),
@@ -17,40 +18,37 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fae_control_plane::{
-    append_audit_jsonl, authorize, generate_token, hash_token, AuditEvent, ClientClass,
-    ClientRecord, Command, PROTOCOL_VERSION,
+    generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, PROTOCOL_VERSION,
 };
+
+mod session;
+mod transport;
 
 const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
 type DaemonResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-fn main() -> DaemonResult<()> {
-    println!("fae-daemon (Phase 1 skeleton) — protocol v{PROTOCOL_VERSION}");
+#[tokio::main]
+async fn main() -> DaemonResult<()> {
+    println!("fae-daemon (Phase 1, chunk 2a) — protocol v{PROTOCOL_VERSION}");
 
     let run_dir = run_directory()?;
     create_private_dir(&run_dir)?;
     let socket_path = run_dir.join("fae-daemon.sock");
+    let audit_path = run_dir.join("audit.jsonl");
     println!("run dir : {} (0700)", run_dir.display());
-    println!(
-        "socket  : {} (CHUNK 2: bind + serve)",
-        socket_path.display()
-    );
 
     // ── Bootstrap the first client (the Swift frontend launched by the owner) ──
-    let now_ms = now_ms()?;
+    let now = now_ms();
     let token = generate_token()?;
     let token_hash = hash_token(&token);
     let token_path = run_dir.join("bootstrap.token");
-    write_secret_file(&token_path, &token)?; // file fallback; CHUNK 2: macOS Keychain
-    println!(
-        "token   : {} (0600, hash {}…)",
-        token_path.display(),
-        &token_hash.to_hex()[..12]
-    );
+    write_secret_file(&token_path, &token)?; // file fallback; CHUNK 2c: macOS Keychain
+    println!("token   : {} (0600)", token_path.display());
 
     let client = ClientRecord {
         client_id: "swift-frontend-bootstrap".to_owned(),
@@ -59,48 +57,22 @@ fn main() -> DaemonResult<()> {
             .default_scopes()
             .into_iter()
             .collect(),
-        issued_at_ms: now_ms,
-        expires_at_ms: now_ms + THIRTY_DAYS_MS,
+        issued_at_ms: now,
+        expires_at_ms: now.saturating_add(THIRTY_DAYS_MS),
         revoked_at_ms: None,
         display_name: "Fae (this Mac)".to_owned(),
     };
 
-    let audit_path = run_dir.join("audit.jsonl");
+    let mut registry = ClientRegistry::new();
+    registry.insert(client, token_hash);
+    let registry = Arc::new(registry);
 
-    // ── Demonstrate the chokepoint: an allowed command and a denied one ──
-    let allowed = Command {
-        v: PROTOCOL_VERSION,
-        request_id: "demo-1".to_owned(),
-        command: "conversation.inject_text".to_owned(),
-        payload: serde_json::json!({ "text": "hello" }),
-    };
-    let denied = Command {
-        v: PROTOCOL_VERSION,
-        request_id: "demo-2".to_owned(),
-        command: "runtime.shutdown".to_owned(), // needs `admin`, which the frontend lacks
-        payload: serde_json::Value::Null,
-    };
-
-    for cmd in [&allowed, &denied] {
-        let decision = authorize(&client, cmd, now_ms);
-        let event = AuditEvent::from_authz(
-            next_event_id(now_ms),
-            now_ms,
-            Some(client.client_id.clone()),
-            cmd,
-            &decision,
-        );
-        append_audit_jsonl(&audit_path, &event)?;
-        println!("authz   : {:<28} -> {:?}", cmd.command, decision);
-    }
     println!("audit   : {} (jsonl)", audit_path.display());
-
+    println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
     println!();
-    println!("NEXT (gated by this control plane):");
-    println!("  CHUNK 2 — Unix-socket + WS listener: Host/Origin checks, single-use stream");
-    println!("            tickets, per-message authorize(), peer input via fae-envelope-gate.");
-    println!("  CHUNK 3 — engine adapter: mistral.rs (E4B + Qwen3-14B) + llama.cpp fallback,");
-    println!("            models.lock fail-closed loader.");
+
+    // Serves until the process is killed. Fails closed on bind/permission error.
+    transport::serve_unix(socket_path, registry, audit_path).await?;
     Ok(())
 }
 
@@ -168,16 +140,20 @@ fn write_secret_file(path: &Path, contents: &str) -> DaemonResult<()> {
     Ok(())
 }
 
-fn now_ms() -> DaemonResult<u64> {
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH)?;
-    Ok(u64::try_from(dur.as_millis())?)
+/// Current wall clock in epoch-ms. Infallible: a pre-1970 clock yields 0 and an
+/// impossibly-far-future clock saturates — never panics.
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|dur| u64::try_from(dur.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 /// Monotonic, non-secret audit correlation id. An event id only needs to be
 /// unique and ordered — never use a CSPRNG bearer token here (that conflates
 /// secret material with log fields and makes every command pay a `getrandom`
 /// syscall that could fail the command).
-fn next_event_id(now_ms: u64) -> String {
+pub(crate) fn next_event_id(now_ms: u64) -> String {
     static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("evt-{now_ms}-{seq}")

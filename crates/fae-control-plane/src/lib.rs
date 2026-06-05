@@ -53,6 +53,61 @@ impl Command {
     }
 }
 
+/// The pre-auth frame a client sends first on a fresh connection. It is **not**
+/// a scoped command — it establishes the session, so it never passes through
+/// [`authorize`]. Carried in `Command.command == "session.authenticate"` with
+/// this shape as the payload.
+pub const AUTHENTICATE_COMMAND: &str = "session.authenticate";
+
+/// A control-plane response (ADR-002 v2). `ok` distinguishes success from any
+/// non-success (denied, needs-confirmation, error); `error.code` carries the
+/// machine-readable reason. Secrets never appear here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Response {
+    pub v: u16,
+    pub request_id: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ResponseError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseError {
+    pub code: String,
+    pub message: String,
+}
+
+impl Response {
+    #[must_use]
+    pub fn ok(request_id: &str, result: serde_json::Value) -> Response {
+        Response {
+            v: PROTOCOL_VERSION,
+            request_id: request_id.to_owned(),
+            ok: true,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    #[must_use]
+    pub fn error(request_id: &str, code: &str, message: &str) -> Response {
+        Response {
+            v: PROTOCOL_VERSION,
+            request_id: request_id.to_owned(),
+            ok: false,
+            result: None,
+            error: Some(ResponseError {
+                code: code.to_owned(),
+                message: message.to_owned(),
+            }),
+        }
+    }
+}
+
 // ───────────────────────────────── Scopes ────────────────────────────────────
 
 /// Closed capability catalog. Unknown scope strings never parse, so they are
@@ -376,6 +431,30 @@ impl AuditEvent {
             arg_hash: hash_token(&cmd.payload.to_string()).to_hex(),
         }
     }
+
+    /// Build an audit row for an authentication attempt. The auth payload holds
+    /// the presented token, so it is **never** hashed into `arg_hash` (a digest
+    /// of a known-format token is needlessly brute-checkable). `arg_hash` is
+    /// empty for auth rows.
+    #[must_use]
+    pub fn authentication(
+        event_id: String,
+        ts_ms: u64,
+        client_id: Option<String>,
+        decision: AuditDecision,
+        reason: &str,
+    ) -> AuditEvent {
+        AuditEvent {
+            event_id,
+            ts_ms,
+            client_id,
+            command: AUTHENTICATE_COMMAND.to_owned(),
+            decision,
+            reason: reason.to_owned(),
+            scopes: Vec::new(),
+            arg_hash: String::new(),
+        }
+    }
 }
 
 /// Append one audit row as JSON Lines. Fail-closed: a write error is surfaced so
@@ -397,6 +476,95 @@ pub fn append_audit_jsonl(
         .map_err(ControlPlaneError::Audit)?;
     file.write_all(b"\n").map_err(ControlPlaneError::Audit)?;
     Ok(())
+}
+
+// ─────────────────────────── Client registry / auth ──────────────────────────
+
+/// Why an authentication attempt was refused. Maps to an audit reason code; the
+/// wire error message is deliberately coarse so it does not leak which factor
+/// failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthError {
+    UnknownClient,
+    BadToken,
+    Revoked,
+    Expired,
+}
+
+impl AuthError {
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            AuthError::UnknownClient => "unknown_client",
+            AuthError::BadToken => "bad_token",
+            AuthError::Revoked => "client_revoked",
+            AuthError::Expired => "token_expired",
+        }
+    }
+}
+
+struct RegisteredClient {
+    record: ClientRecord,
+    token_hash: TokenHash,
+}
+
+/// In-memory registry of sessions the daemon trusts. Pure logic — no I/O. The
+/// transport shell looks a client up by id, verifies the presented token in
+/// constant time, and gets back the exact [`ClientRecord`] (scopes) to run
+/// [`authorize`] against per message.
+#[derive(Default)]
+pub struct ClientRegistry {
+    clients: std::collections::HashMap<String, RegisteredClient>,
+}
+
+impl ClientRegistry {
+    #[must_use]
+    pub fn new() -> ClientRegistry {
+        ClientRegistry {
+            clients: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register (or replace) a client and the at-rest hash of its session token.
+    pub fn insert(&mut self, record: ClientRecord, token_hash: TokenHash) {
+        self.clients.insert(
+            record.client_id.clone(),
+            RegisteredClient { record, token_hash },
+        );
+    }
+
+    /// Authenticate a presented token for `client_id`. Constant-time token
+    /// comparison; returns the live record only if the token matches and the
+    /// record is neither revoked nor expired. Returns a clone so the caller owns
+    /// the session's scope set without holding a borrow on the registry.
+    pub fn authenticate(
+        &self,
+        client_id: &str,
+        presented_token: &str,
+        now_ms: u64,
+    ) -> Result<ClientRecord, AuthError> {
+        let entry = self
+            .clients
+            .get(client_id)
+            .ok_or(AuthError::UnknownClient)?;
+        if !verify_token(presented_token, &entry.token_hash) {
+            return Err(AuthError::BadToken);
+        }
+        if entry.record.revoked_at_ms.is_some() {
+            return Err(AuthError::Revoked);
+        }
+        if now_ms >= entry.record.expires_at_ms {
+            return Err(AuthError::Expired);
+        }
+        Ok(entry.record.clone())
+    }
+
+    /// Mark a client revoked (emergency lockout / security event). Idempotent.
+    pub fn revoke(&mut self, client_id: &str, now_ms: u64) {
+        if let Some(entry) = self.clients.get_mut(client_id) {
+            entry.record.revoked_at_ms.get_or_insert(now_ms);
+        }
+    }
 }
 
 // ───────────────────────────────── Tests ─────────────────────────────────────
@@ -556,6 +724,79 @@ mod tests {
         assert!(json.contains("\"decision\":\"allow\""));
         assert!(json.contains("\"command\":\"conversation.inject_text\""));
         assert!(json.contains("arg_hash"));
+        Ok(())
+    }
+
+    fn registry_with_bootstrap(
+        token: &str,
+        expires_at_ms: u64,
+        revoked: Option<u64>,
+    ) -> ClientRegistry {
+        let mut registry = ClientRegistry::new();
+        registry.insert(
+            client(&[Scope::ConversationWrite], expires_at_ms, revoked),
+            hash_token(token),
+        );
+        registry
+    }
+
+    #[test]
+    fn registry_authenticates_valid_token() -> Result<(), AuthError> {
+        let registry = registry_with_bootstrap("s3cret-token", 1000, None);
+        let record = registry.authenticate("c1", "s3cret-token", 10)?;
+        assert!(record.scopes.contains(&Scope::ConversationWrite));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_rejects_bad_token_unknown_expired_revoked() {
+        let registry = registry_with_bootstrap("s3cret-token", 1000, None);
+        assert!(matches!(
+            registry.authenticate("c1", "wrong", 10),
+            Err(AuthError::BadToken)
+        ));
+        assert!(matches!(
+            registry.authenticate("nope", "s3cret-token", 10),
+            Err(AuthError::UnknownClient)
+        ));
+
+        let expired = registry_with_bootstrap("s3cret-token", 5, None);
+        assert!(matches!(
+            expired.authenticate("c1", "s3cret-token", 10),
+            Err(AuthError::Expired)
+        ));
+
+        let revoked = registry_with_bootstrap("s3cret-token", 1000, Some(1));
+        assert!(matches!(
+            revoked.authenticate("c1", "s3cret-token", 10),
+            Err(AuthError::Revoked)
+        ));
+    }
+
+    #[test]
+    fn revoke_blocks_subsequent_auth() {
+        let mut registry = registry_with_bootstrap("s3cret-token", 1000, None);
+        assert!(registry.authenticate("c1", "s3cret-token", 10).is_ok());
+        registry.revoke("c1", 11);
+        assert!(matches!(
+            registry.authenticate("c1", "s3cret-token", 12),
+            Err(AuthError::Revoked)
+        ));
+    }
+
+    #[test]
+    fn response_serializes_without_secret_fields() -> Result<(), serde_json::Error> {
+        let ok = Response::ok("r1", serde_json::json!({ "pong": true }));
+        let json = serde_json::to_string(&ok)?;
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"pong\":true"));
+        assert!(!json.contains("error"));
+
+        let err = Response::error("r2", "missing_scope", "needs conversation:write");
+        let json = serde_json::to_string(&err)?;
+        assert!(json.contains("\"ok\":false"));
+        assert!(json.contains("missing_scope"));
+        assert!(!json.contains("result"));
         Ok(())
     }
 
