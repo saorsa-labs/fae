@@ -20,6 +20,7 @@ use fae_control_plane::{
     ClientRecord, ClientRegistry, ConsumedTicket, Response as CpResponse, Scope, TicketStore,
     PROTOCOL_VERSION,
 };
+use fae_engine::ProviderAdapter;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -50,6 +51,7 @@ const MAX_WS_MESSAGE_BYTES: usize = 256 * 1024;
 /// Shared state for the diagnostic listener.
 pub struct DiagnosticState {
     pub registry: Arc<ClientRegistry>,
+    pub engine: Arc<dyn ProviderAdapter>,
     pub tickets: Arc<Mutex<TicketStore>>,
     pub audit_path: PathBuf,
     pub port: u16,
@@ -390,13 +392,21 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
             "allow",
         ),
     );
-    ws_message_loop(ws, session, &state.registry, &state.audit_path).await
+    ws_message_loop(
+        ws,
+        session,
+        &state.registry,
+        state.engine.as_ref(),
+        &state.audit_path,
+    )
+    .await
 }
 
 async fn ws_message_loop(
     mut ws: WebSocketStream<TcpStream>,
     mut session: SessionState,
     registry: &ClientRegistry,
+    engine: &dyn ProviderAdapter,
     audit_path: &Path,
 ) -> std::io::Result<()> {
     while let Some(message) = ws.next().await {
@@ -411,7 +421,7 @@ async fn ws_message_loop(
         }
         let now = now_ms();
         let event_id = next_event_id(now);
-        let outcome = handle_frame(registry, &mut session, line, now, event_id);
+        let outcome = handle_frame(registry, engine, &mut session, line, now, event_id).await;
 
         // Same fail-closed audit contract as the Unix socket: no response before
         // the frame is durably audited.

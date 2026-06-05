@@ -10,6 +10,8 @@ use fae_control_plane::{
     authorize, AuditDecision, AuditEvent, AuthzDecision, ClientRecord, ClientRegistry, Command,
     ConsumedTicket, Response, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
 };
+use fae_engine::{ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role};
+use futures_util::StreamExt;
 use serde::Deserialize;
 
 /// Daemon version surfaced by `host.version`.
@@ -37,11 +39,12 @@ pub struct FrameOutcome {
 }
 
 /// Handle one decoded NDJSON line. `event_id` is supplied by the caller (a
-/// monotonic, non-secret id) so this function stays pure. `now_ms` is the
-/// per-frame wall clock — never a stale snapshot.
-#[must_use]
-pub fn handle_frame(
+/// monotonic, non-secret id). `now_ms` is the per-frame wall clock — never a
+/// stale snapshot. `engine` backs `conversation.inject_text`; all other
+/// commands ignore it.
+pub async fn handle_frame(
     registry: &ClientRegistry,
+    engine: &dyn ProviderAdapter,
     state: &mut SessionState,
     line: &str,
     now_ms: u64,
@@ -72,7 +75,7 @@ pub fn handle_frame(
             // Clone the record out so we no longer borrow `state`; the session
             // is already established and never mutated by a command frame.
             let record = record.clone();
-            handle_command(&record, &cmd, now_ms, event_id)
+            handle_command(engine, &record, &cmd, now_ms, event_id).await
         }
     }
 }
@@ -201,7 +204,8 @@ fn handle_auth(
     }
 }
 
-fn handle_command(
+async fn handle_command(
+    engine: &dyn ProviderAdapter,
     record: &ClientRecord,
     cmd: &Command,
     now_ms: u64,
@@ -239,9 +243,9 @@ fn handle_command(
         // shell persists `audit` before writing this response, so nothing is
         // observable pre-audit. When mutating commands land, their side effect
         // MUST move behind the audit write in the shell.
-        AuthzDecision::Allow => match dispatch(cmd) {
+        AuthzDecision::Allow => match dispatch(engine, cmd).await {
             Ok(result) => Response::ok(&cmd.request_id, result),
-            Err(code) => Response::error(&cmd.request_id, code, "command not yet implemented"),
+            Err(code) => Response::error(&cmd.request_id, code, "command could not be completed"),
         },
         AuthzDecision::ConfirmRequired => Response::error(
             &cmd.request_id,
@@ -259,18 +263,78 @@ fn handle_command(
     }
 }
 
-/// Command dispatch. Chunk 2a wires only the read-only `host`/`runtime` status
-/// commands; everything else is authorized-but-unimplemented (fail loud, not a
-/// silent success) until the relevant subsystem is ported.
-fn dispatch(cmd: &Command) -> Result<serde_json::Value, &'static str> {
+/// Command dispatch. Read-only `host`/`runtime` status, plus
+/// `conversation.inject_text` through the engine (chunk 3c). Everything else is
+/// authorized-but-unimplemented (fail loud, not a silent success).
+async fn dispatch(
+    engine: &dyn ProviderAdapter,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
     match cmd.command.as_str() {
         "host.ping" => Ok(serde_json::json!({ "pong": true })),
         "host.version" => {
             Ok(serde_json::json!({ "version": DAEMON_VERSION, "protocol": PROTOCOL_VERSION }))
         }
-        "runtime.status" => Ok(serde_json::json!({ "status": "ok", "engine": "not_loaded" })),
+        "runtime.status" => {
+            let info = engine.describe();
+            Ok(serde_json::json!({
+                "status": "ok",
+                "engine": { "backend": info.backend, "model_id": info.model_id },
+            }))
+        }
+        "conversation.inject_text" => inject_text(engine, cmd).await,
         _ => Err("not_implemented"),
     }
+}
+
+/// Run one user turn through the engine, collecting the streamed events into a
+/// single response. Streaming these as live protocol events is a follow-on, once
+/// the event/`conversation.subscribe` channel lands.
+async fn inject_text(
+    engine: &dyn ProviderAdapter,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let text = cmd
+        .payload
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let request = ChatRequest {
+        system: None,
+        messages: vec![ChatMessage {
+            role: Role::User,
+            content: text.to_owned(),
+        }],
+        tools: Vec::new(),
+        max_tokens: 512,
+    };
+    let mut stream = engine
+        .stream_chat(request)
+        .await
+        .map_err(|_| "inference_failed")?;
+    let mut answer = String::new();
+    let mut tool_calls = Vec::new();
+    let mut finish_reason = "stop".to_owned();
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(ChatEvent::Token(token)) => answer.push_str(&token),
+            Ok(ChatEvent::ToolCall { name, arguments }) => {
+                tool_calls.push(serde_json::json!({ "name": name, "arguments": arguments }));
+            }
+            Ok(ChatEvent::Done {
+                finish_reason: reason,
+            }) => {
+                finish_reason = reason;
+                break;
+            }
+            Err(_) => return Err("inference_failed"),
+        }
+    }
+    Ok(serde_json::json!({
+        "text": answer,
+        "tool_calls": tool_calls,
+        "finish_reason": finish_reason,
+    }))
 }
 
 /// An audit row for a non-authz, non-authenticate event (parse failure, command
@@ -299,7 +363,12 @@ fn manual_audit(
 mod tests {
     use super::*;
     use fae_control_plane::{hash_token, ClientClass, Scope};
+    use fae_engine::MockAdapter;
     use std::collections::HashSet;
+
+    fn mock() -> MockAdapter {
+        MockAdapter::new("test")
+    }
 
     fn registry() -> ClientRegistry {
         let mut registry = ClientRegistry::new();
@@ -338,17 +407,19 @@ mod tests {
         )
     }
 
-    #[test]
-    fn command_before_auth_is_refused_but_connection_kept() {
+    #[tokio::test]
+    async fn command_before_auth_is_refused_but_connection_kept() {
         let reg = registry();
         let mut state = SessionState::Unauthenticated;
         let out = handle_frame(
             &reg,
+            &mock(),
             &mut state,
             &frame("host.ping", serde_json::Value::Null),
             10,
             "e1".to_owned(),
-        );
+        )
+        .await;
         assert!(!out.response.ok);
         assert_eq!(
             out.response.error.as_ref().map(|e| e.code.as_str()),
@@ -358,11 +429,11 @@ mod tests {
         assert!(matches!(state, SessionState::Unauthenticated));
     }
 
-    #[test]
-    fn malformed_frame_closes_connection() {
+    #[tokio::test]
+    async fn malformed_frame_closes_connection() {
         let reg = registry();
         let mut state = SessionState::Unauthenticated;
-        let out = handle_frame(&reg, &mut state, "{not json", 10, "e1".to_owned());
+        let out = handle_frame(&reg, &mock(), &mut state, "{not json", 10, "e1".to_owned()).await;
         assert!(!out.response.ok);
         assert_eq!(
             out.response.error.as_ref().map(|e| e.code.as_str()),
@@ -371,33 +442,37 @@ mod tests {
         assert!(out.close);
     }
 
-    #[test]
-    fn successful_auth_transitions_state() {
+    #[tokio::test]
+    async fn successful_auth_transitions_state() {
         let reg = registry();
         let mut state = SessionState::Unauthenticated;
         let out = handle_frame(
             &reg,
+            &mock(),
             &mut state,
             &auth_frame("c1", "good-token"),
             10,
             "e1".to_owned(),
-        );
+        )
+        .await;
         assert!(out.response.ok);
         assert!(!out.close);
         assert!(matches!(state, SessionState::Authenticated(_)));
     }
 
-    #[test]
-    fn bad_token_is_denied_and_closes() {
+    #[tokio::test]
+    async fn bad_token_is_denied_and_closes() {
         let reg = registry();
         let mut state = SessionState::Unauthenticated;
         let out = handle_frame(
             &reg,
+            &mock(),
             &mut state,
             &auth_frame("c1", "wrong"),
             10,
             "e1".to_owned(),
-        );
+        )
+        .await;
         assert!(!out.response.ok);
         assert_eq!(
             out.response.error.as_ref().map(|e| e.code.as_str()),
@@ -407,18 +482,20 @@ mod tests {
         assert!(matches!(state, SessionState::Unauthenticated));
     }
 
-    #[test]
-    fn authed_ping_dispatches() {
+    #[tokio::test]
+    async fn authed_ping_dispatches() {
         let reg = registry();
         let mut state =
             SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
         let out = handle_frame(
             &reg,
+            &mock(),
             &mut state,
             &frame("host.ping", serde_json::Value::Null),
             11,
             "e2".to_owned(),
-        );
+        )
+        .await;
         assert!(out.response.ok);
         assert_eq!(
             out.response.result,
@@ -426,19 +503,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn authed_command_missing_scope_is_denied() {
+    #[tokio::test]
+    async fn authed_command_missing_scope_is_denied() {
         let reg = registry();
         let mut state =
             SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
         // runtime.shutdown needs `admin`, which this client lacks.
         let out = handle_frame(
             &reg,
+            &mock(),
             &mut state,
             &frame("runtime.shutdown", serde_json::Value::Null),
             11,
             "e2".to_owned(),
-        );
+        )
+        .await;
         assert!(!out.response.ok);
         assert_eq!(
             out.response.error.as_ref().map(|e| e.code.as_str()),
@@ -446,14 +525,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn authed_unimplemented_command_fails_loud() {
+    #[tokio::test]
+    async fn authed_inject_text_runs_through_engine() {
         let reg = registry();
         let mut state =
             SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
-        // conversation.inject_text is authorized (scope held) but not yet wired.
+        // conversation.inject_text (scope held) now streams through the engine;
+        // the mock echoes the user text back.
         let out = handle_frame(
             &reg,
+            &mock(),
             &mut state,
             &frame(
                 "conversation.inject_text",
@@ -461,11 +542,17 @@ mod tests {
             ),
             11,
             "e2".to_owned(),
-        );
-        assert!(!out.response.ok);
+        )
+        .await;
+        assert!(out.response.ok);
+        let result = out.response.result.expect("result");
         assert_eq!(
-            out.response.error.as_ref().map(|e| e.code.as_str()),
-            Some("not_implemented")
+            result.get("text").and_then(|v| v.as_str()),
+            Some("echo: hi")
+        );
+        assert_eq!(
+            result.get("finish_reason").and_then(|v| v.as_str()),
+            Some("stop")
         );
     }
 

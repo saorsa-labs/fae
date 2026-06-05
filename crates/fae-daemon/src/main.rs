@@ -25,6 +25,7 @@ use fae_control_plane::{
     generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, TicketStore,
     PROTOCOL_VERSION,
 };
+use fae_engine::{LocalMistralrsAdapter, MockAdapter, ProviderAdapter};
 
 mod diagnostic;
 mod session;
@@ -70,6 +71,9 @@ async fn main() -> DaemonResult<()> {
     let registry = Arc::new(registry);
     let tickets = Arc::new(Mutex::new(TicketStore::new()));
 
+    let engine = build_engine().await;
+    let info = engine.describe();
+    println!("engine  : {} ({})", info.backend, info.model_id);
     println!("audit   : {} (jsonl)", audit_path.display());
     println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
 
@@ -77,6 +81,7 @@ async fn main() -> DaemonResult<()> {
     if let Some(port) = diagnostic_port() {
         let state = Arc::new(diagnostic::DiagnosticState {
             registry: Arc::clone(&registry),
+            engine: Arc::clone(&engine),
             tickets: Arc::clone(&tickets),
             audit_path: audit_path.clone(),
             port,
@@ -91,8 +96,30 @@ async fn main() -> DaemonResult<()> {
     println!();
 
     // Serves until the process is killed. Fails closed on bind/permission error.
-    transport::serve_unix(socket_path, registry, audit_path).await?;
+    transport::serve_unix(socket_path, registry, engine, audit_path).await?;
     Ok(())
+}
+
+/// Build the inference backend. With `FAE_MODEL_ID` set, load that mistral.rs
+/// text model (the real engine); otherwise (and on load failure) use the mock
+/// echo engine so the daemon still serves without ~GB of weights present.
+async fn build_engine() -> Arc<dyn ProviderAdapter> {
+    match std::env::var("FAE_MODEL_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+    {
+        Some(model_id) => {
+            println!("engine  : loading mistral.rs model {model_id} (this can take a while)…");
+            match LocalMistralrsAdapter::load_text(&model_id).await {
+                Ok(adapter) => Arc::new(adapter),
+                Err(error) => {
+                    eprintln!("fae-daemon: model load failed ({error}); using mock engine");
+                    Arc::new(MockAdapter::new("mock-echo"))
+                }
+            }
+        }
+        None => Arc::new(MockAdapter::new("mock-echo")),
+    }
 }
 
 /// Diagnostic TCP port from `FAE_DIAGNOSTIC_TCP_PORT`, if set to a non-zero

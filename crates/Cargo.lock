@@ -1393,6 +1393,7 @@ name = "fae-daemon"
 version = "0.1.0"
 dependencies = [
  "fae-control-plane",
+ "fae-engine",
  "fae-envelope-gate",
  "futures-util",
  "serde",
