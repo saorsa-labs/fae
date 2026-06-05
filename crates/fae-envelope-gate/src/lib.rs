@@ -15,8 +15,17 @@ use std::path::Path;
 
 pub const SUPPORTED_SCHEMA_VERSION: u16 = 1;
 
+/// Hard ceiling on a raw peer envelope. Peer ingress is pre-authentication
+/// (no token, no verified signature yet), so an oversized blob is rejected
+/// **before** `serde_json` is allowed to allocate for it. Control envelopes
+/// (direct messages, consent receipts, presence) are kilobytes; 64 KiB is
+/// generous headroom.
+pub const MAX_ENVELOPE_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum GateError {
+    #[error("envelope too large: {size} bytes > {max} limit")]
+    TooLarge { size: usize, max: usize },
     #[error("invalid envelope JSON: {0}")]
     InvalidJson(serde_json::Error),
     #[error("unsupported schema version: {0}")]
@@ -79,18 +88,26 @@ pub trait SignatureVerifier {
     fn verify(&self, envelope: &PeerEnvelope) -> bool;
 }
 
+/// Accepts every signature. **Test-only** — gated behind `cfg(test)` and the
+/// non-default `test-util` feature so it can never be constructed in a
+/// production build and accidentally bypass the gate.
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone, Copy)]
 pub struct AcceptAllSignatureVerifier;
 
+#[cfg(any(test, feature = "test-util"))]
 impl SignatureVerifier for AcceptAllSignatureVerifier {
     fn verify(&self, _envelope: &PeerEnvelope) -> bool {
         true
     }
 }
 
+/// Rejects every signature. **Test-only** (see [`AcceptAllSignatureVerifier`]).
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone, Copy)]
 pub struct RejectAllSignatureVerifier;
 
+#[cfg(any(test, feature = "test-util"))]
 impl SignatureVerifier for RejectAllSignatureVerifier {
     fn verify(&self, _envelope: &PeerEnvelope) -> bool {
         false
@@ -126,10 +143,21 @@ impl AcceptedEnvelope {
     }
 }
 
-pub fn parse_and_gate(
+/// Parse + gate, returning the accepted envelope *and* the audit row the caller
+/// MUST persist. Crate-private on purpose: the only public entry is
+/// [`gate_and_audit`], which guarantees the row is written before the accepted
+/// data is handed back — there is no public path to accepted peer data that
+/// skips the audit.
+pub(crate) fn parse_and_gate(
     raw: &str,
     verifier: &dyn SignatureVerifier,
 ) -> Result<(AcceptedEnvelope, AuditRecord), GateError> {
+    if raw.len() > MAX_ENVELOPE_BYTES {
+        return Err(GateError::TooLarge {
+            size: raw.len(),
+            max: MAX_ENVELOPE_BYTES,
+        });
+    }
     let envelope = serde_json::from_str::<PeerEnvelope>(raw).map_err(GateError::InvalidJson)?;
     if envelope.schema_version != SUPPORTED_SCHEMA_VERSION {
         let version = envelope.schema_version;
@@ -189,7 +217,13 @@ fn accepted_audit(envelope: &PeerEnvelope) -> AuditRecord {
 }
 
 fn rejected_audit(raw: &str, error: &GateError) -> AuditRecord {
-    let parsed = serde_json::from_str::<serde_json::Value>(raw).ok();
+    // Never re-parse oversized input on the audit path — that is the exact
+    // allocation we just refused. Salvage sender/envelope ids only when small.
+    let parsed = if raw.len() <= MAX_ENVELOPE_BYTES {
+        serde_json::from_str::<serde_json::Value>(raw).ok()
+    } else {
+        None
+    };
     let envelope_id = string_field(parsed.as_ref(), "envelope_id");
     let sender_id = string_field(parsed.as_ref(), "sender_id");
     let kind = parsed
@@ -216,6 +250,7 @@ fn string_field(value: Option<&serde_json::Value>, field: &str) -> Option<String
 
 fn error_reason(error: &GateError) -> String {
     match error {
+        GateError::TooLarge { size, max } => format!("envelope_too_large:{size}>{max}"),
         GateError::InvalidJson(_) => "invalid_json_or_unknown_kind".to_owned(),
         GateError::UnsupportedSchema(version) => format!("unsupported_schema_version:{version}"),
         GateError::SignatureRejected => "signature_rejected".to_owned(),
@@ -305,6 +340,18 @@ mod tests {
         assert!(content.contains("rejected"));
         assert!(content.contains("signature_rejected"));
         Ok(())
+    }
+
+    #[test]
+    fn rejects_oversized_envelope_before_parsing() {
+        // A blob over the cap is refused on size alone — serde never sees it.
+        let raw = "x".repeat(MAX_ENVELOPE_BYTES + 1);
+        let result = parse_and_gate(&raw, &AcceptAllSignatureVerifier);
+        assert!(matches!(
+            result,
+            Err(GateError::TooLarge { size, max })
+                if size == MAX_ENVELOPE_BYTES + 1 && max == MAX_ENVELOPE_BYTES
+        ));
     }
 
     #[test]

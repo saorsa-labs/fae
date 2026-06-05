@@ -16,6 +16,7 @@
 )]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fae_control_plane::{
@@ -83,7 +84,7 @@ fn main() -> DaemonResult<()> {
     for cmd in [&allowed, &denied] {
         let decision = authorize(&client, cmd, now_ms);
         let event = AuditEvent::from_authz(
-            generate_token()?,
+            next_event_id(now_ms),
             now_ms,
             Some(client.client_id.clone()),
             cmd,
@@ -118,22 +119,45 @@ fn run_directory() -> DaemonResult<PathBuf> {
     Ok(base.join("run"))
 }
 
-/// Create a directory tree, then tighten the leaf to `0700` (owner-only).
+/// Create the private run directory with `0700` from birth. The leaf is created
+/// in a single syscall at mode `0700` (no world-readable window between
+/// `create` and `chmod`); only its ancestors go through `create_dir_all`. If
+/// the leaf already exists we re-tighten it.
 fn create_private_dir(path: &Path) -> DaemonResult<()> {
-    std::fs::create_dir_all(path)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        use std::os::unix::fs::DirBuilderExt;
+        match std::fs::DirBuilder::new().mode(0o700).create(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(path)?;
     Ok(())
 }
 
-/// Write a secret to a fresh `0600` file (owner read/write only).
+/// Write a secret to a `0600` file that is created fresh and exclusively. Any
+/// stale file is removed first, then `create_new` (`O_EXCL`) + `mode(0600)`
+/// creates the file atomically at the right permissions — there is no window
+/// where the plaintext lives in a pre-existing, looser-permissioned file. On
+/// `0600` the owner bits are immune to umask, so no post-chmod is needed.
 fn write_secret_file(path: &Path, contents: &str) -> DaemonResult<()> {
     use std::io::Write;
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let mut open = std::fs::OpenOptions::new();
-    open.write(true).create(true).truncate(true);
+    open.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -141,15 +165,20 @@ fn write_secret_file(path: &Path, contents: &str) -> DaemonResult<()> {
     }
     let mut file = open.open(path)?;
     file.write_all(contents.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
     Ok(())
 }
 
 fn now_ms() -> DaemonResult<u64> {
     let dur = SystemTime::now().duration_since(UNIX_EPOCH)?;
     Ok(u64::try_from(dur.as_millis())?)
+}
+
+/// Monotonic, non-secret audit correlation id. An event id only needs to be
+/// unique and ordered — never use a CSPRNG bearer token here (that conflates
+/// secret material with log fields and makes every command pay a `getrandom`
+/// syscall that could fail the command).
+fn next_event_id(now_ms: u64) -> String {
+    static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("evt-{now_ms}-{seq}")
 }

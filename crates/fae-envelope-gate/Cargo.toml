@@ -7,6 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Permissive/deny-all signature verifiers for downstream tests ONLY. Never
+# enable in a production build — `test-util` makes the gate-bypassing
+# `AcceptAllSignatureVerifier` constructible.
+test-util = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

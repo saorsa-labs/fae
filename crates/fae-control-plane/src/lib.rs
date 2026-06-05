@@ -498,6 +498,36 @@ mod tests {
     }
 
     #[test]
+    fn every_scope_roundtrips_through_as_str_and_parse() {
+        // Guards the two parallel match tables (`as_str` / `parse`) against
+        // drift: a variant added to one but not the other fails here.
+        let all = [
+            Scope::StatusRead,
+            Scope::ConversationWrite,
+            Scope::ConversationRead,
+            Scope::MemoryRead,
+            Scope::MemoryWrite,
+            Scope::ToolRead,
+            Scope::ToolExecuteSafe,
+            Scope::ToolExecuteDangerous,
+            Scope::AudioCapture,
+            Scope::AudioPlayback,
+            Scope::SchedulerRead,
+            Scope::SchedulerWrite,
+            Scope::X0xMessage,
+            Scope::X0xAdmin,
+            Scope::Admin,
+        ];
+        for scope in all {
+            assert_eq!(
+                Scope::parse(scope.as_str()),
+                Some(scope),
+                "round-trip failed for {scope:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_scope_strings_do_not_parse() {
         assert_eq!(Scope::parse("status:read"), Some(Scope::StatusRead));
         assert_eq!(
