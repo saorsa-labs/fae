@@ -1,0 +1,38 @@
+{
+  "case": {
+    "id": "weather-tool-paris",
+    "prompt": "What is the weather in Paris? Use the get_weather tool.",
+    "expected_tool": {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      }
+    }
+  },
+  "primary": {
+    "provider": "mistral.rs",
+    "model": "fixture",
+    "text": "",
+    "tool_call": {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      }
+    },
+    "ttft_ms": null,
+    "decode_tokens_per_second": null
+  },
+  "fallback": {
+    "provider": "llama.cpp",
+    "model": "fixture",
+    "text": "",
+    "tool_call": {
+      "name": "get_weather",
+      "arguments": {
+        "city": "Paris"
+      }
+    },
+    "ttft_ms": null,
+    "decode_tokens_per_second": null
+  }
+}

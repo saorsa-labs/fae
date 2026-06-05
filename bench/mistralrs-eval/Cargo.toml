@@ -1,0 +1,22 @@
+# S13 spike: focused mistral.rs 0.8 eval harness (throwaway).
+# Answers: does mistralrs 0.8 + candle + metal build? does Gemma-4 / Qwen3 generate
+# cleanly (NaN bug #2051 / candle RoPE #3410)? audio transcription? tool calling?
+# NOT a product crate — delete after S13.
+[package]
+name = "mistralrs-eval"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "mistralrs-eval"
+path = "src/main.rs"
+
+[dependencies]
+mistralrs = { version = "0.8", features = ["metal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
