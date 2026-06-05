@@ -20,10 +20,12 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+mod mistralrs_adapter;
 mod mock;
 mod models_lock;
 mod provider;
 
+pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::MockAdapter;
 pub use models_lock::{Artifact, LockError, ModelsLock, SUPPORTED_SCHEMA_VERSION};
 pub use provider::{

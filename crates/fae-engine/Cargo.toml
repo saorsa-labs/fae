@@ -15,7 +15,16 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 toml = { workspace = true }
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 futures-util = { workspace = true }
+
+# mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
+# target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+mistralrs = { version = "0.8", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mistralrs = { version = "0.8" }
 
 [dev-dependencies]
 tokio = { workspace = true }
