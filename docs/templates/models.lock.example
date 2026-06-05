@@ -1,0 +1,33 @@
+# Example only. Real lock file should live under ~/Library/Application Support/fae/models.lock
+schema_version = 1
+created_at = "2026-06-02T00:00:00Z"
+
+[[artifact]]
+id = "qwen3-0-6b-mistralrs-smoke"
+role = "llm"
+loader = "mistralrs"
+source_repo = "Qwen/Qwen3-0.6B"
+source_revision = "<hf-commit-sha>"
+filename = "model.safetensors"
+size_bytes = 0
+sha256 = "<64-hex-sha256>"
+signature = ""
+license = "<source-license>"
+hardware_profile = "Apple Silicon Metal; smoke only"
+approved_by = "owner"
+created_at = "2026-06-02T00:00:00Z"
+
+[[artifact]]
+id = "kokoro-82m-onnx"
+role = "tts"
+loader = "ort"
+source_repo = "<hf-or-github-repo>"
+source_revision = "<commit-or-release>"
+filename = "kokoro-v*.onnx"
+size_bytes = 0
+sha256 = "<64-hex-sha256>"
+signature = ""
+license = "<source-license>"
+hardware_profile = "Apple Silicon CPU/ANE via ONNX Runtime"
+approved_by = "owner"
+created_at = "2026-06-02T00:00:00Z"
