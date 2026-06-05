@@ -18,13 +18,15 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fae_control_plane::{
-    generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, PROTOCOL_VERSION,
+    generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, TicketStore,
+    PROTOCOL_VERSION,
 };
 
+mod diagnostic;
 mod session;
 mod transport;
 
@@ -66,14 +68,40 @@ async fn main() -> DaemonResult<()> {
     let mut registry = ClientRegistry::new();
     registry.insert(client, token_hash);
     let registry = Arc::new(registry);
+    let tickets = Arc::new(Mutex::new(TicketStore::new()));
 
     println!("audit   : {} (jsonl)", audit_path.display());
     println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
+
+    // Optional TCP-loopback HTTP/WS diagnostic surface (opt-in, never default).
+    if let Some(port) = diagnostic_port() {
+        let state = Arc::new(diagnostic::DiagnosticState {
+            registry: Arc::clone(&registry),
+            tickets: Arc::clone(&tickets),
+            audit_path: audit_path.clone(),
+            port,
+        });
+        println!("diag    : TCP loopback diagnostic enabled on port {port} (opt-in)");
+        tokio::spawn(async move {
+            if let Err(error) = diagnostic::serve_tcp(state).await {
+                eprintln!("fae-daemon: diagnostic listener stopped: {error}");
+            }
+        });
+    }
     println!();
 
     // Serves until the process is killed. Fails closed on bind/permission error.
     transport::serve_unix(socket_path, registry, audit_path).await?;
     Ok(())
+}
+
+/// Diagnostic TCP port from `FAE_DIAGNOSTIC_TCP_PORT`, if set to a non-zero
+/// value. Absent/invalid/zero → the diagnostic surface stays off.
+fn diagnostic_port() -> Option<u16> {
+    std::env::var("FAE_DIAGNOSTIC_TCP_PORT")
+        .ok()
+        .and_then(|raw| raw.parse::<u16>().ok())
+        .filter(|port| *port != 0)
 }
 
 /// Owner-private run directory: `~/Library/Application Support/fae/run` on macOS,

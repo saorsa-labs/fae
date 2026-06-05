@@ -8,7 +8,7 @@
 
 use fae_control_plane::{
     authorize, AuditDecision, AuditEvent, AuthzDecision, ClientRecord, ClientRegistry, Command,
-    Response, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
+    ConsumedTicket, Response, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
 
@@ -75,6 +75,23 @@ pub fn handle_frame(
             handle_command(&record, &cmd, now_ms, event_id)
         }
     }
+}
+
+/// Build an already-authenticated session from a consumed stream ticket. The
+/// session's scopes are the **intersection** of the live client record and the
+/// ticket grant — a ticket can never widen what the client already holds — and
+/// per-message [`authorize`] still re-checks live revocation/expiry. Returns
+/// `None` if the client record no longer exists.
+#[must_use]
+pub fn session_from_ticket(
+    registry: &ClientRegistry,
+    consumed: &ConsumedTicket,
+) -> Option<SessionState> {
+    let mut record = registry.record(&consumed.client_id)?;
+    record
+        .scopes
+        .retain(|scope| consumed.scopes.contains(scope));
+    Some(SessionState::Authenticated(record))
 }
 
 fn handle_auth(
@@ -443,5 +460,28 @@ mod tests {
             out.response.error.as_ref().map(|e| e.code.as_str()),
             Some("not_implemented")
         );
+    }
+
+    #[test]
+    fn session_from_ticket_intersects_scopes() {
+        let reg = registry(); // grants StatusRead + ConversationWrite
+        let consumed = ConsumedTicket {
+            client_id: "c1".to_owned(),
+            endpoint: "/v1/stream/x".to_owned(),
+            scopes: vec![Scope::ConversationWrite], // subset
+        };
+        match session_from_ticket(&reg, &consumed).expect("session") {
+            SessionState::Authenticated(record) => {
+                assert!(record.scopes.contains(&Scope::ConversationWrite));
+                assert!(!record.scopes.contains(&Scope::StatusRead)); // narrowed away
+            }
+            SessionState::Unauthenticated => panic!("expected authenticated"),
+        }
+        let gone = ConsumedTicket {
+            client_id: "absent".to_owned(),
+            endpoint: "/v1/stream/x".to_owned(),
+            scopes: vec![],
+        };
+        assert!(session_from_ticket(&reg, &gone).is_none());
     }
 }
