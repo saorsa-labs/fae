@@ -7,6 +7,7 @@ resolver = "2"
 members = [
   "fae-control-plane",
   "fae-envelope-gate",
+  "fae-engine",
   "fae-daemon",
 ]
 
@@ -27,7 +28,9 @@ subtle = "2"
 hex = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 tokio-tungstenite = "0.24"
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+toml = "0.8"
+async-trait = "0.1"
 
 [profile.release]
 opt-level = 3

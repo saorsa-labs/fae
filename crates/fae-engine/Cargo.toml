@@ -1,0 +1,21 @@
+[package]
+name = "fae-engine"
+version = "0.1.0"
+description = "Local inference provider abstraction (ProviderAdapter) + fail-closed models.lock checksum loader. The mistral.rs adapter lands in chunk 3b."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+toml = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
