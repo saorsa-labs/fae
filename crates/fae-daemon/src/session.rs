@@ -81,13 +81,20 @@ pub fn handle_frame(
 /// session's scopes are the **intersection** of the live client record and the
 /// ticket grant — a ticket can never widen what the client already holds — and
 /// per-message [`authorize`] still re-checks live revocation/expiry. Returns
-/// `None` if the client record no longer exists.
+/// `None` if the client record is gone, revoked, or expired: a ticket consumed
+/// for an inactive client must not yield a usable session at all (a future
+/// server-push stream must never stay open for a revoked client that sends no
+/// frame).
 #[must_use]
 pub fn session_from_ticket(
     registry: &ClientRegistry,
     consumed: &ConsumedTicket,
+    now_ms: u64,
 ) -> Option<SessionState> {
     let mut record = registry.record(&consumed.client_id)?;
+    if !record.is_active(now_ms) {
+        return None;
+    }
     record
         .scopes
         .retain(|scope| consumed.scopes.contains(scope));
@@ -470,7 +477,7 @@ mod tests {
             endpoint: "/v1/stream/x".to_owned(),
             scopes: vec![Scope::ConversationWrite], // subset
         };
-        match session_from_ticket(&reg, &consumed).expect("session") {
+        match session_from_ticket(&reg, &consumed, 10).expect("session") {
             SessionState::Authenticated(record) => {
                 assert!(record.scopes.contains(&Scope::ConversationWrite));
                 assert!(!record.scopes.contains(&Scope::StatusRead)); // narrowed away
@@ -482,6 +489,33 @@ mod tests {
             endpoint: "/v1/stream/x".to_owned(),
             scopes: vec![],
         };
-        assert!(session_from_ticket(&reg, &gone).is_none());
+        assert!(session_from_ticket(&reg, &gone, 10).is_none());
+    }
+
+    #[test]
+    fn session_from_ticket_refuses_revoked_and_expired() {
+        let consumed = ConsumedTicket {
+            client_id: "c1".to_owned(),
+            endpoint: "/v1/stream/x".to_owned(),
+            scopes: vec![Scope::ConversationWrite],
+        };
+        // Revoked after the ticket was issued.
+        let mut revoked = ClientRegistry::new();
+        revoked.insert(
+            ClientRecord {
+                client_id: "c1".to_owned(),
+                class: ClientClass::SwiftFrontend,
+                scopes: [Scope::ConversationWrite].into_iter().collect(),
+                issued_at_ms: 0,
+                expires_at_ms: 1_000,
+                revoked_at_ms: Some(5),
+                display_name: "t".to_owned(),
+            },
+            hash_token("tok"),
+        );
+        assert!(session_from_ticket(&revoked, &consumed, 10).is_none());
+        // Expired client.
+        let reg = registry();
+        assert!(session_from_ticket(&reg, &consumed, 10_000).is_none());
     }
 }

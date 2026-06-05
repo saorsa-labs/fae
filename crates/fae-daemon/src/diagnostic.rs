@@ -23,9 +23,10 @@ use fae_control_plane::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
-use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
+use tokio_tungstenite::tungstenite::http::{HeaderMap, HeaderValue, StatusCode};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
@@ -41,6 +42,10 @@ const BASE_SUBPROTOCOL: &str = "fae.v2";
 /// Cap on the peeked header block and on a POST body.
 const MAX_HEAD_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024;
+/// Cap on a single WS message/frame — control frames are tiny, so this bounds a
+/// runaway client to the same order as the Unix socket's frame cap instead of
+/// tungstenite's multi-MiB default.
+const MAX_WS_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// Shared state for the diagnostic listener.
 pub struct DiagnosticState {
@@ -97,9 +102,12 @@ async fn handle_conn(mut stream: TcpStream, state: Arc<DiagnosticState>) -> std:
     let Some((head, body)) = read_request(&mut stream).await? else {
         return Ok(());
     };
-    if !head
-        .header("host")
-        .is_some_and(|h| host_header_allowed(h, state.port))
+    // Exactly one Host, and it must be literal loopback (anti-rebind + anti-
+    // request-smuggling: a duplicate Host is ambiguous and rejected).
+    if head.header_count("host") != 1
+        || !head
+            .header("host")
+            .is_some_and(|h| host_header_allowed(h, state.port))
     {
         return write_http(&mut stream, 403, "text/plain", b"forbidden host").await;
     }
@@ -258,25 +266,39 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
     let port = state.port;
     let tickets = Arc::clone(&state.tickets);
     let mut consumed: Option<ConsumedTicket> = None;
+    // The specific rejection reason, set inside the (sync) callback so the outer
+    // async branch can audit it precisely — the callback can only hand back an
+    // opaque ErrorResponse.
+    let mut reject_reason: Option<&'static str> = None;
 
     // The handshake callback validates Host/Origin on the real request, consumes
     // the single-use ticket bound to the request path, and echoes only the base
     // subprotocol (never the secret ticket) on success.
     let callback = |req: &Request, mut resp: Response| -> Result<Response, ErrorResponse> {
+        // Reject an ambiguous (duplicate) Host before trusting it — defends
+        // against request-smuggling where a downstream hop picks a different one.
+        if req.headers().get_all("host").iter().count() != 1 {
+            reject_reason = Some("ambiguous_host");
+            return Err(error_response(400, "ambiguous host"));
+        }
         let host = req
             .headers()
             .get("host")
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
         if !host_header_allowed(host, port) {
+            reject_reason = Some("forbidden_host");
             return Err(error_response(403, "forbidden host"));
         }
-        if let Some(origin) = req
-            .headers()
-            .get("origin")
-            .and_then(|value| value.to_str().ok())
-        {
-            if !origin_allowed(origin, port) {
+        // A present Origin must parse AND be loopback; a present-but-garbled
+        // Origin is rejected, not silently skipped. A missing Origin is allowed
+        // (non-browser clients don't send one).
+        if let Some(origin_value) = req.headers().get("origin") {
+            let allowed = origin_value
+                .to_str()
+                .is_ok_and(|origin| origin_allowed(origin, port));
+            if !allowed {
+                reject_reason = Some("forbidden_origin");
                 return Err(error_response(403, "forbidden origin"));
             }
         }
@@ -297,11 +319,15 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
             }
         }
         let (Some(token), true) = (ticket, has_base) else {
+            reject_reason = Some("missing_ticket");
             return Err(error_response(400, "missing base subprotocol or ticket"));
         };
         let outcome = match tickets.lock() {
             Ok(mut store) => store.consume(&token, &endpoint, now),
-            Err(_) => return Err(error_response(500, "ticket store unavailable")),
+            Err(_) => {
+                reject_reason = Some("ticket_store_unavailable");
+                return Err(error_response(500, "ticket store unavailable"));
+            }
         };
         match outcome {
             Ok(ticket) => {
@@ -310,13 +336,17 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
                     "sec-websocket-protocol",
                     HeaderValue::from_static(BASE_SUBPROTOCOL),
                 );
+                add_defensive_headers(resp.headers_mut());
                 Ok(resp)
             }
-            Err(err) => Err(error_response(401, err.code())),
+            Err(err) => {
+                reject_reason = Some(err.code());
+                Err(error_response(401, err.code()))
+            }
         }
     };
 
-    let ws = match accept_hdr_async(stream, callback).await {
+    let ws = match accept_hdr_async_with_config(stream, callback, Some(ws_config())).await {
         Ok(ws) => ws,
         Err(error) => {
             audit(
@@ -326,7 +356,7 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
                     None,
                     "stream.ticket_consume",
                     AuditDecision::Deny,
-                    "ticket_rejected",
+                    reject_reason.unwrap_or("ticket_rejected"),
                 ),
             );
             eprintln!("fae-daemon: diagnostic ws handshake refused: {error}");
@@ -337,7 +367,7 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
         return Ok(());
     };
     let client_id = consumed.client_id.clone();
-    let Some(session) = session_from_ticket(&state.registry, &consumed) else {
+    let Some(session) = session_from_ticket(&state.registry, &consumed, now) else {
         audit(
             &state,
             event(
@@ -345,7 +375,7 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
                 Some(client_id),
                 "stream.ticket_consume",
                 AuditDecision::Error,
-                "client_gone",
+                "client_unavailable",
             ),
         );
         return Ok(());
@@ -459,7 +489,34 @@ fn audit(state: &DiagnosticState, ev: AuditEvent) {
 fn error_response(status: u16, message: &str) -> ErrorResponse {
     let mut response = ErrorResponse::new(Some(message.to_owned()));
     *response.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST);
+    add_defensive_headers(response.headers_mut());
     response
+}
+
+/// Add the standard defensive headers (matching [`write_http`]) to a WS
+/// handshake / error response so every browser-visible response carries them.
+fn add_defensive_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("cache-control", HeaderValue::from_static("no-store"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'",
+        ),
+    );
+}
+
+/// WebSocket config that caps message/frame size well below tungstenite's
+/// multi-MiB default — control frames are tiny.
+fn ws_config() -> WebSocketConfig {
+    WebSocketConfig {
+        max_message_size: Some(MAX_WS_MESSAGE_BYTES),
+        max_frame_size: Some(MAX_WS_MESSAGE_BYTES),
+        ..WebSocketConfig::default()
+    }
 }
 
 async fn write_http(
@@ -505,6 +562,10 @@ impl Head {
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    fn header_count(&self, name: &str) -> usize {
+        self.headers.iter().filter(|(key, _)| key == name).count()
     }
 
     fn is_websocket(&self) -> bool {
