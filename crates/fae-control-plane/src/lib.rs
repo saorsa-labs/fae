@@ -565,6 +565,153 @@ impl ClientRegistry {
             entry.record.revoked_at_ms.get_or_insert(now_ms);
         }
     }
+
+    /// Look up a client's live record by id, without a token check. Used to
+    /// rebuild a session after a stream ticket has already authenticated the
+    /// client — the caller still runs per-message [`authorize`], so live
+    /// revocation/expiry are re-checked there.
+    #[must_use]
+    pub fn record(&self, client_id: &str) -> Option<ClientRecord> {
+        self.clients
+            .get(client_id)
+            .map(|entry| entry.record.clone())
+    }
+}
+
+// ───────────────────────────── Stream tickets ────────────────────────────────
+
+/// Maximum lifetime of a WS/SSE stream ticket. The control-plane design caps
+/// this at 60 s and requires single use; [`TicketStore`] enforces both.
+pub const STREAM_TICKET_TTL_MS: u64 = 60_000;
+
+/// What a client receives when it requests a stream ticket: the opaque token to
+/// present (via `Sec-WebSocket-Protocol`, never a `?token=` query) and when it
+/// expires. The token is 256-bit CSPRNG and subsumes the design's id+nonce — it
+/// is never stored raw (the store keeps only its hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamTicketGrant {
+    pub ticket: String,
+    pub expires_at_ms: u64,
+}
+
+/// Session facts unlocked by consuming a valid ticket: which client, which
+/// endpoint it was bound to, and the exact scopes granted for the stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedTicket {
+    pub client_id: String,
+    pub endpoint: String,
+    pub scopes: Vec<Scope>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketError {
+    /// Never issued, already consumed (single-use), or wrong token.
+    Unknown,
+    Expired,
+    WrongEndpoint,
+}
+
+impl TicketError {
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            TicketError::Unknown => "unknown_ticket",
+            TicketError::Expired => "ticket_expired",
+            TicketError::WrongEndpoint => "ticket_wrong_endpoint",
+        }
+    }
+}
+
+struct TicketRecord {
+    client_id: String,
+    endpoint: String,
+    scopes: Vec<Scope>,
+    expires_at_ms: u64,
+}
+
+/// In-memory single-use stream-ticket replay cache. Pure logic — wrap in a mutex
+/// for concurrent use. Tickets are keyed by the hash of the opaque token, so the
+/// raw token is never retained after issue.
+#[derive(Default)]
+pub struct TicketStore {
+    by_hash: std::collections::HashMap<String, TicketRecord>,
+}
+
+impl TicketStore {
+    #[must_use]
+    pub fn new() -> TicketStore {
+        TicketStore {
+            by_hash: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Issue a fresh single-use ticket bound to a client, endpoint, and scope
+    /// set, expiring in [`STREAM_TICKET_TTL_MS`]. GCs expired entries first.
+    pub fn issue(
+        &mut self,
+        client_id: &str,
+        endpoint: &str,
+        scopes: Vec<Scope>,
+        now_ms: u64,
+    ) -> Result<StreamTicketGrant, ControlPlaneError> {
+        self.gc(now_ms);
+        let ticket = generate_token()?;
+        let expires_at_ms = now_ms.saturating_add(STREAM_TICKET_TTL_MS);
+        self.by_hash.insert(
+            hash_token(&ticket).to_hex(),
+            TicketRecord {
+                client_id: client_id.to_owned(),
+                endpoint: endpoint.to_owned(),
+                scopes,
+                expires_at_ms,
+            },
+        );
+        Ok(StreamTicketGrant {
+            ticket,
+            expires_at_ms,
+        })
+    }
+
+    /// Atomically consume a presented ticket for `endpoint`. Single-use: the
+    /// record is removed whether or not it validates, so a replay always fails
+    /// as `Unknown`. Returns the unlocked session facts on success.
+    pub fn consume(
+        &mut self,
+        presented_ticket: &str,
+        endpoint: &str,
+        now_ms: u64,
+    ) -> Result<ConsumedTicket, TicketError> {
+        let key = hash_token(presented_ticket).to_hex();
+        let record = self.by_hash.remove(&key).ok_or(TicketError::Unknown)?;
+        if now_ms >= record.expires_at_ms {
+            return Err(TicketError::Expired);
+        }
+        if record.endpoint != endpoint {
+            return Err(TicketError::WrongEndpoint);
+        }
+        Ok(ConsumedTicket {
+            client_id: record.client_id,
+            endpoint: record.endpoint,
+            scopes: record.scopes,
+        })
+    }
+
+    /// Drop expired tickets. Called opportunistically by [`issue`]; can also be
+    /// driven by a timer.
+    pub fn gc(&mut self, now_ms: u64) {
+        self.by_hash
+            .retain(|_, record| now_ms < record.expires_at_ms);
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_hash.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_hash.is_empty()
+    }
 }
 
 // ───────────────────────────────── Tests ─────────────────────────────────────
@@ -798,6 +945,79 @@ mod tests {
         assert!(json.contains("missing_scope"));
         assert!(!json.contains("result"));
         Ok(())
+    }
+
+    #[test]
+    fn ticket_issue_then_consume_unlocks_scopes() -> Result<(), Box<dyn std::error::Error>> {
+        let mut store = TicketStore::new();
+        let grant = store.issue(
+            "c1",
+            "/v1/stream/conversation",
+            vec![Scope::ConversationRead],
+            100,
+        )?;
+        assert_eq!(store.len(), 1);
+        let consumed = store
+            .consume(&grant.ticket, "/v1/stream/conversation", 200)
+            .map_err(|e| e.code())?;
+        assert_eq!(consumed.client_id, "c1");
+        assert_eq!(consumed.scopes, vec![Scope::ConversationRead]);
+        assert!(store.is_empty()); // consumed
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_is_single_use() -> Result<(), ControlPlaneError> {
+        let mut store = TicketStore::new();
+        let grant = store.issue("c1", "/v1/stream/x", vec![], 100)?;
+        assert!(store.consume(&grant.ticket, "/v1/stream/x", 200).is_ok());
+        // Replay of the same token must now fail as Unknown.
+        assert!(matches!(
+            store.consume(&grant.ticket, "/v1/stream/x", 201),
+            Err(TicketError::Unknown)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_rejects_expired_wrong_endpoint_and_unknown() -> Result<(), ControlPlaneError> {
+        let mut store = TicketStore::new();
+        let grant = store.issue("c1", "/v1/stream/x", vec![], 100)?;
+        // Expired: now beyond issue + TTL.
+        assert!(matches!(
+            store.consume(&grant.ticket, "/v1/stream/x", 100 + STREAM_TICKET_TTL_MS),
+            Err(TicketError::Expired)
+        ));
+
+        let grant = store.issue("c1", "/v1/stream/x", vec![], 100)?;
+        assert!(matches!(
+            store.consume(&grant.ticket, "/v1/stream/other", 200),
+            Err(TicketError::WrongEndpoint)
+        ));
+
+        assert!(matches!(
+            store.consume("never-issued", "/v1/stream/x", 200),
+            Err(TicketError::Unknown)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_gc_drops_expired() -> Result<(), ControlPlaneError> {
+        let mut store = TicketStore::new();
+        store.issue("c1", "/v1/stream/x", vec![], 100)?;
+        assert_eq!(store.len(), 1);
+        store.gc(100 + STREAM_TICKET_TTL_MS);
+        assert!(store.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn registry_record_lookup_by_id() {
+        let mut registry = ClientRegistry::new();
+        registry.insert(client(&[Scope::StatusRead], 1000, None), hash_token("tok"));
+        assert!(registry.record("c1").is_some());
+        assert!(registry.record("absent").is_none());
     }
 
     #[test]
