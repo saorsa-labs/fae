@@ -36,8 +36,12 @@
 
 **Progress (2026-06-05) — greenfield `crates/` workspace, not a `legacy/rust-core` revival** (per the G3 verdict):
 - **Chunk 1 ✅** — `fae-control-plane` (transport-free authz core: scopes, per-command `authorize`, anti-rebind `Host`, CSPRNG tokens hashed-at-rest + constant-time verify, audit) and `fae-envelope-gate` (G5 boundary, promoted from `phase0/`). `/code-review` hardening applied (signature-verifier test-gating, audited-only public gate entry, envelope size cap, atomic `0700`/`0600` bootstrap, non-secret audit ids).
-- **Chunk 2a ✅ (live-tested)** — `fae-daemon` Unix-socket NDJSON listener: per-connection token auth → `ClientRecord`, per-message `authorize`, read-only dispatch stub (`host.ping`/`host.version`/`runtime.status`), fail-closed audit, socket `0600`. No TCP port. Pure `session::handle_frame` (7 unit tests) under a thin tokio shell. End-to-end verified: auth→ok, missing-scope deny, not_implemented fail-loud, bad-token→close, full audit trail with the token never logged.
-- **Next:** 2b stream-ticket logic (pure, in control-plane); 2c TCP-loopback + WS/SSE diagnostic listener (`Host`/`Origin`, defensive headers, ticket consume, Keychain); then Chunk 3 engine adapter.
+- **Chunk 2 ✅ (live-tested) — network surface** (ADR-002 protocol v2):
+  - **2a** — Unix-socket NDJSON listener (default): per-connection token auth → `ClientRecord`, per-message `authorize`, read-only dispatch stub, fail-closed audit, socket `0600`. Pure `session::handle_frame` under a thin tokio shell.
+  - **2b** — pure single-use stream-ticket logic in control-plane (`TicketStore`): issue + replay cache, ≤60 s, endpoint/scope-bound, hashed-at-rest, atomic single-use.
+  - **2c** — opt-in TCP-loopback HTTP/WS diagnostic listener (`FAE_DIAGNOSTIC_TCP_PORT`, `127.0.0.1`+`[::1]`, tokio-tungstenite): anti-rebind `Host`/`Origin`, defensive headers, bearer-auth status + scope-bounded ticket issuance (no escalation), WS upgrade consuming a single-use ticket via `Sec-WebSocket-Protocol` (no `?token=`), per-message authorize reusing the shared session core. End-to-end verified incl. bad-Host 403, replay 401, wrong-endpoint 401, ticket-scoped missing_scope. 36 tests, clippy clean.
+  - **Carried follow-on:** SSE stream variant; macOS Keychain for the bootstrap secret.
+- **Next: Chunk 3 — engine adapter** (`ProviderAdapter`, mistral.rs E4B + Qwen3-14B dense, llama.cpp fallback, `models.lock` fail-closed loader).
 
 ## 2. Phase 2 — Voice pipeline + parity
 
