@@ -550,8 +550,9 @@ enum PersonalityManager {
             parts.append(persistencePrompt)
             parts.append(communitySkillSafetyPrompt)
             parts.append(progressivePermissionPrompt)
-            parts.append(multiSpeakerPrompt)
-            parts.append(voiceIdentityPrompt)
+            // multiSpeakerPrompt + voiceIdentityPrompt dropped (teardown
+            // Phase A): no voiceprint behaviour in the prompt stack — the
+            // blocks remain defined for the Phase B deletion pass.
 
             // 10b. Skill inventory with progressive disclosure.
             // OpenClaw-style scan-then-choose: the LLM actively considers skills

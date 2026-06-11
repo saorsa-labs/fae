@@ -94,10 +94,8 @@ struct SettingsView: View {
                         Label("Models", systemImage: "cpu")
                     }
 
-                SettingsSpeakerTab(commandSender: commandSender)
-                    .tabItem {
-                        Label("Voice Identity", systemImage: "person.wave.2")
-                    }
+                // Voice Identity tab hidden (teardown Phase A) — the tab file
+                // itself goes in the Phase B deletion pass.
 
                 SettingsToolsTab(commandSender: commandSender)
                     .tabItem {

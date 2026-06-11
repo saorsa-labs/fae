@@ -300,10 +300,12 @@ struct FaeConfig: Codable {
     struct SpeakerConfig: Codable {
         var threshold: Float = 0.45
         var ownerThreshold: Float = 0.50
-        /// Voice identity gates tool access. Always true in proactive-by-default mode —
-        /// only the primary user (owner) or explicitly granted guests get tool access.
-        var requireOwnerForTools: Bool = true
-        var progressiveEnrollment: Bool = true
+        /// Teardown Phase A (2026-06-11): identity is the deliberate physical
+        /// act at the machine (push-to-talk / typed input), not a voiceprint —
+        /// see docs/architecture/voice-identity-teardown-plan-2026-06-11.md.
+        var requireOwnerForTools: Bool = false
+        /// Phase A: no silent voiceprint accumulation.
+        var progressiveEnrollment: Bool = false
         var maxEnrollments: Int = 50
         /// Minimum liveness score (0 = disabled, 1 = maximum strictness).
         var livenessThreshold: Float = 0.5
