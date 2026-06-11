@@ -20,11 +20,14 @@ futures-util = { workspace = true }
 
 # mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
 # target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.
+# Pinned to the v0.8.3 tag commit (crates.io stops at 0.8.1; 0.8.2/0.8.3 carry
+# the Gemma 4 tool-calling fixes + mid-stream grammar enforcement we require).
+# Git deps use commit SHAs per the supply-chain pinning policy.
 [target.'cfg(target_os = "macos")'.dependencies]
-mistralrs = { version = "0.8", features = ["metal"] }
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "ba2f7877ed0fc5d814a5f918865aef137b5179fd", features = ["metal"] } # v0.8.3
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-mistralrs = { version = "0.8" }
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "ba2f7877ed0fc5d814a5f918865aef137b5179fd" } # v0.8.3
 
 [dev-dependencies]
 tokio = { workspace = true }

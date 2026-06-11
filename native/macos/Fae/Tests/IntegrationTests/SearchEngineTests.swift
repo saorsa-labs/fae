@@ -200,9 +200,10 @@ final class SearchEngineTests: XCTestCase {
     // MARK: - SearchEngine
 
     func testSearchEngineCases() {
-        XCTAssertEqual(SearchEngine.bing.rawValue, "bing")
-        XCTAssertEqual(SearchEngine.google.rawValue, "google")
-        XCTAssertEqual(SearchEngine.duckDuckGo.rawValue, "duckduckgo")
+        // Raw values are display names (shown in result attribution).
+        XCTAssertEqual(SearchEngine.bing.rawValue, "Bing")
+        XCTAssertEqual(SearchEngine.google.rawValue, "Google")
+        XCTAssertEqual(SearchEngine.duckDuckGo.rawValue, "DuckDuckGo")
     }
 
     func testSearchEngineWeights() {
@@ -272,8 +273,10 @@ final class SearchEngineTests: XCTestCase {
     }
 
     func testURLNormalizerInvalidURL() {
+        // Modern Foundation URLComponents leniently parses the string and
+        // percent-encodes spaces; the result is a stable canonical form.
         let normalized = URLNormalizer.normalize("not a url at all")
-        XCTAssertEqual(normalized, "not a url at all")
+        XCTAssertEqual(normalized, "not%20a%20url%20at%20all")
     }
 
     // MARK: - GoogleEngine — parseGoogleResults

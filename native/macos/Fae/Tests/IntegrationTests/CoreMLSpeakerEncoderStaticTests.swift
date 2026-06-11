@@ -44,6 +44,6 @@ final class CoreMLSpeakerEncoderStaticTests: XCTestCase {
     func testResampleUp() {
         let audio: [Float] = [1.0, 2.0]
         let result = CoreMLSpeakerEncoder.resample(audio, from: 8000, to: 16000)
-        XCTAssertEqual(result.count, 2) // same count when input is minimal
+        XCTAssertEqual(result.count, 4) // doubling the rate doubles the samples
     }
 }

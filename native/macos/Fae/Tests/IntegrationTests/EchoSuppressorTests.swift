@@ -257,10 +257,11 @@ final class EchoSuppressorTests: XCTestCase {
     func testAcceptWhenSegmentExtendsWellBeyondTail() {
         let suppressUntil = Date().addingTimeInterval(0.5)
         let onset = Date().addingTimeInterval(-2.0)
-        // Segment is 3s long, started before tail, extends well beyond
+        // Segment is 5s long, started before tail, ends 2.5s past it —
+        // beyond both minSpeechBeyondTailSecs (0.75s) and the 35% fraction.
         let reject = EchoSuppressor.shouldRejectForEchoTail(
             segmentOnset: onset,
-            durationSecs: 3.0,
+            durationSecs: 5.0,
             suppressUntil: suppressUntil
         )
         XCTAssertFalse(reject) // Extends far beyond tail

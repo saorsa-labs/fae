@@ -11,8 +11,10 @@ final class ImplicitFeedbackDetectorTests: XCTestCase {
     }
 
     func testWordBigramsSingleWord() {
+        // Single-word inputs fall back to the unigram so short re-asks
+        // ("weather", "weather?") still compare as similar.
         let bigrams = ImplicitFeedbackDetector.wordBigrams("hello")
-        XCTAssertTrue(bigrams.isEmpty)
+        XCTAssertEqual(bigrams, ["hello"])
     }
 
     func testWordBigramsEmpty() {

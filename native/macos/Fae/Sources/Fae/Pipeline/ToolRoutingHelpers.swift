@@ -38,8 +38,9 @@ enum ToolRoutingHelpers {
         var result = text
         // Remove closing tags first (simpler).
         result = result.replacingOccurrences(of: "</voice>", with: "")
-        // Remove opening tags: <voice character="..."> or <voice character='...'>
-        if let regex = try? NSRegularExpression(pattern: #"<voice\s+[^>]*>"#) {
+        // Remove opening tags: <voice character="...">, <voice character='...'>,
+        // or a bare <voice> the model may emit without attributes.
+        if let regex = try? NSRegularExpression(pattern: #"<voice(\s+[^>]*)?>"#) {
             result = regex.stringByReplacingMatches(
                 in: result,
                 range: NSRange(result.startIndex..., in: result),

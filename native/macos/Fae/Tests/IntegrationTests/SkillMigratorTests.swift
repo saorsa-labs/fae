@@ -19,8 +19,11 @@ final class SkillMigratorTests: XCTestCase {
     }
 
     func testNormalizeSkillMarkdownEmpty() {
+        // Content without frontmatter is always wrapped in a synthesized
+        // frontmatter block so the migrated SKILL.md is parseable.
         let normalized = SkillMigrator.normalizeSkillMarkdown(name: "test", content: "")
-        XCTAssertTrue(normalized.isEmpty || !normalized.contains("---"))
+        XCTAssertTrue(normalized.hasPrefix("---"))
+        XCTAssertTrue(normalized.contains("name: test"))
     }
 
     // MARK: - inferredSkillName

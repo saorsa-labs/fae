@@ -72,6 +72,10 @@ struct QualityThresholdSet: Sendable {
         }
 
         if let warnValue = threshold.warnValue {
+            // The warn direction follows the dominant bound: when a max is set
+            // the metric is "lower is better" (warn above warnValue); only a
+            // min-only threshold warns below warnValue. With both bounds set,
+            // warning below warnValue would misfire for latency-style metrics.
             if threshold.maxValue != nil && value > warnValue {
                 return ThresholdResult(
                     metricName: threshold.metricName, status: .warn, actualValue: value,
@@ -79,7 +83,7 @@ struct QualityThresholdSet: Sendable {
                     message: "\(threshold.metricName.rawValue) = \(value) exceeds warn \(warnValue)"
                 )
             }
-            if threshold.minValue != nil && value < warnValue {
+            if threshold.maxValue == nil, threshold.minValue != nil, value < warnValue {
                 return ThresholdResult(
                     metricName: threshold.metricName, status: .warn, actualValue: value,
                     threshold: threshold,

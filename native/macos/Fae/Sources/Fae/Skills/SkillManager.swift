@@ -1442,7 +1442,11 @@ actor SkillManager {
         guard !trimmed.isEmpty else {
             throw SkillError.policyViolation("script_name must not be empty")
         }
-        guard isSafeSkillName(trimmed) else {
+        // Script files may carry a ".py" extension (updateSkillScript accepts
+        // both "name" and "name.py"); the stem must satisfy the same character
+        // policy as skill names (no paths, no traversal, no other dots).
+        let stem = trimmed.hasSuffix(".py") ? String(trimmed.dropLast(3)) : trimmed
+        guard isSafeSkillName(stem) else {
             throw SkillError.policyViolation("script_name contains invalid characters")
         }
     }

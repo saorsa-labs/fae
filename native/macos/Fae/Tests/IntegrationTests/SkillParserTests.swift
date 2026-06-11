@@ -28,9 +28,10 @@ final class SkillParserTests: XCTestCase {
     }
 
     func testSplitFrontmatterEmpty() {
+        // No frontmatter delimiter: the whole content (here empty) is the body.
         let (metadata, body) = SkillParser.splitFrontmatter("")
         XCTAssertNil(metadata)
-        XCTAssertNil(body)
+        XCTAssertEqual(body, "")
     }
 
     func testSplitFrontmatterMinimal() {

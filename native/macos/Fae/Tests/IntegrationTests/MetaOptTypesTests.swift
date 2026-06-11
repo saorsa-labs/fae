@@ -38,10 +38,11 @@ final class MetaOptTypesTests: XCTestCase {
         let after = DimensionScores(toolCalling: 0.8, faeCapability: 0.75, assistantFit: 0.65, serialization: 0.85)
 
         let delta = after.improvement(over: baseline)
-        XCTAssertEqual(delta.toolCalling, 0.1)
-        XCTAssertEqual(delta.faeCapability, -0.05)
-        XCTAssertEqual(delta.assistantFit, 0.05)
-        XCTAssertEqual(delta.serialization, -0.05)
+        // Double subtraction carries rounding error — compare with accuracy.
+        XCTAssertEqual(delta.toolCalling ?? .nan, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(delta.faeCapability ?? .nan, -0.05, accuracy: 1e-9)
+        XCTAssertEqual(delta.assistantFit ?? .nan, 0.05, accuracy: 1e-9)
+        XCTAssertEqual(delta.serialization ?? .nan, -0.05, accuracy: 1e-9)
     }
 
     func testDimensionScoresImprovementWithNil() {
@@ -50,9 +51,9 @@ final class MetaOptTypesTests: XCTestCase {
 
         let delta = after.improvement(over: baseline)
         XCTAssertNil(delta.toolCalling) // both nil → nil
-        XCTAssertEqual(delta.faeCapability, 0.1)
+        XCTAssertEqual(delta.faeCapability ?? .nan, 0.1, accuracy: 1e-9)
         XCTAssertNil(delta.assistantFit) // one nil → nil
-        XCTAssertEqual(delta.serialization, 0.0)
+        XCTAssertEqual(delta.serialization ?? .nan, 0.0, accuracy: 1e-9)
     }
 
     func testDimensionScoresAnyRegression() {

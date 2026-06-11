@@ -110,7 +110,7 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
     {
         Some(model_id) => {
             println!("engine  : loading mistral.rs model {model_id} (this can take a while)…");
-            match LocalMistralrsAdapter::load_text(&model_id).await {
+            match LocalMistralrsAdapter::load(&model_id).await {
                 Ok(adapter) => Arc::new(adapter),
                 Err(error) => {
                     eprintln!("fae-daemon: model load failed ({error}); using mock engine");

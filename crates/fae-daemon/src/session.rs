@@ -10,7 +10,7 @@ use fae_control_plane::{
     authorize, AuditDecision, AuditEvent, AuthzDecision, ClientRecord, ClientRegistry, Command,
     ConsumedTicket, Response, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
 };
-use fae_engine::{ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role};
+use fae_engine::{ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role, ToolSpec};
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -287,6 +287,106 @@ async fn dispatch(
     }
 }
 
+/// Hard ceiling on a single turn's generation budget, whatever the client asks.
+const MAX_TOKENS_CEILING: usize = 8192;
+/// Default generation budget when the client does not specify one.
+const MAX_TOKENS_DEFAULT: usize = 512;
+
+/// Parse one `{role, content}` message object from the rich payload.
+fn parse_message(value: &serde_json::Value) -> Result<ChatMessage, &'static str> {
+    let role = match value.get("role").and_then(serde_json::Value::as_str) {
+        Some("system") => Role::System,
+        Some("user") => Role::User,
+        Some("assistant") => Role::Assistant,
+        Some("tool") => Role::Tool,
+        _ => return Err("bad_request"),
+    };
+    let content = value
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    Ok(ChatMessage {
+        role,
+        content: content.to_owned(),
+    })
+}
+
+/// Parse one `{name, description?, parameters?}` tool spec from the payload.
+/// `parameters` defaults to an empty JSON-Schema object so a name-only tool is
+/// still a valid function declaration.
+fn parse_tool(value: &serde_json::Value) -> Result<ToolSpec, &'static str> {
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    if name.is_empty() {
+        return Err("bad_request");
+    }
+    let description = value
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let parameters = value
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
+    Ok(ToolSpec {
+        name: name.to_owned(),
+        description: description.to_owned(),
+        parameters,
+    })
+}
+
+/// Build the engine request from the command payload. Two shapes, both under
+/// the same `conversation.inject_text` command and scope:
+/// - simple: `{ "text": "..." }` — one user message (back-compatible)
+/// - rich:   `{ "messages": [{role, content}, ...], "system"?, "tools"?,
+///   "max_tokens"? }` — full chat with tool schemas for native tool calling
+fn parse_chat_request(payload: &serde_json::Value) -> Result<ChatRequest, &'static str> {
+    let messages = if let Some(array) = payload.get("messages").and_then(serde_json::Value::as_array)
+    {
+        array
+            .iter()
+            .map(parse_message)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let text = payload
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("bad_request")?;
+        vec![ChatMessage {
+            role: Role::User,
+            content: text.to_owned(),
+        }]
+    };
+    if messages.is_empty() {
+        return Err("bad_request");
+    }
+    let system = payload
+        .get("system")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let tools = match payload.get("tools").and_then(serde_json::Value::as_array) {
+        Some(array) => array
+            .iter()
+            .map(parse_tool)
+            .collect::<Result<Vec<_>, _>>()?,
+        None => Vec::new(),
+    };
+    let max_tokens = payload
+        .get("max_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .map_or(MAX_TOKENS_DEFAULT, |value| {
+            (value as usize).min(MAX_TOKENS_CEILING)
+        });
+    Ok(ChatRequest {
+        system,
+        messages,
+        tools,
+        max_tokens,
+    })
+}
+
 /// Run one user turn through the engine, collecting the streamed events into a
 /// single response. Streaming these as live protocol events is a follow-on, once
 /// the event/`conversation.subscribe` channel lands.
@@ -294,20 +394,7 @@ async fn inject_text(
     engine: &dyn ProviderAdapter,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
-    let text = cmd
-        .payload
-        .get("text")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("bad_request")?;
-    let request = ChatRequest {
-        system: None,
-        messages: vec![ChatMessage {
-            role: Role::User,
-            content: text.to_owned(),
-        }],
-        tools: Vec::new(),
-        max_tokens: 512,
-    };
+    let request = parse_chat_request(&cmd.payload)?;
     let mut stream = engine
         .stream_chat(request)
         .await
@@ -604,5 +691,66 @@ mod tests {
         // Expired client.
         let reg = registry();
         assert!(session_from_ticket(&reg, &consumed, 10_000).is_none());
+    }
+
+    #[test]
+    fn parse_chat_request_simple_text_back_compat() {
+        let payload = serde_json::json!({ "text": "hello" });
+        let request = parse_chat_request(&payload).unwrap();
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(request.messages[0].role, Role::User);
+        assert_eq!(request.messages[0].content, "hello");
+        assert!(request.system.is_none());
+        assert!(request.tools.is_empty());
+        assert_eq!(request.max_tokens, MAX_TOKENS_DEFAULT);
+    }
+
+    #[test]
+    fn parse_chat_request_rich_messages_system_and_tools() {
+        let payload = serde_json::json!({
+            "system": "You are Fae, the head butler.",
+            "messages": [
+                { "role": "user", "content": "what's on my calendar?" },
+                { "role": "assistant", "content": "let me check" },
+                { "role": "tool", "content": "{\"events\":[]}" },
+            ],
+            "tools": [
+                {
+                    "name": "calendar",
+                    "description": "Read calendar events",
+                    "parameters": { "type": "object", "properties": { "day": { "type": "string" } } }
+                },
+                { "name": "reminders" }
+            ],
+            "max_tokens": 2048
+        });
+        let request = parse_chat_request(&payload).unwrap();
+        assert_eq!(request.system.as_deref(), Some("You are Fae, the head butler."));
+        assert_eq!(request.messages.len(), 3);
+        assert_eq!(request.messages[2].role, Role::Tool);
+        assert_eq!(request.tools.len(), 2);
+        assert_eq!(request.tools[0].name, "calendar");
+        // Name-only tool still gets a valid empty JSON-Schema object.
+        assert!(request.tools[1].parameters.get("type").is_some());
+        assert_eq!(request.max_tokens, 2048);
+    }
+
+    #[test]
+    fn parse_chat_request_rejects_bad_shapes_and_clamps_budget() {
+        // Unknown role fails loud, not silently coerced.
+        let bad_role = serde_json::json!({ "messages": [{ "role": "wizard", "content": "x" }] });
+        assert_eq!(parse_chat_request(&bad_role), Err("bad_request"));
+        // Empty message list is not a turn.
+        let empty = serde_json::json!({ "messages": [] });
+        assert_eq!(parse_chat_request(&empty), Err("bad_request"));
+        // Tool without a name is invalid.
+        let bad_tool = serde_json::json!({ "text": "x", "tools": [{ "description": "no name" }] });
+        assert_eq!(parse_chat_request(&bad_tool), Err("bad_request"));
+        // Missing both text and messages.
+        let neither = serde_json::json!({ "max_tokens": 5 });
+        assert_eq!(parse_chat_request(&neither), Err("bad_request"));
+        // Generation budget is clamped to the ceiling.
+        let huge = serde_json::json!({ "text": "x", "max_tokens": 1_000_000 });
+        assert_eq!(parse_chat_request(&huge).unwrap().max_tokens, MAX_TOKENS_CEILING);
     }
 }

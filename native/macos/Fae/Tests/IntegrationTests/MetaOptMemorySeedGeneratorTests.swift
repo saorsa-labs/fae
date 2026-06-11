@@ -19,7 +19,12 @@ final class MetaOptMemorySeedGeneratorTests: XCTestCase {
     // MARK: - isToolRelated
 
     func testIsToolRelatedYes() {
-        let event = makeEvent(signalType: "tool_execution", userInput: nil, assistantOutput: nil)
+        // Classification is content-based: the turn text mentions tool usage.
+        let event = makeEvent(
+            signalType: "correction",
+            userInput: "search the web with the right tool",
+            assistantOutput: nil
+        )
         XCTAssertTrue(MetaOptMemorySeedGenerator.isToolRelated(event))
     }
 
@@ -31,7 +36,12 @@ final class MetaOptMemorySeedGeneratorTests: XCTestCase {
     // MARK: - isScheduleRelated
 
     func testIsScheduleRelatedYes() {
-        let event = makeEvent(signalType: "scheduler_update", userInput: nil, assistantOutput: nil)
+        // Classification is content-based: the turn text mentions scheduling.
+        let event = makeEvent(
+            signalType: "correction",
+            userInput: "move the meeting on my schedule to 3pm",
+            assistantOutput: nil
+        )
         XCTAssertTrue(MetaOptMemorySeedGenerator.isScheduleRelated(event))
     }
 

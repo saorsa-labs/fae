@@ -20,8 +20,10 @@ final class AwarenessThrottleTests: XCTestCase {
     }
 
     func testShouldReduceFrequencyBoundary() {
-        // Exactly at 30 minutes boundary
-        let boundary = Date().addingTimeInterval(-(30 * 60))
+        // Just inside the 30-minute boundary. Testing exactly AT the boundary
+        // is inherently flaky: wall-clock time advances between constructing
+        // the date and evaluating it, tipping elapsed time past 30 minutes.
+        let boundary = Date().addingTimeInterval(-(30 * 60 - 1))
         XCTAssertFalse(AwarenessThrottle.shouldReduceFrequency(lastUserSeenAt: boundary))
     }
 

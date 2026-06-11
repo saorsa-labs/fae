@@ -110,6 +110,10 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let s1 = try await coordinator.currentState()
         XCTAssertEqual(s1, .collecting)
 
+        try await coordinator.transition(to: .metaOptimizing)
+        let s1b = try await coordinator.currentState()
+        XCTAssertEqual(s1b, .metaOptimizing)
+
         try await coordinator.transition(to: .training)
         let s2 = try await coordinator.currentState()
         XCTAssertEqual(s2, .training)
@@ -242,6 +246,7 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = makeCoordinator(store: store)
 
         try await coordinator.transition(to: .collecting)
+        try await coordinator.transition(to: .metaOptimizing)
         try await coordinator.transition(to: .training)
 
         let storeState = try await store.readState()
@@ -257,7 +262,7 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = makeCoordinator(store: store)
 
         // Manually drive to proposing state (simulates end of runCycle).
-        for state in [CycleState.collecting, .training, .evaluating, .proposing] {
+        for state in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
             try await coordinator.transition(to: state)
         }
         let preApproveState = try await coordinator.currentState()
@@ -280,7 +285,7 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         try await store.ensureStateRow()
         let coordinator = makeCoordinator(store: store)
 
-        for state in [CycleState.collecting, .training, .evaluating, .proposing] {
+        for state in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
             try await coordinator.transition(to: state)
         }
 
@@ -588,13 +593,15 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         await coordinator.setDirectiveReader { "Existing directive." }
         await coordinator.setDirectiveWriter { text in writtenDirective = text }
 
-        // Seed data with enough corrections to form a pattern.
-        for i in 0..<15 {
+        // Seed enough corrections to form a pattern (>= minRepeatedCorrections)
+        // but fewer than minCorrectionEvents, so the cycle stops after the
+        // meta-optimization/directive-tuning phase instead of running training.
+        for _ in 0..<4 {
             _ = try await store.appendFeedbackEvent(makeEvent(
                 signalType: "correction", fingerprint: "same-correction"
             ))
         }
-        for i in 0..<10 {
+        for i in 0..<16 {
             _ = try await store.appendFeedbackEvent(makeEvent(
                 signalType: "re_ask", fingerprint: "reask-\(i)"
             ))

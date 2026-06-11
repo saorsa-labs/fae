@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mistralrs::{
-    IsqType, RequestBuilder, Response, TextMessageRole, TextModelBuilder, Tool, ToolChoice,
+    IsqType, ModelBuilder, RequestBuilder, Response, TextMessageRole, TextModelBuilder, Tool,
+    ToolChoice,
 };
 
 use crate::provider::{
@@ -36,13 +37,46 @@ impl LocalMistralrsAdapter {
             .build()
             .await
             .map_err(|error| EngineError::Load(error.to_string()))?;
-        Ok(LocalMistralrsAdapter {
+        Ok(Self::wrap(model, model_id))
+    }
+
+    /// Load via the auto-detecting `ModelBuilder`. Required for architectures
+    /// registered as conditional-generation classes — Gemma 4 (E2B/E4B) is
+    /// `Gemma4ForConditionalGeneration`, which `TextModelBuilder` refuses.
+    /// Same Q4K ISQ path; the S13 harness validated Gemma-4 through this
+    /// loader ("auto-detect loader — needed for multimodal models").
+    pub async fn load_auto(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
+        let model = ModelBuilder::new(model_id)
+            .with_isq(IsqType::Q4K)
+            .with_logging()
+            .build()
+            .await
+            .map_err(|error| EngineError::Load(error.to_string()))?;
+        Ok(Self::wrap(model, model_id))
+    }
+
+    /// Try the plain text loader first, then fall back to the auto-detect
+    /// loader when the architecture is a conditional-generation class. This is
+    /// the daemon's default load path: correct for both dense text models and
+    /// Gemma-4-style multimodal registrations, with one download either way.
+    pub async fn load(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
+        match Self::load_text(model_id).await {
+            Ok(adapter) => Ok(adapter),
+            Err(EngineError::Load(reason)) if reason.contains("ForConditionalGeneration") => {
+                Self::load_auto(model_id).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn wrap(model: mistralrs::Model, model_id: &str) -> LocalMistralrsAdapter {
+        LocalMistralrsAdapter {
             model: Arc::new(model),
             info: AdapterInfo {
                 backend: "mistralrs".to_owned(),
                 model_id: model_id.to_owned(),
             },
-        })
+        }
     }
 }
 
@@ -121,7 +155,7 @@ fn map_role(role: Role) -> TextMessageRole {
 /// Translate a [`ChatRequest`] into a mistral.rs `RequestBuilder` (system +
 /// messages + tools). Pure — no model needed, so it is unit-tested directly.
 fn build_request(request: &ChatRequest) -> Result<RequestBuilder, EngineError> {
-    let mut builder = RequestBuilder::new();
+    let mut builder = RequestBuilder::new().set_sampler_max_len(request.max_tokens);
     if let Some(system) = &request.system {
         builder = builder.add_message(TextMessageRole::System, system);
     }

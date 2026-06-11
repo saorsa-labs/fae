@@ -40,7 +40,8 @@ final class EchoSuppressorStaticTests: XCTestCase {
     }
 
     func testExtractDigitsFromNumberWordsEmpty() {
+        // No number words → empty string, not a spurious "0".
         let digits = EchoSuppressor.extractDigitsFromNumberWords([])
-        XCTAssertEqual(digits, "0")
+        XCTAssertEqual(digits, "")
     }
 }

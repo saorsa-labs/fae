@@ -6,10 +6,12 @@ final class TextProcessingTests: XCTestCase {
     // MARK: - Sentence Boundary Detection
 
     func testFindSentenceBoundarySimple() {
-        let text = "Hello world. This is a test."
+        // The boundary is the split point AFTER the terminator: the complete
+        // sentence flushes to TTS, the incomplete remainder stays buffered.
+        let text = "Hello world. This is a test"
         let boundary = TextProcessing.findSentenceBoundary(in: text)
         XCTAssertNotNil(boundary)
-        XCTAssertEqual(String(text[boundary!]), " This is a test.")
+        XCTAssertEqual(String(text[boundary!...]), " This is a test")
     }
 
     func testFindSentenceBoundaryNoPeriod() {
@@ -28,13 +30,14 @@ final class TextProcessingTests: XCTestCase {
     }
 
     func testFindSentenceBoundaryAbbreviation() {
-        // "Dr." should not be treated as a sentence boundary
-        let text = "Dr. Smith is here."
+        // A single uppercase initial ("J.") is an abbreviation, not a sentence
+        // boundary — the text must stay buffered until a real terminator arrives.
+        XCTAssertNil(TextProcessing.findSentenceBoundary(in: "J. Smith is here"))
+        // A real terminator after the initial is still found.
+        let text = "J. Smith is here. And more"
         let boundary = TextProcessing.findSentenceBoundary(in: text)
         XCTAssertNotNil(boundary)
-        // Should skip past "Dr." and find the real period
-        let after = String(text[boundary!])
-        XCTAssertTrue(after.contains("Smith") || after.contains("here"))
+        XCTAssertEqual(String(text[boundary!...]), " And more")
     }
 
     func testFindSentenceBoundaryDecimal() {
@@ -63,7 +66,8 @@ final class TextProcessingTests: XCTestCase {
     // MARK: - isMetaCommentary
 
     func testIsMetaCommentaryYes() {
-        XCTAssertTrue(TextProcessing.isMetaCommentary("Alright, I'll check that for you"))
+        // Leaked reasoning that narrates the user's input must never reach TTS.
+        XCTAssertTrue(TextProcessing.isMetaCommentary("The user says hello and asks about the weather."))
     }
 
     func testIsMetaCommentaryNo() {
@@ -96,7 +100,8 @@ final class TextProcessingTests: XCTestCase {
     // MARK: - isUISelfNarration
 
     func testIsUISelfNarrationYes() {
-        XCTAssertTrue(TextProcessing.isUISelfNarration("I'm opening the calendar now"))
+        // The model describing its own interface should be suppressed.
+        XCTAssertTrue(TextProcessing.isUISelfNarration("The orb is pulsing blue right now"))
     }
 
     func testIsUISelfNarrationNo() {
@@ -106,11 +111,13 @@ final class TextProcessingTests: XCTestCase {
     // MARK: - looksLikeNonProse
 
     func testLooksLikeNonProseCode() {
-        XCTAssertTrue(TextProcessing.looksLikeNonProse("func hello() {}"))
+        // Leaked tool-call markup must be flagged so it never reaches TTS.
+        XCTAssertTrue(TextProcessing.looksLikeNonProse("<tool_call>{\"name\": \"read\"}</tool_call>"))
     }
 
     func testLooksLikeNonProseJSON() {
-        XCTAssertTrue(TextProcessing.looksLikeNonProse("{\"key\": \"value\"}"))
+        // Machine payloads (tool-ish JSON keys) are non-prose.
+        XCTAssertTrue(TextProcessing.looksLikeNonProse("{\"name\": \"web_search\", \"arguments\": {\"q\": \"x\"}}"))
     }
 
     func testLooksLikeNonProseNormalText() {
@@ -120,7 +127,8 @@ final class TextProcessingTests: XCTestCase {
     // MARK: - stripSelfIntroductions
 
     func testStripSelfIntroduction() {
-        let result = TextProcessing.stripSelfIntroductions("I'm Fae, your voice assistant. How can I help?")
+        // SOUL.md: Fae never opens with a self-introduction — refText bleed is stripped.
+        let result = TextProcessing.stripSelfIntroductions("I'm Fae, your personal voice assistant. How can I help?")
         XCTAssertFalse(result.contains("I'm Fae"))
     }
 
@@ -132,9 +140,12 @@ final class TextProcessingTests: XCTestCase {
 
     // MARK: - stripNonSpeechChars
 
-    func testStripNonSpeechCharsEmojis() {
-        let result = TextProcessing.stripNonSpeechChars("Hello 👋 World 🌍")
-        XCTAssertFalse(result.contains("👋"))
+    func testStripNonSpeechCharsMarkdown() {
+        // Markdown emphasis/code markers sound terrible when spoken — stripped before TTS.
+        let result = TextProcessing.stripNonSpeechChars("**Hello** `world`")
+        XCTAssertFalse(result.contains("**"))
+        XCTAssertFalse(result.contains("`"))
+        XCTAssertTrue(result.contains("Hello"))
     }
 
     func testStripNonSpeechCharsNormalText() {
@@ -167,7 +178,7 @@ final class TextProcessingTests: XCTestCase {
     // MARK: - isLikelyContinuationCue
 
     func testIsLikelyContinuationCueYes() {
-        XCTAssertTrue(TextProcessing.isLikelyContinuationCue("go ahead"))
+        XCTAssertTrue(TextProcessing.isLikelyContinuationCue("go on"))
     }
 
     func testIsLikelyContinuationCueNo() {

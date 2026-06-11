@@ -86,9 +86,10 @@ final class DocsContractTests: XCTestCase {
                       "README should mention Unsloth quantization")
 
         XCTAssertTrue(modelSwitchingGuide.contains("`Auto (Recommended)` resolves by RAM"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`<8 GB` | `Qwen3.5 2B`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`8–15 GB` | `Qwen3.5 4B`"))
-        XCTAssertTrue(modelSwitchingGuide.contains("`16+ GB` | `Qwen3.5 9B Unsloth`"))
+        XCTAssertTrue(modelSwitchingGuide.contains("| `<8 GB` | Qwen3.5-2B OptiQ |"))
+        XCTAssertTrue(modelSwitchingGuide.contains("| `8–15 GB` | Qwen3.5-4B |"))
+        XCTAssertTrue(modelSwitchingGuide.contains("| `16–31 GB` | Qwen3.5-9B Unsloth |"))
+        XCTAssertTrue(modelSwitchingGuide.contains("| `≥32 GB` | Qwen3.5-9B Unsloth |"))
         XCTAssertTrue(modelSwitchingGuide.contains("one active Qwen3.5 text model"))
     }
 
@@ -126,14 +127,12 @@ final class DocsContractTests: XCTestCase {
     }
 
     func testSecurityBoundaryAndPermissionGuidesReflectCurrentEnforcementStory() throws {
-        let boundaryGuide = try loadRepositoryText(relativePath: "docs/guides/security-autonomy-boundary-and-execution-plan.md")
+        // Note: docs/guides/security-autonomy-boundary-and-execution-plan.md was
+        // removed in the docs cleanup (f55903e4) alongside the 14-layer pipeline
+        // it described; the scheduler and confirmation-copy guides remain the
+        // enforced contract surfaces.
         let schedulerGuide = try loadRepositoryText(relativePath: "docs/guides/scheduler-tooling-and-permissions.md")
         let confirmationCopy = try loadRepositoryText(relativePath: "docs/guides/security-confirmation-copy.md")
-
-        XCTAssertTrue(boundaryGuide.contains("single broker chokepoint"))
-        XCTAssertTrue(boundaryGuide.contains("Default-deny on uncovered action shapes"))
-        XCTAssertTrue(boundaryGuide.contains("Credentials out of untrusted execution contexts") || boundaryGuide.contains("Keep credentials out of untrusted execution contexts."))
-        XCTAssertTrue(boundaryGuide.contains("Skills may request behavior. Core code grants, transforms, confirms, or denies."))
 
         XCTAssertTrue(schedulerGuide.lowercased().contains("prefer asking fae conversationally for setup/changes over manual config editing"))
         XCTAssertTrue(schedulerGuide.contains("Apple tool (CalendarTool, RemindersTool, ContactsTool, MailTool, NotesTool)"))

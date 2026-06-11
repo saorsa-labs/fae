@@ -271,7 +271,9 @@ final class BackchannelClassifierTests: XCTestCase {
         XCTAssertTrue(BackchannelClassifier.isBackchannel("yeah!"))
         XCTAssertTrue(BackchannelClassifier.isBackchannel("ok."))
         XCTAssertTrue(BackchannelClassifier.isBackchannel("wow?"))
-        XCTAssertTrue(BackchannelClassifier.isBackchannel("sure, yeah."))
+        // Compound utterances are not pure backchannels — the user is
+        // actually speaking, so they may trigger an interrupt.
+        XCTAssertFalse(BackchannelClassifier.isBackchannel("sure, yeah."))
     }
 
     func testTrimsWhitespace() {

@@ -78,8 +78,8 @@ run-native: build _bundle-app _sign-bundle _kill-fae
 # Build, bundle, sign, and launch in DEV mode (isolated data directory).
 # Uses ~/Library/Application Support/fae-dev/ — does NOT touch production Fae.
 # Reads config.toml from fae-dev/. Uses separate UserDefaults, memories, skills.
-run-dev: build _bundle-app _sign-bundle _kill-fae
-    FAE_DEV=1 open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1
+run-dev: build-ui-shell build _bundle-app _embed-ui-shell _sign-bundle _kill-fae
+    FAE_DEV=1 FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1 --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae (DEV) launched — logs: tail -f /tmp/fae-dev.log"
     @echo "  Data: ~/Library/Application Support/fae-dev/"
     @echo "  Vault: ~/.fae-vault-dev/"

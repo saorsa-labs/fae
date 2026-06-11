@@ -77,8 +77,10 @@ final class CoworkLLMProviderTests: XCTestCase {
     // MARK: - CoworkNetworkTransport
 
     func testNormalizedBaseURLWithTrailingSlash() {
-        let url = CoworkProviderConnectionTester.normalizedBaseURL("https://api.example.com/", fallback: "https://fallback.com")
-        XCTAssertEqual(url, "https://api.example.com")
+        // normalizedBaseURL only trims whitespace and applies the fallback —
+        // a trailing slash is preserved (URL path appending tolerates it).
+        let url = CoworkProviderConnectionTester.normalizedBaseURL("  https://api.example.com/  ", fallback: "https://fallback.com")
+        XCTAssertEqual(url, "https://api.example.com/")
     }
 
     func testNormalizedBaseURLEmpty() {

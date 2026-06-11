@@ -401,6 +401,11 @@ actor MemoryOrchestrator {
         if normalized.lowercased().hasPrefix("that ") {
             normalized = String(normalized.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        // Question forms leave a leading copula behind ("what is my name" →
+        // "is my name") — strip it so the topic is left for recall matching.
+        if normalized.lowercased().hasPrefix("is ") {
+            normalized = String(normalized.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if normalized.lowercased().hasSuffix(" anymore") {
             normalized = String(normalized.dropLast(8)).trimmingCharacters(in: .whitespacesAndNewlines)
         }

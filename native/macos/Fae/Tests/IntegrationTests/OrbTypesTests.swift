@@ -112,9 +112,10 @@ final class OrbTypesTests: XCTestCase {
     }
 
     func testOrbFeelingCommandOverrideWithSeparators() {
-        // Should handle hyphens and underscores
+        // Hyphens and underscores normalize to spaces before matching.
         XCTAssertNotNil(OrbFeeling.commandOverride(in: "set-feeling-calm"))
-        XCTAssertNotNil(OrbFeeling.commandOverride(in: "set_feeting_calm")) // typo check - should not match
+        XCTAssertNotNil(OrbFeeling.commandOverride(in: "set_feeling_calm"))
+        XCTAssertNil(OrbFeeling.commandOverride(in: "set_feeting_calm")) // typo must not match
     }
 
     // MARK: - OrbPalette
@@ -280,9 +281,10 @@ final class OrbTypesTests: XCTestCase {
         )
 
         let mid = OrbSnapshot.lerp(a, b, t: 0.5)
-        XCTAssertEqual(mid.hueShift, 10)
-        XCTAssertEqual(mid.speedScale, 1.5)
-        XCTAssertEqual(mid.sparkleIntensity, 0.4)
-        XCTAssertEqual(mid.radiusBias, 0.025)
+        // Float lerp accumulates rounding error — compare with accuracy.
+        XCTAssertEqual(mid.hueShift, 10, accuracy: 1e-5)
+        XCTAssertEqual(mid.speedScale, 1.5, accuracy: 1e-5)
+        XCTAssertEqual(mid.sparkleIntensity, 0.4, accuracy: 1e-5)
+        XCTAssertEqual(mid.radiusBias, 0.025, accuracy: 1e-5)
     }
 }

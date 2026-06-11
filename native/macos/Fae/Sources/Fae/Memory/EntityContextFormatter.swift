@@ -103,7 +103,11 @@ enum EntityContextFormatter {
         case "lives_in": return "Lives in"
         case "knows": return "Knows"
         case "reports_to": return "Reports to"
-        default: return raw.replacingOccurrences(of: "_", with: " ").capitalized
+        default:
+            // Sentence case, matching the explicit cases above ("Works at").
+            let spaced = raw.replacingOccurrences(of: "_", with: " ")
+            guard let first = spaced.first else { return spaced }
+            return first.uppercased() + spaced.dropFirst()
         }
     }
 

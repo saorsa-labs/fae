@@ -36,9 +36,12 @@ final class SessionStoreStaticTests: XCTestCase {
     // MARK: - derivedTitle
 
     func testDerivedTitle() {
+        // Short content is used as-is; long content is truncated to 80 chars.
         let title = SessionStore.derivedTitle(from: "Hello world this is a test message")
-        XCTAssertNotNil(title)
-        XCTAssertEqual(title?.count, 80)
+        XCTAssertEqual(title, "Hello world this is a test message")
+
+        let long = SessionStore.derivedTitle(from: String(repeating: "a", count: 200))
+        XCTAssertEqual(long?.count, 80)
     }
 
     func testDerivedTitleShort() {

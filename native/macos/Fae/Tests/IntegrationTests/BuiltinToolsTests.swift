@@ -4,9 +4,10 @@ import XCTest
 final class BuiltinToolsTests: XCTestCase {
 
     private let fm = FileManager.default
-    private var tempDir: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("fae-builtin-tools-\(UUID().uuidString)")
-    }
+    // Stored, not computed: a computed property would mint a fresh UUID path
+    // on every access, so writes and reads would land in different directories.
+    private let tempDir: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("fae-builtin-tools-\(UUID().uuidString)")
 
     override func tearDown() {
         try? fm.removeItem(at: tempDir)
@@ -158,10 +159,11 @@ final class BuiltinToolsTests: XCTestCase {
     // MARK: - SelfConfigTool
 
     func testSelfConfigToolProperties() {
+        // Self-modification is high risk and approval-gated by design.
         let tool = SelfConfigTool()
         XCTAssertEqual(tool.name, "self_config")
-        XCTAssertFalse(tool.requiresApproval)
-        XCTAssertEqual(tool.riskLevel, .low)
+        XCTAssertTrue(tool.requiresApproval)
+        XCTAssertEqual(tool.riskLevel, .high)
     }
 
     // MARK: - WebSearchTool
@@ -293,7 +295,8 @@ final class BuiltinToolsTests: XCTestCase {
     }
 
     func testDomainCategoryUnknown() {
-        XCTAssertEqual(WebSearchTool.domainCategory(for: "https://unknown-domain.xyz"), "[Web]")
+        // Unknown domains get no category tag — an empty string, not a filler tag.
+        XCTAssertEqual(WebSearchTool.domainCategory(for: "https://unknown-domain.xyz"), "")
     }
 
     func testDomainCategoryInvalid() {

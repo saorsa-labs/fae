@@ -24,6 +24,15 @@ enum PathPolicy {
         let resolved = url.resolvingSymlinksInPath().path
         let lowered = resolved.lowercased()
 
+        // The per-user temporary directory lives under /var/folders/
+        // (via the /private/var symlink) but is user-owned scratch space,
+        // not a system path — allow it before the system-prefix blocklist.
+        let userTemp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .standardized.resolvingSymlinksInPath().path.lowercased()
+        if lowered.hasPrefix(userTemp) {
+            return .allowed(canonicalPath: resolved)
+        }
+
         // Block system paths.
         for prefix in blockedSystemPrefixes {
             if lowered.hasPrefix(prefix) {

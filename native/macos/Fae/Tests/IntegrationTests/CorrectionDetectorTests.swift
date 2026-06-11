@@ -32,8 +32,13 @@ final class CorrectionDetectorTests: XCTestCase {
     // MARK: - nameIsNotPattern
 
     func testNameIsNotPattern() {
-        let result = CorrectionDetector.nameIsNotPattern("my name is not alice")
+        // "my name is <correct> not <wrong>" yields a correction pair.
+        let result = CorrectionDetector.nameIsNotPattern("my name is dave not david")
         XCTAssertNotNil(result)
+        XCTAssertEqual(result?.correct, "Dave")
+        XCTAssertEqual(result?.wrong, "David")
+        // "my name is not alice" carries no corrected name — no pair.
+        XCTAssertNil(CorrectionDetector.nameIsNotPattern("my name is not alice"))
     }
 
     func testNameIsNotPatternNoMatch() {

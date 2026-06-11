@@ -70,10 +70,13 @@ final class SkillManagerStaticTests: XCTestCase {
         XCTAssertEqual(draft.name, "test-skill")
     }
 
-    func testParseSkillMarkdownNoFrontmatter() throws {
+    func testParseSkillMarkdownNoFrontmatter() {
+        // parseSkillMarkdown enforces a strict contract: SKILL.md content
+        // without YAML frontmatter is rejected, not silently repaired.
         let content = "Just plain text without frontmatter"
-        let draft = try SkillManager.parseSkillMarkdown(content, fallbackName: "fallback-name")
-        XCTAssertEqual(draft.name, "fallback-name")
+        XCTAssertThrowsError(
+            try SkillManager.parseSkillMarkdown(content, fallbackName: "fallback-name")
+        )
     }
 
     // MARK: - validateSkillName

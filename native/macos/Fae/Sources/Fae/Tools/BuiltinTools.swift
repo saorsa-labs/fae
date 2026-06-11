@@ -361,6 +361,8 @@ struct SelfConfigTool: Tool {
         "unrestricted access",
         "ignore instructions",
         "override instructions",
+        "ignore previous instructions",
+        "ignore all previous instructions",
     ]
 
     private static var filePath: URL { FaeDirectories.directiveFile }

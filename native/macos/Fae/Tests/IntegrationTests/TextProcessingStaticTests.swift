@@ -70,8 +70,10 @@ final class TextProcessingStaticTests: XCTestCase {
     // MARK: - normalizeWakeAlias
 
     func testNormalizeWakeAlias() {
+        // Non-alphanumeric characters become token separators so alias
+        // matching works on spoken words ("Fae-Bot!" is heard as "fae bot").
         let normalized = TextProcessing.normalizeWakeAlias("Fae-Bot!")
-        XCTAssertEqual(normalized, "fae-bot")
+        XCTAssertEqual(normalized, "fae bot")
     }
 
     func testNormalizeWakeAliasSpecialChars() {

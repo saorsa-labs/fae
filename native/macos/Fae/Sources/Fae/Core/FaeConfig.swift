@@ -113,6 +113,18 @@ struct FaeConfig: Codable {
         /// - deep: more deliberate reasoning with a larger local response budget.
         var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
 
+        // MARK: Daemon LLM lane (experimental)
+
+        /// Route LLM turns to the local Rust fae-daemon (mistral.rs) instead of
+        /// the in-process MLX engine. Falls back to MLX (loudly) if the daemon
+        /// cannot be launched. Default false.
+        var useDaemonEngine: Bool = false
+
+        /// Absolute path to the fae-daemon binary (e.g. built via
+        /// `cargo build -p fae-daemon --release`). Required when
+        /// `useDaemonEngine` is true; the `FAE_DAEMON_BIN` env var overrides it.
+        var daemonBinaryPath: String? = nil
+
         // MARK: KV Cache Optimization (Phase 1)
 
         /// KV cache quantization bits. 4 = 4x memory savings with encode/decode
@@ -507,6 +519,20 @@ struct FaeConfig: Codable {
         default:
             NSLog("FaeConfig: unknown model preset '%@' — falling back to auto", preset)
             return "auto"
+        }
+    }
+
+    /// Model id exported as `FAE_MODEL_ID` when the daemon LLM lane
+    /// (`llm.useDaemonEngine`) is enabled.
+    ///
+    /// All presets currently map to Gemma 4 E4B — the daemon (mistral.rs)
+    /// loads its own weights independently of the MLX preset catalogue. The
+    /// preset parameter is kept so per-preset daemon mappings can be added
+    /// without changing call sites.
+    static func daemonModelId(preset: String) -> String {
+        switch canonicalVoiceModelPreset(preset) {
+        default:
+            return "google/gemma-4-E4B-it"
         }
     }
 
@@ -980,6 +1006,11 @@ struct FaeConfig: Codable {
                 case "thinkingLevel", "thinking_level":
                     guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.llm.thinkingLevel = v
+                case "useDaemonEngine":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.llm.useDaemonEngine = v
+                case "daemonBinaryPath":
+                    config.llm.daemonBinaryPath = rawValue == "nil" ? nil : parseString(rawValue)
                 default: break
                 }
             case "tts":
@@ -1279,6 +1310,8 @@ struct FaeConfig: Codable {
         lines.append("enableVision = \(llm.enableVision ? "true" : "false")")
         lines.append("thinkingEnabled = \(normalizedThinkingLevel.enablesThinking ? "true" : "false")")
         lines.append("thinkingLevel = \(encodeString(normalizedThinkingLevel.rawValue))")
+        lines.append("useDaemonEngine = \(llm.useDaemonEngine ? "true" : "false")")
+        lines.append("daemonBinaryPath = \(encodeStringOrNil(llm.daemonBinaryPath))")
         lines.append("")
 
         lines.append("[tts]")

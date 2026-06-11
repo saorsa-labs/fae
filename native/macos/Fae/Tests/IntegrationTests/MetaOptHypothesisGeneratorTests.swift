@@ -19,7 +19,12 @@ final class MetaOptHypothesisGeneratorTests: XCTestCase {
     // MARK: - isToolRelated
 
     func testIsToolRelatedYes() {
-        let event = makeEvent(signalType: "tool_execution", userInput: nil, assistantOutput: nil)
+        // Classification is content-based: the turn text mentions tool usage.
+        let event = makeEvent(
+            signalType: "correction",
+            userInput: "use the calendar tool to add the meeting",
+            assistantOutput: nil
+        )
         XCTAssertTrue(MetaOptHypothesisGenerator.isToolRelated(event))
     }
 

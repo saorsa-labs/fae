@@ -171,7 +171,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     private let sttEngine = MLXSTTEngine()
-    private let llmEngine: any LLMEngine = MLXLLMEngine()
+    /// Default is the in-process MLX engine; replaced by `DaemonLLMEngine`
+    /// during `start()` when `llm.useDaemonEngine` is set and the daemon
+    /// launches successfully (falls back to MLX loudly otherwise).
+    private var llmEngine: any LLMEngine = MLXLLMEngine()
     private let ttsEngine: any TTSEngine = FaeTTSAdapter()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
@@ -260,6 +263,33 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 if lowResidentMemoryProfileActive {
                     runtimeConfig = runtimeConfig.applyingTestServerMemoryProfile()
                     NSLog("FaeCore: low-resident-memory profile active")
+                }
+
+                // Daemon LLM lane (experimental): route turns to the local Rust
+                // fae-daemon (mistral.rs) instead of in-process MLX. The daemon
+                // engine's load() is idempotent, so modelManager.loadAll() below
+                // re-invoking load is a no-op. On any launch failure we fall
+                // back to the MLX engine and log loudly.
+                if runtimeConfig.llm.useDaemonEngine {
+                    let daemonModelId = FaeConfig.daemonModelId(
+                        preset: runtimeConfig.llm.voiceModelPreset)
+                    let daemonEngine = DaemonLLMEngine(
+                        binaryPath: runtimeConfig.llm.daemonBinaryPath,
+                        modelID: daemonModelId,
+                        eventBus: eventBus
+                    )
+                    do {
+                        try await daemonEngine.load(modelID: daemonModelId)
+                        llmEngine = daemonEngine
+                        NSLog(
+                            "FaeCore: daemon LLM lane ACTIVE — fae-daemon (mistral.rs) serving %@",
+                            daemonModelId)
+                    } catch {
+                        NSLog(
+                            "FaeCore: ⚠️ daemon LLM engine FAILED to start — falling back to in-process MLX: %@",
+                            error.localizedDescription)
+                        await daemonEngine.shutdown()
+                    }
                 }
 
                 try await modelManager.loadAll(
@@ -2460,6 +2490,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         let raw = text.dropFirst(prefix.count)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            // Stripping a trailing period can expose whitespace again
+            // ("Alice Smith  ." → "Alice Smith  ") — trim once more.
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return nil }
         return raw
     }
