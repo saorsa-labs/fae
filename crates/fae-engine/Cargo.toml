@@ -17,6 +17,7 @@ toml = { workspace = true }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures-util = { workspace = true }
+base64 = { workspace = true }
 
 # mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
 # target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.

@@ -292,7 +292,9 @@ const MAX_TOKENS_CEILING: usize = 8192;
 /// Default generation budget when the client does not specify one.
 const MAX_TOKENS_DEFAULT: usize = 512;
 
-/// Parse one `{role, content}` message object from the rich payload.
+/// Parse one `{role, content, audio_wav_base64?}` message object from the rich
+/// payload. `audio_wav_base64` (S18 push-to-talk) is optional; when present it
+/// must be a string — base64 validity is the engine's concern, shape is ours.
 fn parse_message(value: &serde_json::Value) -> Result<ChatMessage, &'static str> {
     let role = match value.get("role").and_then(serde_json::Value::as_str) {
         Some("system") => Role::System,
@@ -305,9 +307,15 @@ fn parse_message(value: &serde_json::Value) -> Result<ChatMessage, &'static str>
         .get("content")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
+    let audio_wav_base64 = match value.get("audio_wav_base64") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(encoded)) => Some(encoded.clone()),
+        Some(_) => return Err("bad_request"),
+    };
     Ok(ChatMessage {
         role,
         content: content.to_owned(),
+        audio_wav_base64,
     })
 }
 
@@ -343,7 +351,9 @@ fn parse_tool(value: &serde_json::Value) -> Result<ToolSpec, &'static str> {
 /// - rich:   `{ "messages": [{role, content}, ...], "system"?, "tools"?,
 ///   "max_tokens"? }` — full chat with tool schemas for native tool calling
 fn parse_chat_request(payload: &serde_json::Value) -> Result<ChatRequest, &'static str> {
-    let messages = if let Some(array) = payload.get("messages").and_then(serde_json::Value::as_array)
+    let messages = if let Some(array) = payload
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
     {
         array
             .iter()
@@ -354,10 +364,7 @@ fn parse_chat_request(payload: &serde_json::Value) -> Result<ChatRequest, &'stat
             .get("text")
             .and_then(serde_json::Value::as_str)
             .ok_or("bad_request")?;
-        vec![ChatMessage {
-            role: Role::User,
-            content: text.to_owned(),
-        }]
+        vec![ChatMessage::text(Role::User, text)]
     };
     if messages.is_empty() {
         return Err("bad_request");
@@ -725,7 +732,10 @@ mod tests {
             "max_tokens": 2048
         });
         let request = parse_chat_request(&payload).unwrap();
-        assert_eq!(request.system.as_deref(), Some("You are Fae, the head butler."));
+        assert_eq!(
+            request.system.as_deref(),
+            Some("You are Fae, the head butler.")
+        );
         assert_eq!(request.messages.len(), 3);
         assert_eq!(request.messages[2].role, Role::Tool);
         assert_eq!(request.tools.len(), 2);
@@ -733,6 +743,93 @@ mod tests {
         // Name-only tool still gets a valid empty JSON-Schema object.
         assert!(request.tools[1].parameters.get("type").is_some());
         assert_eq!(request.max_tokens, 2048);
+    }
+
+    #[test]
+    fn parse_chat_request_carries_audio_payload() {
+        // S18 push-to-talk: an audio clip rides the rich message shape and
+        // composes with tools in the same request.
+        let payload = serde_json::json!({
+            "messages": [
+                { "role": "user", "content": "what's on my calendar today?",
+                  "audio_wav_base64": "AAAA" },
+            ],
+            "tools": [{ "name": "calendar" }],
+        });
+        let request = parse_chat_request(&payload).unwrap();
+        assert_eq!(
+            request.messages[0].audio_wav_base64.as_deref(),
+            Some("AAAA")
+        );
+        assert_eq!(request.tools.len(), 1);
+        // Absent and explicit-null both mean "no audio".
+        let none = serde_json::json!({
+            "messages": [{ "role": "user", "content": "hi", "audio_wav_base64": null }],
+        });
+        assert!(parse_chat_request(&none).unwrap().messages[0]
+            .audio_wav_base64
+            .is_none());
+        // A non-string audio field is a malformed frame, not a silent drop.
+        let bad = serde_json::json!({
+            "messages": [{ "role": "user", "content": "hi", "audio_wav_base64": 42 }],
+        });
+        assert_eq!(parse_chat_request(&bad), Err("bad_request"));
+    }
+
+    #[tokio::test]
+    async fn authed_inject_text_with_audio_runs_through_engine() {
+        use base64::Engine as _;
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let encoded = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mut state,
+            &frame(
+                "conversation.inject_text",
+                serde_json::json!({
+                    "messages": [{ "role": "user", "content": "speak", "audio_wav_base64": encoded }],
+                }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(out.response.ok);
+        let result = out.response.result.expect("result");
+        assert_eq!(
+            result.get("text").and_then(|v| v.as_str()),
+            Some("echo: [audio:8 bytes] speak")
+        );
+    }
+
+    #[tokio::test]
+    async fn authed_inject_text_with_malformed_audio_fails_loud() {
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mut state,
+            &frame(
+                "conversation.inject_text",
+                serde_json::json!({
+                    "messages": [{ "role": "user", "content": "speak",
+                                   "audio_wav_base64": "not-base64!!!" }],
+                }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(!out.response.ok);
+        assert_eq!(
+            out.response.error.as_ref().map(|e| e.code.as_str()),
+            Some("inference_failed")
+        );
     }
 
     #[test]
@@ -751,6 +848,9 @@ mod tests {
         assert_eq!(parse_chat_request(&neither), Err("bad_request"));
         // Generation budget is clamped to the ceiling.
         let huge = serde_json::json!({ "text": "x", "max_tokens": 1_000_000 });
-        assert_eq!(parse_chat_request(&huge).unwrap().max_tokens, MAX_TOKENS_CEILING);
+        assert_eq!(
+            parse_chat_request(&huge).unwrap().max_tokens,
+            MAX_TOKENS_CEILING
+        );
     }
 }

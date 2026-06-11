@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mistralrs::{
-    IsqType, ModelBuilder, RequestBuilder, Response, TextMessageRole, TextModelBuilder, Tool,
-    ToolChoice,
+    AudioInput, IsqType, ModelBuilder, RequestBuilder, Response, TextMessageRole, TextModelBuilder,
+    Tool, ToolChoice,
 };
 
 use crate::provider::{
@@ -154,13 +154,24 @@ fn map_role(role: Role) -> TextMessageRole {
 
 /// Translate a [`ChatRequest`] into a mistral.rs `RequestBuilder` (system +
 /// messages + tools). Pure — no model needed, so it is unit-tested directly.
+/// A message carrying audio (S18 push-to-talk) is decoded base64 → WAV bytes →
+/// `AudioInput` and attached via `add_audio_message`; audio composes with
+/// tools in a single request (validated by the S13 harness).
 fn build_request(request: &ChatRequest) -> Result<RequestBuilder, EngineError> {
     let mut builder = RequestBuilder::new().set_sampler_max_len(request.max_tokens);
     if let Some(system) = &request.system {
         builder = builder.add_message(TextMessageRole::System, system);
     }
     for message in &request.messages {
-        builder = builder.add_message(map_role(message.role), &message.content);
+        builder = match message.decode_audio()? {
+            Some(bytes) => {
+                let clip = AudioInput::from_bytes(&bytes).map_err(|error| {
+                    EngineError::Inference(format!("audio decode failed: {error}"))
+                })?;
+                builder.add_audio_message(map_role(message.role), &message.content, vec![clip])
+            }
+            None => builder.add_message(map_role(message.role), &message.content),
+        };
     }
     if !request.tools.is_empty() {
         let mut tools = Vec::with_capacity(request.tools.len());
@@ -207,14 +218,8 @@ mod tests {
         let request = ChatRequest {
             system: Some("You are Fae.".to_owned()),
             messages: vec![
-                ChatMessage {
-                    role: Role::User,
-                    content: "weather in Paris?".to_owned(),
-                },
-                ChatMessage {
-                    role: Role::Assistant,
-                    content: "checking".to_owned(),
-                },
+                ChatMessage::text(Role::User, "weather in Paris?"),
+                ChatMessage::text(Role::Assistant, "checking"),
             ],
             tools: vec![weather_tool()],
             max_tokens: 128,
@@ -226,13 +231,83 @@ mod tests {
     fn build_request_without_tools_is_ok() {
         let request = ChatRequest {
             system: None,
-            messages: vec![ChatMessage {
-                role: Role::User,
-                content: "hi".to_owned(),
-            }],
+            messages: vec![ChatMessage::text(Role::User, "hi")],
             tools: Vec::new(),
             max_tokens: 32,
         };
         assert!(build_request(&request).is_ok());
+    }
+
+    /// A minimal valid 16 kHz mono 16-bit PCM WAV (the PTT capture format).
+    fn tiny_wav() -> Vec<u8> {
+        let samples: [i16; 8] = [0, 1000, -1000, 2000, -2000, 1000, -1000, 0];
+        let data_len = (samples.len() * 2) as u32;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&16_000u32.to_le_bytes()); // sample rate
+        wav.extend_from_slice(&32_000u32.to_le_bytes()); // byte rate
+        wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+        wav
+    }
+
+    fn audio_message(encoded: String) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: "what's on my calendar today?".to_owned(),
+            audio_wav_base64: Some(encoded),
+        }
+    }
+
+    #[test]
+    fn build_request_attaches_audio_and_composes_with_tools() {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(tiny_wav());
+        let request = ChatRequest {
+            system: Some("You are Fae.".to_owned()),
+            messages: vec![audio_message(encoded)],
+            tools: vec![weather_tool()],
+            max_tokens: 128,
+        };
+        assert!(build_request(&request).is_ok());
+    }
+
+    #[test]
+    fn build_request_rejects_malformed_audio() {
+        // Malformed base64 fails loud, not silently dropped from the turn.
+        let bad_base64 = ChatRequest {
+            system: None,
+            messages: vec![audio_message("not-base64!!!".to_owned())],
+            tools: Vec::new(),
+            max_tokens: 32,
+        };
+        assert!(matches!(
+            build_request(&bad_base64),
+            Err(EngineError::Inference(_))
+        ));
+        // Valid base64 that is not decodable audio also fails loud.
+        use base64::Engine as _;
+        let not_audio = base64::engine::general_purpose::STANDARD.encode(b"plain text bytes");
+        let bad_audio = ChatRequest {
+            system: None,
+            messages: vec![audio_message(not_audio)],
+            tools: Vec::new(),
+            max_tokens: 32,
+        };
+        assert!(matches!(
+            build_request(&bad_audio),
+            Err(EngineError::Inference(_))
+        ));
     }
 }

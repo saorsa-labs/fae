@@ -33,7 +33,21 @@ impl ProviderAdapter for MockAdapter {
     }
 
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
-        let echo = request.last_user().unwrap_or_default().to_owned();
+        // Echo the last user message; an attached audio clip is decoded (so
+        // malformed base64 fails here exactly as it would in a real adapter)
+        // and surfaced as a deterministic `[audio:<n> bytes]` marker.
+        let last_user = request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == crate::provider::Role::User);
+        let echo = match last_user {
+            None => String::new(),
+            Some(message) => match message.decode_audio()? {
+                Some(bytes) => format!("[audio:{} bytes] {}", bytes.len(), message.content),
+                None => message.content.clone(),
+            },
+        };
         let events = vec![
             Ok(ChatEvent::Token("echo: ".to_owned())),
             Ok(ChatEvent::Token(echo)),
@@ -54,10 +68,7 @@ mod tests {
     fn user_request(text: &str) -> ChatRequest {
         ChatRequest {
             system: None,
-            messages: vec![ChatMessage {
-                role: Role::User,
-                content: text.to_owned(),
-            }],
+            messages: vec![ChatMessage::text(Role::User, text)],
             tools: Vec::new(),
             max_tokens: 64,
         }
@@ -83,5 +94,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn mock_echoes_audio_marker_for_audio_messages() {
+        use base64::Engine as _;
+        let adapter = MockAdapter::new("mock-1");
+        let mut request = user_request("speak");
+        request.messages[0].audio_wav_base64 =
+            Some(base64::engine::general_purpose::STANDARD.encode([0u8; 16]));
+        let stream = adapter.stream_chat(request).await.expect("stream");
+        let events: Vec<_> = stream.map(|event| event.expect("event")).collect().await;
+        assert_eq!(
+            events[1],
+            ChatEvent::Token("[audio:16 bytes] speak".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_rejects_malformed_audio_base64() {
+        let adapter = MockAdapter::new("mock-1");
+        let mut request = user_request("speak");
+        request.messages[0].audio_wav_base64 = Some("not-base64!!!".to_owned());
+        assert!(adapter.stream_chat(request).await.is_err());
     }
 }

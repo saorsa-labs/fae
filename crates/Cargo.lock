@@ -1409,6 +1409,7 @@ dependencies = [
 name = "fae-daemon"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "fae-control-plane",
  "fae-engine",
  "fae-envelope-gate",
@@ -1425,6 +1426,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "futures-util",
  "hex",
  "mistralrs",

@@ -19,6 +19,36 @@ pub enum Role {
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
+    /// Optional audio clip (base64-encoded WAV) attached to this message —
+    /// the S18 push-to-talk path sends the user's speech directly to an
+    /// audio-capable model (Gemma 4). `None` for ordinary text turns.
+    pub audio_wav_base64: Option<String>,
+}
+
+impl ChatMessage {
+    /// A plain text message (the common case).
+    #[must_use]
+    pub fn text(role: Role, content: impl Into<String>) -> ChatMessage {
+        ChatMessage {
+            role,
+            content: content.into(),
+            audio_wav_base64: None,
+        }
+    }
+
+    /// Decode the attached audio clip, if any. Malformed base64 fails loud —
+    /// a clip the engine cannot decode must never be silently dropped from
+    /// the turn.
+    pub fn decode_audio(&self) -> Result<Option<Vec<u8>>, EngineError> {
+        use base64::Engine as _;
+        match &self.audio_wav_base64 {
+            None => Ok(None),
+            Some(encoded) => base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map(Some)
+                .map_err(|error| EngineError::Inference(format!("invalid audio base64: {error}"))),
+        }
+    }
 }
 
 /// A tool the model may call. `parameters` is a JSON Schema object.

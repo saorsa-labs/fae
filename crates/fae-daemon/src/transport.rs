@@ -17,11 +17,18 @@ use tokio::net::{UnixListener, UnixStream};
 use crate::session::{handle_frame, SessionState};
 use crate::{next_event_id, now_ms};
 
-/// Reject any single NDJSON frame larger than this. The control socket is
-/// same-user (OS-enforced peer credentials), so this is a sanity bound against
-/// a runaway/buggy client, not a hard anti-DoS guard — a streaming cap for the
-/// less-trusted TCP/WS path lands in chunk 2c. Control frames are sub-kilobyte.
-const MAX_FRAME_BYTES: usize = 64 * 1024;
+/// Reject any single NDJSON frame larger than this **before authentication**.
+/// The control socket is same-user (OS-enforced peer credentials), so this is a
+/// sanity bound against a runaway/buggy client, not a hard anti-DoS guard — a
+/// streaming cap for the less-trusted TCP/WS path lands in chunk 2c. Control
+/// frames are sub-kilobyte.
+const MAX_FRAME_BYTES_UNAUTHENTICATED: usize = 64 * 1024;
+
+/// Frame ceiling for an **authenticated** session. `conversation.inject_text`
+/// can carry a base64 WAV clip (S18 push-to-talk: ~1.3 MB for a 30 s
+/// utterance), so authenticated frames get headroom; everything pre-auth stays
+/// on the tight control-frame bound.
+const MAX_FRAME_BYTES_AUTHENTICATED: usize = 8 * 1024 * 1024;
 
 /// Bind the Unix socket (owner-only) and serve connections until the process is
 /// killed. Fails closed: if a stale socket cannot be cleared, the bind fails, or
@@ -83,7 +90,11 @@ async fn handle_connection(
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed.len() > MAX_FRAME_BYTES {
+        let max_frame_bytes = match state {
+            SessionState::Unauthenticated => MAX_FRAME_BYTES_UNAUTHENTICATED,
+            SessionState::Authenticated(_) => MAX_FRAME_BYTES_AUTHENTICATED,
+        };
+        if trimmed.len() > max_frame_bytes {
             let response =
                 Response::error("unknown", "frame_too_large", "command frame exceeds limit");
             write_response(&mut write_half, &response).await?;

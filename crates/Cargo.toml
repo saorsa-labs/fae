@@ -32,6 +32,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 toml = "0.8"
 async-trait = "0.1"
 async-stream = "0.3"
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3
