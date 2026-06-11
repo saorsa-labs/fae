@@ -1,0 +1,100 @@
+# Spike S18 — Pure Gemma ASR + push-to-talk (chain simplification)
+
+> **Status:** Executing (2026-06-11)
+> **Owner mandate:** Speaker detect and barge-in are not working well — bypass
+> both for now (rethink later). Interaction becomes deliberate: **click the
+> orb to speak** (plus a configurable keyboard combo in Settings). Audio goes
+> **directly to Gemma 4 E4B** via the daemon — no Qwen3-ASR. One model:
+> ASR + reasoning + tool calling; only TTS remains separate.
+
+## The simplified chain
+
+```
+click orb / hotkey ─→ mic capture (16 kHz) ─→ release/click-again or
+silence endpoint ─→ WAV ─→ fae-daemon (Gemma 4 E4B audio-in, tools)
+─→ { [heard] transcript line + response text | tool_calls }
+─→ TTS (Kokoro) ─→ speaker
+```
+
+Bypassed in PTT mode (NOT deleted — flagged off, rethink later): continuous
+VAD gating, speaker verification gate, wake word, echo suppression, barge-in,
+keyword spotter. Voice-identity enrollment/UI remain; the *gate* is bypassed
+because capture is now a deliberate physical act by the person at the machine.
+
+## Engine (crates/) — APIs confirmed against the v0.8.3 checkout
+
+- `ChatMessage` gains `audio_wav_base64: Option<String>` (None for normal
+  text turns; protocol field `audio_wav_base64` on rich `messages[]` entries;
+  `#[serde(default)]`-style optional in `parse_message`).
+- mistral.rs mapping (all verified in the pinned ba2f7877 checkout):
+  - `mistralrs::AudioInput::from_bytes(&[u8]) -> Result<Self>`
+    (`mistralrs-audio/src/lib.rs:45`) — decode base64 → bytes → AudioInput,
+    **no temp files**.
+  - `RequestBuilder::add_audio_message(role, text, vec![clip])`
+    (`mistralrs/src/messages.rs:287`) — replaces `add_message` for messages
+    carrying audio. **Composes with `set_tools`/`ToolChoice::Auto`** — the
+    S13 harness ran audio + tools in one request (`bench/mistralrs-eval/
+    src/main.rs:138-149`).
+- `build_request` in `fae-engine/src/mistralrs_adapter.rs`: when a message
+  has audio, base64-decode (reject malformed → `EngineError::Inference`),
+  `AudioInput::from_bytes`, `add_audio_message`; else `add_message` as today.
+- Mock adapter echoes `[audio:<n> bytes]` for protocol tests; session tests
+  cover the new payload field (valid, malformed base64, audio+tools).
+- Payload size: WAV at 16 kHz mono 16-bit ≈ 32 KB/s; a 30 s utterance ≈
+  1 MB → ~1.3 MB base64. **Raise the daemon's NDJSON frame limit** (currently
+  sub-kilobyte control frames, `transport.rs` MAX frame const) to 8 MB for
+  authenticated `conversation.inject_text` frames only.
+
+## Execution order (next session)
+
+1. Engine: `ChatMessage.audio_wav_base64` + adapter mapping + frame-limit
+   bump + tests (`cargo nextest run` in crates/).
+2. Standalone proof: extend `/tmp/fae_toolcall_test.py` pattern — record or
+   synthesize a short WAV ("what is on my calendar today?"), send via rich
+   payload, assert `[heard]:` transcript line + calendar tool call.
+3. Swift agent task: PTT mode + orb click + hotkey + [heard] handling (spec
+   below).
+4. `just run-dev` live test: click orb, speak, hear answer; commit per phase.
+
+## Transcript contract (the design wrinkle, decided)
+
+Audio-direct means Gemma answers without separately emitting the user's
+words, but memory capture, the transcript panel, and correction learning all
+consume user text. **V1 contract:** the system prompt instructs Gemma to
+begin every audio-turn reply with one line:
+
+```
+[heard]: <verbatim transcription of the user's speech>
+```
+
+Swift strips that line: it becomes the user-turn transcript (memory capture,
+panel) and is never spoken. The remainder is the reply. Cheap, robust enough
+for v1; revisit if transcription fidelity needs a dedicated pass.
+
+## Swift (agent-executed)
+
+1. Config: `voice.pushToTalkOnly: Bool` (v1 default **true** in dev),
+   `voice.pttHotkey: String?` (Settings: recordable combo via
+   GlobalHotkeyManager, which already has PTT machinery).
+2. PTT capture mode in PipelineCoordinator: between talk-start and endpoint
+   (click again, hotkey release, or 1.2 s silence via existing VAD as a plain
+   endpointer), buffer mic audio; skip speaker gate, wake word, echo
+   suppressor, barge-in. Generate via daemon rich payload with
+   `audio_wav_base64` on the user message (text field carries the [heard]
+   instruction context).
+3. Orb host: left-click on orb body = talk toggle (emits
+   `{"type":"menu","action":"talk_toggle"}` bridge event; messages bead hit
+   keeps its panel). Window move becomes **Option+drag**. Orb shows listening
+   state while capturing (mode=listening over the existing state bridge).
+4. Transcript: strip `[heard]:` line → user message in ConversationController
+   + memory capture path; speak only the remainder; tool calls unchanged.
+5. MLX/Qwen3-ASR stays in the codebase (fallback when daemon lane is off).
+
+## Acceptance
+
+- Click orb → speak → answer spoken, with correct [heard] transcript stored.
+- Tool-call-by-voice: "what's on my calendar today?" spoken → calendar tool
+  call through the daemon.
+- Keyboard combo works after being set in Settings.
+- `just build` zero errors; suite stays green (bypassed components' tests
+  untouched); daemon tests green; smoke test via run-dev.
