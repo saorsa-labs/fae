@@ -56,6 +56,25 @@ because capture is now a deliberate physical act by the person at the machine.
    below).
 4. `just run-dev` live test: click orb, speak, hear answer; commit per phase.
 
+## Empirical findings (standalone proof, 2026-06-11)
+
+Proven live (`/tmp/s18_audio_test.py`, daemon + Gemma 4 E4B Metal): one
+request carrying WAV audio + tool schemas returns the `[heard]:` verbatim
+transcription line **and** a native calendar tool call with the correct ISO
+date, in 2.7–5.9 s/turn. Two gotchas found and fixed:
+
+1. **The audio user message must have EMPTY text content.** Any placeholder
+   text ("(audio message)", instructions, anything) wins over the audio —
+   Gemma transcribes the text instead of listening. The `[heard]`
+   instruction lives in the system prompt only.
+2. **mistral.rs prefix cache corrupts audio turns.** Cache hits across
+   consecutive multimodal prompts produced "heard nothing"/instant-empty
+   replies. Disabled via `with_prefix_cache_n(None)` in both adapter load
+   paths (correct over fast).
+3. Gemma leaks raw tool-call markup (`<|tool_call>call:...`) into the text
+   channel alongside the parsed `tool_calls` array — Swift must drop
+   everything from the first tool-call marker before TTS.
+
 ## Transcript contract (the design wrinkle, decided)
 
 Audio-direct means Gemma answers without separately emitting the user's
@@ -80,8 +99,9 @@ for v1; revisit if transcription fidelity needs a dedicated pass.
    (click again, hotkey release, or 1.2 s silence via existing VAD as a plain
    endpointer), buffer mic audio; skip speaker gate, wake word, echo
    suppressor, barge-in. Generate via daemon rich payload with
-   `audio_wav_base64` on the user message (text field carries the [heard]
-   instruction context).
+   `audio_wav_base64` on the user message — **content must be the empty
+   string** (see Empirical findings); the [heard] instruction goes in the
+   system prompt.
 3. Orb host: left-click on orb body = talk toggle (emits
    `{"type":"menu","action":"talk_toggle"}` bridge event; messages bead hit
    keeps its panel). Window move becomes **Option+drag**. Orb shows listening
