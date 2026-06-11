@@ -262,7 +262,10 @@ enum DaemonWire {
     }
 
     /// Parse the daemon's startup stdout for announced paths. Lines look like:
-    /// `run dir : /path`, `token   : /path`, `listening on /path`.
+    /// `run dir : /path (0700)`, `token   : /path (0600)`,
+    /// `listening on /path (NDJSON)`. The trailing parenthesised annotation is
+    /// commentary, not part of the path (paths themselves contain spaces —
+    /// "Application Support" — so only a trailing `(...)` group is stripped).
     /// Missing values stay nil — callers fall back to the default run dir.
     static func parseStartupPaths(lines: [String]) -> StartupPaths {
         var paths = StartupPaths()
@@ -273,9 +276,10 @@ enum DaemonWire {
                 paths.runDir = value
             } else if lower.hasPrefix("token"), let value = valueAfterColon(line) {
                 paths.tokenPath = value
-            } else if lower.hasPrefix("listening on") {
-                let value = String(line.dropFirst("listening on".count))
-                    .trimmingCharacters(in: .whitespaces)
+            } else if let marker = lower.range(of: "listening on ") {
+                // The daemon prefixes this line ("fae-daemon: listening on …"),
+                // so match anywhere, not at line start.
+                let value = stripTrailingAnnotation(String(line[marker.upperBound...]))
                 if !value.isEmpty { paths.socketPath = value }
             }
         }
@@ -284,9 +288,18 @@ enum DaemonWire {
 
     private static func valueAfterColon(_ line: String) -> String? {
         guard let colon = line.firstIndex(of: ":") else { return nil }
-        let value = line[line.index(after: colon)...]
-            .trimmingCharacters(in: .whitespaces)
+        let value = stripTrailingAnnotation(String(line[line.index(after: colon)...]))
         return value.isEmpty ? nil : value
+    }
+
+    /// Drop a trailing ` (...)` annotation (e.g. ` (0700)`, ` (NDJSON)`).
+    private static func stripTrailingAnnotation(_ raw: String) -> String {
+        var value = raw.trimmingCharacters(in: .whitespaces)
+        if value.hasSuffix(")"), let open = value.range(of: " (", options: .backwards) {
+            value = String(value[..<open.lowerBound])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return value
     }
 }
 

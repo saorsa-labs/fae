@@ -664,14 +664,18 @@ fn apply_bridge_command(
             audio,
             feeling,
         } => {
-            // Product UX: the orb appears while Fae is thinking/speaking.
-            // Listening remains protocol-supported but visually quiescent for now.
-            let active = matches!(ui_state, FaeUiState::Thinking | FaeUiState::Speaking);
+            // S18: the orb is Fae's only UI and the push-to-talk button — it
+            // stays visible at all times; thinking/speaking/listening animate
+            // it. Hiding flows through the explicit Hide command (Hide Fae).
+            let active = matches!(
+                ui_state,
+                FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
+            );
             state.set_active(active);
             state.set_audio(audio);
             state.set_emotion(ui_state, feeling.as_deref());
             state.set_status_progress(None, false);
-            window.set_visible(active);
+            window.set_visible(true);
         }
         ShellCommand::Status {
             phase,
@@ -686,7 +690,9 @@ fn apply_bridge_command(
                 state.set_audio(Some(progress));
             }
             refresh_messages_panels(web_panels, orb_ui);
-            window.set_visible(should_show);
+            // Status changes animate the orb but never hide it (S18: the orb
+            // is the talk button and must stay clickable while idle).
+            window.set_visible(true);
         }
         ShellCommand::Conversation { role, text } => {
             orb_ui.push_message(role, text);

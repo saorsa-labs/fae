@@ -449,7 +449,9 @@ final class RustUiShellController {
             send(["type": "clear_conversation"])
             onResetConversation?()
         case "hide_fae":
-            sendState("quiescent")
+            // Quiescent no longer hides the orb (it must stay clickable for
+            // push-to-talk) — hide explicitly.
+            send(["type": "hide"])
             onHideFae?()
         case "stop": NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
         case "permissions_microphone": onPermissionMicrophone?()

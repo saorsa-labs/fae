@@ -219,6 +219,27 @@ final class DaemonWireTests: XCTestCase {
         XCTAssertEqual(paths.socketPath, "/Users/x/.local/share/fae/run/fae-daemon.sock")
     }
 
+    func testParseStartupPathsStripsTrailingAnnotations() {
+        // The daemon's real startup lines carry parenthesised annotations that
+        // are NOT part of the path — and the paths contain spaces
+        // ("Application Support"), so only a trailing group may be stripped.
+        // Regression: the un-stripped " (0700)" poisoned the socket path and
+        // the engine polled a nonexistent file for the full 600 s timeout.
+        let lines = [
+            "run dir : /Users/x/Library/Application Support/fae/run (0700)",
+            "token   : /Users/x/Library/Application Support/fae/run/bootstrap.token (0600)",
+            "fae-daemon: listening on /Users/x/Library/Application Support/fae/run/fae-daemon.sock (NDJSON)",
+        ]
+        let paths = DaemonWire.parseStartupPaths(lines: lines)
+        XCTAssertEqual(paths.runDir, "/Users/x/Library/Application Support/fae/run")
+        XCTAssertEqual(
+            paths.tokenPath,
+            "/Users/x/Library/Application Support/fae/run/bootstrap.token")
+        XCTAssertEqual(
+            paths.socketPath,
+            "/Users/x/Library/Application Support/fae/run/fae-daemon.sock")
+    }
+
     func testParseStartupPathsReturnsNilsForUnrelatedOutput() {
         let paths = DaemonWire.parseStartupPaths(lines: ["loading model...", "warmup done"])
         XCTAssertNil(paths.runDir)

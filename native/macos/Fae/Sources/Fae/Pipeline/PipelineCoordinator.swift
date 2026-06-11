@@ -2983,12 +2983,14 @@ actor PipelineCoordinator {
             // and VAD acts only as an endpointer — the speaker gate, wake
             // word, echo suppression and barge-in below are bypassed. In
             // push-to-talk-only mode deliberate capture is the ONLY audio
-            // entry, so the continuous path drops chunks entirely.
+            // entry, so the continuous path drops chunks — EXCEPT during
+            // first-owner voice enrollment, which needs the normal pipeline
+            // to hear the user (onboarding would silently fail otherwise).
             if pttCapturing {
                 await handlePTTChunk(chunk)
                 continue
             }
-            if pushToTalkOnlyLive {
+            if pushToTalkOnlyLive && !speakerGate.firstOwnerEnrollmentActive {
                 continue
             }
 
