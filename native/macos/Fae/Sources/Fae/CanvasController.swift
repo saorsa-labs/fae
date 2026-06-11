@@ -40,63 +40,27 @@ struct ActivityCard: Identifiable {
 
 // MARK: - CanvasController
 
-/// Observable store for canvas content and live activity feed.
+/// Observable store for the live tool-activity feed shown inline in the
+/// conversation scroll (tool calls, results, web searches).
 ///
-/// Supports two display modes:
-/// - **Activity feed mode**: live tool cards showing tool calls, results, and web searches
-/// - **Static HTML mode**: legacy HTML rendering via `setContent(_:)`
-///
-/// `PipelineAuxBridgeController` pushes content and visibility updates here.
-/// `CanvasWindowView` observes the published properties to render content.
+/// The legacy static-HTML canvas window was removed in the 2026-06-11
+/// cleanup; the Rust orb host's panels own rich content surfaces now.
 @MainActor
 final class CanvasController: ObservableObject {
-    /// Legacy HTML content (for backward compat with setContent callers).
-    @Published var htmlContent: String = ""
-
-    /// Whether the canvas window should be visible.
-    @Published var isVisible: Bool = false
-
     /// Live activity cards for the current turn.
     @Published var activityCards: [ActivityCard] = []
 
     /// Archived turns: each entry is (timestamp, cards) for a completed turn.
     @Published var archivedTurns: [(timestamp: Date, cards: [ActivityCard])] = []
 
-    /// Whether we're in activity feed mode (vs static HTML mode).
-    @Published var isActivityMode: Bool = false
-
-    /// Whether the canvas currently has anything meaningful to display.
-    var hasDisplayableContent: Bool {
-        if isActivityMode {
-            return !activityCards.isEmpty || !archivedTurns.isEmpty
-        }
-
-        return !htmlContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    // MARK: - Legacy HTML API (kept for backward compat)
-
-    func setContent(_ html: String) {
-        isActivityMode = false
-        htmlContent = html
-    }
-
-    func appendContent(_ html: String) {
-        htmlContent += html
-    }
-
     func clear() {
-        htmlContent = ""
         activityCards = []
         archivedTurns = []
-        isActivityMode = false
-        isVisible = false
     }
 
     // MARK: - Activity Feed API
 
     func addCard(_ card: ActivityCard) {
-        isActivityMode = true
         activityCards.append(card)
     }
 
@@ -118,11 +82,5 @@ final class CanvasController: ObservableObject {
             archivedTurns.removeFirst(archivedTurns.count - 10)
         }
         activityCards = []
-    }
-
-    func clearActivity() {
-        activityCards = []
-        archivedTurns = []
-        isActivityMode = false
     }
 }

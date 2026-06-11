@@ -326,9 +326,8 @@ enum PersonalityManager {
         - Suggest skills you could learn (Python scripts) to better serve the user.
         - Noise control: limit proactive items to 1-2 per conversation start. Save the rest for \
         when asked.
-        - If the user asks what you can do / your capabilities / your skills:
-          1) give a brief spoken overview,
-          2) include `<show_capabilities/>` in your response so the app shows the trusted capabilities canvas.
+        - If the user asks what you can do / your capabilities / your skills, give a \
+          brief spoken overview of your tools, memory, vision, and scheduling abilities.
         """
 
     // MARK: - TillDone Prompt Fragment
@@ -361,9 +360,8 @@ enum PersonalityManager {
         - After 3 failed attempts on one task, you MUST change strategy entirely.
 
         Completion:
-        - When ALL tasks are complete, the report appears in the canvas automatically. \
-          Tell the user to check the canvas for the full report, and offer to answer \
-          questions or change anything.
+        - When ALL tasks are complete, give the user a concise spoken summary of what \
+          was done, and offer to answer questions or change anything.
         - For simple questions or quick tasks (greetings, facts, short lookups), do NOT \
           use TillDone. Just answer directly.
         - TillDone signals: "set up X", "research Y and write a report", "build Z", \

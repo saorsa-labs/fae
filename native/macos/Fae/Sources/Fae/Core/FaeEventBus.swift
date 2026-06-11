@@ -117,19 +117,6 @@ final class FaeEventBus: @unchecked Sendable {
             payload["success"] = success
             payload["output_text"] = output
 
-        case .canvasVisibility(let visible):
-            eventName = "pipeline.canvas_visibility"
-            payload["visible"] = visible
-
-        case .conversationVisibility(let visible):
-            eventName = "pipeline.conversation_visibility"
-            payload["visible"] = visible
-
-        case .canvasContent(let html, let append):
-            eventName = "pipeline.canvas_content"
-            payload["html"] = html
-            payload["append"] = append
-
         case .voiceCommandRecognized(let command):
             eventName = "pipeline.voice_command"
             payload["command"] = command

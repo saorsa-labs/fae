@@ -71,20 +71,6 @@ final class PipelineCoordinatorStaticTests: XCTestCase {
         XCTAssertNotNil(present)
     }
 
-    // MARK: - shouldShowCapabilitiesCanvas
-
-    func testShouldShowCapabilitiesCanvasTriggerPhrase() {
-        XCTAssertTrue(PipelineCoordinator.shouldShowCapabilitiesCanvas(triggerText: "what can you do", modelResponse: "I can help with many things"))
-    }
-
-    func testShouldShowCapabilitiesCanvasTagInResponse() {
-        XCTAssertTrue(PipelineCoordinator.shouldShowCapabilitiesCanvas(triggerText: "hello", modelResponse: "here is info <show_capabilities/>"))
-    }
-
-    func testShouldShowCapabilitiesCanvasNoMatch() {
-        XCTAssertFalse(PipelineCoordinator.shouldShowCapabilitiesCanvas(triggerText: "hello world", modelResponse: "hi there"))
-    }
-
     // MARK: - contentHash (delegates to ToolRoutingHelpers)
 
     func testContentHash() {

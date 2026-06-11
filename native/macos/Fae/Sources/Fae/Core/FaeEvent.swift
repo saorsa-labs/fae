@@ -42,9 +42,6 @@ enum FaeEvent: Sendable {
 
     // MARK: Auxiliary UI
 
-    case canvasVisibility(Bool)
-    case conversationVisibility(Bool)
-    case canvasContent(html: String, append: Bool)
     case voiceCommandRecognized(String)
 
     // MARK: Model

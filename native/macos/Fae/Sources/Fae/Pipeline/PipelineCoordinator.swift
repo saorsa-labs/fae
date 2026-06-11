@@ -4573,30 +4573,6 @@ actor PipelineCoordinator {
     ) async -> Bool {
         debugLog(debugConsole, .command, "Evaluate command: \(String(describing: command))")
         switch command {
-        case .showCanvas:
-            eventBus.send(.voiceCommandRecognized("show_canvas"))
-            eventBus.send(.canvasVisibility(true))
-            await speakDirect("Opening the canvas.")
-            return true
-
-        case .hideCanvas:
-            eventBus.send(.voiceCommandRecognized("hide_canvas"))
-            eventBus.send(.canvasVisibility(false))
-            await speakDirect("Hiding the canvas.")
-            return true
-
-        case .showConversation:
-            eventBus.send(.voiceCommandRecognized("show_conversation"))
-            eventBus.send(.conversationVisibility(true))
-            await speakDirect("Opening the conversation.")
-            return true
-
-        case .hideConversation:
-            eventBus.send(.voiceCommandRecognized("hide_conversation"))
-            eventBus.send(.conversationVisibility(false))
-            await speakDirect("Hiding the conversation.")
-            return true
-
         case .showSettings:
             eventBus.send(.voiceCommandRecognized("show_settings"))
             let openResult: (primary: Bool, fallback: Bool) = await MainActor.run {
@@ -4621,14 +4597,6 @@ actor PipelineCoordinator {
                 NotificationCenter.default.post(name: .faeCloseSettingsRequested, object: nil)
             }
             await speakDirect("Closing settings.")
-            return true
-
-        case .showPermissionsCanvas:
-            eventBus.send(.voiceCommandRecognized("show_permissions_canvas"))
-            let html = await buildToolsAndPermissionsCanvasHTML(triggerText: originalText)
-            eventBus.send(.canvasContent(html: html, append: false))
-            eventBus.send(.canvasVisibility(true))
-            await speakDirect("Here are your current tools and permission levels.")
             return true
 
         case .setToolMode(let requestedMode):
@@ -4824,49 +4792,6 @@ actor PipelineCoordinator {
             metadata: ["capability": capability]
         )
         await speakDirect("Okay. Requesting \(label) permission now.")
-
-        let trigger = "permission refresh: \(capability)"
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self else { return }
-            await self.logGovernanceDebug("Refreshing permissions snapshot after request: \(capability)")
-            let html = await self.buildToolsAndPermissionsCanvasHTML(triggerText: trigger)
-            self.eventBus.send(.canvasContent(html: html, append: false))
-            self.eventBus.send(.canvasVisibility(true))
-        }
-    }
-
-    private func buildToolsAndPermissionsCanvasHTML(triggerText: String) async -> String {
-        let snapshot = await buildToolsAndPermissionsSnapshot(triggerText: triggerText)
-        return snapshot.toCanvasHTML()
-    }
-
-    private func buildToolsAndPermissionsSnapshot(triggerText: String) async -> ToolPermissionSnapshot {
-        let mode = effectiveToolMode()
-        let permissions = await MainActor.run { PermissionStatusProvider.current() }
-        let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
-
-        let speakerState: String = {
-            if speakerGate.currentSpeakerIsOwner { return "Owner verified" }
-            if speakerGate.currentSpeakerIsKnownNonOwner { return "Known non-owner speaker" }
-            if speakerGate.currentSpeakerLabel != nil { return "Recognized speaker" }
-            return "Speaker unknown"
-        }()
-
-        return CapabilitySnapshotService.buildSnapshot(
-            triggerText: triggerText,
-            toolMode: mode,
-            privacyMode: effectivePrivacyMode(),
-            speakerState: speakerState,
-            ownerGateEnabled: config.speaker.requireOwnerForTools,
-            ownerProfileExists: ownerProfileExists,
-            permissions: permissions,
-            thinkingEnabled: (thinkingLevelLive ?? config.llm.resolvedThinkingLevel).enablesThinking,
-            requireDirectAddress: effectiveRequireDirectAddress(),
-            visionEnabled: effectiveVisionEnabled(),
-            voiceIdentityLock: effectiveVoiceIdentityLock(),
-            registry: registry
-        )
     }
 
     private func applyGovernanceAction(
@@ -4948,75 +4873,6 @@ actor PipelineCoordinator {
         default:
             return mode
         }
-    }
-
-    static func shouldShowCapabilitiesCanvas(triggerText: String, modelResponse: String) -> Bool {
-        let lowerTrigger = triggerText.lowercased()
-        let lowerResponse = stripThinkContent(modelResponse).lowercased()
-
-        if lowerResponse.contains("<show_capabilities/>") || lowerResponse.contains("<show_capabilities>") {
-            return true
-        }
-
-        let queryPhrases = [
-            "what can you do",
-            "what are your capabilities",
-            "what are your skills",
-            "show me your skills",
-            "show your skills",
-            "show capabilities",
-            "help me understand what you can do",
-        ]
-        return queryPhrases.contains { lowerTrigger.contains($0) }
-    }
-
-    private func trustedCapabilitiesCanvasHTML() -> String {
-        let toolCount = registry.toolNames.count
-        return """
-        <html>
-        <head>
-          <meta name='viewport' content='width=device-width, initial-scale=1' />
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1015; color: #e9e9ef; padding: 18px; line-height: 1.45; }
-            .panel { border: 1px solid #2a2d38; border-radius: 10px; padding: 12px; margin-bottom: 10px; background: #171a23; }
-            .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-            .chip { font-size: 11px; text-decoration: none; color: #e9e9ef; border: 1px solid #3d4354; padding: 5px 9px; border-radius: 999px; background: #202533; }
-            ul { margin: 8px 0 0 18px; padding: 0; }
-            li { margin: 4px 0; }
-            .hint { color: #99a0b6; font-size: 12px; }
-          </style>
-        </head>
-        <body>
-          <div class='panel'>
-            <p><strong>What I can do for you</strong></p>
-            <ul>
-              <li>Voice identity + owner-aware safety</li>
-              <li>Persistent memory and relationship context</li>
-              <li>\(toolCount) built-in tools (read/write/edit/bash, web, calendar, reminders, contacts, mail, notes)</li>
-              <li>Vision tools (camera, screenshot, read_screen)</li>
-              <li>Scheduler + proactive morning/overnight workflows</li>
-              <li>Skill system (activate, run, create, update)</li>
-              <li>Self-configuration of behavior and preferences</li>
-            </ul>
-            <div class='chips'>
-              <a class='chip' href='fae-action://open_settings?source=canvas'>Open settings</a>
-              <a class='chip' href='fae-action://start_owner_enrollment?source=canvas'>Voice enrollment</a>
-            </div>
-            <p class='hint'>Tip: ask “show tools and permissions” for a live policy snapshot.</p>
-          </div>
-        </body>
-        </html>
-        """
-    }
-
-    private func maybeShowCapabilitiesCanvas(triggerText: String, modelResponse: String) {
-        guard Self.shouldShowCapabilitiesCanvas(triggerText: triggerText, modelResponse: modelResponse) else {
-            return
-        }
-        let html = trustedCapabilitiesCanvasHTML()
-        eventBus.send(.canvasContent(html: html, append: false))
-        eventBus.send(.canvasVisibility(true))
-        debugLog(debugConsole, .qa, "Capabilities canvas opened from trusted template")
     }
 
     /// Unified LLM generation with inline tool execution.
@@ -6509,8 +6365,6 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .llmThink, "[suppressed non-spoken output] \(String(fullResponse.prefix(160)))")
             }
 
-            maybeShowCapabilitiesCanvas(triggerText: userText, modelResponse: fullResponse)
-
             // TillDone nudge: if the LLM stopped generating but there are incomplete
             // tasks on the TillDone list, nudge it to continue working.
             // Nudges are tagged so they can be cleaned up after the turn, preventing
@@ -6947,15 +6801,9 @@ actor PipelineCoordinator {
 
         await synchronizeLLMSession()
 
-        // TillDone: clean up nudge history and push canvas report when workflow ends.
+        // TillDone: clean up nudge history when the workflow ends.
         let tillDoneListStillActive = await TillDoneManager.shared.isListActive
         if tillDoneListStillActive, await TillDoneManager.shared.allDone {
-            let htmlReport = await TillDoneManager.shared.generateHTMLReport()
-            if !htmlReport.isEmpty {
-                debugLog(debugConsole, .qa, "TillDone: all tasks complete — pushing report to canvas")
-                eventBus.send(.canvasContent(html: htmlReport, append: false))
-                eventBus.send(.canvasVisibility(true))
-            }
             await conversationState.removeMessages(taggedWith: "tilldone_nudge")
         } else if !tillDoneListStillActive {
             // List was cleared mid-conversation — remove any leftover nudge messages.

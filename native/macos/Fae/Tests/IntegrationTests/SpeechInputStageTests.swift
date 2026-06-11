@@ -399,29 +399,6 @@ final class FaeEventTests: XCTestCase {
         }
     }
 
-    // MARK: - UI events
-
-    func testCanvasVisibility() {
-        let event = FaeEvent.canvasVisibility(true)
-        switch event {
-        case .canvasVisibility(let visible):
-            XCTAssertTrue(visible)
-        default:
-            XCTFail("Expected canvasVisibility")
-        }
-    }
-
-    func testCanvasContent() {
-        let event = FaeEvent.canvasContent(html: "<p>test</p>", append: true)
-        switch event {
-        case .canvasContent(let html, let append):
-            XCTAssertEqual(html, "<p>test</p>")
-            XCTAssertTrue(append)
-        default:
-            XCTFail("Expected canvasContent")
-        }
-    }
-
     // MARK: - Model events
 
     func testModelLoaded() {

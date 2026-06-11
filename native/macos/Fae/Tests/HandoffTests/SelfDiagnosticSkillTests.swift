@@ -86,7 +86,7 @@ final class SelfDiagnosticSkillTests: XCTestCase {
 
     func testDiagnosticsDoesNotConflictWithOtherCommands() {
         // Ensure other commands still work.
-        XCTAssertEqual(VoiceCommandParser.parse("show canvas"), .showCanvas)
+        XCTAssertEqual(VoiceCommandParser.parse("open settings"), .showSettings)
         XCTAssertEqual(VoiceCommandParser.parse("enable thinking mode"), .setThinking(true))
         XCTAssertEqual(VoiceCommandParser.parse("request camera permission"), .requestPermission("camera"))
     }

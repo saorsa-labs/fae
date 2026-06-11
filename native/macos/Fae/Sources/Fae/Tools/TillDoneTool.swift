@@ -229,64 +229,6 @@ actor TillDoneManager {
         return md
     }
 
-    /// Generate an HTML report for the canvas.
-    func generateHTMLReport() -> String {
-        guard !tasks.isEmpty else { return "" }
-        let title = listTitle ?? "Task Report"
-        let done = tasks.filter { $0.status == .done }.count
-        let skipped = tasks.filter { $0.status == .skipped }.count
-        let total = tasks.count
-
-        var html = """
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px;
-                 background: transparent; color: #e0e0e0; }
-          h1 { color: #fff; font-size: 18px; margin-bottom: 4px; }
-          .subtitle { color: #888; font-size: 13px; margin-bottom: 16px; }
-          .progress { background: #333; border-radius: 6px; height: 8px; margin-bottom: 16px; overflow: hidden; }
-          .progress-fill { background: linear-gradient(90deg, #4ade80, #22d3ee);
-                           height: 100%; border-radius: 6px; transition: width 0.3s; }
-          .task { padding: 8px 12px; margin: 4px 0; border-radius: 8px; background: #1a1a2e; }
-          .task.done { border-left: 3px solid #4ade80; }
-          .task.inprogress { border-left: 3px solid #fbbf24; }
-          .task.idle { border-left: 3px solid #555; }
-          .task.skipped { border-left: 3px solid #888; opacity: 0.6; }
-          .task-title { font-weight: 600; font-size: 13px; }
-          .task-result { color: #aaa; font-size: 12px; margin-top: 4px; }
-          .icon { margin-right: 6px; }
-        </style>
-        <h1>\(Self.escapeHTML(title))</h1>
-        """
-
-        if let desc = listDescription {
-            html += "<div class=\"subtitle\">\(Self.escapeHTML(desc))</div>"
-        }
-
-        let pct = total > 0 ? Int(Double(done) / Double(total) * 100) : 0
-        html += """
-        <div class="subtitle">\(done)/\(total) completed\(skipped > 0 ? ", \(skipped) skipped" : "")</div>
-        <div class="progress"><div class="progress-fill" style="width: \(pct)%"></div></div>
-        """
-
-        for task in tasks {
-            let (icon, cls): (String, String)
-            switch task.status {
-            case .done: (icon, cls) = ("✅", "done")
-            case .inprogress: (icon, cls) = ("🔄", "inprogress")
-            case .idle: (icon, cls) = ("⬜", "idle")
-            case .skipped: (icon, cls) = ("⏭️", "skipped")
-            }
-            html += "<div class=\"task \(cls)\">"
-            html += "<span class=\"icon\">\(icon)</span>"
-            html += "<span class=\"task-title\">\(Self.escapeHTML(task.text))</span>"
-            if let result = task.result {
-                html += "<div class=\"task-result\">\(Self.escapeHTML(result))</div>"
-            }
-            html += "</div>"
-        }
-
-        return html
-    }
 
     func clear() -> String {
         let count = tasks.count

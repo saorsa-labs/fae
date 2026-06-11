@@ -369,20 +369,6 @@ final class PipelineAuxBridgeController: ObservableObject {
 
     private func handlePipelineState(event: String, payload: [String: Any]) {
         switch event {
-        case "pipeline.canvas_visibility":
-            // The canvas auxiliary window was removed (2026-06-11 cleanup);
-            // inline activity cards still render canvas content.
-            break
-
-        case "pipeline.canvas_content":
-            let html = payload["html"] as? String ?? ""
-            let append = payload["append"] as? Bool ?? false
-            if append {
-                canvasController?.appendContent(html)
-            } else {
-                canvasController?.setContent(html)
-            }
-
         case "pipeline.control":
             let control = payload["control"] as? String ?? "unknown"
             status = "Pipeline: \(control)"

@@ -14,13 +14,8 @@ enum VoiceCommandParser {
 
     /// Voice command types that Fae recognizes.
     enum VoiceCommand: Sendable, Equatable {
-        case showCanvas
-        case hideCanvas
-        case showConversation
-        case hideConversation
         case showSettings
         case hideSettings
-        case showPermissionsCanvas
         case setToolMode(String)
         case setThinking(Bool)
         case setBargeIn(Bool)
@@ -45,35 +40,11 @@ enum VoiceCommandParser {
         // Long input is never a voice command — bail early.
         if lower.count > 120 { return .none }
 
-        // Canvas commands — word-level matching handles "the" variants.
-        if (lower.contains("show") || lower.contains("open")) && lower.contains("canvas") {
-            return .showCanvas
-        }
-        if (lower.contains("hide") || lower.contains("close")) && lower.contains("canvas") {
-            return .hideCanvas
-        }
-
-        // Conversation panel commands.
-        if (lower.contains("show") || lower.contains("open")) && lower.contains("conversation") {
-            return .showConversation
-        }
-        if (lower.contains("hide") || lower.contains("close")) && lower.contains("conversation") {
-            return .hideConversation
-        }
-
         // Settings window commands.
         if lower.contains("show settings") || lower.contains("open settings")
             || lower.contains("go to settings") || lower.contains("settings window")
         {
             return .showSettings
-        }
-
-        // Tool + permission snapshot canvas commands.
-        if lower.contains("show permissions") || lower.contains("show tool permissions")
-            || lower.contains("show tools i can use") || lower.contains("show available tools")
-            || lower.contains("show tools and permissions")
-        {
-            return .showPermissionsCanvas
         }
 
         // Permission requests.

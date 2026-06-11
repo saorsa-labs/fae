@@ -64,9 +64,8 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
 
         controller.finishStartupCanvasTransition()
 
-        XCTAssertFalse(canvas.isActivityMode)
-        XCTAssertEqual(canvas.htmlContent, "")
-        XCTAssertFalse(canvas.isVisible)
+        XCTAssertTrue(canvas.activityCards.isEmpty)
+        XCTAssertTrue(canvas.archivedTurns.isEmpty)
     }
 
     func testStartupProgressDoesNotAutoOpenCanvasWindow() async throws {
@@ -84,8 +83,8 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
 
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        XCTAssertEqual(canvas.htmlContent, "")
-        XCTAssertFalse(canvas.isVisible)
+        XCTAssertTrue(canvas.activityCards.isEmpty)
+        XCTAssertTrue(canvas.archivedTurns.isEmpty)
     }
 
     func testReadyProgressStageDoesNotMarkPipelineReady() async throws {
