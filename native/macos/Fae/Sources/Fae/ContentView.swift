@@ -16,7 +16,6 @@ struct ContentView: View {
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var faeCore: FaeCore
     @State private var showingNativeEnrollment = false
-    @State private var showingPhotoCapture = false
     @State private var listeningBeforeNativeEnrollment = true
 
     var body: some View {
@@ -31,24 +30,10 @@ struct ContentView: View {
                 // Subtle separator
                 Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
 
-                // Enrollment invitation — visible until owner voice is enrolled.
-                if !ownerEnrollmentComplete {
-                    EnrollmentInvitationBanner {
-                        beginNativeEnrollment()
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-
-                // Photo setup — visible after voice enrollment until a photo is taken.
-                // Gate on hasOwnerSetUp (synced from speaker profile store during
-                // startup) rather than ownerEnrollmentComplete to avoid showing the
-                // photo banner during the brief window before the owner check runs.
-                if faeCore.hasOwnerSetUp && !faeCore.hasOwnerPhoto {
-                    PhotoSetupBanner {
-                        showingPhotoCapture = true
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                // Voice/photo enrollment banners removed (S18 push-to-talk era):
+                // identity is the deliberate physical act at the machine, not a
+                // voiceprint. Enrollment remains reachable from Settings >
+                // Speaker until the full voice-identity teardown lands.
 
                 // Input — pinned at bottom once startup fully completes.
                 InputBarView()
@@ -125,18 +110,6 @@ struct ContentView: View {
                 initialName: onboarding.userName ?? faeCore.userName ?? "",
                 onPhotoCapture: { jpegData in
                     faeCore.saveOwnerPhoto(jpegData: jpegData, description: nil)
-                }
-            )
-            .preferredColorScheme(nil)
-        }
-        .sheet(isPresented: $showingPhotoCapture) {
-            OwnerPhotoCaptureView(
-                onComplete: { jpegData in
-                    showingPhotoCapture = false
-                    faeCore.saveOwnerPhoto(jpegData: jpegData, description: nil)
-                },
-                onSkip: {
-                    showingPhotoCapture = false
                 }
             )
             .preferredColorScheme(nil)

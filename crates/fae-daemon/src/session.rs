@@ -402,10 +402,12 @@ async fn inject_text(
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
     let request = parse_chat_request(&cmd.payload)?;
-    let mut stream = engine
-        .stream_chat(request)
-        .await
-        .map_err(|_| "inference_failed")?;
+    let mut stream = engine.stream_chat(request).await.map_err(|error| {
+        // The wire carries only a coarse code — keep the real failure visible
+        // in the daemon's own output for diagnosis.
+        eprintln!("fae-daemon: inject_text failed before first token: {error}");
+        "inference_failed"
+    })?;
     let mut answer = String::new();
     let mut tool_calls = Vec::new();
     let mut finish_reason = "stop".to_owned();
@@ -421,7 +423,10 @@ async fn inject_text(
                 finish_reason = reason;
                 break;
             }
-            Err(_) => return Err("inference_failed"),
+            Err(error) => {
+                eprintln!("fae-daemon: inject_text failed mid-stream: {error}");
+                return Err("inference_failed");
+            }
         }
     }
     Ok(serde_json::json!({

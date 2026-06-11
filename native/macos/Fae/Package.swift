@@ -20,7 +20,13 @@ let package = Package(
         // MLX ecosystem — local ML inference on Apple Silicon.
         // mlx-swift is resolved transitively via mlx-swift-lm.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", .upToNextMinor(from: "2.31.0")),
-        .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", from: "0.1.2"),
+        // Pinned by SHA (supply-chain policy): the v0.1.2 tag points at a
+        // pre-Kokoro commit — resolving it silently killed TTS ("Unsupported
+        // model type: kokoro"). 65e228f = main 2026-04-20: has Kokoro (incl.
+        // the #136/#151 crash fixes) and is the last revision on
+        // mlx-swift-lm 2.x, matching our 2.31 pin. Newer main requires
+        // mlx-swift-lm 3.x — bump both together when that migration happens.
+        .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", revision: "65e228ff3131f994c47d083c732e1adb6504cbf7"),
         // SQLite with ORM — memory store.
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         // NOTE: SQLiteVec upstream removed — its CSQLiteVec C module exposes

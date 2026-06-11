@@ -22,6 +22,8 @@ final class RustUiShellController {
     var onResetConversation: (() -> Void)?
     /// Plain left-click on the orb body (S18 push-to-talk toggle).
     var onTalkToggle: (() -> Void)?
+    /// Text submitted from the messages-panel composer.
+    var onSendText: ((String) -> Void)?
     var onHideFae: (() -> Void)?
     var onQuit: (() -> Void)?
     var onPermissionMicrophone: (() -> Void)?
@@ -400,6 +402,10 @@ final class RustUiShellController {
                 return
             }
             setSkill(id: id, active: active)
+        case "send_text":
+            // Messages-panel composer (typed input from the orb's panel).
+            guard let text = event.text, !text.isEmpty else { return }
+            onSendText?(text)
         default:
             NSLog("RustUiShellController: unknown shell event type %@", event.type)
         }
@@ -508,4 +514,5 @@ private struct ShellEvent: Decodable {
     let id: String?
     let enabled: Bool?
     let active: Bool?
+    let text: String?
 }

@@ -5234,10 +5234,14 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .memory, "Recalled: \(preview)…")
             }
 
-            // Build system prompt with tool schemas.
+            // Build system prompt with tool schemas. A deliberate physical act
+            // at the machine (push-to-talk click, typed text) marks the turn's
+            // speaker as the owner — that satisfies the owner requirement
+            // without a voiceprint (S18: enrollment is no longer the gate).
             let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
             let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                 && !ownerProfileExists
+                && !speakerGate.currentSpeakerIsOwner
             // Detect conversation continuation: the last assistant message must have
             // been within 45 seconds. This gates the "show all tools on follow-up"
             // heuristic so it doesn't over-trigger on new topics after long pauses.
@@ -6500,6 +6504,7 @@ actor PipelineCoordinator {
                 let ownerProfileExists = await speakerProfileStore?.hasOwnerProfile() ?? false
                 let ownerEnrollmentRequired = config.speaker.requireOwnerForTools
                     && !ownerProfileExists
+                    && !speakerGate.currentSpeakerIsOwner
 
                 let fallback: String
                 let reasonCode: String

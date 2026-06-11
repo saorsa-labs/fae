@@ -209,6 +209,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let faeCore = self?.faeCore else { return }
             Task { await faeCore.pttToggle() }
         }
+        rustUiShell.onSendText = { [weak self] text in
+            // Composer text follows the typed-input path (trusted owner).
+            self?.faeCore.injectText(text)
+        }
         rustUiShell.onResetConversation = { [weak self] in
             self?.conversation.clearMessages()
             self?.subtitles.clearAll()
@@ -415,9 +419,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 faeCore.acceptLicense()
                 startPipelineIfReady()
-                if !faeCore.hasOwnerSetUp {
-                    requestPermissionsForFirstLaunch()
-                }
+                requestPermissionsForFirstLaunchIfNeeded()
             }
         )
         .environmentObject(handoff)
@@ -648,9 +650,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Start pipeline if license already accepted.
         if faeCore.isLicenseAccepted {
             startPipelineIfReady()
-            if !faeCore.hasOwnerSetUp {
-                requestPermissionsForFirstLaunch()
-            }
+            requestPermissionsForFirstLaunchIfNeeded()
         }
 
         // Read Me Card on every startup (if contacts permission already granted).
@@ -875,6 +875,17 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Startup now stays on the main conversation surface instead of opening
         // a separate canvas window.
         canvasController.clear()
+    }
+
+    /// One-time first-launch flow: read-access permissions + learning the
+    /// user's name from the Contacts Me Card. Keyed on its own flag — NOT on
+    /// owner voice enrollment (S18: enrollment is no longer part of first
+    /// launch; identity is the deliberate physical act at the machine).
+    func requestPermissionsForFirstLaunchIfNeeded() {
+        let flagKey = "fae.firstLaunch.permissionsRequested"
+        guard !FaeEnvironment.defaults.bool(forKey: flagKey) else { return }
+        FaeEnvironment.defaults.set(true, forKey: flagKey)
+        requestPermissionsForFirstLaunch()
     }
 
     func requestPermissionsForFirstLaunch() {

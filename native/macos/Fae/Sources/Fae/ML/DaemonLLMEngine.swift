@@ -669,8 +669,17 @@ actor DaemonLLMEngine: LLMEngine {
         let frame = try DaemonWire.encodeFrame(
             requestID: requestID, command: "conversation.inject_text", payload: payload)
         let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
-        let response = try DaemonWire.unwrapResponse(raw)
-        return DaemonWire.parseTurn(from: response)
+        do {
+            let response = try DaemonWire.unwrapResponse(raw)
+            return DaemonWire.parseTurn(from: response)
+        } catch {
+            // The wire error is a coarse code — surface the daemon's own
+            // output (where the engine logs the real failure) alongside it.
+            NSLog(
+                "DaemonLLMEngine: turn %@ failed (%@) — daemon tail: %@",
+                requestID, error.localizedDescription, output.tail(1_500))
+            throw error
+        }
     }
 
     private func nextRequestID() -> String {

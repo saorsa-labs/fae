@@ -814,7 +814,18 @@ fn refresh_panel_kind(web_panels: &[WebPanel], kind: WebPanelKind, html: String)
             return;
         }
     };
-    let script = format!("document.open();document.write({js_payload});document.close();");
+    // Preserve the composer's draft text + focus across the rewrite — the
+    // panel re-renders on every conversation update, mid-typing included.
+    let script = format!(
+        "(function() {{\
+           const prior = document.getElementById('composer');\
+           const draft = prior ? prior.value : '';\
+           const hadFocus = prior && document.activeElement === prior;\
+           document.open();document.write({js_payload});document.close();\
+           const next = document.getElementById('composer');\
+           if (next) {{ next.value = draft; if (hadFocus) next.focus(); }}\
+         }})();"
+    );
     for panel in web_panels.iter().filter(|panel| panel.kind == kind) {
         if let Err(error) = panel.webview.evaluate_script(&script) {
             log::warn!("failed to refresh panel: {error}");
@@ -860,10 +871,24 @@ fn messages_html(orb_ui: &OrbUiModel) -> String {
         r#"<!doctype html>
 <html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <style>
-:root{{color-scheme:dark}}body{{margin:0;background:radial-gradient(circle at 50% 0,#221F28,#0F1013 62%);color:#CEC4DC;font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}main{{padding:22px;display:grid;gap:14px}}.status{{border:1px solid rgba(180,168,196,.25);border-radius:16px;padding:16px;background:#1A1820;box-shadow:0 20px 70px rgba(0,0,0,.28)}}h1{{font-size:20px;margin:0 0 8px;font-family:'Instrument Serif',Georgia,serif;color:#E8DED2}}.muted,.empty{{color:#9A90A8}}.progress{{height:8px;border-radius:99px;background:rgba(255,255,255,.10);overflow:hidden;margin-top:12px}}.bar{{height:100%;width:{progress_width};background:linear-gradient(90deg,#7A9B8E,#C8D3D5)}}.msg{{border-radius:16px;padding:14px 9px 14px 16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}}.msg.user{{background:#38476B;border-color:rgba(89,115,166,.5)}}.msg.fae,.msg.assistant{{background:#3D334D;border-color:rgba(180,168,196,.25)}}.role{{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#9A90A8;margin-bottom:6px}}p{{white-space:pre-wrap;line-height:1.45;margin:0;font-family:Georgia,'Times New Roman',serif;font-size:13px;color:#CEC4DC}}
+:root{{color-scheme:dark}}body{{margin:0;background:radial-gradient(circle at 50% 0,#221F28,#0F1013 62%);color:#CEC4DC;font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}main{{padding:22px;display:grid;gap:14px}}.status{{border:1px solid rgba(180,168,196,.25);border-radius:16px;padding:16px;background:#1A1820;box-shadow:0 20px 70px rgba(0,0,0,.28)}}h1{{font-size:20px;margin:0 0 8px;font-family:'Instrument Serif',Georgia,serif;color:#E8DED2}}.muted,.empty{{color:#9A90A8}}.progress{{height:8px;border-radius:99px;background:rgba(255,255,255,.10);overflow:hidden;margin-top:12px}}.bar{{height:100%;width:{progress_width};background:linear-gradient(90deg,#7A9B8E,#C8D3D5)}}.msg{{border-radius:16px;padding:14px 9px 14px 16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}}.msg.user{{background:#38476B;border-color:rgba(89,115,166,.5)}}.msg.fae,.msg.assistant{{background:#3D334D;border-color:rgba(180,168,196,.25)}}.role{{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#9A90A8;margin-bottom:6px}}p{{white-space:pre-wrap;line-height:1.45;margin:0;font-family:Georgia,'Times New Roman',serif;font-size:13px;color:#CEC4DC}}.composer{{display:flex;gap:8px;position:sticky;bottom:0;padding:10px 0}}.composer input{{flex:1;border:1px solid rgba(180,168,196,.25);border-radius:12px;background:#1A1820;color:#CEC4DC;padding:10px 14px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;outline:none}}.composer input:focus{{border-color:rgba(122,155,142,.6)}}.composer button{{border:1px solid rgba(122,155,142,.5);border-radius:12px;background:#2A3A33;color:#C8D3D5;padding:10px 16px;font:600 13px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer}}
 </style></head><body><main>
 <section class='status'><h1>Fae</h1><p class='muted'>{phase}: {message}</p><p class='muted'>progress: {progress}</p><div class='progress'><div class='bar'></div></div></section>
 <section>{messages}</section>
+<section class='composer'><input id='composer' placeholder='Message Fae…' autocomplete='off'><button id='composer-send'>Send</button></section>
+<script>
+(function() {{
+  const input = document.getElementById('composer');
+  const send = () => {{
+    const text = input.value.trim();
+    if (!text) return;
+    window.ipc.postMessage(JSON.stringify({{ type: 'send_text', text }}));
+    input.value = '';
+  }};
+  document.getElementById('composer-send').addEventListener('click', send);
+  input.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') send(); }});
+}})();
+</script>
 </main></body></html>"#,
         phase = html_escape(&orb_ui.status_phase),
         message = html_escape(&orb_ui.status_message),
