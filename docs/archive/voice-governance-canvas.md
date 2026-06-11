@@ -1,3 +1,5 @@
+> **Superseded** (2026-06-11, Great Cleanup): the canvas auxiliary window was removed; the orb host is the only product UI (ADR-009). Current governance/permission behavior: `docs/guides/progressive-disclosure-and-permissions.md`. Kept for historical record.
+
 # Voice Governance Canvas (Current Runtime)
 
 Fae now supports a unified, voice-first governance flow for tool authority, behavior settings, and permission remediation.

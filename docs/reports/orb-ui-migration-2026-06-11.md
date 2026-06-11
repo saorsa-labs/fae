@@ -184,7 +184,7 @@ Build/docs:
 - `docs/adr/009-rust-orb-ui-shell.md`
 - `docs/architecture/fae-rust-orb-ui-shell.md`
 - `docs/checklists/app-release-validation.md`
-- `docs/checklists/main-and-cowork-live-test-scenarios.md`
+- `docs/archive/main-and-cowork-live-test-scenarios.md` (archived 2026-06-11)
 
 ## Validation Performed
 

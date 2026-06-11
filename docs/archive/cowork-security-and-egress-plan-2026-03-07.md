@@ -1,3 +1,5 @@
+> **Superseded** (2026-06-11, Great Cleanup): CoWork and its security intercept were removed with the feature. See `docs/architecture/cowork-removal-plan-2026-06-05.md` and `docs/architecture/great-cleanup-2026-06-11.md`. Kept for historical record.
+
 # Cowork security and remote egress plan — 2026-03-07
 
 **Status:** Implemented baseline (Phase 1 export hardening)  

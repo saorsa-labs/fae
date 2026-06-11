@@ -1,3 +1,5 @@
+> **Superseded** (2026-06-11, Great Cleanup): CoWork was removed from the product. See `docs/architecture/cowork-removal-plan-2026-06-05.md` and `docs/architecture/great-cleanup-2026-06-11.md`. Kept for historical record.
+
 # Cowork Launch UX Checklist
 
 Last updated: March 8, 2026

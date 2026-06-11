@@ -86,9 +86,7 @@ These phases are the minimum scripted baseline:
 - [ ] `10-policy-profiles`
 - [ ] `11-voice-pipeline`
 - [ ] `12-onboarding`
-- [ ] `13-cowork`
 - [ ] `14-dual-model` (legacy compatibility coverage only when that path is intentionally touched)
-- [ ] `15-cowork-voice` (requires Chatterbox)
 
 Acceptance:
 
@@ -158,7 +156,6 @@ The Swift main window scenarios remain required while the live pipeline is still
 - [ ] Overlapping turns are handled cleanly without silent drops or permanent `Thinking...`.
 - [ ] When a turn enters a thinking phase, the conversation surface shows the crawl panel before reply streaming begins.
 - [ ] When a thinking phase finishes, the crawl collapses cleanly and leaves a replayable thinking icon tied to that turn.
-- [ ] Main-window replies remain reliable while Cowork is open.
 
 ### Tools, approvals, and popups
 
@@ -184,60 +181,9 @@ The Swift main window scenarios remain required while the live pipeline is still
 - [ ] Staged skill drafts can be listed, inspected, and only applied or dismissed after explicit user confirmation.
 - [ ] Any generated or edited artifacts appear where the UI says they will.
 
-## Cowork scenarios
+## Cowork scenarios (removed)
 
-### Open, layout, and clarity
-
-- [ ] Opening Cowork leaves the role of the main Fae window obvious.
-- [ ] The Cowork screen is calm, readable, and not cluttered.
-- [ ] The current model is visible at rest without opening a menu.
-- [ ] The current thinking level is visible without looking like a debug control.
-- [ ] Local vs remote is obvious at a glance.
-- [ ] Narrow-window resize preserves hierarchy and avoids broken truncation.
-
-### Conversation controls
-
-- [ ] Send is the only dominant action.
-- [ ] Compare is secondary and clearly means multi-model fanout.
-- [ ] Fork conversation is discoverable without hunting.
-- [ ] Add context, switch model, and change response style are easy to find.
-
-### Audio
-
-- [ ] Cowork has a visible voice-input control.
-- [ ] Cowork has a visible read-aloud control.
-- [ ] Fae in Cowork can receive audio input and produce audible TTS output.
-- [ ] Non-local models in Cowork can use the same audio in/out surface where supported by the product.
-- [ ] The main-window mic can be disabled or parked cleanly while Cowork voice testing runs.
-- [ ] A shared mic gate change is reflected both in `/status` and in the visible mic state on the live UI.
-
-### Local and remote model behavior
-
-- [ ] Local Fae in Cowork can use brokered tools, scheduler access, and memory correctly.
-- [ ] Remote models can answer normally through configured providers.
-- [ ] Model switching works across local, direct API, and OpenRouter-backed models.
-- [ ] Thinking level / response style switching works and remains understandable.
-- [ ] Main and Cowork both show the thinking crawl during deliberate reasoning and preserve the replay icon after the answer arrives.
-- [ ] Compare and fork preserve the right conversation state.
-
-### Security and privacy
-
-- [ ] Remote-provider sends do not expose secrets, private memories, or unnecessary local metadata.
-- [ ] Absolute paths, workspace roots, and hidden local context are not leaked in remote-default packets.
-- [ ] Security/export states feel precise and calm rather than blunt or alarming.
-- [ ] A remote model can request helpful brokered local outputs without direct raw authority.
-
-### Cowork and main-window coexistence
-
-- [ ] Opening Cowork does not leave the main Fae window covering the workspace surface.
-- [ ] If the main window remains visible, it is intentionally docked or parked and does not steal focus during Cowork work.
-- [ ] Re-activating the app while Cowork is open preserves that intentional main-window state.
-
-### Workspace surfaces
-
-- [ ] Skills page allows add/edit/remove and reflects real state.
-- [ ] Scheduler page allows add/edit/remove and reflects real state.
-- [ ] Any approval, export-review, or credentials popup in Cowork actually works.
+CoWork was removed from the product in the Great Cleanup (2026-06-11). The historical scenarios live in `../archive/main-and-cowork-live-test-scenarios.md` and `../archive/cowork-launch-ux-checklist.md`. The only remaining CoWork-related checks are the anti-restoration guards above (Cowork/canvas must NOT appear as product UI surfaces).
 
 ## Settings and diagnostics scenarios
 
@@ -249,7 +195,6 @@ The Swift main window scenarios remain required while the live pipeline is still
 ## Accessibility scenarios
 
 - [ ] Main window controls are reachable and understandable with accessibility labels.
-- [ ] Cowork controls are reachable and understandable with accessibility labels.
 - [ ] Return-to-send and Shift-Return-for-newline behaviors work where documented.
 - [ ] Small targets, truncation, and low-contrast areas have been reviewed live.
 - [ ] A live VoiceOver pass has been completed before release.
@@ -260,7 +205,6 @@ Do not claim production readiness unless all of the following are true:
 
 - [ ] The scripted phases relevant to the change pass on the shipping bundle.
 - [ ] Main-window live validation passes.
-- [ ] Cowork live validation passes.
 - [ ] Audio input and output are validated with real audio, not text injection.
 - [ ] Required screenshots and failure evidence are captured.
 - [ ] Docs were updated for any user-visible or policy-visible behavior change.

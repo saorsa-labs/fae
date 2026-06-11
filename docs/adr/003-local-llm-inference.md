@@ -6,6 +6,13 @@
 
 > The core decision (local-only, no API keys, privacy-first) remains active and implemented.
 > Implementation changed from Rust/mistralrs/ONNX to Swift/MLX. Models evolved from Qwen3 to Qwen3.5, with Gemma 4 migration pending.
+>
+> **Update 2026-06-11 (Great Cleanup / orb-first):** the primary inference lane is now the
+> Rust daemon (`crates/fae-daemon` + `fae-engine`, mistral.rs, Gemma 4 E4B) behind
+> `llm.useDaemonEngine`, with a llama.cpp adapter planned for Vulkan-class hardware.
+> The Swift/MLX engine described here remains the macOS fallback and LoRA training
+> substrate. Local-only remains unchanged. See ADR-009 and
+> `docs/architecture/great-cleanup-2026-06-11.md`.
 
 ## Context
 

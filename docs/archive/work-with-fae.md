@@ -1,3 +1,5 @@
+> **Superseded** (2026-06-11, Great Cleanup): the Work with Fae / CoWork workspace was removed from the product. See `docs/architecture/cowork-removal-plan-2026-06-05.md`. Kept for historical record.
+
 # Work with Fae
 
 Work with Fae is Fae’s conversation-first workspace surface for focused project work.

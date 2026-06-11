@@ -1,3 +1,5 @@
+> **Superseded** (2026-06-11, Great Cleanup): CoWork and the legacy main window were removed; the orb host is the only product UI. Canonical validation now lives in `docs/checklists/app-release-validation.md`. Kept for historical record.
+
 # Fae Orb Shell Live Test Scenarios
 
 Last updated: June 11, 2026

@@ -493,7 +493,7 @@ Relevant files:
 
 - [test-comprehensive.sh](../../scripts/test-comprehensive.sh)
 - [App release validation checklist](../checklists/app-release-validation.md)
-- [Main and Cowork live scenarios](../checklists/main-and-cowork-live-test-scenarios.md)
+- [Main and Cowork live scenarios (archived 2026-06-11)](../archive/main-and-cowork-live-test-scenarios.md)
 
 ### Promotion gates
 
