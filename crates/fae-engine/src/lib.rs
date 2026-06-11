@@ -24,6 +24,9 @@ mod mistralrs_adapter;
 mod mock;
 mod models_lock;
 mod provider;
+mod tts;
+#[cfg(target_os = "macos")]
+mod voice_tts_adapter;
 
 pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::MockAdapter;
@@ -32,3 +35,6 @@ pub use provider::{
     AdapterInfo, ChatEvent, ChatMessage, ChatRequest, ChatStream, EngineError, ProviderAdapter,
     Role, ToolSpec,
 };
+pub use tts::{encode_wav_pcm16, MockTtsAdapter, TtsAdapter, TtsAudio};
+#[cfg(target_os = "macos")]
+pub use voice_tts_adapter::VoiceTtsAdapter;

@@ -25,7 +25,7 @@ use fae_control_plane::{
     generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, TicketStore,
     PROTOCOL_VERSION,
 };
-use fae_engine::{LocalMistralrsAdapter, MockAdapter, ProviderAdapter};
+use fae_engine::{LocalMistralrsAdapter, MockAdapter, MockTtsAdapter, ProviderAdapter, TtsAdapter};
 
 mod diagnostic;
 mod session;
@@ -74,6 +74,9 @@ async fn main() -> DaemonResult<()> {
     let engine = build_engine().await;
     let info = engine.describe();
     println!("engine  : {} ({})", info.backend, info.model_id);
+    let tts = build_tts_engine();
+    let tts_info = tts.describe();
+    println!("tts     : {} ({})", tts_info.backend, tts_info.model_id);
     println!("audit   : {} (jsonl)", audit_path.display());
     println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
 
@@ -82,6 +85,7 @@ async fn main() -> DaemonResult<()> {
         let state = Arc::new(diagnostic::DiagnosticState {
             registry: Arc::clone(&registry),
             engine: Arc::clone(&engine),
+            tts: Arc::clone(&tts),
             tickets: Arc::clone(&tickets),
             audit_path: audit_path.clone(),
             port,
@@ -96,8 +100,32 @@ async fn main() -> DaemonResult<()> {
     println!();
 
     // Serves until the process is killed. Fails closed on bind/permission error.
-    transport::serve_unix(socket_path, registry, engine, audit_path).await?;
+    transport::serve_unix(socket_path, registry, engine, tts, audit_path).await?;
     Ok(())
+}
+
+/// Build the TTS backend (S19). On macOS: Kokoro via voice-tts/mlx-rs, with
+/// weights loading lazily on the first `tts.synthesize`. `FAE_TTS_MODEL_ID`
+/// overrides the repo; `FAE_TTS=mock` forces the mock. Elsewhere: mock until
+/// the candle port lands.
+fn build_tts_engine() -> Arc<dyn TtsAdapter> {
+    if std::env::var("FAE_TTS").is_ok_and(|value| value == "mock") {
+        return Arc::new(MockTtsAdapter::new("mock-tts"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let model_repo = std::env::var("FAE_TTS_MODEL_ID")
+            .ok()
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| "prince-canuma/Kokoro-82M".to_owned());
+        match fae_engine::VoiceTtsAdapter::spawn(model_repo) {
+            Ok(adapter) => return Arc::new(adapter),
+            Err(error) => {
+                eprintln!("fae-daemon: tts worker spawn failed ({error}); using mock tts");
+            }
+        }
+    }
+    Arc::new(MockTtsAdapter::new("mock-tts"))
 }
 
 /// Build the inference backend. With `FAE_MODEL_ID` set, load that mistral.rs

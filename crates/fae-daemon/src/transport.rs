@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fae_control_plane::{append_audit_jsonl, ClientRegistry, Response};
-use fae_engine::ProviderAdapter;
+use fae_engine::{ProviderAdapter, TtsAdapter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -37,6 +37,7 @@ pub async fn serve_unix(
     socket_path: PathBuf,
     registry: Arc<ClientRegistry>,
     engine: Arc<dyn ProviderAdapter>,
+    tts: Arc<dyn TtsAdapter>,
     audit_path: PathBuf,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
@@ -57,10 +58,17 @@ pub async fn serve_unix(
         let (stream, _addr) = listener.accept().await?;
         let registry = Arc::clone(&registry);
         let engine = Arc::clone(&engine);
+        let tts = Arc::clone(&tts);
         let audit_path = audit_path.clone();
         tokio::spawn(async move {
-            if let Err(error) =
-                handle_connection(stream, &registry, engine.as_ref(), &audit_path).await
+            if let Err(error) = handle_connection(
+                stream,
+                &registry,
+                engine.as_ref(),
+                tts.as_ref(),
+                &audit_path,
+            )
+            .await
             {
                 // One bad connection must never take the daemon down.
                 eprintln!("fae-daemon: connection ended: {error}");
@@ -73,6 +81,7 @@ async fn handle_connection(
     stream: UnixStream,
     registry: &ClientRegistry,
     engine: &dyn ProviderAdapter,
+    tts: &dyn TtsAdapter,
     audit_path: &Path,
 ) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
@@ -103,7 +112,7 @@ async fn handle_connection(
 
         let now = now_ms();
         let event_id = next_event_id(now);
-        let outcome = handle_frame(registry, engine, &mut state, trimmed, now, event_id).await;
+        let outcome = handle_frame(registry, engine, tts, &mut state, trimmed, now, event_id).await;
 
         // Fail closed: a frame must be audited before its response is sent. If
         // the audit write fails, surface an error response and drop the

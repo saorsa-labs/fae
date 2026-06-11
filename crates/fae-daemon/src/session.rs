@@ -10,7 +10,9 @@ use fae_control_plane::{
     authorize, AuditDecision, AuditEvent, AuthzDecision, ClientRecord, ClientRegistry, Command,
     ConsumedTicket, Response, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
 };
-use fae_engine::{ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role, ToolSpec};
+use fae_engine::{
+    ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role, ToolSpec, TtsAdapter,
+};
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -40,11 +42,12 @@ pub struct FrameOutcome {
 
 /// Handle one decoded NDJSON line. `event_id` is supplied by the caller (a
 /// monotonic, non-secret id). `now_ms` is the per-frame wall clock — never a
-/// stale snapshot. `engine` backs `conversation.inject_text`; all other
-/// commands ignore it.
+/// stale snapshot. `engine` backs `conversation.inject_text`; `tts` backs
+/// `tts.synthesize`; all other commands ignore them.
 pub async fn handle_frame(
     registry: &ClientRegistry,
     engine: &dyn ProviderAdapter,
+    tts: &dyn TtsAdapter,
     state: &mut SessionState,
     line: &str,
     now_ms: u64,
@@ -75,7 +78,7 @@ pub async fn handle_frame(
             // Clone the record out so we no longer borrow `state`; the session
             // is already established and never mutated by a command frame.
             let record = record.clone();
-            handle_command(engine, &record, &cmd, now_ms, event_id).await
+            handle_command(engine, tts, &record, &cmd, now_ms, event_id).await
         }
     }
 }
@@ -206,6 +209,7 @@ fn handle_auth(
 
 async fn handle_command(
     engine: &dyn ProviderAdapter,
+    tts: &dyn TtsAdapter,
     record: &ClientRecord,
     cmd: &Command,
     now_ms: u64,
@@ -243,7 +247,7 @@ async fn handle_command(
         // shell persists `audit` before writing this response, so nothing is
         // observable pre-audit. When mutating commands land, their side effect
         // MUST move behind the audit write in the shell.
-        AuthzDecision::Allow => match dispatch(engine, cmd).await {
+        AuthzDecision::Allow => match dispatch(engine, tts, cmd).await {
             Ok(result) => Response::ok(&cmd.request_id, result),
             Err(code) => Response::error(&cmd.request_id, code, "command could not be completed"),
         },
@@ -268,6 +272,7 @@ async fn handle_command(
 /// authorized-but-unimplemented (fail loud, not a silent success).
 async fn dispatch(
     engine: &dyn ProviderAdapter,
+    tts: &dyn TtsAdapter,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
     match cmd.command.as_str() {
@@ -277,14 +282,60 @@ async fn dispatch(
         }
         "runtime.status" => {
             let info = engine.describe();
+            let tts_info = tts.describe();
             Ok(serde_json::json!({
                 "status": "ok",
                 "engine": { "backend": info.backend, "model_id": info.model_id },
+                "tts": { "backend": tts_info.backend, "model_id": tts_info.model_id },
             }))
         }
         "conversation.inject_text" => inject_text(engine, cmd).await,
+        "tts.synthesize" => synthesize_tts(tts, cmd).await,
         _ => Err("not_implemented"),
     }
+}
+
+/// Default Kokoro voice when the client does not name one.
+const TTS_DEFAULT_VOICE: &str = "af_heart";
+/// Bound a single synthesis request — long text should be sentence-chunked
+/// by the client (matching the Swift TTS pipeline's behaviour).
+const TTS_MAX_TEXT_CHARS: usize = 2_000;
+
+/// Run one `tts.synthesize` request: `{ text, voice?, speed? }` →
+/// `{ wav_base64, sample_rate }`.
+async fn synthesize_tts(
+    tts: &dyn TtsAdapter,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    use base64::Engine as _;
+    let text = cmd
+        .payload
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    if text.trim().is_empty() || text.len() > TTS_MAX_TEXT_CHARS {
+        return Err("bad_request");
+    }
+    let voice = cmd
+        .payload
+        .get("voice")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(TTS_DEFAULT_VOICE);
+    #[allow(clippy::cast_possible_truncation)]
+    let speed = cmd
+        .payload
+        .get("speed")
+        .and_then(serde_json::Value::as_f64)
+        .map_or(1.0_f32, |value| (value as f32).clamp(0.5, 2.0));
+
+    let audio = tts.synthesize(text, voice, speed).await.map_err(|error| {
+        eprintln!("fae-daemon: tts.synthesize failed: {error}");
+        "inference_failed"
+    })?;
+    Ok(serde_json::json!({
+        "wav_base64": base64::engine::general_purpose::STANDARD.encode(&audio.wav),
+        "sample_rate": audio.sample_rate,
+    }))
 }
 
 /// Hard ceiling on a single turn's generation budget, whatever the client asks.
@@ -469,6 +520,10 @@ mod tests {
         MockAdapter::new("test")
     }
 
+    fn mock_tts() -> fae_engine::MockTtsAdapter {
+        fae_engine::MockTtsAdapter::new("test-tts")
+    }
+
     fn registry() -> ClientRegistry {
         let mut registry = ClientRegistry::new();
         let scopes: HashSet<Scope> = [Scope::StatusRead, Scope::ConversationWrite]
@@ -513,6 +568,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &frame("host.ping", serde_json::Value::Null),
             10,
@@ -532,7 +588,16 @@ mod tests {
     async fn malformed_frame_closes_connection() {
         let reg = registry();
         let mut state = SessionState::Unauthenticated;
-        let out = handle_frame(&reg, &mock(), &mut state, "{not json", 10, "e1".to_owned()).await;
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &mut state,
+            "{not json",
+            10,
+            "e1".to_owned(),
+        )
+        .await;
         assert!(!out.response.ok);
         assert_eq!(
             out.response.error.as_ref().map(|e| e.code.as_str()),
@@ -548,6 +613,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &auth_frame("c1", "good-token"),
             10,
@@ -566,6 +632,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &auth_frame("c1", "wrong"),
             10,
@@ -589,6 +656,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &frame("host.ping", serde_json::Value::Null),
             11,
@@ -611,6 +679,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &frame("runtime.shutdown", serde_json::Value::Null),
             11,
@@ -634,6 +703,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &frame(
                 "conversation.inject_text",
@@ -703,6 +773,113 @@ mod tests {
         // Expired client.
         let reg = registry();
         assert!(session_from_ticket(&reg, &consumed, 10_000).is_none());
+    }
+
+    #[tokio::test]
+    async fn authed_tts_synthesize_returns_wav() {
+        use base64::Engine as _;
+        let reg = registry_with_playback();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &mut state,
+            &frame(
+                "tts.synthesize",
+                serde_json::json!({ "text": "hello there" }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(
+            out.response.ok,
+            "tts.synthesize should succeed: {:?}",
+            out.response.error
+        );
+        let result = out.response.result.expect("result");
+        assert_eq!(
+            result
+                .get("sample_rate")
+                .and_then(serde_json::Value::as_u64),
+            Some(24_000)
+        );
+        let encoded = result
+            .get("wav_base64")
+            .and_then(serde_json::Value::as_str)
+            .expect("wav_base64");
+        let wav = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("valid base64");
+        assert_eq!(&wav[0..4], b"RIFF");
+    }
+
+    #[tokio::test]
+    async fn tts_synthesize_requires_playback_scope_and_valid_text() {
+        // The default test registry lacks AudioPlayback — denied.
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &mut state,
+            &frame("tts.synthesize", serde_json::json!({ "text": "hello" })),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(!out.response.ok);
+        assert_eq!(
+            out.response.error.as_ref().map(|e| e.code.as_str()),
+            Some("missing_scope")
+        );
+
+        // Empty text is a malformed request, not a model error.
+        let reg = registry_with_playback();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &mut state,
+            &frame("tts.synthesize", serde_json::json!({ "text": "  " })),
+            11,
+            "e3".to_owned(),
+        )
+        .await;
+        assert_eq!(
+            out.response.error.as_ref().map(|e| e.code.as_str()),
+            Some("bad_request")
+        );
+    }
+
+    fn registry_with_playback() -> ClientRegistry {
+        let mut registry = ClientRegistry::new();
+        let scopes: HashSet<Scope> = [
+            Scope::StatusRead,
+            Scope::ConversationWrite,
+            Scope::AudioPlayback,
+        ]
+        .into_iter()
+        .collect();
+        registry.insert(
+            ClientRecord {
+                client_id: "c1".to_owned(),
+                class: ClientClass::SwiftFrontend,
+                scopes,
+                issued_at_ms: 0,
+                expires_at_ms: 1_000,
+                revoked_at_ms: None,
+                display_name: "test".to_owned(),
+            },
+            hash_token("good-token"),
+        );
+        registry
     }
 
     #[test]
@@ -791,6 +968,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &frame(
                 "conversation.inject_text",
@@ -818,6 +996,7 @@ mod tests {
         let out = handle_frame(
             &reg,
             &mock(),
+            &mock_tts(),
             &mut state,
             &frame(
                 "conversation.inject_text",

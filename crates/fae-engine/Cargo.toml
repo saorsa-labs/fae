@@ -18,6 +18,10 @@ async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures-util = { workspace = true }
 base64 = { workspace = true }
+# Daemon-side TTS (S19). voice-g2p (text → phonemes) is pure Rust and
+# portable; tokio is needed for the oneshot reply channel.
+voice-g2p = "=0.2.1"
+tokio = { workspace = true }
 
 # mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
 # target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.
@@ -26,6 +30,9 @@ base64 = { workspace = true }
 # Git deps use commit SHAs per the supply-chain pinning policy.
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "ba2f7877ed0fc5d814a5f918865aef137b5179fd", features = ["metal"] } # v0.8.3
+# Kokoro TTS on mlx-rs (Apple Silicon). Exact-pinned per supply-chain policy;
+# the candle port replaces this for non-Apple targets (MockTtsAdapter there).
+voice-tts = "=0.2.1"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "ba2f7877ed0fc5d814a5f918865aef137b5179fd" } # v0.8.3

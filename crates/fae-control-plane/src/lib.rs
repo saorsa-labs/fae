@@ -189,6 +189,8 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "conversation.subscribe" => &[Scope::ConversationRead],
         "audio.start_capture" | "audio.stop_capture" => &[Scope::AudioCapture],
         "audio.playback_control" => &[Scope::AudioPlayback],
+        // S19: daemon-side Kokoro TTS — synthesis produces playback audio.
+        "tts.synthesize" => &[Scope::AudioPlayback],
         "memory.search" => &[Scope::MemoryRead],
         "memory.capture" => &[Scope::MemoryWrite],
         "tool.list" => &[Scope::ToolRead],
