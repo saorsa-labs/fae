@@ -81,3 +81,32 @@ Remove from the Swift app:
 - The app must still: launch orb-first, run the Gemma 4 daemon lane, fall
   back to MLX engine if daemon fails, complete onboarding, open Settings,
   show approval cards, quit cleanly.
+
+## Completion note — C1/C2/C3 (2026-06-11)
+
+Phases C1–C3 executed and committed on `main`:
+
+- **C1** `629e7afc` — CoWork fully removed (Cowork/ 14 files, settings tabs,
+  events, TestServer endpoints, menus, privacy-filter bridge, legacy preset
+  alias, canvas aux window). Orb-host workspace snapshot types extracted to
+  `Core/WorkspaceSnapshot.swift`. 70 files, −18,001 lines.
+  Kept: `ChannelManager` (still the live channel runtime in FaeCore;
+  ChannelGateway is not wired there yet).
+- **C2** `c9815d89` — legacy Swift orb/main-window UI deleted (NativeOrbView,
+  3 Metal shaders, OrbCrown, OrbAnimationState, SubtitleOverlay,
+  ConversationWindowView, CanvasWindowView, LoadingCanvasContent, IntroCrawl,
+  ProgressOverlay). Orb-host crash fallback replaced with auto-restart
+  (3 attempts, exponential backoff, then Retry/Quit alert); dock reopen no
+  longer resurrects the legacy window. The companion window survives as the
+  reduced license/onboarding/Ask-Fae text surface (hidden while the orb host
+  runs). 21 files, −5,064 lines. Smoke-tested via `just run-dev`.
+- **C3** `9205984d` — dead canvas/conversation events, canvas voice commands,
+  capabilities/permissions canvas HTML builders, and the TillDone canvas
+  report removed; CanvasController slimmed to the inline activity feed.
+  15 files, −587 lines.
+
+Validation at C3: `just build` zero errors; `swift test` 3,185 tests with
+1 pre-existing failure (DocsContractTests, docs under concurrent rewrite);
+`VocabularyHarvestTests` skipped (Contacts TCC hang in the test environment);
+`cargo nextest` 47/47; `just check-ui-shell` green. C4 (docs) handled
+separately.
