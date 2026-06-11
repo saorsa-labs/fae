@@ -294,7 +294,6 @@ final class PipelineAuxBridgeController: ObservableObject {
     /// content from prior sessions. Startup no longer auto-opens the canvas.
     private func showLoadingCanvas() {
         canvasController?.clear()
-        auxiliaryWindows?.hideCanvas()
     }
 
     /// Preserve the prior timing behavior, but keep startup on the main surface.
@@ -312,7 +311,6 @@ final class PipelineAuxBridgeController: ObservableObject {
     func finishStartupCanvasTransition(force: Bool = false) {
         guard hasShownLoadingCanvas || force || enrollmentModeActive else { return }
         canvasController?.clear()
-        auxiliaryWindows?.hideCanvas()
     }
 
     // MARK: - Canvas Activity Cards
@@ -372,12 +370,9 @@ final class PipelineAuxBridgeController: ObservableObject {
     private func handlePipelineState(event: String, payload: [String: Any]) {
         switch event {
         case "pipeline.canvas_visibility":
-            let visible = payload["visible"] as? Bool ?? false
-            if visible {
-                auxiliaryWindows?.showCanvas()
-            } else {
-                auxiliaryWindows?.hideCanvas()
-            }
+            // The canvas auxiliary window was removed (2026-06-11 cleanup);
+            // inline activity cards still render canvas content.
+            break
 
         case "pipeline.canvas_content":
             let html = payload["html"] as? String ?? ""

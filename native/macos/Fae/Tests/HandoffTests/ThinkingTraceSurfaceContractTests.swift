@@ -10,14 +10,6 @@ final class ThinkingTraceSurfaceContractTests: XCTestCase {
         XCTAssertTrue(source.contains("conversation.streamingThinkText.isEmpty"))
     }
 
-    func testCoworkSurfaceKeepsThinkingCrawlAndReplayIconHooks() throws {
-        let source = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/Cowork/CoworkWorkspaceView.swift")
-
-        XCTAssertTrue(source.contains("ThinkingCrawlView(text: conversation.streamingThinkText)"))
-        XCTAssertTrue(source.contains("ThinkIconBubble(thinkTrace: trace)"))
-        XCTAssertTrue(source.contains("conversationBubblesOpacity"))
-    }
-
     private func loadRepositoryText(relativePath: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

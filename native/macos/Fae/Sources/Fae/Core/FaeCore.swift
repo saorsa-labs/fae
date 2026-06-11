@@ -48,12 +48,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Rescue mode reference — set by FaeAppDelegate before start().
     weak var rescueMode: RescueMode?
 
-    /// CoWork security executor — gates all external LLM calls with
-    /// DamageControlPolicy and inbound response scanning. Available after pipeline startup.
-    var coworkToolExecutor: CoworkToolExecutor? {
-        get async { await pipelineCoordinator?.coworkToolExecutor }
-    }
-
     // MARK: - Subsystems
 
     private var config: FaeConfig
@@ -490,10 +484,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 if let dc = debugConsoleRef {
                     await coordinator.setDebugConsole(dc)
                 }
-
-                // Create the CoWork security executor so external LLM calls
-                // are gated by DamageControlPolicy and inbound response scanning.
-                await coordinator.makeCoworkToolExecutor()
 
                 // Skip scheduler in rescue mode.
                 if !isRescue {
@@ -1446,12 +1436,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
         ]
     }
 
-    func coworkWorkspaceSnapshot() async -> CoworkWorkspaceSnapshot {
+    func workspaceSnapshot() async -> WorkspaceSnapshot {
         let skillManager = skillManagerRef ?? SkillManager()
         let activeSkillNames = Set(await skillManager.activatedSkillNames())
         let discoveredSkills = await skillManager.discoverSkills()
             .map { metadata in
-                CoworkSkillSummary(
+                WorkspaceSkillSummary(
                     id: metadata.name,
                     description: metadata.description,
                     type: metadata.type.rawValue,
@@ -1475,7 +1465,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             .filter { registry.isToolAllowed($0.name, mode: toolMode, privacyMode: config.privacy.mode) }
             .sorted { $0.name < $1.name }
             .map {
-                CoworkToolSummary(
+                WorkspaceToolSummary(
                     name: $0.name,
                     description: $0.description,
                     riskLevel: $0.riskLevel.rawValue
@@ -1483,14 +1473,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
 
         let schedulerStatuses = await scheduler?.statusAll() ?? []
-        let schedulerStatusMap = schedulerStatuses.reduce(into: [String: CoworkSchedulerStatus]()) { result, entry in
+        let schedulerStatusMap = schedulerStatuses.reduce(into: [String: WorkspaceSchedulerStatus]()) { result, entry in
             guard let id = entry["id"] as? String else { return }
             let enabled = entry["enabled"] as? Bool ?? true
             let lastRunAt = (entry["last_run_at"] as? TimeInterval).map(Date.init(timeIntervalSince1970:))
-            result[id] = CoworkSchedulerStatus(enabled: enabled, lastRunAt: lastRunAt)
+            result[id] = WorkspaceSchedulerStatus(enabled: enabled, lastRunAt: lastRunAt)
         }
 
-        return CoworkWorkspaceSnapshot(
+        return WorkspaceSnapshot(
             pipelineStateLabel: pipelineState.label,
             toolMode: toolMode,
             thinkingEnabled: thinkingEnabled,

@@ -114,7 +114,6 @@ final class WindowStateController: ObservableObject {
     // MARK: - Timer
 
     private var inactivityTimer: Timer?
-    private var isCoworkWindowVisible: Bool = false
 
     /// Notification observers for pipeline events (assistant generating).
     private var observations: [NSObjectProtocol] = []
@@ -299,10 +298,6 @@ final class WindowStateController: ObservableObject {
     // MARK: - Interaction / Inactivity
 
     func noteActivity() {
-        guard !isCoworkWindowVisible else {
-            cancelInactivityTimer()
-            return
-        }
         if mode == .collapsed {
             transitionToCompact()
         }
@@ -331,10 +326,6 @@ final class WindowStateController: ObservableObject {
     }
 
     private func handleInactivityTimeout() {
-        guard !isCoworkWindowVisible else {
-            cancelInactivityTimer()
-            return
-        }
         transitionToCollapsed()
     }
 
@@ -361,37 +352,6 @@ final class WindowStateController: ObservableObject {
             }
         )
 
-        observations.append(
-            center.addObserver(
-                forName: .faeCoworkWindowVisibilityChanged, object: nil, queue: .main
-            ) { [weak self] notification in
-                let visible = notification.userInfo?["visible"] as? Bool ?? false
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.isCoworkWindowVisible = visible
-                    if visible {
-                        self.showWindow()
-                        self.transitionToCollapsed()
-                        self.cancelInactivityTimer()
-                    } else {
-                        self.transitionToCompact()
-                        self.startInactivityTimer()
-                    }
-                }
-            }
-        )
-
-        observations.append(
-            center.addObserver(
-                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.isCoworkWindowVisible else { return }
-                    self.transitionToCollapsed()
-                    self.cancelInactivityTimer()
-                }
-            }
-        )
     }
 
     // MARK: - Visibility
@@ -408,11 +368,7 @@ final class WindowStateController: ObservableObject {
 
     func showWindow() {
         window?.makeKeyAndOrderFront(nil)
-        if isCoworkWindowVisible {
-            cancelInactivityTimer()
-        } else {
-            startInactivityTimer()
-        }
+        startInactivityTimer()
     }
 
     // MARK: - Window Property Enforcement

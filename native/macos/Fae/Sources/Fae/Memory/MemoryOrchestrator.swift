@@ -1149,14 +1149,14 @@ actor MemoryOrchestrator {
                 return "pdf \((origin as NSString).lastPathComponent)"
             }
             return "pdf"
-        case .file, .coworkAttachment:
+        case .file:
             if let title, !title.isEmpty {
-                return "\(sourceType == .coworkAttachment ? "cowork attachment" : "file") \(title)"
+                return "file \(title)"
             }
             if let origin {
-                return "\(sourceType == .coworkAttachment ? "cowork attachment" : "file") \((origin as NSString).lastPathComponent)"
+                return "file \((origin as NSString).lastPathComponent)"
             }
-            return sourceType == .coworkAttachment ? "cowork attachment" : "file"
+            return "file"
         case .pastedText:
             return "pasted text"
         case .proactive:

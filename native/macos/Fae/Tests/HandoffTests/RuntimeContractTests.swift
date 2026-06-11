@@ -506,11 +506,10 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertEqual(tts?["runtime_voice_lock_applied"] as? Bool, true)
     }
 
-    func testThinkingLevelControlsRemainWiredAcrossMainAndCoworkSurfaces() throws {
+    func testThinkingLevelControlsRemainWired() throws {
         let settingsModels = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsTab.swift")
         let settingsPerformance = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsPerformanceTab.swift")
         let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
-        let coworkView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/Cowork/CoworkWorkspaceView.swift")
 
         XCTAssertTrue(settingsModels.contains("Picker(\"Thinking level\""))
         XCTAssertTrue(settingsModels.contains("payload: [\"key\": \"llm.thinking_level\""))
@@ -518,47 +517,15 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(settingsPerformance.contains("patchConfig(\"llm.thinking_level\""))
         XCTAssertTrue(inputBar.contains("faeCore.setThinkingLevel(level)"))
         XCTAssertTrue(inputBar.contains("Text(faeCore.thinkingLevel.displayName)"))
-        XCTAssertTrue(coworkView.contains("controller.setThinkingLevel(level)"))
-        XCTAssertTrue(coworkView.contains("conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)"))
     }
 
     func testMainInputKeepsTypingAvailableWhileListening() throws {
         let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
-        let coworkGuide = try loadRepositoryText(relativePath: "docs/guides/work-with-fae.md")
 
         XCTAssertTrue(inputBar.contains("let shouldRestoreFocus = isTextFieldFocused || !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
         XCTAssertTrue(inputBar.contains("isTextFieldFocused = true"))
         XCTAssertTrue(inputBar.contains("Voice capture and typing can stay active at the same time."))
         XCTAssertTrue(inputBar.contains("Type a message for Fae while listening stays on"))
-        XCTAssertTrue(coworkGuide.contains("voice capture should not turn typing into a separate mode"))
-    }
-
-    func testCoworkKeyboardCommandsRemainExposedForModelInspectorAndUtilitySurfaces() throws {
-        let faeApp = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/FaeApp.swift")
-        let coworkView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/Cowork/CoworkWorkspaceView.swift")
-        let conversationController = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ConversationController.swift")
-
-        XCTAssertTrue(faeApp.contains("CommandGroup(after: .appSettings)"))
-        XCTAssertTrue(faeApp.contains("Button(\"Scheduler\")"))
-        XCTAssertTrue(faeApp.contains("Button(\"Skills\")"))
-        XCTAssertTrue(faeApp.contains("appDelegate.openCoworkDesktop(section: .scheduler)"))
-        XCTAssertTrue(faeApp.contains("appDelegate.openCoworkDesktop(section: .skills)"))
-        XCTAssertTrue(faeApp.contains("func openCoworkDesktop(section: CoworkWorkspaceSection? = nil)"))
-        XCTAssertTrue(faeApp.contains("Button(\"Cowork Model…\")"))
-        XCTAssertTrue(faeApp.contains("Button(\"Toggle Cowork Inspector\")"))
-        XCTAssertTrue(faeApp.contains("Button(\"Open Cowork Tools\")"))
-        XCTAssertTrue(faeApp.contains("Button(\"New Cowork Task\")"))
-        XCTAssertTrue(faeApp.contains("Button(\"New Cowork Skill\")"))
-        XCTAssertTrue(coworkView.contains(".faeCoworkOpenModelPickerRequested"))
-        XCTAssertTrue(coworkView.contains(".faeCoworkToggleInspectorRequested"))
-        XCTAssertTrue(coworkView.contains(".faeCoworkOpenUtilityRequested"))
-        XCTAssertTrue(coworkView.contains(".faeCoworkNewTaskRequested"))
-        XCTAssertTrue(coworkView.contains(".faeCoworkNewSkillRequested"))
-        XCTAssertTrue(conversationController.contains("faeCoworkOpenModelPickerRequested"))
-        XCTAssertTrue(conversationController.contains("faeCoworkToggleInspectorRequested"))
-        XCTAssertTrue(conversationController.contains("faeCoworkOpenUtilityRequested"))
-        XCTAssertTrue(conversationController.contains("faeCoworkNewTaskRequested"))
-        XCTAssertTrue(conversationController.contains("faeCoworkNewSkillRequested"))
     }
 
     func testOnboardingBannerUsesNativeEnrollmentFlow() throws {

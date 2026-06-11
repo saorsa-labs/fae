@@ -95,14 +95,6 @@ struct SettingsGeneralTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Window Behavior") {
-                Toggle("Auto-hide conversation & canvas when orb collapses",
-                       isOn: $auxiliaryWindows.autoHideOnCollapse)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Text("When enabled, the conversation and canvas windows will automatically hide when the orb collapses after inactivity.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
     }

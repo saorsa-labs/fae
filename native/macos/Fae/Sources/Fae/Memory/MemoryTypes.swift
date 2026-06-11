@@ -38,7 +38,6 @@ enum MemoryArtifactSourceType: String, Sendable, Codable, CaseIterable {
     case file = "file"
     case pdf = "pdf"
     case url = "url"
-    case coworkAttachment = "cowork_attachment"
     case proactive = "proactive"
 }
 

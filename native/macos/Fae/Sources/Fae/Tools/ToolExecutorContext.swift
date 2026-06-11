@@ -51,33 +51,6 @@ struct ToolExecutorContext: Sendable {
 
     // MARK: - Factory Methods
 
-    /// Creates a restrictive context suitable for CoWork external LLM calls.
-    ///
-    /// `modelLocality` is always `.nonLocal` — this triggers DamageControlPolicy's
-    /// nonLocalOnly zeroAccessPaths rules, protecting credentials from exfiltration
-    /// through external providers.
-    ///
-    /// - Parameter actionSource: The action source for this context (defaults to `.relay`).
-    /// - Returns: A context configured for non-local, relay-origin tool execution.
-    static func coworkExternal(actionSource: ActionSource = .relay) -> ToolExecutorContext {
-        ToolExecutorContext(
-            toolMode: "full",
-            privacyMode: "shareable",
-            modelLocality: .nonLocal,
-            explicitUserAuthorization: false,
-            isOwner: true,
-            livenessScore: nil,
-            speakerId: nil,
-            actionSource: actionSource,
-            proactiveContext: nil,
-            visionEnabled: false,
-            firstOwnerEnrollmentActive: false,
-            workflowTurnID: nil,
-            traceToolCallID: nil,
-            workflowRunID: nil
-        )
-    }
-
     /// Creates a restrictive fallback context suitable for use when the coordinator
     /// is unavailable (e.g. in tests, developer harness, or after deallocation).
     ///
@@ -116,8 +89,8 @@ struct ToolExecutorCallbacks: Sendable {
     /// Increment the computer-use step counter and return the new value.
     let onComputerUseStep: @Sendable () async -> Int
 
-    /// No-op callbacks for use by CoworkToolExecutor and other callers that
-    /// don't need side effects routed back to a pipeline coordinator.
+    /// No-op callbacks for callers that don't need side effects routed back
+    /// to a pipeline coordinator.
     static let noop = ToolExecutorCallbacks(
         onApprovalPending: { _, _ in },
         onVisionAutoEnabled: { },

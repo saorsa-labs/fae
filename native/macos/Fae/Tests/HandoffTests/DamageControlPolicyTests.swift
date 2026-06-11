@@ -297,7 +297,7 @@ final class DamageControlPolicyTests: XCTestCase {
         assertAllow(await bash("curl -o output.json https://api.example.com/data"), "curl -o should be allowed")
     }
 
-    // MARK: - Fae Workspace Secrets (CoWork intercept)
+    // MARK: - Fae Workspace Secrets (non-local model gate)
 
     func testZeroAccessFaeVaultBlockedForNonLocal() async {
         let home = FileManager.default.homeDirectoryForCurrentUser.path

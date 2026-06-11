@@ -144,26 +144,6 @@ final class FaeEventBus: @unchecked Sendable {
             payload["capability"] = capability
             payload["reason"] = reason
             payload["jit"] = true
-
-        case .coworkRedactionApplied(let provider, let strippedFields):
-            eventName = "cowork.redaction_applied"
-            payload["provider"] = provider
-            payload["stripped_fields"] = strippedFields
-
-        case .coworkSecurityBlocked(let provider, let reason):
-            eventName = "cowork.security_blocked"
-            payload["provider"] = provider
-            payload["reason"] = reason
-
-        case .coworkInjectionFlagged(let provider, let pattern):
-            eventName = "cowork.injection_flagged"
-            payload["provider"] = provider
-            payload["pattern"] = pattern
-
-        case .coworkPIIRedacted(let provider, let categories):
-            eventName = "cowork.pii_detected"
-            payload["provider"] = provider
-            payload["categories"] = categories
         }
 
         let userInfo: [String: Any] = [

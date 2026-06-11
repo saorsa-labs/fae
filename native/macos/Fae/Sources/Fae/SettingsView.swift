@@ -37,15 +37,15 @@ struct SettingsView: View {
                         Label("Models & Performance", systemImage: "cpu")
                     }
 
-                SettingsSkillsChannelsWorkspace(commandSender: commandSender)
-                    .environmentObject(auxiliaryWindows)
+                SettingsSkillsTab(commandSender: commandSender)
                     .tabItem {
-                        Label("Skills & Channels", systemImage: "bubble.left.and.bubble.right")
+                        Label("Skills", systemImage: "sparkles")
                     }
 
-                SettingsOtherLLMsTab(commandSender: commandSender)
+                SettingsChannelsTab(commandSender: commandSender)
+                    .environmentObject(auxiliaryWindows)
                     .tabItem {
-                        Label("Other LLMs", systemImage: "network.badge.shield.half.filled")
+                        Label("Channels", systemImage: "bubble.left.and.bubble.right")
                     }
 
                 SettingsPrivacySecurityTab(

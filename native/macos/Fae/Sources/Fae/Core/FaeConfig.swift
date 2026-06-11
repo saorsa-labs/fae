@@ -446,13 +446,6 @@ struct FaeConfig: Codable {
         /// local_preferred: local-first with optional connected features.
         /// connected: enable connected features when allowed by tool mode.
         var mode: String = "local_preferred"
-
-        /// PII filter (OpenAI Privacy Filter via mlx-embeddings).
-        /// When on, outbound CoWork prompts are scanned for personally
-        /// identifying information; detected spans emit UI events and
-        /// security log entries. Scan is detect-only; the outbound prompt
-        /// is not mutated.
-        var piiFilterEnabled: Bool = true
     }
 
     static func recommendedTrainingTarget() -> String {
@@ -506,8 +499,6 @@ struct FaeConfig: Codable {
             return "qwen3_5_4b"
         case "qwen3_5_2b":
             return "qwen3_5_2b"
-        case "saorsa-1.1-tiny", "saorsa_1_1_tiny":
-            return "qwen3_5_2b"  // legacy alias → Qwen3.5-2B-OptiQ
         case "gemma_4_e2b":
             return "gemma_4_e2b"
         case "gemma_4_e4b":

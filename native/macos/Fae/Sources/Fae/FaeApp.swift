@@ -138,7 +138,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let orbAnimation = OrbAnimationState()
     let orbBridge = OrbStateBridgeController()
     let conversation = ConversationController()
-    let coworkConversation = ConversationController()
     let conversationBridge = ConversationBridgeController()
     let pipelineAux = PipelineAuxBridgeController()
     let subtitles = SubtitleStateController()
@@ -154,7 +153,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let relayServer = FaeRelayServer()
     let aboutWindow = AboutWindowController()
     let memoryImport = MemoryImportWindowController()
-    let coworkWindow = CoworkWindowController()
     let hotkeyManager = GlobalHotkeyManager()
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
@@ -176,7 +174,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     var deviceTransferObserver: NSObjectProtocol?
     var openSettingsObserver: NSObjectProtocol?
     var closeSettingsObserver: NSObjectProtocol?
-    var openCoworkObserver: NSObjectProtocol?
     var settingsWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -321,18 +318,12 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         orbAnimation.bind(to: orbState)
         conversationBridge.subtitleState = subtitles
         conversationBridge.conversationController = conversation
-        conversationBridge.coworkConversationController = coworkConversation
         pipelineAux.canvasController = canvasController
         pipelineAux.auxiliaryWindows = auxiliaryWindows
         pipelineAux.subtitleState = subtitles
         windowState.onCollapse = { [weak subtitles] in subtitles?.clearAll() }
         auxiliaryWindows.windowState = windowState
-        auxiliaryWindows.canvasController = canvasController
         auxiliaryWindows.subtitleState = subtitles
-        auxiliaryWindows.coworkWindowProvider = { [weak coworkWindow] in
-            coworkWindow?.currentWindow
-        }
-        auxiliaryWindows.observeWindowState()
         auxiliaryWindows.inputController = inputOverlay
         auxiliaryWindows.observeInputController()
         auxiliaryWindows.debugConsoleController = debugConsole
@@ -389,17 +380,12 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         memoryImport.memoryInboxServiceProvider = { [weak faeCore] in
             faeCore?.memoryInboxService
         }
-        coworkWindow.faeCore = faeCore
-        coworkWindow.conversation = coworkConversation
-        coworkWindow.orbAnimation = orbAnimation
-        coworkWindow.pipelineAux = pipelineAux
         let localRuntimeServer = FaeLocalRuntimeServer(
             faeCore: faeCore,
-            conversation: coworkConversation,
+            conversation: conversation,
             inputOverlay: inputOverlay
         )
         self.localRuntimeServer = localRuntimeServer
-        coworkWindow.runtimeDescriptor = localRuntimeServer.descriptor
         localRuntimeServer.start()
         relayServer.bindOrbState(orbState)
         relayServer.commandSender = faeCore
@@ -558,20 +544,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        if openCoworkObserver == nil {
-            openCoworkObserver = NotificationCenter.default.addObserver(
-                forName: .faeOpenCoworkRequested,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.openCoworkDesktop()
-                }
-            }
-        }
-
         // Skill import suggestion — Fae found a community skill and wants the user to review it.
-        // Opens a standalone import window so it works even when Settings/Cowork aren't open.
+        // Opens a standalone import window so it works even when Settings isn't open.
         NotificationCenter.default.addObserver(
             forName: .faeSkillImportSuggested,
             object: nil,
@@ -657,8 +631,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 debugConsole: debugConsole,
                 conversation: conversation,
                 inputOverlay: inputOverlay,
-                auxiliaryWindows: auxiliaryWindows,
-                coworkWindow: coworkWindow
+                auxiliaryWindows: auxiliaryWindows
             )
             testServer = server
             server.start()
@@ -854,22 +827,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         debugLog(debugConsole, .governance, "Open settings managed created (\(reason))")
     }
 
-    func openCoworkDesktop(section: CoworkWorkspaceSection? = nil) {
-        windowState.showWindow()
-        windowState.transitionToCollapsed()
-        coworkWindow.show()
-
-        guard let section else { return }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            NotificationCenter.default.post(
-                name: .faeCoworkOpenUtilityRequested,
-                object: nil,
-                userInfo: ["section": section.rawValue]
-            )
-        }
-    }
-
     func startPipelineIfReady() {
         try? faeCore.start()
         orbState.mode = .thinking
@@ -898,7 +855,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Startup now stays on the main conversation surface instead of opening
         // a separate canvas window.
         canvasController.clear()
-        auxiliaryWindows.hideCanvas()
     }
 
     func requestPermissionsForFirstLaunch() {
@@ -990,10 +946,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
 struct FaeApp: App {
     @NSApplicationDelegateAdaptor(FaeAppDelegate.self) var appDelegate
 
-    private var showLegacyCoworkUI: Bool {
-        UserDefaults.standard.bool(forKey: "showLegacyCoworkUI")
-    }
-
     init() {}
 
     var body: some Scene {
@@ -1048,17 +1000,6 @@ struct FaeApp: App {
                     }
                 }
             }
-            CommandGroup(after: .appSettings) {
-                Button("Scheduler") {
-                    appDelegate.openCoworkDesktop(section: .scheduler)
-                }
-                .keyboardShortcut("s", modifiers: [.command, .option])
-
-                Button("Skills") {
-                    appDelegate.openCoworkDesktop(section: .skills)
-                }
-                .keyboardShortcut("k", modifiers: [.command, .option])
-            }
             CommandMenu("Edit") {
                 Button("Edit Soul\u{2026}") {
                     appDelegate.personalityEditor.showSoulEditor()
@@ -1078,48 +1019,6 @@ struct FaeApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Divider()
-                if showLegacyCoworkUI {
-                    Button("Cowork Desktop") {
-                        NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
-                    }
-                    .keyboardShortcut("d", modifiers: [.command, .shift])
-
-                    Button("Cowork Model…") {
-                        NotificationCenter.default.post(name: .faeCoworkOpenModelPickerRequested, object: nil)
-                    }
-                    .keyboardShortcut("o", modifiers: [.command, .shift])
-
-                    Button("Toggle Cowork Inspector") {
-                        NotificationCenter.default.post(name: .faeCoworkToggleInspectorRequested, object: nil)
-                    }
-                    .keyboardShortcut("i", modifiers: [.command, .option])
-
-                    Button("Open Cowork Tools") {
-                        NotificationCenter.default.post(
-                            name: .faeCoworkOpenUtilityRequested,
-                            object: nil,
-                            userInfo: ["section": CoworkWorkspaceSection.tools.rawValue]
-                        )
-                    }
-                    .keyboardShortcut("t", modifiers: [.command, .option])
-
-                    Button("New Cowork Task") {
-                        NotificationCenter.default.post(name: .faeCoworkNewTaskRequested, object: nil)
-                    }
-                    .keyboardShortcut("n", modifiers: [.command, .option])
-
-                    Button("New Cowork Skill") {
-                        NotificationCenter.default.post(name: .faeCoworkNewSkillRequested, object: nil)
-                    }
-                    .keyboardShortcut("k", modifiers: [.command, .control])
-
-                    Divider()
-                }
-
-                Button("Toggle Canvas") {
-                    appDelegate.auxiliaryWindows.toggleCanvas()
-                }
-                .keyboardShortcut("k", modifiers: [.command, .shift])
 
                 Button(appDelegate.auxiliaryWindows.isDebugConsoleVisible ? "Hide Debug Console" : "Debug Console") {
                     appDelegate.auxiliaryWindows.toggleDebugConsole()

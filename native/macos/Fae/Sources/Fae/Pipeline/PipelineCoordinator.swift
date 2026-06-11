@@ -44,11 +44,6 @@ actor PipelineCoordinator {
     private let isRescueMode: Bool
     private let toolExecutor: ToolExecutor
 
-    /// CoWork security intercept — routes all external LLM calls through
-    /// ToolExecutor's unified security pipeline. Created lazily by
-    /// ``makeCoworkToolExecutor()`` and exposed to FaeCore.
-    private(set) var coworkToolExecutor: CoworkToolExecutor?
-
     /// JSC runtime for executing `<tool_program>` script blocks.
     /// Lazily created on first script execution to avoid unnecessary
     /// JSC overhead when no scripts are used.
@@ -694,48 +689,6 @@ actor PipelineCoordinator {
         // Keyword classifier is loaded by ModelManager — wired up in start().
     }
 
-    // MARK: - CoWork Security Executor
-
-    /// Create and store the ``CoworkToolExecutor`` that routes all external
-    /// LLM calls through the shared security pipeline.
-    ///
-    /// Called once by ``FaeCore`` after the pipeline has started. Subsequent
-    /// calls are no-ops (returns the existing instance).
-    @discardableResult
-    func makeCoworkToolExecutor() async -> CoworkToolExecutor {
-        if let existing = coworkToolExecutor { return existing }
-
-        // Build the privacy filter bridge if enabled. Fail-soft: if the daemon
-        // cannot start (uv missing, script missing, install blocked), continue
-        // without the filter. PII scrub is best-effort and must never block
-        // CoWork from working.
-        let privacyFilter: (any PrivacyFilterScanning)?
-        if config.privacy.piiFilterEnabled {
-            do {
-                privacyFilter = try await PrivacyFilterBridge.createDefault()
-                NSLog("PipelineCoordinator: privacy filter bridge attached")
-            } catch {
-                NSLog(
-                    "PipelineCoordinator: privacy filter unavailable (%@) — continuing without PII scan",
-                    String(describing: error)
-                )
-                privacyFilter = nil
-            }
-        } else {
-            privacyFilter = nil
-        }
-
-        let executor = CoworkToolExecutor(
-            damageControlPolicy: toolExecutor.damageControlPolicy,
-            isReady: true,
-            securityLogger: SecurityEventLogger.shared,
-            eventBus: eventBus,
-            privacyFilter: privacyFilter
-        )
-        coworkToolExecutor = executor
-        return executor
-    }
-
     // MARK: - Lifecycle
 
     /// Restart audio capture after enrollment stole the mic.
@@ -1211,7 +1164,7 @@ actor PipelineCoordinator {
         eventBus.send(.assistantText(text: text, isFinal: isFinal))
     }
 
-    /// Inject text from the desktop cowork surface.
+    /// Inject text from a desktop text surface (input bar, local runtime server).
     ///
     /// This path is intentionally silent: it bypasses wake/direct-address gating,
     /// keeps the turn in text mode, and suppresses thinking tones and audio playback.

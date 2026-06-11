@@ -74,22 +74,6 @@ final class PersonalityContractTests: XCTestCase {
         XCTAssertTrue(prompt.contains("HEARTBEAT CONTRACT"))
     }
 
-    func testWorkWithFaeGuideMakesRemoteTrustBoundaryExplicit() throws {
-        let guide = try loadRepositoryText(relativePath: "docs/guides/work-with-fae.md")
-
-        XCTAssertTrue(guide.contains("remote models do **not** get direct access to local tools"))
-        XCTAssertTrue(guide.contains("remote models do **not** get your files, apps, or approvals directly"))
-        XCTAssertTrue(guide.contains("only Fae Local owns tool execution, approval prompts, local grounding, and memory writes"))
-    }
-
-    func testReadmeKeepsRemoteProviderClaimsHonest() throws {
-        let readme = try loadRepositoryText(relativePath: "README.md")
-
-        XCTAssertTrue(readme.contains("Work with Fae can optionally connect selected remote providers"))
-        XCTAssertTrue(readme.contains("remote models never get direct local tool access"))
-        XCTAssertFalse(readme.contains("No cloud. No API keys. No data ever leaves your Mac."))
-    }
-
     func testSystemPromptKeepsSensitiveScopeLocalOnlyPolicy() throws {
         let systemPrompt = try loadRepositoryText(relativePath: "Prompts/system_prompt.md")
 

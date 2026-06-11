@@ -131,3 +131,12 @@ enum FaeOpenAICompatResponseFactory {
     }
 }
 
+
+extension String {
+    /// Trimmed string, or `nil` when the result is empty.
+    /// (Re-homed from the removed CoWork workspace, 2026-06-11 cleanup.)
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}

@@ -19,8 +19,8 @@ import Foundation
 
 /// Protocol for tool executor functionality, enabling test doubles.
 ///
-/// Conformed to by the real `ToolExecutor` actor and the test-only
-/// `MockToolExecutor` actor used in CoworkToolExecutor tests.
+/// Conformed to by the real `ToolExecutor` actor and test-only mock
+/// executors.
 protocol ToolExecutorProtocol: Actor {
     func execute(
         _ call: ToolCall,

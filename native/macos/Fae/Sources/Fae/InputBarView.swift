@@ -15,7 +15,6 @@ struct InputBarView: View {
     @State private var isSendAnimating: Bool = false
     @FocusState private var isTextFieldFocused: Bool
     @AppStorage("inputBarControlsExpanded") private var controlsExpanded: Bool = true
-    @AppStorage("showLegacyCoworkUI") private var showLegacyCoworkUI: Bool = false
 
     /// Heather accent colour.
     private static let heather = Color(
@@ -84,9 +83,6 @@ struct InputBarView: View {
                 }
 
                 Spacer()
-                if showLegacyCoworkUI {
-                    coworkPill
-                }
             }
         }
         .padding(.horizontal, 16)
@@ -370,37 +366,6 @@ struct InputBarView: View {
         case .deep:
             return .orange
         }
-    }
-
-    // MARK: - Co-Work Pill
-
-    private var coworkPill: some View {
-        Button(action: {
-            NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
-        }) {
-            HStack(spacing: 5) {
-                Image(systemName: "rectangle.3.group.bubble.left.fill")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(Color.primary.opacity(0.6))
-                Text("Work with Fae")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(Color.primary.opacity(0.6))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.primary.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .help("Open Work with Fae")
-        .accessibilityLabel("Open Work with Fae")
-        .accessibilityHint("Open the focused cowork workspace window.")
     }
 
     // MARK: - Submit

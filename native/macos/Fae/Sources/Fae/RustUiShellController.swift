@@ -236,9 +236,9 @@ final class RustUiShellController {
 
     private func sendWorkspaceSnapshot() async {
         guard let faeCore else { return }
-        let snapshot = await faeCore.coworkWorkspaceSnapshot()
+        let snapshot = await faeCore.workspaceSnapshot()
         let formatter = ISO8601DateFormatter()
-        let tasks = CoworkSchedulerTask.load(statusesByID: snapshot.schedulerStatusesByID)
+        let tasks = WorkspaceSchedulerTask.load(statusesByID: snapshot.schedulerStatusesByID)
             .map { task -> [String: Any] in
                 var object: [String: Any] = [
                     "id": task.id,

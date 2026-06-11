@@ -41,11 +41,10 @@ final class ThinkingLevelRuntimeParityTests: XCTestCase {
         XCTAssertEqual(FaeEnvironment.defaults.object(forKey: "thinkingEnabled") as? Bool, true)
     }
 
-    func testThinkingLevelControlsRemainWiredAcrossMainAndCoworkSurfaces() throws {
+    func testThinkingLevelControlsRemainWired() throws {
         let settingsModels = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsTab.swift")
         let settingsPerformance = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsPerformanceTab.swift")
         let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
-        let coworkView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/Cowork/CoworkWorkspaceView.swift")
 
         XCTAssertTrue(settingsModels.contains("Picker(\"Thinking level\""))
         XCTAssertTrue(settingsModels.contains("payload: [\"key\": \"llm.thinking_level\""))
@@ -53,8 +52,6 @@ final class ThinkingLevelRuntimeParityTests: XCTestCase {
         XCTAssertTrue(settingsPerformance.contains("patchConfig(\"llm.thinking_level\""))
         XCTAssertTrue(inputBar.contains("faeCore.setThinkingLevel(level)"))
         XCTAssertTrue(inputBar.contains("Text(faeCore.thinkingLevel.displayName)"))
-        XCTAssertTrue(coworkView.contains("controller.setThinkingLevel(level)"))
-        XCTAssertTrue(coworkView.contains("conversationControlPill(icon: faeCore.thinkingLevel.systemImage, title: faeCore.thinkingLevel.displayName)"))
     }
 
     private func loadRepositoryText(relativePath: String) throws -> String {

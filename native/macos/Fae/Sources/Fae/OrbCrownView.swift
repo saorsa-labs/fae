@@ -306,19 +306,6 @@ struct OrbCrownView: View {
         menu.addItem(settingsItem)
 
         var handlers: [MenuActionHandler] = []
-        if UserDefaults.standard.bool(forKey: "showLegacyCoworkUI") {
-            let coworkHandler = MenuActionHandler {
-                NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
-            }
-            let coworkItem = NSMenuItem(
-                title: "Open Work with Fae",
-                action: #selector(MenuActionHandler.invoke),
-                keyEquivalent: ""
-            )
-            coworkItem.target = coworkHandler
-            menu.addItem(coworkItem)
-            handlers.append(coworkHandler)
-        }
 
         menu.addItem(.separator())
 

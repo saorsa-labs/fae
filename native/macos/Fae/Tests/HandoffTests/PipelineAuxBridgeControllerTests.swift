@@ -45,7 +45,6 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
         let windows = AuxiliaryWindowManager()
         controller.canvasController = canvas
         controller.auxiliaryWindows = windows
-        windows.canvasController = canvas
 
         NotificationCenter.default.post(
             name: .faeRuntimeProgress,
@@ -76,7 +75,6 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
         let windows = AuxiliaryWindowManager()
         controller.canvasController = canvas
         controller.auxiliaryWindows = windows
-        windows.canvasController = canvas
 
         NotificationCenter.default.post(
             name: .faeRuntimeProgress,
@@ -88,7 +86,6 @@ final class PipelineAuxBridgeControllerTests: XCTestCase {
 
         XCTAssertEqual(canvas.htmlContent, "")
         XCTAssertFalse(canvas.isVisible)
-        XCTAssertFalse(windows.isCanvasVisible)
     }
 
     func testReadyProgressStageDoesNotMarkPipelineReady() async throws {

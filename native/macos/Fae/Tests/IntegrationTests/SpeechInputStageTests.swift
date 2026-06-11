@@ -435,30 +435,6 @@ final class FaeEventTests: XCTestCase {
         }
     }
 
-    // MARK: - CoWork security events
-
-    func testCoworkRedactionApplied() {
-        let event = FaeEvent.coworkRedactionApplied(provider: "test", strippedFields: ["field1"])
-        switch event {
-        case .coworkRedactionApplied(let provider, let fields):
-            XCTAssertEqual(provider, "test")
-            XCTAssertEqual(fields, ["field1"])
-        default:
-            XCTFail("Expected coworkRedactionApplied")
-        }
-    }
-
-    func testCoworkSecurityBlocked() {
-        let event = FaeEvent.coworkSecurityBlocked(provider: "test", reason: "injection")
-        switch event {
-        case .coworkSecurityBlocked(let provider, let reason):
-            XCTAssertEqual(provider, "test")
-            XCTAssertEqual(reason, "injection")
-        default:
-            XCTFail("Expected coworkSecurityBlocked")
-        }
-    }
-
     // MARK: - Capability events
 
     func testCapabilityRequested() {

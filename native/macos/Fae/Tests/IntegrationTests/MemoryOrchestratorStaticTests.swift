@@ -158,9 +158,4 @@ final class MemoryOrchestratorStaticTests: XCTestCase {
         let label = MemoryOrchestrator.sourceLabel(sourceType: .file, title: "notes.txt", origin: nil)
         XCTAssertTrue(label.contains("notes.txt"))
     }
-
-    func testSourceLabelCoworkAttachment() {
-        let label = MemoryOrchestrator.sourceLabel(sourceType: .coworkAttachment, title: "image.png", origin: nil)
-        XCTAssertTrue(label.contains("cowork attachment"))
-    }
 }

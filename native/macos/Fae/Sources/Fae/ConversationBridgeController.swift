@@ -21,11 +21,6 @@ final class ConversationBridgeController: ObservableObject {
     /// Set by `FaeApp` during wiring.
     weak var conversationController: ConversationController?
 
-    /// Native message store for the Work with Fae conversation surface.
-    /// Set by `FaeApp` during wiring.
-    weak var coworkConversationController: ConversationController?
-
-    private var routeConversationEventsToCowork = false
     private var observations: [NSObjectProtocol] = []
 
     /// Tracks the currently-streaming assistant message ID so we can
@@ -156,18 +151,6 @@ final class ConversationBridgeController: ObservableObject {
                 Task { @MainActor [weak self] in
                     let label = Self.friendlyModelLabel(from: modelId)
                     self?.conversationController?.loadedModelLabel = label
-                    self?.coworkConversationController?.loadedModelLabel = label
-                }
-            }
-        )
-
-        observations.append(
-            center.addObserver(
-                forName: .faeCoworkConversationRoutingChanged, object: nil, queue: .main
-            ) { [weak self] notification in
-                let active = notification.userInfo?["active"] as? Bool ?? false
-                Task { @MainActor [weak self] in
-                    self?.routeConversationEventsToCowork = active
                 }
             }
         )
@@ -188,10 +171,7 @@ final class ConversationBridgeController: ObservableObject {
     }
 
     private var activeConversationController: ConversationController? {
-        if routeConversationEventsToCowork {
-            return coworkConversationController ?? conversationController
-        }
-        return conversationController
+        conversationController
     }
 
     // MARK: - Handlers
@@ -404,7 +384,6 @@ final class ConversationBridgeController: ObservableObject {
             // Capture the LLM model label for the About tab.
             if let llmLabel = Self.extractLLMLabel(from: model) {
                 conversationController?.loadedModelLabel = llmLabel
-                coworkConversationController?.loadedModelLabel = llmLabel
             }
 
         case "verify_started":
@@ -525,11 +504,9 @@ final class ConversationBridgeController: ObservableObject {
         case "runtime.stopped":
             subtitleState?.hideProgress()
             conversationController?.resetBackgroundLookups()
-            coworkConversationController?.resetBackgroundLookups()
         case "runtime.error":
             subtitleState?.hideProgress()
             conversationController?.resetBackgroundLookups()
-            coworkConversationController?.resetBackgroundLookups()
             let payload = userInfo["payload"] as? [String: Any] ?? [:]
             let message = payload["error"] as? String ?? "unknown error"
             appendStatusMessage("Pipeline error: \(message)")

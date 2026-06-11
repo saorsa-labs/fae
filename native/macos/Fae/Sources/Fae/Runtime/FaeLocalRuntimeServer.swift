@@ -178,7 +178,6 @@ final class FaeLocalRuntimeServer {
         let startedAt = Date()
 
         conversation.lastInteractionTimestamp = Date()
-        setCoworkConversationRouting(active: true)
         faeCore.injectDesktopText(injectedPrompt)
 
         Task { @MainActor [weak self] in
@@ -206,9 +205,6 @@ final class FaeLocalRuntimeServer {
                 )
             }
             self.sendResponse(connection: connection, status: 200, body: body)
-            Task { @MainActor [weak self] in
-                await self?.clearCoworkConversationRoutingWhenIdle(since: startedAt)
-            }
         }
     }
 
@@ -238,33 +234,6 @@ final class FaeLocalRuntimeServer {
         }
 
         return .timedOut(conversation?.streamingText.nilIfEmpty)
-    }
-
-    private func clearCoworkConversationRoutingWhenIdle(since: Date) async {
-        let deadline = Date().addingTimeInterval(60)
-
-        while Date() < deadline {
-            let hasFreshAssistantReply = conversation?.messages.contains(where: { message in
-                message.role == .assistant && message.timestamp >= since.addingTimeInterval(-0.25)
-            }) == true
-            let isIdle = conversation?.isGenerating == false && conversation?.isStreaming == false
-
-            if hasFreshAssistantReply || isIdle {
-                break
-            }
-
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-
-        setCoworkConversationRouting(active: false)
-    }
-
-    private func setCoworkConversationRouting(active: Bool) {
-        NotificationCenter.default.post(
-            name: .faeCoworkConversationRoutingChanged,
-            object: nil,
-            userInfo: ["active": active]
-        )
     }
 
     private func authorize(_ request: ParsedRequest) -> Bool {

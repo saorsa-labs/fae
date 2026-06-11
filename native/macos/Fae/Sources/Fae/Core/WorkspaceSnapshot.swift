@@ -1,70 +1,12 @@
 import Foundation
 
-// MARK: - Per-Request Overrides
+// MARK: - Workspace Snapshot
+//
+// Runtime inventory types consumed by the Rust orb host bridge
+// (`RustUiShellController`) for the scheduler and skills panels.
+// Extracted from the removed CoWork workspace (2026-06-11 cleanup).
 
-/// Ephemeral per-request settings that override workspace defaults without
-/// permanently changing the agent profile. Used for "ask this one question
-/// with a different temperature" or "use a different model just this once".
-///
-/// - TODO(phase-1.2): Wire into `runSingleAgentSubmission` and `runConsensus` to allow
-///   per-request model/temperature/prompt overrides without changing the agent profile binding.
-struct MessageOverride: Sendable, Codable, Hashable {
-    /// Override sampling temperature for this request only.
-    let temperatureOverride: Double?
-    /// Override model identifier for this request only (e.g. "gpt-4o-mini").
-    let modelIDOverride: String?
-    /// Override provider kind for this request only.
-    let providerKindOverride: String?
-    /// Override system prompt for this request only.
-    let systemPromptOverride: String?
-    /// Override max output tokens for this request only.
-    let maxTokensOverride: Int?
-
-    init(
-        temperatureOverride: Double? = nil,
-        modelIDOverride: String? = nil,
-        providerKindOverride: String? = nil,
-        systemPromptOverride: String? = nil,
-        maxTokensOverride: Int? = nil
-    ) {
-        self.temperatureOverride = temperatureOverride
-        self.modelIDOverride = modelIDOverride
-        self.providerKindOverride = providerKindOverride
-        self.systemPromptOverride = systemPromptOverride
-        self.maxTokensOverride = maxTokensOverride
-    }
-}
-
-// MARK: - Workspace Sections
-
-enum CoworkWorkspaceSection: String, CaseIterable, Identifiable, Sendable {
-    case workspace
-    case scheduler
-    case skills
-    case tools
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .workspace: return "Workspace"
-        case .scheduler: return "Scheduler"
-        case .skills: return "Skills"
-        case .tools: return "Tools"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .workspace: return "rectangle.3.group.bubble.left.fill"
-        case .scheduler: return "calendar.badge.clock"
-        case .skills: return "sparkles.rectangle.stack.fill"
-        case .tools: return "wrench.and.screwdriver.fill"
-        }
-    }
-}
-
-struct CoworkToolSummary: Identifiable, Sendable {
+struct WorkspaceToolSummary: Identifiable, Sendable {
     let id: String
     let displayName: String
     let description: String
@@ -118,7 +60,7 @@ struct CoworkToolSummary: Identifiable, Sendable {
     }
 }
 
-struct CoworkSkillSummary: Identifiable, Sendable {
+struct WorkspaceSkillSummary: Identifiable, Sendable {
     let id: String
     let description: String
     let type: String
@@ -127,23 +69,23 @@ struct CoworkSkillSummary: Identifiable, Sendable {
     let isActive: Bool
 }
 
-struct CoworkSchedulerStatus: Sendable {
+struct WorkspaceSchedulerStatus: Sendable {
     let enabled: Bool
     let lastRunAt: Date?
 }
 
-struct CoworkWorkspaceSnapshot: Sendable {
+struct WorkspaceSnapshot: Sendable {
     let pipelineStateLabel: String
     let toolMode: String
     let thinkingEnabled: Bool
     let thinkingLevel: String
     let hasOwnerSetUp: Bool
     let userName: String?
-    let tools: [CoworkToolSummary]
-    let skills: [CoworkSkillSummary]
-    let schedulerStatusesByID: [String: CoworkSchedulerStatus]
+    let tools: [WorkspaceToolSummary]
+    let skills: [WorkspaceSkillSummary]
+    let schedulerStatusesByID: [String: WorkspaceSchedulerStatus]
 
-    static let empty = CoworkWorkspaceSnapshot(
+    static let empty = WorkspaceSnapshot(
         pipelineStateLabel: "Stopped",
         toolMode: "assistant",
         thinkingEnabled: false,
@@ -155,16 +97,16 @@ struct CoworkWorkspaceSnapshot: Sendable {
         schedulerStatusesByID: [:]
     )
 
-    var activeSkills: [CoworkSkillSummary] {
+    var activeSkills: [WorkspaceSkillSummary] {
         skills.filter(\.isActive)
     }
 
-    var appleTools: [CoworkToolSummary] {
+    var appleTools: [WorkspaceToolSummary] {
         tools.filter { $0.category == "Apple" }
     }
 }
 
-struct CoworkSchedulerTask: Identifiable, Sendable {
+struct WorkspaceSchedulerTask: Identifiable, Sendable {
     let id: String
     var name: String
     let scheduleDescription: String
@@ -183,9 +125,9 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
 
     static func load(
         from url: URL = resolvedSchedulerFileURL(),
-        statusesByID: [String: CoworkSchedulerStatus]
-    ) -> [CoworkSchedulerTask] {
-        var tasksByID: [String: CoworkSchedulerTask] = [:]
+        statusesByID: [String: WorkspaceSchedulerStatus]
+    ) -> [WorkspaceSchedulerTask] {
+        var tasksByID: [String: WorkspaceSchedulerTask] = [:]
 
         if let data = try? Data(contentsOf: url),
            let json = try? JSONSerialization.jsonObject(with: data)
@@ -208,7 +150,7 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
         }
 
         for (id, status) in statusesByID where tasksByID[id] == nil {
-            tasksByID[id] = CoworkSchedulerTask(
+            tasksByID[id] = WorkspaceSchedulerTask(
                 id: id,
                 name: title(from: id),
                 scheduleDescription: defaultScheduleDescription(for: id),
@@ -240,8 +182,8 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
 
     private static func from(
         dict: [String: Any],
-        statusesByID: [String: CoworkSchedulerStatus]
-    ) -> CoworkSchedulerTask? {
+        statusesByID: [String: WorkspaceSchedulerStatus]
+    ) -> WorkspaceSchedulerTask? {
         guard let id = dict["id"] as? String else { return nil }
 
         let status = statusesByID[id]
@@ -271,7 +213,7 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
             scheduleParams: dict["scheduleParams"] as? [String: Any]
         )
 
-        return CoworkSchedulerTask(
+        return WorkspaceSchedulerTask(
             id: id,
             name: name,
             scheduleDescription: scheduleDescription,
@@ -388,33 +330,5 @@ struct CoworkSchedulerTask: Identifiable, Sendable {
 
     static func iso8601Date(from raw: String) -> Date? {
         ISO8601DateFormatter().date(from: raw)
-    }
-}
-
-struct CoworkActivityItem: Identifiable, Sendable {
-    enum Tone: Sendable {
-        case neutral
-        case success
-        case warning
-    }
-
-    let id: UUID
-    let title: String
-    let detail: String
-    let timestamp: Date
-    let tone: Tone
-
-    init(
-        id: UUID = UUID(),
-        title: String,
-        detail: String,
-        timestamp: Date = Date(),
-        tone: Tone = .neutral
-    ) {
-        self.id = id
-        self.title = title
-        self.detail = detail
-        self.timestamp = timestamp
-        self.tone = tone
     }
 }
