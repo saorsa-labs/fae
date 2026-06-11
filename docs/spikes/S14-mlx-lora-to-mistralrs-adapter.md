@@ -14,6 +14,29 @@ Current evidence:
 - mistral.rs supports LoRA/X-LoRA loading and reads `adapter_config.json` from the LoRA repo for targeted modules and rank.
 - The shape is promising, but tensor names, target-module conventions, scaling, tokenizer/base-model identity, and runtime behavior still need empirical proof.
 
+## Fleet-exchange framing (added 2026-06-11)
+
+This spike is bigger than Apple→mistral.rs portability. The moat research
+(`docs/architecture/moat-thesis-deep-research-2026-06-11.md`) identified
+**collaborative adapter exchange across the user's own x0x fleet** as the one
+configuration where the literature says local fine-tuning beats training alone
+(EPFL/Jaggi COLM 2024) — converting the single-user data-scarcity weakness of
+nightly training into a structural advantage no centralized rival can copy.
+That only works if **what crosses the wire is one format**, regardless of which
+TrainingAdapter lane (MLX, Unsloth/PEFT, future ROCm/XPU) produced it.
+
+Consequences for this spike:
+
+- The conversion target (PEFT-style `adapter_config.json` +
+  `adapter_model.safetensors`) is not a compatibility shim — it is the
+  **canonical fleet exchange format**. Choose and document it as such.
+- The deterministic conversion script's output must be content-addressable
+  (stable hashing) so adapters can later be signed (ML-DSA-65) and verified at
+  the x0x boundary — signed receipts for weights, same as for tool calls.
+- Record base-model identity (HF id + revision + quantization) in the artifact
+  so a receiving node can refuse adapters trained against a different base —
+  the `models.lock` discipline extended to adapters.
+
 ## Non-goals
 
 - Do not replace MLX training in this spike.

@@ -1,10 +1,19 @@
 # Local Model Strategy
 
-Last updated: April 4, 2026
+Last updated: June 11, 2026
 
 This is the current canonical guide for Fae's local model stack.
 
 ## Product direction
+
+Fae's cross-platform direction is **mistral.rs for the LLM lane**, not "mistral replaces every ML/perception component." The runtime strategy is now layered:
+
+- **LLM inference:** mistral.rs primary through `ProviderAdapter`, with dense drivers favored over MoE where candle support is shaky.
+- **Non-NVIDIA Windows/Linux GPU fallback:** llama.cpp/`llama-server` stays mandatory because it supplies Vulkan acceleration for consumer AMD/Intel GPUs.
+- **Apple-only moat lanes:** MLX remains for personal LoRA training (`mlx-lm`/`mlx-tune`), Apple-optimized VLM/STT work until product parity is proven elsewhere, and short-term perception experiments.
+- **Voice continuity:** Kokoro remains the TTS identity path; Gemma-4 audio may remove separate STT in some tiers, but it does not replace TTS.
+
+For the full cross-platform pipeline matrix, including TTS, training, VAD, wake, AEC/noise, speaker verification, embeddings, and VLM, see `docs/architecture/full-cross-platform-ml-pipeline-2026-06-11.md`.
 
 Fae is transitioning from Qwen3.5 to **Gemma 4** as the primary local model family:
 
@@ -93,6 +102,19 @@ Gemma 4 E2B/E4B have native audio input via USM conformer (~300M params). ASR ac
 - A full app restart is not required for normal model switching.
 - If a selected model is not cached locally, Fae downloads it during that reload.
 - All models cached at `~/.cache/huggingface/hub/` — shared between Python benchmarks and production Fae.
+
+## Personal LoRA training and adapter portability
+
+MLX remains production-critical for Fae's personal-training loop. `mlx-lm` documents LoRA/QLoRA fine-tuning on Apple silicon, saves adapter config and learned weights under `adapters/` by default, supports `--adapter-path`, can resume from `adapters.safetensors`, and can fuse/upload models. mistral.rs documents LoRA/X-LoRA loading from LoRA repos and reads `adapter_config.json` for target modules and rank.
+
+Therefore the expected path is:
+
+1. Train/update the personal adapter on Apple via MLX.
+2. Export or convert the adapter to a PEFT-style repo with `adapter_config.json` + `safetensors`.
+3. Load it through mistral.rs LoRA/X-LoRA adapter APIs.
+4. Verify behavior on a fixed preference/identity eval before enabling it for the user.
+
+This is **plausible, not yet proven**. Track the acceptance criteria in `docs/spikes/S14-mlx-lora-to-mistralrs-adapter.md` and the broader trainer comparison in `docs/spikes/S16-cross-platform-training-lanes.md`. Unsloth is promising for cross-platform retraining (documented NVIDIA training plus AMD ROCm, Intel XPU, and macOS/MLX support), but it should be treated as a candidate non-Apple training lane until Fae's exact adapter format and eval loop pass. Cross-platform TTS is tracked separately in `docs/spikes/S15-cross-platform-tts-benchmark.md`; voice front-end portability is tracked in `docs/spikes/S17-cross-platform-voice-front-end.md`.
 
 ## Source of truth
 
