@@ -15,6 +15,7 @@ struct InputBarView: View {
     @State private var isSendAnimating: Bool = false
     @FocusState private var isTextFieldFocused: Bool
     @AppStorage("inputBarControlsExpanded") private var controlsExpanded: Bool = true
+    @AppStorage("showLegacyCoworkUI") private var showLegacyCoworkUI: Bool = false
 
     /// Heather accent colour.
     private static let heather = Color(
@@ -39,7 +40,7 @@ struct InputBarView: View {
                 .animation(.easeInOut(duration: 0.2), value: conversation.isGenerating)
             }
 
-            // Controls row: collapsible access/thinking + always-visible cowork
+            // Controls row: collapsible access/thinking controls.
             HStack(spacing: 8) {
                 // Collapsible controls
                 VStack(spacing: 4) {
@@ -83,7 +84,9 @@ struct InputBarView: View {
                 }
 
                 Spacer()
-                coworkPill
+                if showLegacyCoworkUI {
+                    coworkPill
+                }
             }
         }
         .padding(.horizontal, 16)

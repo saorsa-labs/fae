@@ -1,6 +1,6 @@
 # Fae App Release Validation Contract
 
-Last updated: April 7, 2026
+Last updated: June 11, 2026
 
 This is the canonical end-to-end validation contract for shipping Fae.
 
@@ -19,7 +19,8 @@ Run this full contract when any of the following changes:
 - memory capture/recall or scheduler behavior
 - skills management or Python-runtime integration
 - JSC tool-program runtime, typed adapters, batch approval, or dry-run mode
-- Cowork routing, model switching, compare/fork, or remote-provider handling
+- Rust orb UI shell, orb visibility/state bridge, right-click menu, or webview/browser panel behavior
+- accidental restoration of Cowork/canvas as product UI surfaces
 - legacy dual-model or concierge compatibility changes
 - settings that affect loaded models, policy, or diagnostics
 - any release candidate build
@@ -27,7 +28,8 @@ Run this full contract when any of the following changes:
 ## Required environment
 
 1. Clean native build and real app launch with `just run-native` or `just rebuild`.
-2. Test-server launch with `just test-serve`.
+2. Rust orb shell validation with `just check-ui-shell` and a live `just run-ui-shell` smoke test whenever UI shell code changes.
+3. Test-server launch with `just test-serve`.
 3. Chatterbox available for real audio playback on `http://127.0.0.1:8000`.
 4. Screenshot evidence captured from the live app during validation.
 5. Relevant `tests/comprehensive/specs/*.yaml` phases run and archived.
@@ -37,7 +39,7 @@ Run this full contract when any of the following changes:
 For every release-validation run, retain:
 
 - latest comprehensive JSON report from `tests/comprehensive/reports/`
-- screenshots for startup, onboarding, permissions, main window, Cowork, and any failing state
+- screenshots for startup, onboarding, permissions, Rust orb shell states, right-click orb menu, browser/data panel, and any failing state
 - test-server evidence from `/status`, `/conversation`, and `/events` for failures
 - notes of any manual-only checks and their outcome
 
@@ -49,14 +51,17 @@ Suggested screenshot root:
 
 1. Clean build and model verification.
 2. Scripted infrastructure and policy phases.
-3. Main-window live validation.
-4. Cowork live validation.
+3. Rust orb shell live validation.
+4. Legacy main-window live validation while migration remains incomplete.
 5. Settings, scheduler, skills, and popup validation.
-6. Final regression rerun after fixes.
+6. Confirm Cowork/canvas do not appear as product UI surfaces.
+7. Final regression rerun after fixes.
 
 ## Preflight
 
 - [ ] `just rebuild` or `just run-native` launches exactly one real Fae app bundle.
+- [ ] `just check-ui-shell` passes when `native/rust/fae-ui-shell` changed.
+- [ ] `just run-ui-shell` launches the Rust orb shell when UI shell behavior is in scope.
 - [ ] `just test-serve` exposes `/health` on `127.0.0.1:7433`.
 - [ ] The active local text model and configured vision model are visible in Settings without truncation.
 - [ ] The runtime reports the expected local text model, context size, and tool mode.
@@ -91,7 +96,26 @@ Acceptance:
 - [ ] Any failure is either fixed or captured as an explicit release blocker.
 - [ ] If a capability changed and no phase covers it, a new phase or deterministic test is added in the same change.
 
-## Main Fae window scenarios
+## Rust orb shell scenarios
+
+These scenarios are mandatory for the new canonical UI shell once it is included in a release candidate, and mandatory immediately for shell-only changes.
+
+- [ ] Quiescent state has no visible animated orb and no continuous redraw loop.
+- [ ] Startup/model-loading status appears through the orb itself, including progress affordance, with no separate startup shell.
+- [ ] Thinking/speaking states show the orb and resume rendering only while active; idle/listening remain visually quiescent.
+- [ ] The orb window is frameless, transparent, movable, and visually reads as just the orb.
+- [ ] Right-click on the orb opens the Fae menu.
+- [ ] Menu includes Settings, Open Browser/Data Panel, Reset Conversation, Hide Fae, Stop, permissions, Scheduler, Skills, edit prompts, Ask Fae/help topics, Memory Inbox, Rescue Mode, and Quit Fae.
+- [ ] Rust shell menu does not include Cowork or Open Work with Fae.
+- [ ] Stop, Hide, and Quit perform their expected action.
+- [ ] Open Browser/Data Panel opens an orb-launched browser/webview surface for charts, data, documents, and video.
+- [ ] Scheduler and Skills open orb-owned temporary panels rather than Cowork.
+- [ ] Rich output does not require a permanent canvas or Cowork surface.
+- [ ] Screenshots capture quiescent, startup/progress orb, thinking/speaking orb, Messages panel, right-click menu, and browser/data panel.
+
+## Legacy main Fae window scenarios
+
+The Swift main window scenarios remain required while the live pipeline is still hosted by the Swift shell. They become legacy migration checks once the Rust orb shell bridge owns startup and command routing.
 
 ### Startup and first impression
 

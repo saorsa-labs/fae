@@ -305,16 +305,20 @@ struct OrbCrownView: View {
         )
         menu.addItem(settingsItem)
 
-        let coworkHandler = MenuActionHandler {
-            NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
+        var handlers: [MenuActionHandler] = []
+        if UserDefaults.standard.bool(forKey: "showLegacyCoworkUI") {
+            let coworkHandler = MenuActionHandler {
+                NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
+            }
+            let coworkItem = NSMenuItem(
+                title: "Open Work with Fae",
+                action: #selector(MenuActionHandler.invoke),
+                keyEquivalent: ""
+            )
+            coworkItem.target = coworkHandler
+            menu.addItem(coworkItem)
+            handlers.append(coworkHandler)
         }
-        let coworkItem = NSMenuItem(
-            title: "Open Work with Fae",
-            action: #selector(MenuActionHandler.invoke),
-            keyEquivalent: ""
-        )
-        coworkItem.target = coworkHandler
-        menu.addItem(coworkItem)
 
         menu.addItem(.separator())
 
@@ -340,6 +344,7 @@ struct OrbCrownView: View {
         )
         hideItem.target = hideHandler
         menu.addItem(hideItem)
+        handlers.append(contentsOf: [resetHandler, hideHandler])
 
         menu.addItem(.separator())
 
@@ -352,7 +357,7 @@ struct OrbCrownView: View {
 
         objc_setAssociatedObject(
             menu, &Self.menuHandlersKey,
-            [coworkHandler, resetHandler, hideHandler] as NSArray,
+            handlers as NSArray,
             .OBJC_ASSOCIATION_RETAIN
         )
 

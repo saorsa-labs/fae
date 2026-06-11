@@ -159,6 +159,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let debugConsole = DebugConsoleController()
     let faeCore = FaeCore()
     let receiptsWindow = ReceiptsWindowController()
+    let rustUiShell = RustUiShellController()
 
     // Local runtime server for OpenAI-compatible localhost access.
     var localRuntimeServer: FaeLocalRuntimeServer?
@@ -177,7 +178,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     var closeSettingsObserver: NSObjectProtocol?
     var openCoworkObserver: NSObjectProtocol?
     var settingsWindow: NSWindow?
-    private var terminationInFlight: Bool = false
     private var cancellables: Set<AnyCancellable> = []
 
     private static let backendEventRouter = BackendEventRouter()
@@ -204,30 +204,110 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     nonisolated func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        Task { @MainActor [weak self] in
-            guard let self else {
-                sender.reply(toApplicationShouldTerminate: true)
-                return
-            }
-
-            guard !terminationInFlight else {
-                // Double-quit: always allow — never grey out Quit menu
-                sender.reply(toApplicationShouldTerminate: true)
-                return
-            }
-            terminationInFlight = true
-            debugLog(debugConsole, .qa, "Application termination requested — draining pipeline")
-
-            let drained = await faeCore.stopAndWait(timeoutSeconds: 8.0)
-
-            terminationInFlight = false
-            if !drained {
-                NSLog("FaeAppDelegate: pipeline did not quiesce — force-quitting")
-            }
-            // Always allow termination — a stuck pipeline should never trap the user
-            sender.reply(toApplicationShouldTerminate: true)
+        // Quit must be SYNCHRONOUS. The previous .terminateLater + async-reply
+        // design deadlocked whenever terminate() arrived via a main-queue block
+        // (orb menu quit): AppKit's nested wait loop sat on the serial main
+        // queue's current block, so the reply Task queued behind it could
+        // never run — every real quit ended at the 6s failsafe (log evidence
+        // 2026-06-11: three quits, failsafe-only breadcrumbs). Best-effort
+        // teardown here, then terminate immediately. fae.db is WAL-mode SQLite
+        // and the vault is git — both crash-safe; the async "drain" never
+        // actually ran in practice, so nothing of value is lost.
+        MainActor.assumeIsolated {
+            NSLog("FaeAppDelegate: termination begin (synchronous)")
+            debugLog(debugConsole, .qa, "Application terminating — stopping pipeline")
+            rustUiShell.stop()
+            faeCore.cancel()
+            faeCore.stop()
         }
-        return .terminateLater
+        // Belt-and-braces: never hang inside AppKit's own shutdown either.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3.0) {
+            NSLog("FaeAppDelegate: termination failsafe fired — exiting")
+            exit(0)
+        }
+        NSLog("FaeAppDelegate: terminating now")
+        return .terminateNow
+    }
+
+    // MARK: - Rust UI Shell
+
+    private func configureRustUiShell() {
+        rustUiShell.orbState = orbState
+        rustUiShell.conversation = conversation
+        rustUiShell.faeCore = faeCore
+        rustUiShell.onSettings = { [weak self] in
+            self?.openSettingsWindow(reason: "rust-ui-shell")
+        }
+        rustUiShell.onResetConversation = { [weak self] in
+            self?.conversation.clearMessages()
+            self?.subtitles.clearAll()
+            self?.faeCore.resetConversation()
+        }
+        rustUiShell.onHideFae = { [weak self] in
+            self?.windowState.hideWindow()
+        }
+        rustUiShell.onQuit = {
+            // Defer one runloop turn: terminate() must never run inside the
+            // orb-host stdout handler. With .terminateLater AppKit spins a
+            // nested event loop awaiting the async reply; entered from within
+            // this closure the main thread never unwinds — a hard deadlock
+            // that forced users to force-quit (observed via sample 2026-06-11).
+            DispatchQueue.main.async {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+        rustUiShell.onPermissionMicrophone = { [weak self] in self?.onboarding.requestMicrophone() }
+        rustUiShell.onPermissionContacts = { [weak self] in self?.onboarding.requestContacts() }
+        rustUiShell.onPermissionCalendars = { [weak self] in self?.onboarding.requestCalendar() }
+        rustUiShell.onPermissionReminders = { [weak self] in self?.onboarding.requestReminders() }
+        rustUiShell.onPermissionMailNotes = { [weak self] in self?.onboarding.requestMail() }
+        rustUiShell.onOpenPrivacySecurity = { [weak self] in self?.onboarding.openPrivacySettings("AllFiles") }
+        rustUiShell.onScheduler = { [weak self] in
+            // Panel is opened by the orb host; refresh backing data from Swift.
+            self?.rustUiShell.refreshWorkspaceSnapshot()
+        }
+        rustUiShell.onSkills = { [weak self] in
+            // Panel is opened by the orb host; refresh backing data from Swift.
+            self?.rustUiShell.refreshWorkspaceSnapshot()
+        }
+        rustUiShell.onEditSoul = { [weak self] in self?.personalityEditor.showSoulEditor() }
+        rustUiShell.onEditCustomInstructions = { [weak self] in self?.personalityEditor.showInstructionsEditor() }
+        rustUiShell.onAskFae = { [weak self] in
+            self?.windowState.showWindow()
+            NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
+        }
+        rustUiShell.onAskAboutShortcuts = { [weak self] in
+            self?.prefillFaePrompt("What keyboard shortcuts and voice commands do you support?")
+        }
+        rustUiShell.onAskAboutModels = { [weak self] in
+            self?.prefillFaePrompt("What models are you running and how were they selected?")
+        }
+        rustUiShell.onAskAboutPrivacy = { [weak self] in
+            self?.prefillFaePrompt("How do you handle my privacy and data security?")
+        }
+        rustUiShell.onAskAboutTools = { [weak self] in
+            self?.prefillFaePrompt("What tools do you have and how do I configure them?")
+        }
+        rustUiShell.onMemoryInbox = { [weak self] in self?.memoryImport.show() }
+        rustUiShell.onRescueMode = { [weak self] in self?.toggleRescueMode() }
+        rustUiShell.onUnexpectedExit = { [weak self] in
+            // Orb host died: fall back to the Swift window so Fae stays usable.
+            self?.windowState.suppressAutoSurface = false
+            self?.mainWindow?.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+        rustUiShell.startIfAvailable()
+        windowState.suppressAutoSurface = rustUiShell.isActive
+    }
+
+    private func prefillFaePrompt(_ text: String) {
+        windowState.showWindow()
+        NotificationCenter.default.post(
+            name: .faePrefillInput,
+            object: nil,
+            userInfo: ["text": text]
+        )
+        NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
     }
 
     // MARK: - Window Creation
@@ -328,6 +408,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         hostBridge.sender = faeCore
         hostBridge.debugConsole = debugConsole
         hostBridge.faeCore = faeCore
+        configureRustUiShell()
 
         // Direct Combine observation for final startup readiness.
         // This tracks FaeCore's authoritative "running" state, which is only
@@ -405,9 +486,16 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         windowState.window = window
 
         window.contentViewController = hostingController
-        window.makeKeyAndOrderFront(nil)
 
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        // Orb-first product: when the Rust orb host is running, the orb IS the
+        // UI — the Swift main window stays hidden (reachable via dock reopen,
+        // "Ask Fae", and as automatic fallback if the orb host dies).
+        if rustUiShell.isActive {
+            NSLog("FaeAppDelegate: orb host active — main window stays hidden")
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
 
         NSLog("FaeAppDelegate: main window created — visible=%d", window.isVisible ? 1 : 0)
 
@@ -902,6 +990,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
 struct FaeApp: App {
     @NSApplicationDelegateAdaptor(FaeAppDelegate.self) var appDelegate
 
+    private var showLegacyCoworkUI: Bool {
+        UserDefaults.standard.bool(forKey: "showLegacyCoworkUI")
+    }
+
     init() {}
 
     var body: some Scene {
@@ -986,39 +1078,43 @@ struct FaeApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Divider()
-                Button("Cowork Desktop") {
-                    NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
+                if showLegacyCoworkUI {
+                    Button("Cowork Desktop") {
+                        NotificationCenter.default.post(name: .faeOpenCoworkRequested, object: nil)
+                    }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
 
-                Button("Cowork Model…") {
-                    NotificationCenter.default.post(name: .faeCoworkOpenModelPickerRequested, object: nil)
-                }
-                .keyboardShortcut("o", modifiers: [.command, .shift])
+                    Button("Cowork Model…") {
+                        NotificationCenter.default.post(name: .faeCoworkOpenModelPickerRequested, object: nil)
+                    }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
 
-                Button("Toggle Cowork Inspector") {
-                    NotificationCenter.default.post(name: .faeCoworkToggleInspectorRequested, object: nil)
-                }
-                .keyboardShortcut("i", modifiers: [.command, .option])
+                    Button("Toggle Cowork Inspector") {
+                        NotificationCenter.default.post(name: .faeCoworkToggleInspectorRequested, object: nil)
+                    }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
 
-                Button("Open Cowork Tools") {
-                    NotificationCenter.default.post(
-                        name: .faeCoworkOpenUtilityRequested,
-                        object: nil,
-                        userInfo: ["section": CoworkWorkspaceSection.tools.rawValue]
-                    )
-                }
-                .keyboardShortcut("t", modifiers: [.command, .option])
+                    Button("Open Cowork Tools") {
+                        NotificationCenter.default.post(
+                            name: .faeCoworkOpenUtilityRequested,
+                            object: nil,
+                            userInfo: ["section": CoworkWorkspaceSection.tools.rawValue]
+                        )
+                    }
+                    .keyboardShortcut("t", modifiers: [.command, .option])
 
-                Button("New Cowork Task") {
-                    NotificationCenter.default.post(name: .faeCoworkNewTaskRequested, object: nil)
-                }
-                .keyboardShortcut("n", modifiers: [.command, .option])
+                    Button("New Cowork Task") {
+                        NotificationCenter.default.post(name: .faeCoworkNewTaskRequested, object: nil)
+                    }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
 
-                Button("New Cowork Skill") {
-                    NotificationCenter.default.post(name: .faeCoworkNewSkillRequested, object: nil)
+                    Button("New Cowork Skill") {
+                        NotificationCenter.default.post(name: .faeCoworkNewSkillRequested, object: nil)
+                    }
+                    .keyboardShortcut("k", modifiers: [.command, .control])
+
+                    Divider()
                 }
-                .keyboardShortcut("k", modifiers: [.command, .control])
 
                 Button("Toggle Canvas") {
                     appDelegate.auxiliaryWindows.toggleCanvas()

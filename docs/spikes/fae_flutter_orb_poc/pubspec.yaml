@@ -1,0 +1,19 @@
+name: fae_flutter_orb_poc
+description: Flutter fragment-shader POC for Fae's golden Siri-like orb.
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  shaders:
+    - shaders/fae_orb.frag

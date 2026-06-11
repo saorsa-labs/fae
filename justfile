@@ -1,4 +1,4 @@
-# fae — Real-time speech-to-speech AI conversation system (Pure Swift + MLX)
+# fae — Real-time speech-to-speech AI conversation system (Swift core + Rust orb UI shell)
 
 # Show available recipes
 default:
@@ -34,7 +34,28 @@ guard-no-rust:
 check: build test
     @echo "✓ All checks passed"
 
-# ── Native App (macOS) ────────────────────────────────────────────────────
+# ── Rust Orb UI Shell (new canonical UI direction) ─────────────────────────
+
+# Build the Rust orb UI shell.
+build-ui-shell:
+    cd native/rust/fae-ui-shell && cargo build --release
+
+# Run the Rust orb UI shell prototype (tao + wgpu + muda + wry).
+# This is explicit and not part of default build/test/check until bridge wiring lands.
+run-ui-shell: build-ui-shell
+    cd native/rust/fae-ui-shell && cargo run --release
+
+# Build and launch the Swift app with the Rust UI shell bridge enabled.
+run-native-with-ui-shell: build-ui-shell build _bundle-app _embed-ui-shell _sign-bundle _kill-fae
+    FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
+
+# Validate the Rust orb UI shell prototype.
+check-ui-shell:
+    cd native/rust/fae-ui-shell && cargo fmt --all
+    cd native/rust/fae-ui-shell && cargo clippy --all-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+    cd native/rust/fae-ui-shell && cargo check --workspace --all-targets
+
+# ── Native App (macOS, legacy Swift shell during migration) ────────────────
 
 # xcodebuild output paths
 _xcode_products := "native/macos/Fae/.build/xcode/Build/Products/Debug"
@@ -360,6 +381,21 @@ _bundle-app:
 
     echo "✓ Bundle assembled: $BUNDLE (v${VERSION})"
 
+# (internal) Embed the explicitly-built Rust orb UI shell in the .app bundle.
+_embed-ui-shell:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUNDLE="{{_app_bundle}}"
+    UI_SHELL="$(git rev-parse --show-toplevel)/native/rust/fae-ui-shell/target/release/fae-ui-shell"
+    if [ ! -x "$UI_SHELL" ]; then
+        echo "Missing executable Rust UI shell: $UI_SHELL" >&2
+        echo "Run: just build-ui-shell" >&2
+        exit 1
+    fi
+    cp "$UI_SHELL" "$BUNDLE/Contents/MacOS/fae-ui-shell"
+    chmod 755 "$BUNDLE/Contents/MacOS/fae-ui-shell"
+    echo "  → Embedded fae-ui-shell"
+
 # (internal) Sign the .app bundle with Developer ID.
 _sign-bundle:
     #!/usr/bin/env bash
@@ -385,6 +421,10 @@ _sign-bundle:
         [ "$FNAME" = "Sparkle.framework" ] && continue
         codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" "$fw"
     done
+    if [ -f "$BUNDLE/Contents/MacOS/fae-ui-shell" ]; then
+        codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
+            "$BUNDLE/Contents/MacOS/fae-ui-shell"
+    fi
     codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
         --entitlements "$ENT" "$BUNDLE"
     echo "✓ Signed: $BUNDLE"
@@ -402,6 +442,16 @@ _verify-bundle:
         ERRORS=$((ERRORS+1))
     else
         echo "  ✓ Executable present"
+    fi
+    if [ -f "$BUNDLE/Contents/MacOS/fae-ui-shell" ]; then
+        if [ ! -x "$BUNDLE/Contents/MacOS/fae-ui-shell" ]; then
+            echo "  ✗ FAIL: Rust UI shell is present but not executable"
+            ERRORS=$((ERRORS+1))
+        else
+            echo "  ✓ Rust UI shell present"
+        fi
+    else
+        echo "  ℹ Rust UI shell not bundled (default Swift-only bundle)"
     fi
     # Check Fae's own Metal shader
     METALLIB="$BUNDLE/Contents/Resources/Fae_Fae.bundle/Contents/Resources/default.metallib"

@@ -262,9 +262,13 @@ final class WindowStateController: ObservableObject {
             window.animator().setFrame(targetFrame, display: true)
         }
 
-        // Bring the window to the front so the user can see Fae's response.
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Bring the window to the front so the user can see Fae's response —
+        // unless the Rust orb host owns the product UI and the window is
+        // hidden, in which case it must not auto-surface (orb-first product).
+        if !suppressAutoSurface || window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         if wasCollapsed {
             // After the expand animation, ask the input bar to claim focus so
@@ -391,6 +395,11 @@ final class WindowStateController: ObservableObject {
     }
 
     // MARK: - Visibility
+
+    /// When the Rust orb host is the product UI, the Swift window must never
+    /// surface itself automatically (e.g. on assistant generation). Explicit
+    /// user actions (showWindow via Ask Fae, dock reopen) still surface it.
+    var suppressAutoSurface = false
 
     func hideWindow() {
         cancelInactivityTimer()

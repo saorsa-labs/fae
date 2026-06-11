@@ -1,0 +1,17 @@
+[package]
+name = "fae-ui-shell"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bytemuck = { version = "1.16", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+muda = "0.19"
+pollster = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tao = "0.35"
+wgpu = "0.20"
+wry = "0.55"

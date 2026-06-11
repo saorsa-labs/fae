@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fae Orb WebGL Preview</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #090604; color: #ffd77a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { display: grid; place-items: center; overflow: hidden; }
+    .wrap { text-align: center; }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p { margin: 0 0 18px; color: rgba(255,255,255,.72); }
+    canvas { width: min(78vmin, 540px); height: min(78vmin, 540px); display: block; }
+    .controls { margin-top: 12px; color: rgba(255,255,255,.8); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Fae Golden Glass Orb — WebGL Preview v2</h1>
+    <p>Circular glass silhouette, independent rim, internal golden fog motion.</p>
+    <canvas id="c" width="720" height="720"></canvas>
+    <div class="controls">Click/tap to toggle reduce motion.</div>
+  </div>
+<script id="frag" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uAudio;
+uniform float uQuality;
+uniform float uReduceMotion;
+
+float hash21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);} 
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);float a=hash21(i),b=hash21(i+vec2(1,0)),c=hash21(i+vec2(0,1)),d=hash21(i+vec2(1,1));return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);} 
+float fbm(vec2 p,float q){float v=0.0,a=.5;v+=a*noise(p);p=p*2.03+17.2;a*=.5;v+=a*noise(p);p=p*2.07+31.7;a*=.5;v+=a*noise(p);if(q>.5){p=p*2.11+9.4;a*=.5;v+=a*noise(p);}return v;} 
+mat2 rot(float a){float s=sin(a),c=cos(a);return mat2(c,-s,s,c);} 
+vec3 palette(float t){vec3 ember=vec3(1,.30,.045),deepGold=vec3(1,.54,.10),gold=vec3(1,.78,.24),cream=vec3(1,.93,.68);vec3 c=mix(ember,deepGold,smoothstep(0.,.45,t));c=mix(c,gold,smoothstep(.28,.82,t));c=mix(c,cream,smoothstep(.74,1.,t)*.55);return c;} 
+float gaussianRing(float r,float center,float width){float x=(r-center)/width;return exp(-(x*x));}
+
+void main(){
+  vec2 frag=vec2(gl_FragCoord.x,uResolution.y-gl_FragCoord.y);
+  vec2 uv=(frag-.5*uResolution)/min(uResolution.x,uResolution.y);
+  float t=mix(uTime,2.0,clamp(uReduceMotion,0.,1.));
+  float audio=clamp(uAudio,0.,1.), quality=clamp(uQuality,0.,1.);
+  float r=length(uv), angle=atan(uv.y,uv.x);
+  float baseR=.365+.010*sin(t*.72)+audio*.012;
+  float microWobble=.0035*sin(angle*6.+t*.45)+.0020*sin(angle*11.-t*.31);
+  float edgeR=baseR+microWobble;
+  float aa=.006;
+  float outerMask=1.0-smoothstep(edgeR-aa,edgeR+aa,r);
+  float normalizedR=clamp(r/max(baseR,.001),0.,1.);
+  vec2 lensUv=uv*(1.0+.10*normalizedR*normalizedR);
+  vec2 flow=vec2(fbm(lensUv*3.0+vec2(t*.040,3.7),quality)-.5,fbm(lensUv*3.0+vec2(8.1,-t*.035),quality)-.5);
+  vec2 fogUv=lensUv+flow*(.035+audio*.018);
+  vec2 p1=rot(t*.045)*fogUv*3.4+vec2(t*.032,-t*.020);
+  vec2 p2=rot(-t*.070)*fogUv*5.8+vec2(-t*.038,t*.016);
+  float fog=fbm(p1,quality)*.60+fbm(p2,quality)*.40;
+  float blobs=0.;
+  for(int i=0;i<8;i++){float fi=float(i);float a=fi*2.399963+t*(.10+.012*fi);float orbit=.07+.17*hash21(vec2(fi,4.2));vec2 c=vec2(cos(a),sin(a))*orbit;c+=vec2(sin(t*.15+fi),cos(t*.12+fi*1.7))*.028;float br=.095+.045*hash21(vec2(fi,9.1));blobs+=exp(-dot(fogUv-c,fogUv-c)/(br*br));}
+  blobs=clamp(blobs*.20,0.,1.);
+  float coreGlow=smoothstep(baseR*.95,0.,r);
+  float edgeFade=1.0-smoothstep(baseR*.72,baseR*.99,r);
+  vec3 interior=palette(fog*.78+blobs*.32+coreGlow*.18);
+  interior+=vec3(1.,.58,.12)*blobs*(.42+audio*.45);
+  interior+=vec3(1.,.88,.46)*coreGlow*.22;
+  interior*=mix(.62,1.0,edgeFade);
+  float lowerShadow=smoothstep(-.05,.34,uv.y)*smoothstep(.05,baseR,r);
+  interior*=1.0-lowerShadow*.20;
+  vec3 col=interior*outerMask;
+  float rimCore=gaussianRing(r,baseR+.001,.014);
+  float innerRim=gaussianRing(r,baseR-.034,.030)*.55;
+  float fresnel=pow(normalizedR,4.5)*outerMask;
+  float sheen=.5+.5*sin(angle*3.-t*.35+fog*1.4);
+  vec3 rimCol=mix(vec3(1.,.42,.07),vec3(1.,.94,.72),.55+.45*sheen);
+  col=mix(col,rimCol,clamp(rimCore*.82+innerRim*.20,0.,1.));
+  col+=rimCol*rimCore*.48;
+  col+=vec3(1.,.82,.42)*fresnel*.13;
+  float topGlow=exp(-dot(uv-vec2(-.11,-.18),uv-vec2(-.11,-.18))/.030)*outerMask;
+  vec2 dir=normalize(uv+vec2(.001));
+  float crescentDir=dot(dir,normalize(vec2(-.55,-.83)));
+  float crescent=smoothstep(.58,.94,crescentDir)*smoothstep(.08,.30,r)*(1.0-smoothstep(baseR-.050,baseR-.004,r));
+  col+=vec3(1.,.91,.66)*topGlow*.26;
+  col+=vec3(1.,.96,.82)*crescent*.18;
+  float halo=exp(-max(r-baseR,0.)*11.)*(1.0-outerMask)*.24;
+  col+=vec3(1.,.48,.08)*halo;
+  float grain=hash21(frag+floor(t*18.));
+  float sparkleGate=smoothstep(.45,.85,audio)*quality;
+  float sparkle=step(.9985,grain)*outerMask*sparkleGate;
+  col+=vec3(1.,.90,.55)*sparkle*.45;
+  float alpha=clamp(outerMask+rimCore*.55+halo,0.,1.);
+  gl_FragColor=vec4(col,alpha);
+}
+</script>
+<script>
+const canvas=document.getElementById('c');
+const gl=canvas.getContext('webgl',{antialias:true,alpha:true});
+let reduce=0; canvas.addEventListener('click',()=>reduce=reduce?0:1);
+function shader(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+const vert=shader(gl.VERTEX_SHADER,'attribute vec2 p; void main(){ gl_Position=vec4(p,0.0,1.0); }');
+const frag=shader(gl.FRAGMENT_SHADER,document.getElementById('frag').textContent);
+const prog=gl.createProgram(); gl.attachShader(prog,vert); gl.attachShader(prog,frag); gl.linkProgram(prog); if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog)); gl.useProgram(prog);
+const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+const loc=gl.getAttribLocation(prog,'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+const uResolution=gl.getUniformLocation(prog,'uResolution'),uTime=gl.getUniformLocation(prog,'uTime'),uAudio=gl.getUniformLocation(prog,'uAudio'),uQuality=gl.getUniformLocation(prog,'uQuality'),uReduceMotion=gl.getUniformLocation(prog,'uReduceMotion');
+function frame(ms){const t=ms/1000;const audio=.10+Math.pow(.5+.5*Math.sin(t*2.7),2)*.55+(.5+.5*Math.sin(t*19))*0.08;gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.uniform2f(uResolution,canvas.width,canvas.height);gl.uniform1f(uTime,t);gl.uniform1f(uAudio,audio);gl.uniform1f(uQuality,1);gl.uniform1f(uReduceMotion,reduce);gl.drawArrays(gl.TRIANGLES,0,6);requestAnimationFrame(frame);} requestAnimationFrame(frame);
+</script>
+</body>
+</html>

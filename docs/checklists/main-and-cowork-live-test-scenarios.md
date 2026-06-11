@@ -1,13 +1,13 @@
-# Main And Cowork Live Test Scenarios
+# Fae Orb Shell Live Test Scenarios
 
-Last updated: March 16, 2026
+Last updated: June 11, 2026
 
 This document is the step-by-step live validation companion to
 [`docs/checklists/app-release-validation.md`](/Users/davidirvine/Desktop/Devel/projects/fae/docs/checklists/app-release-validation.md).
 
 Use it when validating the real shipping app build after model swaps, prompt
-changes, voice pipeline changes, UI changes, tool-policy changes, or Cowork
-security changes.
+changes, voice pipeline changes, UI changes, tool-policy changes, or Rust orb shell
+changes.
 
 Do not treat screenshots, scripted phase results, or isolated unit tests as a
 substitute for these live scenarios. The release bar is: the real app, with
@@ -15,6 +15,12 @@ real windows, real audio, real popups, and real provider integration.
 
 Current local product path:
 
+- Rust orb UI shell is the canonical UI direction (`native/rust/fae-ui-shell`)
+- orb appears only when thinking/speaking and is quiescent otherwise
+- right-click orb menu is the primary control surface
+- browser/webview panels are used for charts, documents, tools, and video
+- Swift main/canvas surfaces are legacy migration surfaces until bridge wiring is complete
+- Cowork is removed from the new product UI and must not appear in the orb menu
 - single Qwen3.5 text model
 - on-demand Qwen3-VL vision model
 - legacy dual / concierge mode treated as compatibility-only, not default behavior
@@ -24,7 +30,8 @@ Current local product path:
 ## Required setup
 
 1. Start from a clean native launch path with `just run-native` or `just test-serve`.
-2. Confirm the test server is live on `http://127.0.0.1:7433`.
+2. For UI shell changes, run `just check-ui-shell` and launch `just run-ui-shell`.
+3. Confirm the test server is live on `http://127.0.0.1:7433`.
 3. Ensure Chatterbox is available on `http://127.0.0.1:8000`.
 4. Create a screenshot folder, normally `/tmp/fae-live-check/`.
 5. Intentionally reset onboarding, scheduler, approval, or memory state through the test server before any scenario that depends on clean state.
@@ -32,16 +39,45 @@ Current local product path:
 ## Evidence to capture
 
 - Startup screenshot
+- Rust orb shell screenshots: quiescent/active orb, right-click menu, browser/data panel
 - Onboarding screenshot(s)
-- Main-window voice and text screenshot(s)
+- Legacy main-window voice and text screenshot(s) while Swift shell remains in migration
 - Approval popup screenshot(s)
-- Cowork base screenshot
-- Cowork model picker screenshot
-- Cowork scheduler / skills / tools screenshot(s)
+- Evidence that Cowork/Open Work with Fae is absent from the new orb menu
 - Screenshot for any failure or surprising state
 - `/status`, `/conversation`, and `/events` output for failures
 
-## Main window scenarios
+## Rust orb shell scenarios
+
+### 0. Orb shell baseline
+
+Acceptance:
+
+- `just check-ui-shell` passes.
+- `just run-ui-shell` opens a frameless transparent orb window.
+- The orb visually reads as a standalone golden glass/fog lifeform, not as a normal app rectangle.
+- The orb can be dragged.
+- Right-click opens the Fae menu.
+- `Open Browser/Data Panel` opens a separate webview panel.
+- `Space` or bridge state can switch active/quiescent mode.
+- Quiescent mode stops continuous redraw.
+- `Quit Fae` exits the shell.
+
+Steps:
+
+1. Run `just check-ui-shell`.
+2. Launch `just run-ui-shell`.
+3. Capture active orb screenshot.
+4. Press `Space` to quiesce and confirm the shell stops animating.
+5. Press `Space` again or drive the bridge state to active and confirm the orb resumes.
+6. Drag the orb to a new screen position.
+7. Right-click the orb and capture the menu.
+8. Select `Open Browser/Data Panel` and capture the webview panel.
+9. Select `Quit Fae` and confirm the shell exits.
+
+## Legacy main window scenarios
+
+These remain required while the live voice/model pipeline is still hosted by the Swift shell. They should shrink or be removed after the Rust orb shell bridge owns startup and command routing.
 
 ### 1. Startup and baseline
 

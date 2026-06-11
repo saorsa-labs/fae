@@ -10,7 +10,7 @@
 - **Direction:** Refined Organic — warm, literary, intimate. Fae is a presence, not a dashboard.
 - **Decoration level:** Intentional — the orb provides all visual drama. UI elements use subtle frosted glass, soft borders, and gentle colour washes. No gradients on buttons, no emoji in headers, no generic system accent colours.
 - **Mood:** A beautifully bound book sitting next to a candle. The orb is alive and breathing; the surrounding UI recedes to let it be the centre of attention.
-- **Visual anchor:** The glowing amber orb rendered via Metal shaders (FogCloudOrb.metal, NebulaOrb.metal). All design decisions support, never compete with, the orb.
+- **Visual anchor:** The orb — golden fluid glass: gently swirling ember/deep-gold/cream fog suspended behind an iridescent glass surface with near-white speculars (Rust orb host, `fae-ui-shell/src/orb.wgsl`; legacy Metal shaders FogCloudOrb.metal/NebulaOrb.metal remain in the Swift app). The fog is emotive: demeanor (thinking, speaking, warmth, concern…) drives its hue bias and tempo. All design decisions support, never compete with, the orb.
 
 ## Typography
 - **Display/Headers:** Instrument Serif — warm, literary, pairs with the serif conversation bubbles. Use for settings window headers, section titles, and page titles. Replaces SF Pro Rounded in settings.
@@ -131,3 +131,5 @@ Fae is dark-first. There is no light mode. The surface hierarchy (base → card 
 | 2026-03-28 | Dual-layer colour system (base + text variants) | Scottish palette colours too dark for readable text on dark backgrounds. Base hex for decoration, lightened `-text` variants for readable text. All pass WCAG AA. |
 | 2026-03-28 | Instrument Serif for display typography | Matches the literary quality of serif conversation bubbles. Warm without being decorative. |
 | 2026-03-28 | No light mode | Fae is dark-first by identity. The orb is designed for dark backgrounds. Surface hierarchy provides depth. |
+| 2026-06-11 | Orb: Siri-class fluid glassification, **golden fog** (owner corrected same day) | Owner initially asked for non-golden fog, then corrected: keep the signature golden/deep-orange gently swirling fog inside the new glass treatment (iridescent warm rim, dual near-white speculars, liquid flow). A cool heather/silver variant existed for a few hours and was reverted. Orb-owned panels stay on DESIGN.md surface/bubble tokens. |
+| 2026-06-11 | Emotive fog | The fog shows demeanor: pipeline mode (thinking/speaking/listening) and `OrbFeeling` flow over the UI-shell bridge (`feeling` on state messages) into shader `mode`/`warmth`/`energy` uniforms — concern sinks the fog toward ember/smoke, delight lifts it to bright cream, energy sets tempo, thinking adds a deliberate core pulse, speaking rides the voice. Eased ~1s so demeanor never snaps. |

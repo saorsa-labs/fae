@@ -1,14 +1,16 @@
-# AGENTS.md — Fae Swift Engineering Guardrails
+# AGENTS.md — Fae Engineering Guardrails
 
 This file defines implementation guardrails for agents modifying Fae.
 
 ## Current architecture (authoritative)
 
-Fae is a **pure Swift** macOS app in `native/macos/Fae`.
+Fae's production runtime is the **Swift macOS app** in `native/macos/Fae`; the new canonical visual shell is the explicit Rust orb UI shell in `native/rust/fae-ui-shell`.
 
 - No embedded Rust core in production
 - No C ABI / `libfae` dependency in active runtime path
-- Build/test with SwiftPM:
+- Rust is allowed only for the orb UI shell/bridge unless a new ADR updates this policy
+- Default Swift build/test/check recipes must remain Rust-free until release packaging intentionally promotes the shell
+- Swift validation:
 
 ```bash
 cd native/macos/Fae
@@ -16,7 +18,13 @@ swift build
 swift test
 ```
 
-Historical Rust-era docs under `docs/adr/*` and `legacy/rust-core/` are archival context only.
+- Rust shell validation:
+
+```bash
+just check-ui-shell
+```
+
+Historical Rust-era core docs under `legacy/rust-core/` are archival context only. Current Rust UI shell decisions live under `docs/adr/009-rust-orb-ui-shell.md` and `docs/architecture/fae-rust-orb-ui-shell.md`.
 
 ---
 

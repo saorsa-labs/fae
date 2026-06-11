@@ -689,6 +689,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Stop the pipeline and wait up to `timeoutSeconds` for a clean stopped state.
     @discardableResult
     func stopAndWait(timeoutSeconds: TimeInterval = 8.0) async -> Bool {
+        NSLog("FaeCore: stopAndWait entered (timeout=%.1fs, state=%@)",
+              timeoutSeconds, String(describing: pipelineState))
         cancel()
         stop()
 
@@ -756,6 +758,16 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Clear pipeline conversation history and await completion (for test harness use).
     func resetConversationAsync() async {
         await pipelineCoordinator?.resetConversation()
+    }
+
+    /// Activate/deactivate a skill in the live prompt context for orb-owned Skills UI.
+    func setSkill(_ id: String, active: Bool) async {
+        let skillManager = skillManagerRef ?? SkillManager()
+        if active {
+            _ = await skillManager.activate(skillName: id)
+        } else {
+            await skillManager.deactivate(skillName: id)
+        }
     }
 
     /// Whether any deferred (background) tool jobs are still running (test harness use).
