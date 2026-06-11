@@ -156,11 +156,12 @@ final class TrainingBridgeTypesTests: XCTestCase {
         )
 
         let delta = after.delta(from: baseline)
-        XCTAssertEqual(delta.toolCallingDelta, 15.0) // (0.85-0.70)*100
-        XCTAssertEqual(delta.faeCapabilityDelta, 10.0)
-        XCTAssertEqual(delta.assistantFitDelta, 15.0)
-        XCTAssertEqual(delta.serializationDelta, -5.0) // regression
-        XCTAssertEqual(delta.throughputDelta, 10.0)
+        // Double arithmetic carries rounding error — compare with accuracy.
+        XCTAssertEqual(delta.toolCallingDelta ?? .nan, 15.0, accuracy: 1e-9) // (0.85-0.70)*100
+        XCTAssertEqual(delta.faeCapabilityDelta ?? .nan, 10.0, accuracy: 1e-9)
+        XCTAssertEqual(delta.assistantFitDelta ?? .nan, 15.0, accuracy: 1e-9)
+        XCTAssertEqual(delta.serializationDelta ?? .nan, -5.0, accuracy: 1e-9) // regression
+        XCTAssertEqual(delta.throughputDelta ?? .nan, 10.0, accuracy: 1e-9)
     }
 
     func testTrainingBenchmarkResultDeltaNilThroughput() {

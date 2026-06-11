@@ -46,7 +46,7 @@ final class ToolAugmentationManagerTests: XCTestCase {
 
     func testFormatProjectsForMemoryEmpty() {
         let text = ToolAugmentationManager.formatProjectsForMemory([])
-        XCTAssertTrue(text.isEmpty || text.contains("No projects"))
+        XCTAssertEqual(text, "No git projects found on this Mac.")
     }
 
     func testFormatProjectsForMemoryWithProjects() {

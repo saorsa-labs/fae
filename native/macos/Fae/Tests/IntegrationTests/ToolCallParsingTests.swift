@@ -45,15 +45,16 @@ final class ToolCallParsingTests: XCTestCase {
         XCTAssertEqual(calls[0].arguments["query"] as? String, "weather")
     }
 
+    // XML-style format is <parameter=key>value</parameter> (Qwen3.5).
     func testParseXMLToolCallMultipleParams() {
-        let text = "<tool_call><function=read><parameter>path>/tmp/file</parameter><parameter>lines>10</parameter></function></tool_call>"
+        let text = "<tool_call><function=read><parameter=path>/tmp/file</parameter><parameter=lines>10</parameter></function></tool_call>"
         let calls = ToolCallParser.parseToolCalls(from: text)
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(calls[0].arguments["path"] as? String, "/tmp/file")
     }
 
     func testParseXMLToolCallJSONValue() {
-        let text = "<tool_call><function=test><parameter>count>42</parameter></function></tool_call>"
+        let text = "<tool_call><function=test><parameter=count>42</parameter></function></tool_call>"
         let calls = ToolCallParser.parseToolCalls(from: text)
         XCTAssertEqual(calls.count, 1)
         // "42" parses as JSON number
@@ -61,7 +62,7 @@ final class ToolCallParsingTests: XCTestCase {
     }
 
     func testParseXMLToolCallBooleanValue() {
-        let text = "<tool_call><function=test><parameter>enabled>true</parameter></function></tool_call>"
+        let text = "<tool_call><function=test><parameter=enabled>true</parameter></function></tool_call>"
         let calls = ToolCallParser.parseToolCalls(from: text)
         XCTAssertEqual(calls.count, 1)
         XCTAssertTrue(calls[0].arguments["enabled"] as? Bool == true)

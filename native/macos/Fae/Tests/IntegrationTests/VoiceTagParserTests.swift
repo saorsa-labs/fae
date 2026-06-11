@@ -124,11 +124,20 @@ final class VoiceTagStripperTests: XCTestCase {
 
     func testFlushWithRemainingBuffer() {
         var stripper = VoiceTagStripper()
-        stripper.process("Some text without tags")
-        let flushed = stripper.flush()
+        // Untagged text is emitted eagerly by process(); nothing is held back.
+        let processed = stripper.process("Some text without tags")
+        XCTAssertEqual(processed.count, 1)
+        XCTAssertEqual(processed.first?.text, "Some text without tags")
+        XCTAssertNil(processed.first?.character)
+        XCTAssertTrue(stripper.flush().isEmpty)
+
+        // A partial opening tag IS held back — flush() releases it verbatim.
+        var stripper2 = VoiceTagStripper()
+        let eager = stripper2.process("Waiting <voi")
+        XCTAssertEqual(eager.first?.text, "Waiting ")
+        let flushed = stripper2.flush()
         XCTAssertEqual(flushed.count, 1)
-        XCTAssertEqual(flushed[0].text, "Some text without tags")
-        XCTAssertNil(flushed[0].character)
+        XCTAssertEqual(flushed.first?.text, "<voi")
     }
 
     func testFlushWithUnterminatedVoiceTag() {
@@ -152,8 +161,15 @@ final class VoiceTagStripperTests: XCTestCase {
     func testPartialOpeningTagDoesNotEmit() {
         var stripper = VoiceTagStripper()
         let segments = stripper.process("Hello <voi")
-        // Partial opening — should wait
-        XCTAssertTrue(segments.isEmpty)
+        // Narrator text before the partial tag is emitted eagerly (low TTS
+        // latency); only the potential partial tag itself is held back.
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments.first?.text, "Hello ")
+        // The held "<voi" resolves once the rest of the tag arrives.
+        let resolved = stripper.process("ce character=\"A\">Hi</voice>")
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertEqual(resolved.first?.character, "A")
+        XCTAssertEqual(resolved.first?.text, "Hi")
     }
 
     // MARK: - Character name extraction edge cases

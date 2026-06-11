@@ -153,7 +153,10 @@ final class ToolRoutingHelpersTests: XCTestCase {
     // MARK: - isToolBackedLookupRequest
 
     func testIsToolBackedLookupYes() {
-        XCTAssertTrue(ToolRoutingHelpers.isToolBackedLookupRequest("what's the weather"))
+        // Tool-backed lookups are Apple-tool nouns (calendar, mail, notes...)
+        // plus a lookup verb. Weather is a web-search topic, not a tool noun.
+        XCTAssertTrue(ToolRoutingHelpers.isToolBackedLookupRequest("check my calendar"))
+        XCTAssertFalse(ToolRoutingHelpers.isToolBackedLookupRequest("what's the weather"))
     }
 
     func testIsToolBackedLookupNo() {

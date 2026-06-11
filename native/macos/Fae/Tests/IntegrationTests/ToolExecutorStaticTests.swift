@@ -6,18 +6,19 @@ final class ToolExecutorStaticTests: XCTestCase {
     // MARK: - toolTimeoutSeconds
 
     func testToolTimeoutScreenshot() {
+        // Vision tools get the extended 180s budget — VLM analysis is slow.
         let timeout = ToolExecutor.toolTimeoutSeconds(for: "screenshot")
-        XCTAssertEqual(timeout, 60) // extendedVisionToolTimeoutSeconds
+        XCTAssertEqual(timeout, 180) // extendedVisionToolTimeoutSeconds
     }
 
     func testToolTimeoutCamera() {
         let timeout = ToolExecutor.toolTimeoutSeconds(for: "camera")
-        XCTAssertEqual(timeout, 60)
+        XCTAssertEqual(timeout, 180)
     }
 
     func testToolTimeoutReadScreen() {
         let timeout = ToolExecutor.toolTimeoutSeconds(for: "read_screen")
-        XCTAssertEqual(timeout, 60)
+        XCTAssertEqual(timeout, 180)
     }
 
     func testToolTimeoutDefault() {

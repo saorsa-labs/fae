@@ -79,11 +79,14 @@ final class DocsContractTests: XCTestCase {
             XCTAssertEqual(selection.contextSize, contextSize)
         }
 
-        // Check model names are mentioned in docs.
+        // Check model names are mentioned in docs. The strategy README leads
+        // with Gemma 4 (daemon lane); the MLX fallback family must still be
+        // named there, but quantization variants (Unsloth) are a
+        // model-switching-guide detail, asserted below.
         XCTAssertTrue(readme.contains("Qwen3.5") || readme.contains("qwen3_5"),
-                      "README should mention Qwen3.5 models")
-        XCTAssertTrue(readme.contains("Unsloth") || readme.contains("unsloth"),
-                      "README should mention Unsloth quantization")
+                      "README should mention the Qwen3.5 fallback family")
+        XCTAssertTrue(readme.contains("Gemma 4") || readme.contains("gemma-4"),
+                      "README should mention the Gemma 4 primary brain")
 
         XCTAssertTrue(modelSwitchingGuide.contains("`Auto (Recommended)` resolves by RAM"))
         XCTAssertTrue(modelSwitchingGuide.contains("| `<8 GB` | Qwen3.5-2B OptiQ |"))

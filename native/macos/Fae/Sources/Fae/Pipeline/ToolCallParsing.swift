@@ -191,6 +191,12 @@ enum ToolCallParser {
             }
         }
 
+        // Removing an inline block leaves a double space ("Hello  World") —
+        // collapse runs of spaces without touching newlines.
+        result = result.replacingOccurrences(
+            of: " {2,}", with: " ", options: .regularExpression
+        )
+
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -233,8 +239,11 @@ enum ToolCallParser {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
             // Try to parse value as JSON for nested objects/arrays/numbers/booleans.
+            // .fragmentsAllowed is required for top-level scalars ("42", "true") —
+            // without it only objects/arrays would coerce and the documented
+            // number/boolean coercion silently never happened.
             if let data = value.data(using: .utf8),
-               let parsed = try? JSONSerialization.jsonObject(with: data)
+               let parsed = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
             {
                 args[key] = parsed
             } else {
