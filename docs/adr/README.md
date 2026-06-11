@@ -10,6 +10,7 @@
 | [006](006-voice-privilege-escalation.md) | Voice Privilege Escalation | Accepted (evolved) | 2026-02-23 |
 | [007](007-companion-device-handoff.md) | Companion Device Handoff | Deferred | 2026-02-23 |
 | [008](008-autonomous-self-improvement.md) | Autonomous Self-Improvement (Meta-Optimization) | Accepted | 2026-04-05 |
+| [009](009-rust-orb-ui-shell.md) | Rust Orb UI Shell as Canonical Fae UI | Accepted | 2026-06-11 |
 
 ## Notes
 
@@ -18,3 +19,4 @@
 - ADR-002 is the only fully superseded decision (Rust core replaced by Swift)
 - All other architectural decisions remain valid; implementations ported to Swift
 - ADR-008 documents the AutoAgent-inspired meta-optimization system added 2026-04-05
+- ADR-009 reintroduces Rust for the canonical UI shell only: `tao` + `wgpu` + `muda` + `wry`, while bridge migration from the Swift shell is in progress
