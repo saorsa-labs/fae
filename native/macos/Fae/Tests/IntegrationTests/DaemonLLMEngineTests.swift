@@ -117,6 +117,44 @@ final class DaemonWireTests: XCTestCase {
         XCTAssertTrue(DaemonWire.daemonTools(from: specs).isEmpty)
     }
 
+    // MARK: injectTextPayload — audio (S18 push-to-talk)
+
+    func testInjectTextPayloadAttachesAudioWithEmptyContent() throws {
+        // Empirical daemon contract (docs/spikes/S18): the audio user message
+        // must carry EMPTY content — any text out-competes the audio and gets
+        // transcribed instead — and the turn-context prefix migrates to the
+        // system prompt so memory recall still reaches the model.
+        let messages = [
+            LLMMessage(role: .assistant, content: "earlier reply"),
+            LLMMessage(role: .user, content: "(voice message)"),
+        ]
+        var options = GenerationOptions(maxTokens: 256)
+        options.turnContextPrefix = "[context: morning]"
+        options.audioWAVBase64 = "QkFTRTY0"
+
+        let payload = DaemonWire.injectTextPayload(
+            messages: messages, systemPrompt: "You are Fae.", options: options)
+
+        let wire = try XCTUnwrap(payload["messages"] as? [[String: Any]])
+        XCTAssertEqual(wire.count, 2)
+        XCTAssertEqual(wire[1]["content"] as? String, "")
+        XCTAssertEqual(wire[1]["audio_wav_base64"] as? String, "QkFTRTY0")
+        XCTAssertNil(wire[0]["audio_wav_base64"], "audio attaches to the final user message only")
+        let system = try XCTUnwrap(payload["system"] as? String)
+        XCTAssertTrue(system.contains("[context: morning]"))
+    }
+
+    func testInjectTextPayloadWithoutAudioIsUnchanged() throws {
+        // Text turns must stay byte-identical to the pre-S18 shape.
+        let payload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hello")],
+            systemPrompt: "You are Fae.",
+            options: GenerationOptions(maxTokens: 64))
+        let wire = try XCTUnwrap(payload["messages"] as? [[String: Any]])
+        XCTAssertEqual(wire[0]["content"] as? String, "hello")
+        XCTAssertNil(wire[0]["audio_wav_base64"])
+    }
+
     // MARK: parseTurn
 
     func testParseTurnExtractsTextAndToolCalls() {

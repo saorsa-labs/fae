@@ -3,6 +3,32 @@ import XCTest
 
 final class FaeConfigStaticTests: XCTestCase {
 
+    // MARK: - [voice] (S18 push-to-talk)
+
+    func testVoiceConfigDefaults() {
+        // PTT-only is opt-in: a default install keeps the always-listening
+        // pipeline; nil hotkey means Right Option.
+        let config = FaeConfig()
+        XCTAssertFalse(config.voice.pushToTalkOnly)
+        XCTAssertNil(config.voice.pttHotkeyKeyCode)
+    }
+
+    func testVoiceConfigParsesFromTOML() throws {
+        let toml = """
+        [voice]
+        pushToTalkOnly = true
+        pttHotkeyKeyCode = 96
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("s18-voice-\(UUID().uuidString).toml")
+        try toml.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let config = FaeConfig.load(from: url)
+        XCTAssertTrue(config.voice.pushToTalkOnly)
+        XCTAssertEqual(config.voice.pttHotkeyKeyCode, 96)
+    }
+
     // MARK: - migrateToolMode
 
     func testMigrateToolMode() {

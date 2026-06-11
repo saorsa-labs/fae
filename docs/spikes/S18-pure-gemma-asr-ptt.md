@@ -110,6 +110,28 @@ for v1; revisit if transcription fidelity needs a dedicated pass.
    + memory capture path; speak only the remainder; tool calls unchanged.
 5. MLX/Qwen3-ASR stays in the codebase (fallback when daemon lane is off).
 
+## Post-S18 consolidation queue (the bypassed-stack kill-list)
+
+PTT + Gemma-4-direct makes a slice of the Swift MLX perception stack
+historic. For the always-on rethink (queued behind daemon streaming +
+cancel):
+
+- **Qwen3-ASR** — redundant in the PTT path; survives only as MLX-lane
+  fallback.
+- **SmartTurn** — endpointing is now click/release/1.2 s silence; never runs.
+- **Keyword spotter (1D-CNN)** — served acoustic barge-in, which is bypassed;
+  if the rethink lands on a button/key interrupt it never returns.
+- **Speaker ID (WeSpeaker)** — gray zone: locally PTT collapses identity to
+  physical access, but channels/guest flows still reference voice identity.
+  Decide at the rethink, don't auto-delete.
+- **SmolVLM2-500M (deep)** — consolidation bait: on-demand analysis is
+  exactly the daemon's request shape; route deep vision through Gemma 4 and
+  delete.
+- **SmolVLM2-256M (fast)** — KEEP for now: always-on presence triage at
+  19–30 s cadence is a power/thermal budget the 256M model exists to fit,
+  and the daemon is single-lane (perception would queue behind turns).
+- **Kokoro TTS / Hash-384 embedding** — keep; no Gemma replacement.
+
 ## Acceptance
 
 - Click orb → speak → answer spoken, with correct [heard] transcript stored.

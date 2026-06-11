@@ -73,6 +73,26 @@ actor ConversationStateTracker {
         trimHistory()
     }
 
+    /// Replace the content of the most recent user message, preserving its tag
+    /// and applying the same speaker annotation as `addUserMessage`. Used by
+    /// the S18 push-to-talk path: the turn starts with a placeholder user
+    /// message (the audio rides the request) and is corrected once the model's
+    /// `[heard]:` transcription arrives.
+    func updateLastUserMessage(_ text: String, speakerDisplayName: String? = nil, speakerId: String? = nil) {
+        guard let index = history.lastIndex(where: { $0.role == .user }) else { return }
+        let content: String
+        if let name = speakerDisplayName, let speakerId, !speakerId.isEmpty {
+            content = "[\(name) | id:\(speakerId)]: \(text)"
+        } else if let name = speakerDisplayName {
+            content = "[\(name)]: \(text)"
+        } else if let speakerId, !speakerId.isEmpty {
+            content = "[speaker id:\(speakerId)]: \(text)"
+        } else {
+            content = text
+        }
+        history[index] = LLMMessage(role: .user, content: content, tag: history[index].tag)
+    }
+
     /// Add an assistant message to history.
     func addAssistantMessage(_ text: String, tag: String? = nil) {
         history.append(LLMMessage(role: .assistant, content: text, tag: tag))

@@ -132,17 +132,35 @@ enum DaemonWire {
     /// - `options.tools` arrive in MLX ToolSpec format
     ///   (`{"type":"function","function":{...}}`) and are flattened to the
     ///   daemon's `{name, description, parameters}` shape.
+    /// - `options.audioWAVBase64` (S18 push-to-talk) attaches the clip to the
+    ///   final user message, whose wire content MUST be empty — any text on the
+    ///   audio message out-competes the audio and gets transcribed instead
+    ///   (empirical, see docs/spikes/S18). The turn-context prefix migrates to
+    ///   the system prompt for audio turns so memory recall still reaches the
+    ///   model.
     static func injectTextPayload(
         messages: [LLMMessage],
         systemPrompt: String,
         options: GenerationOptions
     ) -> [String: Any] {
         var wireMessages: [[String: Any]] = []
+        var effectiveSystemPrompt = systemPrompt
         let lastIndex = messages.indices.last
         for (index, message) in messages.enumerated() {
             var content = message.content
-            if index == lastIndex,
-               message.role == .user,
+            let isFinalUser = index == lastIndex && message.role == .user
+            if isFinalUser, let audio = options.audioWAVBase64, !audio.isEmpty {
+                if let prefix = options.turnContextPrefix, !prefix.isEmpty {
+                    effectiveSystemPrompt += "\n\n" + prefix
+                }
+                wireMessages.append([
+                    "role": message.role.rawValue,
+                    "content": "",
+                    "audio_wav_base64": audio,
+                ])
+                continue
+            }
+            if isFinalUser,
                let prefix = options.turnContextPrefix,
                !prefix.isEmpty
             {
@@ -152,7 +170,7 @@ enum DaemonWire {
         }
 
         var payload: [String: Any] = [
-            "system": systemPrompt,
+            "system": effectiveSystemPrompt,
             "messages": wireMessages,
             "max_tokens": options.maxTokens,
         ]
@@ -592,8 +610,13 @@ actor DaemonLLMEngine: LLMEngine {
                     // When the daemon returned structured tool calls, the raw
                     // text is the model's tool-call markup (e.g. Gemma 4's
                     // "<|tool_call>call:…") — never speakable output. Rely on
-                    // the structured calls alone in that case.
-                    if !turn.text.isEmpty && turn.toolCalls.isEmpty {
+                    // the structured calls alone in that case. EXCEPT on audio
+                    // turns (S18): the text then begins with the `[heard]:`
+                    // transcription line, which the pipeline must receive even
+                    // when the turn is a pure tool call — it strips the line
+                    // and any tool-call residue before anything is spoken.
+                    let isAudioTurn = options.audioWAVBase64?.isEmpty == false
+                    if !turn.text.isEmpty && (turn.toolCalls.isEmpty || isAudioTurn) {
                         continuation.yield(.text(turn.text))
                     }
                     for call in turn.toolCalls {

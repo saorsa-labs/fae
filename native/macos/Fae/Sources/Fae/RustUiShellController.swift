@@ -20,6 +20,8 @@ final class RustUiShellController {
 
     var onSettings: (() -> Void)?
     var onResetConversation: (() -> Void)?
+    /// Plain left-click on the orb body (S18 push-to-talk toggle).
+    var onTalkToggle: (() -> Void)?
     var onHideFae: (() -> Void)?
     var onQuit: (() -> Void)?
     var onPermissionMicrophone: (() -> Void)?
@@ -240,8 +242,12 @@ final class RustUiShellController {
             sendState("thinking")
         case .speaking:
             sendState("speaking")
-        case .idle, .listening:
-            // Product UX: no visible orb while idle/quiescent or merely listening.
+        case .listening:
+            // S18 push-to-talk capture in progress — the user needs visible
+            // feedback that the mic is live. Nothing else sets this mode.
+            sendState("listening")
+        case .idle:
+            // Product UX: no visible orb while idle/quiescent.
             sendState("quiescent")
         }
     }
@@ -437,6 +443,7 @@ final class RustUiShellController {
     private func handleMenuAction(_ action: String) {
         switch action {
         case "settings": onSettings?()
+        case "talk_toggle": onTalkToggle?()
         case "open_browser_data_panel", "show_messages": break // Handled inside the orb host.
         case "reset_conversation":
             send(["type": "clear_conversation"])

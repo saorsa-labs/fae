@@ -780,6 +780,33 @@ final class FaeCore: ObservableObject, HostCommandSender {
         await pipelineCoordinator?.resetConversation()
     }
 
+    // MARK: - Push-to-Talk (S18)
+
+    /// Live read of `voice.pushToTalkOnly` (Settings can change it at runtime).
+    func isPushToTalkOnly() -> Bool {
+        config.voice.pushToTalkOnly
+    }
+
+    /// Live read of `voice.pttHotkeyKeyCode` (nil = default, Right Option).
+    func pttHotkeyKeyCode() -> Int? {
+        config.voice.pttHotkeyKeyCode
+    }
+
+    /// Orb click: start a deliberate capture, or end-and-send one in progress.
+    func pttToggle() async {
+        await pipelineCoordinator?.pttToggle()
+    }
+
+    /// Hotkey press: begin a deliberate capture.
+    func pttStart() async {
+        await pipelineCoordinator?.pttStart()
+    }
+
+    /// Hotkey release: end the capture and send it.
+    func pttStop() async {
+        await pipelineCoordinator?.pttStop()
+    }
+
     /// Activate/deactivate a skill in the live prompt context for orb-owned Skills UI.
     func setSkill(_ id: String, active: Bool) async {
         let skillManager = skillManagerRef ?? SkillManager()
@@ -1651,6 +1678,30 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
         case "barge_in.enabled":
             break // Barge-in is always on — ignore config patches.
+
+        case "voice.push_to_talk_only":
+            guard let value = value as? Bool else { return }
+            config.voice.pushToTalkOnly = value
+            persistConfig(reason: "config.patch.voice.push_to_talk_only")
+            if let coordinator = pipelineCoordinator {
+                Task { await coordinator.setPushToTalkOnly(value) }
+            }
+
+        case "voice.ptt_hotkey_key_code":
+            // nil/absent value resets to the default (Right Option).
+            let keyCode: Int?
+            if let v = value as? Int {
+                keyCode = v
+            } else {
+                keyCode = nil
+            }
+            config.voice.pttHotkeyKeyCode = keyCode
+            persistConfig(reason: "config.patch.voice.ptt_hotkey_key_code")
+            NotificationCenter.default.post(
+                name: .faePTTHotkeyChanged,
+                object: nil,
+                userInfo: keyCode.map { ["keyCode": $0] }
+            )
 
         case "tts.speed":
             let parsedSpeed: Float?

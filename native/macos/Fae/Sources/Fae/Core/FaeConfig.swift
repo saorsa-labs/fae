@@ -24,6 +24,7 @@ struct FaeConfig: Codable {
     var training = TrainingConfig()
     var agents = AgentConfig()
     var privacy: PrivacyConfig = PrivacyConfig()
+    var voice: VoiceConfig = VoiceConfig()
     var userName: String?
     var licenseAccepted: Bool = false
     var startupIntroSeen: Bool = false
@@ -437,6 +438,18 @@ struct FaeConfig: Codable {
         var maxConcurrentSessions: Int = 5
         /// Session idle timeout in seconds (default 30 minutes).
         var sessionIdleTimeoutSeconds: Int = 1800
+    }
+
+    // MARK: - Voice interaction (S18 push-to-talk)
+
+    struct VoiceConfig: Codable {
+        /// When true, deliberate capture (orb click / hotkey) is the ONLY audio
+        /// entry: the continuous always-listening path — speaker gate, wake
+        /// word, echo suppression, barge-in — is bypassed (not deleted).
+        var pushToTalkOnly: Bool = false
+        /// Hotkey for push-to-talk hold (macOS virtual key code). nil falls
+        /// back to Right Option (61).
+        var pttHotkeyKeyCode: Int?
     }
 
     // MARK: - Privacy
@@ -1073,6 +1086,16 @@ struct FaeConfig: Codable {
                     config.conversation.sleepPhrases = v
                 default: break
                 }
+            case "voice":
+                switch key {
+                case "pushToTalkOnly":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.voice.pushToTalkOnly = v
+                case "pttHotkeyKeyCode":
+                    guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.voice.pttHotkeyKeyCode = v
+                default: break
+                }
             case "bargeIn":
                 switch key {
                 case "enabled":
@@ -1330,6 +1353,13 @@ struct FaeConfig: Codable {
         lines.append("acousticWakeEnabled = \(conversation.acousticWakeEnabled ? "true" : "false")")
         lines.append("acousticWakeThreshold = \(formatFloat(conversation.acousticWakeThreshold))")
         lines.append("sleepPhrases = \(encodeStringArray(conversation.sleepPhrases))")
+        lines.append("")
+
+        lines.append("[voice]")
+        lines.append("pushToTalkOnly = \(voice.pushToTalkOnly ? "true" : "false")")
+        if let keyCode = voice.pttHotkeyKeyCode {
+            lines.append("pttHotkeyKeyCode = \(keyCode)")
+        }
         lines.append("")
 
         lines.append("[bargeIn]")

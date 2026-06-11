@@ -137,6 +137,160 @@ actor PipelineCoordinator {
         return value
     }
 
+    // MARK: - Push-to-Talk (S18)
+
+    // Deliberate capture: click the orb (talk toggle) or hold the configured
+    // hotkey. While capturing, mic chunks accumulate into a buffer and VAD
+    // runs only as a plain endpointer; the speaker-verification gate, wake
+    // word, echo suppression and barge-in are BYPASSED (not deleted) —
+    // capture is a deliberate physical act by the person at the machine, so
+    // the turn runs as the owner. The buffer is WAV-encoded and rides the
+    // daemon request directly to Gemma: ASR + reasoning + tool calling in one
+    // request, with the `[heard]:` first-line contract preserving the
+    // transcript for memory capture (see docs/spikes/S18-pure-gemma-asr-ptt.md).
+
+    /// Live mirror of `voice.pushToTalkOnly`. When true, deliberate capture is
+    /// the only audio entry — the continuous pipeline drops mic chunks.
+    private var pushToTalkOnlyLive = false
+    private var pttCapturing = false
+    private var pttBuffer: [Float] = []
+    private var pttSpeechSeen = false
+    private var pttSilenceSamples = 0
+    private var pttMicWasMuted = false
+    /// Base64 WAV consumed by the next user-turn generation (S18 audio turn).
+    private var pendingPTTAudioBase64: String?
+    /// The `[heard]:` transcription extracted from the model's first reply of
+    /// an audio turn. Spans tool follow-up recursion so end-of-turn memory
+    /// capture records what the user actually said, not the placeholder.
+    private var pttHeardTranscriptForTurn: String?
+
+    /// System-prompt block for audio turns — proven against Gemma 4 E4B (the
+    /// daemon strips nothing; Swift strips the [heard] line + tool residue).
+    private static let pttHeardInstruction = """
+    The user's message arrives as audio. Begin EVERY reply with one line of \
+    the form `[heard]: <verbatim transcription of the user's speech>` and \
+    then answer (or call a tool) based on what you heard.
+    """
+
+    /// Trailing silence (after speech) that ends a capture: 1.2 s @ 16 kHz.
+    private static let pttEndpointSilenceSamples = 19_200
+    /// Minimum capture worth sending: 0.5 s @ 16 kHz.
+    private static let pttMinimumSamples = 8_000
+    /// Hard cap on one capture: 30 s @ 16 kHz (~1.3 MB as base64 WAV).
+    private static let pttMaximumSamples = 480_000
+
+    func setPushToTalkOnly(_ enabled: Bool) {
+        pushToTalkOnlyLive = enabled
+        NSLog("PipelineCoordinator: push-to-talk-only %@", enabled ? "enabled" : "disabled")
+    }
+
+    /// Orb click: start capture, or end-and-send when already capturing.
+    func pttToggle() async {
+        if pttCapturing {
+            await pttStop()
+        } else {
+            await pttStart()
+        }
+    }
+
+    /// Begin a deliberate capture (orb click / hotkey press).
+    func pttStart() async {
+        guard !pttCapturing else { return }
+        // A deliberate capture interrupts whatever Fae is saying.
+        if assistantSpeaking {
+            markGenerationInterrupted()
+            ttsState.cancelPending()
+            await playback.stop()
+        }
+        pttCapturing = true
+        pttBuffer = []
+        pttBuffer.reserveCapacity(Self.pttMaximumSamples)
+        pttSpeechSeen = false
+        pttSilenceSamples = 0
+        vad.reset()
+        pttMicWasMuted = await capture.isMuted
+        if pttMicWasMuted {
+            await capture.setMuted(false)
+        }
+        eventBus.send(.orbStateChanged(mode: "listening", feeling: OrbFeeling.curiosity.rawValue, palette: nil))
+        debugLog(debugConsole, .pipeline, "PTT capture started")
+    }
+
+    /// End a deliberate capture (orb click again / hotkey release) and send.
+    func pttStop() async {
+        guard pttCapturing else { return }
+        await finishPTTCapture(reason: "stop")
+    }
+
+    /// Accumulate one mic chunk while capturing. VAD acts as a plain
+    /// endpointer only: 1.2 s of trailing silence after speech ends the
+    /// capture, as does the 30 s hard cap.
+    private func handlePTTChunk(_ chunk: AudioChunk) async {
+        let vadOutput = vad.processChunk(chunk)
+        eventBus.send(.audioLevel(vadOutput.rms))
+        pttBuffer.append(contentsOf: chunk.samples)
+
+        if vadOutput.isSpeech {
+            pttSpeechSeen = true
+            pttSilenceSamples = 0
+        } else if pttSpeechSeen {
+            pttSilenceSamples += chunk.samples.count
+        }
+
+        if pttSpeechSeen && pttSilenceSamples >= Self.pttEndpointSilenceSamples {
+            await finishPTTCapture(reason: "silence_endpoint")
+        } else if pttBuffer.count >= Self.pttMaximumSamples {
+            await finishPTTCapture(reason: "max_duration")
+        }
+    }
+
+    /// Close the capture, restore mic state, and run the audio turn through
+    /// the daemon. Captures with no speech (or too short) are discarded.
+    private func finishPTTCapture(reason: String) async {
+        guard pttCapturing else { return }
+        pttCapturing = false
+        let samples = pttBuffer
+        pttBuffer = []
+        await capture.setMuted(pttMicWasMuted)
+        vad.reset()
+        eventBus.send(.orbStateChanged(mode: "idle", feeling: OrbFeeling.neutral.rawValue, palette: nil))
+        debugLog(
+            debugConsole, .pipeline,
+            "PTT capture finished (\(reason)): \(samples.count) samples, speech=\(pttSpeechSeen)")
+
+        guard pttSpeechSeen, samples.count >= Self.pttMinimumSamples else {
+            debugLog(debugConsole, .pipeline, "PTT capture discarded (no usable speech)")
+            return
+        }
+
+        let wav = WAVEncoder.encode(samples: samples, sampleRate: 16_000)
+        pendingPTTAudioBase64 = wav.base64EncodedString()
+
+        // Deliberate physical act at the machine = the owner is speaking.
+        speakerGate.currentSpeakerLabel = "owner"
+        speakerGate.currentSpeakerDisplayName = await speakerProfileStore?.ownerDisplayName() ?? "Owner"
+        speakerGate.currentSpeakerRole = .owner
+        speakerGate.currentSpeakerIsOwner = true
+        speakerGate.currentSpeakerIsKnownNonOwner = false
+        if gateState == .idle {
+            wake()
+        }
+
+        // The placeholder is never sent to the model (the audio message ships
+        // with empty content); the `[heard]:` transcription replaces it in
+        // history, transcript and memory once the model answers.
+        await processTranscription(
+            text: Self.pttPlaceholderUserText,
+            wakeMatch: nil,
+            rms: nil,
+            durationSecs: Float(samples.count) / 16_000.0,
+            turnSource: .voice
+        )
+    }
+
+    /// User-turn placeholder while the `[heard]:` transcription is pending.
+    static let pttPlaceholderUserText = "(voice message)"
+
     /// Live override for tool mode — set by FaeCore when the user changes tool settings.
     /// `nil` means fall back to `config.toolMode`.
     private var toolModeLive: String?
@@ -659,6 +813,9 @@ actor PipelineCoordinator {
 
         // Configure VAD from config.
         vad.applyConfiguration(config.vad)
+
+        // S18: push-to-talk-only mode (deliberate capture is the only audio entry).
+        pushToTalkOnlyLive = config.voice.pushToTalkOnly
 
         // Initialize barge-in state with interruption decider and recovery tracker.
         let adaptiveConfig = config.bargeIn.adaptive
@@ -2822,6 +2979,19 @@ actor PipelineCoordinator {
                 break
             }
 
+            // S18 push-to-talk: while capturing, chunks feed the PTT buffer
+            // and VAD acts only as an endpointer — the speaker gate, wake
+            // word, echo suppression and barge-in below are bypassed. In
+            // push-to-talk-only mode deliberate capture is the ONLY audio
+            // entry, so the continuous path drops chunks entirely.
+            if pttCapturing {
+                await handlePTTChunk(chunk)
+                continue
+            }
+            if pushToTalkOnlyLive {
+                continue
+            }
+
             // Periodic output route re-detection (~every 5s).
             let now = Date()
             if now.timeIntervalSince(lastRouteCheckAt) >= routeCheckIntervalSec {
@@ -4928,6 +5098,19 @@ actor PipelineCoordinator {
 
         await refreshDegradedModeIfNeeded(context: "before_generation")
 
+        // S18 audio turn: the pending PTT clip is consumed by this turn's
+        // FIRST request only — tool follow-ups resend history as plain text.
+        // The [heard] transcript captured during streaming replaces the
+        // placeholder user text in history, transcript and memory capture.
+        let pttAudioForTurn: String?
+        if !isToolFollowUp, let pending = pendingPTTAudioBase64 {
+            pttAudioForTurn = pending
+            pendingPTTAudioBase64 = nil
+            pttHeardTranscriptForTurn = nil
+        } else {
+            pttAudioForTurn = nil
+        }
+
         let generationContext: GenerationContext
         if !isToolFollowUp {
             debugLog(debugConsole, .qa, "=== TURN START user=\(userText.prefix(160)) ===")
@@ -4951,7 +5134,9 @@ actor PipelineCoordinator {
                 speakerId: speakerGate.currentSpeakerLabel,
                 tag: proactiveContext?.conversationTag
             )
-            if proactiveContext == nil {
+            if proactiveContext == nil, pttAudioForTurn == nil {
+                // Audio turns persist once the [heard] transcription arrives —
+                // the placeholder never reaches the session store.
                 await persistAcceptedUserTurnIfNeeded(userText)
             }
 
@@ -5251,7 +5436,12 @@ actor PipelineCoordinator {
             return
         }
 
-        let systemPrompt = generationContext.systemPrompt
+        var systemPrompt = generationContext.systemPrompt
+        if pttAudioForTurn != nil {
+            // S18 audio turn: the [heard] contract lives in the system prompt
+            // ONLY — any text on the audio user message out-competes the audio.
+            systemPrompt += "\n\n" + Self.pttHeardInstruction
+        }
         let baseTurnContextPrefix = generationContext.turnContextPrefix ?? ""
         let history = await conversationState.history
 
@@ -5344,12 +5534,16 @@ actor PipelineCoordinator {
             kvGroupSize: config.llm.kvGroupSize,
             quantizedKVStart: config.llm.kvQuantStartTokens,
             repetitionContextSize: config.llm.repetitionContextSize,
-            prefillStepSize: prefillStep
+            prefillStepSize: prefillStep,
+            audioWAVBase64: pttAudioForTurn
         )
 
-        // Cache options for speculative prefill on next turn.
+        // Cache options for speculative prefill on next turn. The audio clip
+        // is strictly this turn's payload — never cached or replayed.
         if !isToolFollowUp {
-            cachedGenerationOptions = options
+            var cacheable = options
+            cacheable.audioWAVBase64 = nil
+            cachedGenerationOptions = cacheable
         }
 
         // Stream tokens.
@@ -5360,6 +5554,10 @@ actor PipelineCoordinator {
         var fullResponse = ""
         var sentenceBuffer = ""
         var detectedToolCall = false
+        // S18 audio turn: the first text of the reply carries the `[heard]:`
+        // transcription line (the daemon delivers the whole turn in one text
+        // event). It becomes the user transcript and is never spoken.
+        var pttAwaitingHeard = pttAudioForTurn != nil
         // Qwen3 emits <think> as a special token (decoded to empty string by mlx-swift-lm)
         // but </think> as regular literal text. Suppress all TTS until </think> is seen.
         // When thinking is disabled, mark think as already seen so tokens route to TTS.
@@ -5598,13 +5796,41 @@ actor PipelineCoordinator {
                     sentenceBuffer = ""
                     continue
 
-                case .text(let token):
+                case .text(let rawToken):
+                    var token = rawToken
                     llmTokenCount += 1
                     if firstTokenAt == nil {
                         firstTokenAt = Date()
                         await instrumentation.markLLMFirstToken(
                             latencyMs: Date().timeIntervalSince(llmStartedAt) * 1000
                         )
+                    }
+
+                    if pttAwaitingHeard {
+                        // The daemon lane is non-streaming: this event holds the
+                        // complete reply, so the [heard] line is fully present.
+                        pttAwaitingHeard = false
+                        let split = HeardLineParser.split(token)
+                        let heard = split.heard ?? Self.pttPlaceholderUserText
+                        pttHeardTranscriptForTurn = heard
+                        if let transcript = split.heard {
+                            await conversationState.updateLastUserMessage(
+                                transcript,
+                                speakerDisplayName: speakerGate.currentSpeakerDisplayName,
+                                speakerId: speakerGate.currentSpeakerLabel
+                            )
+                            eventBus.send(.transcription(text: transcript, isFinal: true))
+                            if proactiveContext == nil {
+                                await persistAcceptedUserTurnIfNeeded(transcript)
+                            }
+                            debugLog(debugConsole, .pipeline, "PTT [heard]: \(transcript)")
+                        } else {
+                            debugLog(debugConsole, .pipeline, "⚠️ PTT reply missing [heard] line")
+                        }
+                        // Tool-call markup leaked into the text channel is
+                        // never speakable; the structured calls drive tools.
+                        token = HeardLineParser.stripToolCallResidue(split.remainder)
+                        if token.isEmpty { continue }
                     }
 
                     let visible = thinkTagStripper.process(token)
@@ -6327,13 +6553,16 @@ actor PipelineCoordinator {
                     speakerRole: speakerGate.currentSpeakerRole
                 ) {
                     let turnId = newMemoryId(prefix: "turn")
+                    // S18 audio turns: memory records what the user actually
+                    // said (the [heard] transcription), not the placeholder.
                     _ = await memoryOrchestrator?.capture(
                         turnId: turnId,
-                        userText: userText,
+                        userText: pttHeardTranscriptForTurn ?? userText,
                         assistantText: assistantTextForStorage,
                         speakerId: speakerGate.currentSpeakerLabel,
                         utteranceTimestamp: speakerGate.currentUtteranceTimestamp
                     )
+                    pttHeardTranscriptForTurn = nil
                     await capturePendingCorrection()
                 } else {
                     debugLog(

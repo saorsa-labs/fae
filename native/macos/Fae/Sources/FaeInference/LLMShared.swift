@@ -257,6 +257,11 @@ public struct GenerationOptions: Sendable {
     /// Auto-tuned based on model size if nil.
     public var prefillStepSize: Int?
 
+    /// Base64-encoded WAV clip attached to the final user message (S18
+    /// push-to-talk). Only the daemon engine honours it — the audio-capable
+    /// model transcribes and answers in one request; the MLX engine ignores it.
+    public var audioWAVBase64: String?
+
     public init(
         temperature: Float = 0.7,
         topP: Float = 0.9,
@@ -271,7 +276,8 @@ public struct GenerationOptions: Sendable {
         kvGroupSize: Int = 64,
         quantizedKVStart: Int = 512,
         repetitionContextSize: Int = 64,
-        prefillStepSize: Int? = nil
+        prefillStepSize: Int? = nil,
+        audioWAVBase64: String? = nil
     ) {
         self.temperature = temperature
         self.topP = topP
@@ -287,6 +293,7 @@ public struct GenerationOptions: Sendable {
         self.quantizedKVStart = quantizedKVStart
         self.repetitionContextSize = repetitionContextSize
         self.prefillStepSize = prefillStepSize
+        self.audioWAVBase64 = audioWAVBase64
     }
 }
 

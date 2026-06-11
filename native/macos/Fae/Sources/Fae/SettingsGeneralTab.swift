@@ -7,6 +7,18 @@ struct SettingsGeneralTab: View {
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var faeCore: FaeCore
     @StateObject private var audio = AudioDeviceController()
+    @State private var pushToTalkOnly = false
+    @State private var pttHotkeySelection = -1
+    @State private var pttControlsHydrated = false
+
+    /// Hold-to-talk key options (macOS virtual key codes). -1 = default
+    /// (Right Option), stored as nil in config.
+    private static let pttHotkeyOptions: [(label: String, keyCode: Int)] = [
+        ("Right Option (default)", -1),
+        ("Right Command", 54),
+        ("F5", 96),
+        ("F6", 97),
+    ]
 
     var body: some View {
         Form {
@@ -61,6 +73,32 @@ struct SettingsGeneralTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Push to Talk") {
+                Toggle("Push-to-talk only", isOn: $pushToTalkOnly)
+                    .onChange(of: pushToTalkOnly) { _, newValue in
+                        guard pttControlsHydrated else { return }
+                        faeCore.patchConfig(
+                            key: "voice.push_to_talk_only",
+                            payload: ["value": newValue]
+                        )
+                    }
+                Text("Click the orb (or hold the key below) to talk. Continuous listening, wake word and barge-in are bypassed — your speech goes straight to the model.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Picker("Hold-to-talk key", selection: $pttHotkeySelection) {
+                    ForEach(Self.pttHotkeyOptions, id: \.keyCode) { option in
+                        Text(option.label).tag(option.keyCode)
+                    }
+                }
+                .onChange(of: pttHotkeySelection) { _, newValue in
+                    guard pttControlsHydrated else { return }
+                    faeCore.patchConfig(
+                        key: "voice.ptt_hotkey_key_code",
+                        payload: newValue >= 0 ? ["value": newValue] : [:]
+                    )
+                }
+            }
+
             Section("Keyboard Shortcuts") {
                 HStack {
                     Text("Summon Fae")
@@ -97,6 +135,13 @@ struct SettingsGeneralTab: View {
 
         }
         .formStyle(.grouped)
+        .onAppear {
+            pushToTalkOnly = faeCore.isPushToTalkOnly()
+            pttHotkeySelection = faeCore.pttHotkeyKeyCode() ?? -1
+            // Defer the hydrated flag one runloop turn so the assignments
+            // above never fire the persisting onChange handlers.
+            DispatchQueue.main.async { pttControlsHydrated = true }
+        }
     }
 
     private func openMicrophonePrivacySettings() {

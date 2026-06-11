@@ -258,6 +258,9 @@ extension Notification.Name {
     /// Posted when the push-to-talk key is released (hold-to-talk mode).
     /// FaeCore listens for this to restore the previous mute state.
     static let faePTTReleased = Notification.Name("faePTTReleased")
+    /// Posted when voice.ptt_hotkey_key_code changes so the app re-registers
+    /// the hold-to-talk monitor with the new key.
+    static let faePTTHotkeyChanged = Notification.Name("faePTTHotkeyChanged")
     /// Posted by the stop button or Cmd+. menu item to cancel the current generation.
     static let faeCancelGeneration = Notification.Name("faeCancelGeneration")
     /// Posted when voice-command routing asks the app to open the Settings window.

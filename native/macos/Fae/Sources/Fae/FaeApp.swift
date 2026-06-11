@@ -205,6 +205,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         rustUiShell.onSettings = { [weak self] in
             self?.openSettingsWindow(reason: "rust-ui-shell")
         }
+        rustUiShell.onTalkToggle = { [weak self] in
+            guard let faeCore = self?.faeCore else { return }
+            Task { await faeCore.pttToggle() }
+        }
         rustUiShell.onResetConversation = { [weak self] in
             self?.conversation.clearMessages()
             self?.subtitles.clearAll()
@@ -558,18 +562,27 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             self.windowState.showWindow()
         }
 
-        // Hold-to-talk (Right Option key) — press to listen, release to stop.
-        hotkeyManager.startHoldToTalk(
-            onPress: {
-                NotificationCenter.default.post(name: .faePTTPressed, object: nil)
-            },
-            onRelease: {
-                NotificationCenter.default.post(name: .faePTTReleased, object: nil)
-            }
+        // Hold-to-talk — press to listen, release to stop. Key is configurable
+        // via voice.pttHotkeyKeyCode (default: Right Option).
+        registerHoldToTalkHotkey(
+            keyCode: faeCore.pttHotkeyKeyCode().flatMap { UInt16(exactly: $0) }
         )
+        NotificationCenter.default.addObserver(
+            forName: .faePTTHotkeyChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let keyCode = (note.userInfo?["keyCode"] as? Int).flatMap { UInt16(exactly: $0) }
+            Task { @MainActor [weak self] in
+                self?.registerHoldToTalkHotkey(keyCode: keyCode)
+            }
+        }
 
-        // Observe PTT notifications to mute/unmute the pipeline.
-        // Track prior mute state so release restores it instead of forcing mute.
+        // Observe PTT notifications. In push-to-talk-only mode (S18) the
+        // hotkey drives deliberate capture: press buffers audio for a direct
+        // audio turn through the daemon. In legacy mode it temporarily
+        // unmutes the always-listening pipeline (restoring prior mute state
+        // on release).
         NotificationCenter.default.addObserver(
             forName: .faePTTPressed,
             object: nil,
@@ -578,6 +591,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let faeCore = self.faeCore
             Task { @MainActor in
+                if faeCore.isPushToTalkOnly() {
+                    await faeCore.pttStart()
+                    return
+                }
                 self.micWasMutedBeforePTT = await faeCore.isMicMuted()
                 await faeCore.pipelineSetMicMuted(false)
 
@@ -593,6 +610,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let faeCore = self.faeCore
             Task { @MainActor in
+                if faeCore.isPushToTalkOnly() {
+                    await faeCore.pttStop()
+                    return
+                }
                 await faeCore.pipelineSetMicMuted(self.micWasMutedBeforePTT)
             }
         }
@@ -640,6 +661,23 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
                 self.faeCore.userName = name
             }
         }
+    }
+
+    // MARK: - Push-to-Talk Hotkey (S18)
+
+    /// (Re)register the hold-to-talk monitor. nil keyCode = default
+    /// (Right Option). The press/release handlers only post notifications —
+    /// the PTT-vs-legacy behaviour branch lives in the observers.
+    private func registerHoldToTalkHotkey(keyCode: UInt16?) {
+        hotkeyManager.startHoldToTalk(
+            keyCode: keyCode ?? GlobalHotkeyManager.holdToTalkKeyCode,
+            onPress: {
+                NotificationCenter.default.post(name: .faePTTPressed, object: nil)
+            },
+            onRelease: {
+                NotificationCenter.default.post(name: .faePTTReleased, object: nil)
+            }
+        )
     }
 
     // MARK: - Skill Import Panel

@@ -17,12 +17,26 @@ final class GlobalHotkeyManager {
     // MARK: - Push-to-Talk (Hold-to-Talk)
 
     /// Key code for the Right Option key.
-    static let holdToTalkKeyCode: UInt16 = 61
+    nonisolated static let holdToTalkKeyCode: UInt16 = 61
 
     private var pttMonitor: Any?
+    private var pttKeyUpMonitor: Any?
     private var pttOnPress: (() -> Void)?
     private var pttOnRelease: (() -> Void)?
     private var pttKeyIsDown: Bool = false
+
+    /// Modifier flag for a modifier key code, or nil for regular keys (which
+    /// use keyDown/keyUp monitors instead of flagsChanged).
+    private static func modifierFlag(for keyCode: UInt16) -> NSEvent.ModifierFlags? {
+        switch keyCode {
+        case 58, 61: return .option
+        case 54, 55: return .command
+        case 59, 62: return .control
+        case 56, 60: return .shift
+        case 63: return .function
+        default: return nil
+        }
+    }
 
     /// Start monitoring for the global hotkey.
     ///
@@ -50,12 +64,18 @@ final class GlobalHotkeyManager {
         }
     }
 
-    /// Start monitoring the hold-to-talk key (default: Right Option, keyCode 61).
+    /// Start monitoring the hold-to-talk key (default: Right Option, keyCode 61;
+    /// configurable via `voice.pttHotkeyKeyCode`).
     ///
-    /// `onPress` fires on key-down; `onRelease` fires on key-up.
+    /// `onPress` fires on key-down; `onRelease` fires on key-up. Modifier keys
+    /// arrive as `.flagsChanged`; regular keys (e.g. F5) as `.keyDown`/`.keyUp`.
     /// Safe to call multiple times — replaces the previous callbacks and monitor.
     /// Requires Accessibility permission (same as the summon hotkey).
-    func startHoldToTalk(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+    func startHoldToTalk(
+        keyCode: UInt16 = GlobalHotkeyManager.holdToTalkKeyCode,
+        onPress: @escaping () -> Void,
+        onRelease: @escaping () -> Void
+    ) {
         // Clean up any existing PTT monitor
         stopHoldToTalk()
 
@@ -70,21 +90,40 @@ final class GlobalHotkeyManager {
             return
         }
 
-        pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard event.keyCode == Self.holdToTalkKeyCode else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let optionPressed = event.modifierFlags.contains(.option)
-                if optionPressed, !self.pttKeyIsDown {
+        if let flag = Self.modifierFlag(for: keyCode) {
+            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                guard event.keyCode == keyCode else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let pressed = event.modifierFlags.contains(flag)
+                    if pressed, !self.pttKeyIsDown {
+                        self.pttKeyIsDown = true
+                        self.pttOnPress?()
+                    } else if !pressed, self.pttKeyIsDown {
+                        self.pttKeyIsDown = false
+                        self.pttOnRelease?()
+                    }
+                }
+            }
+        } else {
+            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard event.keyCode == keyCode else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.pttKeyIsDown else { return }
                     self.pttKeyIsDown = true
                     self.pttOnPress?()
-                } else if !optionPressed, self.pttKeyIsDown {
+                }
+            }
+            pttKeyUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
+                guard event.keyCode == keyCode else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.pttKeyIsDown else { return }
                     self.pttKeyIsDown = false
                     self.pttOnRelease?()
                 }
             }
         }
-        NSLog("GlobalHotkeyManager: hold-to-talk monitor started (Right Option)")
+        NSLog("GlobalHotkeyManager: hold-to-talk monitor started (keyCode %d)", keyCode)
     }
 
     /// Stop hold-to-talk monitoring only (leaves summon hotkey intact).
@@ -94,6 +133,10 @@ final class GlobalHotkeyManager {
         if let m = pttMonitor {
             NSEvent.removeMonitor(m)
             pttMonitor = nil
+        }
+        if let m = pttKeyUpMonitor {
+            NSEvent.removeMonitor(m)
+            pttKeyUpMonitor = nil
         }
         pttKeyIsDown = false
         pttOnPress = nil
@@ -117,6 +160,9 @@ final class GlobalHotkeyManager {
             NSEvent.removeMonitor(m)
         }
         if let m = pttMonitor {
+            NSEvent.removeMonitor(m)
+        }
+        if let m = pttKeyUpMonitor {
             NSEvent.removeMonitor(m)
         }
     }
