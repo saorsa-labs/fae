@@ -102,15 +102,7 @@ final class ToolRegistry: Sendable {
             FindElementTool(),
             // Task tracking
             TillDoneTool(),
-            // Voice identity
-            VoiceIdentityTool(
-                speakerEncoder: speakerEncoder,
-                speakerProfileStore: speakerProfileStore,
-                audioCaptureManager: audioCaptureManager,
-                audioPlaybackManager: audioPlaybackManager,
-                sttEngine: sttEngine,
-                wakeWordProfileStore: wakeWordProfileStore
-            ),
+            // voice_identity tool deleted (voice-identity teardown Phase B).
             // Plugin management
             PluginTool(pluginManager: pm),
         ]
@@ -213,7 +205,6 @@ final class ToolRegistry: Sendable {
         "activate_skill",
         "input_request",
         "find_element",
-        "voice_identity",
         "till_done",
     ]
 

@@ -3,7 +3,6 @@ import SwiftUI
 struct SettingsPrivacySecurityTab: View {
     enum Section: String, CaseIterable, Identifiable {
         case tools = "Tools"
-        case voiceIdentity = "Voice Identity"
         case personality = "Personality"
 
         var id: String { rawValue }
@@ -30,8 +29,6 @@ struct SettingsPrivacySecurityTab: View {
                 switch section {
                 case .tools:
                     SettingsToolsTab(commandSender: commandSender)
-                case .voiceIdentity:
-                    SettingsSpeakerTab(commandSender: commandSender)
                 case .personality:
                     SettingsPersonalityTab(
                         personalityEditor: personalityEditor,

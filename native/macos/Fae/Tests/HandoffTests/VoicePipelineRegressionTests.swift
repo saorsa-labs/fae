@@ -644,21 +644,22 @@ final class VoicePipelineRegressionTests: XCTestCase {
         )
     }
 
-    func testOnboardingTurnsLimitVisibleToolsToVoiceIdentity() {
+    func testOnboardingTurnsExposeNoTools() {
+        // Voice-identity teardown: enrollment turns expose no tools at all.
         XCTAssertEqual(
             PipelineCoordinator.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: true,
                 userText: "",
-                availableToolNames: ["read", "bash", "voice_identity"],
+                availableToolNames: ["read", "bash"],
                 proactiveAllowedTools: ["read", "bash"]
             ),
-            ["voice_identity"]
+            []
         )
         XCTAssertEqual(
             PipelineCoordinator.visibleToolNamesForTurn(
                 firstOwnerEnrollmentActive: false,
                 userText: "",
-                availableToolNames: ["read", "bash", "voice_identity"],
+                availableToolNames: ["read", "bash"],
                 proactiveAllowedTools: ["read", "bash"]
             ),
             ["read", "bash"]

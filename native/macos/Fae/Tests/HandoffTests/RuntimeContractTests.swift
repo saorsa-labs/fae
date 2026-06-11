@@ -528,15 +528,15 @@ final class RuntimeContractTests: XCTestCase {
         XCTAssertTrue(inputBar.contains("Type a message for Fae while listening stays on"))
     }
 
-    func testOnboardingBannerUsesNativeEnrollmentFlow() throws {
+    func testEnrollmentUIIsGoneFromContentView() throws {
+        // Voice-identity teardown Phase B: no enrollment UI may return to the
+        // companion window — identity is the deliberate physical act at the
+        // machine, not a voiceprint.
         let contentView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ContentView.swift")
 
-        XCTAssertTrue(contentView.contains("SpeakerEnrollmentView("))
-        XCTAssertTrue(contentView.contains("beginNativeEnrollment()"))
-        XCTAssertTrue(contentView.contains("restoreConversationAfterNativeEnrollment()"))
-        XCTAssertTrue(contentView.contains("onboarding.isComplete = true"))
-        XCTAssertTrue(contentView.contains("onboarding.isComplete || faeCore.hasOwnerSetUp"))
-        XCTAssertFalse(contentView.contains("faeCore.injectText(\"Hi Fae, I'm ready to introduce myself.\")"))
+        XCTAssertFalse(contentView.contains("SpeakerEnrollmentView"))
+        XCTAssertFalse(contentView.contains("EnrollmentInvitationBanner"))
+        XCTAssertFalse(contentView.contains("OwnerPhotoCaptureView"))
     }
 
     @MainActor
@@ -562,22 +562,25 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     @MainActor
-    func testFaeCoreStartEnrollmentRequestsNativeAudioFlow() async throws {
+    func testFaeCoreStartEnrollmentCommandIsRetired() async throws {
+        // Voice-identity teardown Phase B: the enrollment command surface is
+        // gone — the host command must be a no-op, never a UI trigger.
         let core = FaeCore()
-        let expectation = expectation(description: "native enrollment requested")
+        var requested = false
 
         let observer = NotificationCenter.default.addObserver(
             forName: .faeStartNativeEnrollmentRequested,
             object: nil,
             queue: .main
         ) { _ in
-            expectation.fulfill()
+            requested = true
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
         core.sendCommand(name: "speaker.start_enrollment", payload: [:])
+        try await Task.sleep(nanoseconds: 200_000_000)
 
-        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertFalse(requested)
     }
 
     @MainActor

@@ -361,13 +361,13 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
 
     func testRepairedToolCallForActivateSkillExtractsSkillName() {
         guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
-            "Fae, activate the voice-identity skill"
+            "Fae, activate the file-organizer skill"
         ) else {
             return XCTFail("Expected activate_skill repair call")
         }
 
         XCTAssertEqual(call.name, "activate_skill")
-        XCTAssertEqual(call.arguments["name"] as? String, "voice-identity")
+        XCTAssertEqual(call.arguments["name"] as? String, "file-organizer")
     }
 
     func testRepairedToolCallForRunSkillExtractsSkillName() {
@@ -423,15 +423,12 @@ final class PipelineCoordinatorPolicyTests: XCTestCase {
         XCTAssertEqual(call.name, "camera")
     }
 
-    func testRepairedToolCallForVoiceIdentityStatusUsesVoiceIdentityTool() {
-        guard let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
+    func testRepairedToolCallForVoiceIdentityIsRetired() {
+        // Voice-identity teardown: no repair routing to the deleted tool.
+        let call = PipelineCoordinator.repairedToolCallForSkippedTurn(
             "Fae, use the voice_identity tool to check current status"
-        ) else {
-            return XCTFail("Expected voice_identity repair call")
-        }
-
-        XCTAssertEqual(call.name, "voice_identity")
-        XCTAssertEqual(call.arguments["action"] as? String, "check_status")
+        )
+        XCTAssertNotEqual(call?.name, "voice_identity")
     }
 
     func testRepairedToolCallForReadScreenRequestUsesReadScreenTool() {

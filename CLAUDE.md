@@ -82,18 +82,20 @@ Required for: model swaps, prompt/routing changes, voice capture/STT/TTS/playbac
 Swift app (voice pipeline, memory, tools, skills) + Rust orb host (only product UI) + Rust daemon (`crates/fae-daemon`, primary LLM lane). All intelligence runs locally — no cloud, no API keys, no data leaves the machine. The Swift MLX engine remains the macOS fallback and LoRA training substrate.
 
 ```
-Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
-                       │              │
-                       │              ├── Memory (SQLite + ANN + FTS5)
-                       │              ├── Tools (37 built-in)
-                       │              ├── Skills (29 built-in)
-                       │              ├── Scheduler (~23 tasks)
-                       │              ├── Backup (Git Vault)
-                       │              └── Self-Config
-                       │
-                       ├── Voice Identity (Core ML ECAPA-TDNN)
-                       └── Visual Identity (Camera + VLM)
+orb click / hotkey → mic capture (16kHz) → WAV → fae-daemon
+(Gemma 4 E4B: ASR + LLM + tools in one request) → TTS → Speaker
+                                      │
+                                      ├── Memory (SQLite + ANN + FTS5)
+                                      ├── Tools (36 built-in)
+                                      ├── Skills (27 built-in)
+                                      ├── Scheduler (~23 tasks)
+                                      ├── Backup (Git Vault)
+                                      └── Self-Config
 ```
+
+> S18 (2026-06-11): push-to-talk is the primary capture model. The always-on
+> VAD/speaker-ID/wake-word path is bypassed; voice identity is retired
+> (teardown plan: docs/architecture/voice-identity-teardown-plan-2026-06-11.md).
 
 ### Model stack
 
@@ -275,7 +277,7 @@ Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
 
 ## Tool system
 
-37 tools registered in `ToolRegistry.buildDefault()`:
+36 tools registered in `ToolRegistry.buildDefault()`:
 
 | Category | Tools |
 |----------|-------|
@@ -289,7 +291,6 @@ Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
 | Vision | `screenshot`, `camera`, `read_screen` |
 | Computer Use | `click`, `type_text`, `scroll`, `find_element` |
 | Task Tracking | `till_done` |
-| Voice Identity | `voice_identity` |
 | Plugin | `plugin_manage` |
 
 **Tool access model**: Voice identity is the primary gate. Primary user (owner) gets `full` tool access. Guests get no tool access unless explicitly granted by the primary user. Pre-enrollment: no tool calls except voice enrollment.
@@ -333,12 +334,10 @@ cd native/macos/Fae/Sources/Fae/Resources/Skills/<skill-name>
 for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d' ' -f1)\""; done
 ```
 
-## Built-in skills (29)
+## Built-in skills (27)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
-| `voice-identity` | Instruction | Speaker enrollment, introduction flow, re-verification |
-| `voice-tools` | Executable | Audio file processing (normalize, prepare, compare, quality) |
 | `proactive-awareness` | Instruction | Camera observation: greetings, mood, presence |
 | `screen-awareness` | Instruction | Silent screen context monitoring |
 | `overnight-research` | Instruction | Quiet-hours web research |
@@ -570,7 +569,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | `ML/` | Model loading (`ModelManager`), STT/TTS/VLM/embedding engines, `DaemonLLMEngine` (daemon LLM lane client), ECAPA-TDNN speaker encoder + profile store, keyword classifier, turn detector, voice libraries |
 | `Pipeline/` | `PipelineCoordinator` (STT→LLM→TTS, barge-in, `injectProactiveQuery()`), VAD, echo suppression, speaker gating, tool-call/script-block parsing, correction detection, post-ASR vocabulary correction, implicit feedback, conversation state, text processing |
 | `Runtime/` | JSC tool-program runtime (`JSCRuntime`, bridges, `ScriptBudget`, `DryRunPlan`), Python uv runtime + dependency installer, local runtime server, `PrivacyFilterBridge` |
-| `Tools/` | Tool protocol/registry/executor (4-step flow), built-in + Apple + scheduler + skill + vision + voice-identity tools, ACP delegation, security stack (`DamageControlPolicy`, `ReversibilityEngine`, `SafeBashExecutor`, `PathPolicy`, `NetworkTargetPolicy`, `SecurityEventLogger`, redaction) |
+| `Tools/` | Tool protocol/registry/executor (4-step flow), built-in + Apple + scheduler + skill + vision tools, ACP delegation, security stack (`DamageControlPolicy`, `ReversibilityEngine`, `SafeBashExecutor`, `PathPolicy`, `NetworkTargetPolicy`, `SecurityEventLogger`, redaction) |
 | `Memory/` | `MemoryOrchestrator` (hybrid ANN+FTS5 recall/capture/GC), GRDB SQLite store, sqlite-vec vector store, entity graph + linking, digests, inbox ingestion, `ImprovementStore`, external review gate, shadow evaluator |
 | `Scheduler/` | `FaeScheduler` (~23 tasks), awareness throttle, proactive policy, `ImprovementCycleCoordinator`, `TrainingBridge` (mlx-tune via uv), MetaOpt* (hill-climbing meta-optimization), adapter deployment |
 | `Skills/` | Skill discovery/activation/execution (`SkillManager`), SKILL.md parsing, MANIFEST.json + SHA-256 integrity, security review |

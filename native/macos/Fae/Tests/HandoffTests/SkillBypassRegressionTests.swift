@@ -157,7 +157,7 @@ final class SkillBypassRegressionTests: XCTestCase {
         let manager = SkillManager()
         let skills = await manager.discoverSkills()
 
-        for skillName in ["forge", "toolbox", "voice-tools"] {
+        for skillName in ["forge", "toolbox"] {
             guard let skill = skills.first(where: { $0.name == skillName }) else {
                 XCTFail("Expected built-in skill \(skillName) to be discovered")
                 continue

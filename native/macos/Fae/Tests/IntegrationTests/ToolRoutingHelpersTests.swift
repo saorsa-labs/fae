@@ -321,10 +321,10 @@ final class ToolRoutingHelpersTests: XCTestCase {
         XCTAssertEqual(call?.name, "self_config")
     }
 
-    func testRepairedVoiceIdentity() {
+    func testVoiceIdentityRepairIsRetired() {
+        // Voice-identity teardown: no repair routing to the deleted tool.
         let call = ToolRoutingHelpers.repairedToolCallForSkippedTurn("check voice identity status")
-        XCTAssertNotNil(call)
-        XCTAssertEqual(call?.name, "voice_identity")
+        XCTAssertNotEqual(call?.name, "voice_identity")
     }
 
     func testRepairedCameraIntent() {

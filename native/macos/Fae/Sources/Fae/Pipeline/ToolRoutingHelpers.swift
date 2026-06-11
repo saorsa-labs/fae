@@ -405,10 +405,6 @@ enum ToolRoutingHelpers {
             return ToolCall(name: "self_config", arguments: ["action": "get_settings"])
         }
 
-        if lower.contains("voice_identity") || lower.contains("voice identity") {
-            return ToolCall(name: "voice_identity", arguments: ["action": "check_status"])
-        }
-
         if isCameraIntentRequest(text)
             || lower.contains("capture from the webcam")
             || lower.contains("snap a picture")

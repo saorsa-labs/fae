@@ -55,11 +55,12 @@ final class TurnHelpersTests: XCTestCase {
     // MARK: - Tool Visibility
 
     func testVisibleToolsDuringEnrollment() {
+        // Voice-identity teardown: enrollment exposes no tools at all.
         let tools = TurnHelpers.visibleToolNamesForTurn(
             firstOwnerEnrollmentActive: true, userText: "anything", availableToolNames: ["read", "bash"],
             proactiveAllowedTools: nil
         )
-        XCTAssertEqual(tools, ["voice_identity"])
+        XCTAssertEqual(tools, [])
     }
 
     func testVisibleToolsConversationContinuation() {
@@ -347,11 +348,6 @@ final class TurnHelpersTests: XCTestCase {
         let aliases = TurnHelpers.toolNameAliases("session_search")
         XCTAssertTrue(aliases.contains("transcript search"))
         XCTAssertTrue(aliases.contains("search our chat"))
-    }
-
-    func testToolAliasVoiceIdentity() {
-        let aliases = TurnHelpers.toolNameAliases("voice_identity")
-        XCTAssertTrue(aliases.contains("speaker profile"))
     }
 
     func testToolAliasSchedulerCreate() {

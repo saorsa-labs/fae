@@ -1090,23 +1090,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 respondToApproval(requestID: requestId, decisionStr: decisionStr, toolName: toolName, payload: payload)
             }
 
-        case "speaker.rename":
-            if let label = payload["label"] as? String,
-               let displayName = payload["displayName"] as? String
-            {
-                Task {
-                    await speakerProfileStore.rename(label: label, newDisplayName: displayName)
-                    NSLog("FaeCore: speaker '%@' renamed to '%@'", label, displayName)
-                }
-            }
-
-        case "speaker.test":
-            Task {
-                await pipelineCoordinator?.testSpeakerMatch()
-            }
-
-        case "speaker.start_enrollment":
-            NotificationCenter.default.post(name: .faeStartNativeEnrollmentRequested, object: nil)
+        case "speaker.rename", "speaker.test", "speaker.start_enrollment":
+            // Voice-identity teardown Phase B: enrollment/verification command
+            // surface removed.
+            NSLog("FaeCore: '%@' ignored — voice identity retired", name)
 
         case "awareness.start_onboarding":
             if let coordinator = pipelineCoordinator,
@@ -2906,8 +2893,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
         case "set_mode":
             guard let mode = userInfo["mode"] as? String else { return }
             patchConfig(key: "tool_mode", payload: ["value": mode])
-        case "start_enrollment":
-            NotificationCenter.default.post(name: .faeStartNativeEnrollmentRequested, object: nil)
         case "open_settings":
             NotificationCenter.default.post(name: .faeOpenSettingsRequested, object: nil)
         default:

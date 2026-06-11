@@ -164,7 +164,7 @@ final class SkillActivationTests: XCTestCase {
             "calendar", "reminders", "contacts", "mail", "notes",
             "activate_skill", "run_skill", "manage_skill",
             "web_search", "fetch_url", "screenshot", "camera",
-            "channel_setup", "input_request", "voice_identity",
+            "channel_setup", "input_request",
         ]
 
         let skillNames = [

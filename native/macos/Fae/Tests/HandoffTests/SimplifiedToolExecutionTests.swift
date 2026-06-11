@@ -78,7 +78,6 @@ final class SimplifiedToolExecutionTests: XCTestCase {
             "screenshot", "camera", "read_screen",
             "click", "type_text", "scroll", "find_element",
             "till_done",
-            "voice_identity",
             "plugin_manage",
         ]
         let executor = makeExecutor(toolNames: allToolNames)

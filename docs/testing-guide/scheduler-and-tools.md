@@ -94,7 +94,7 @@ Implementation in `SchedulerTriggerTool`:
 
 ### Tool Inventory
 
-**Total: 37 tools**
+**Total: 36 tools**
 
 Breakdown by category:
 
@@ -108,7 +108,6 @@ Breakdown by category:
 | Scheduler | 5 | scheduler_list, scheduler_create, scheduler_update, scheduler_delete, scheduler_trigger |
 | Roleplay | 1 | roleplay |
 | Vision | 7 | screenshot, camera, read_screen, click, type_text, scroll, find_element |
-| Voice Identity | 1 | voice_identity |
 | Task Tracking | 1 | till_done |
 | Plugin | 1 | plugin_manage |
 | **Total** | **37** | |
@@ -119,8 +118,8 @@ The registry supports 5 permission modes:
 
 | Mode | Read Tools | Write Tools | Scheduler Mutation | Vision | Bash | Notes |
 |------|-----------|-----------|------------------|--------|------|-------|
-| `assistant` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations (17 tools) |
-| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups (37 tools) |
+| `assistant` | ✓ | ✗ | ✗ | ✗ | ✗ | Safe read-only operations (16 tools) |
+| `full` | ✓ | ✓ | ✓ | ✓ | ✓ | All tools with approval popups (36 tools) |
 
 Legacy modes (`off`, `read_only`, `read_write`, `full`) are silently migrated.
 
@@ -130,7 +129,7 @@ Legacy modes (`off`, `read_only`, `read_write`, `full`) are silently migrated.
 ```
 read, window_control, session_search, web_search, fetch_url,
 calendar, reminders, contacts, mail, notes,
-scheduler_list, roleplay, activate_skill, input_request, find_element, voice_identity, till_done
+scheduler_list, roleplay, activate_skill, input_request, find_element, till_done
 ```
 
 ### Write Tool Set
@@ -151,10 +150,10 @@ screenshot, camera, read_screen, click, type_text, scroll
 
 ### Testing Checklist
 
-- [ ] **Tool Count**: Verify 37 tools are registered: `ToolRegistry.buildDefault().allTools.count == 37`
+- [ ] **Tool Count**: Verify 36 tools are registered: `ToolRegistry.buildDefault().allTools.count == 36`
 - [ ] **Mode Filtering**: Test `isToolAllowed(name, mode)` for each mode:
-  - `assistant`: 17 tools (no write, no bash)
-  - `full`: 37 tools
+  - `assistant`: 16 tools (no write, no bash)
+  - `full`: 36 tools
 - [ ] **Native Specs**: Call `nativeToolSpecs(for:)` with each mode, verify count and content
 - [ ] **Schema Generation**: Call `toolSchemas(for:)` with each mode, verify JSON is valid and filtered
 - [ ] **Compact Summary**: Call `compactToolSummary(for:)` with each mode, verify output includes tool names and risk levels

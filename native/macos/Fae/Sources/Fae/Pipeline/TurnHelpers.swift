@@ -137,7 +137,8 @@ enum TurnHelpers {
         isConversationContinuation: Bool = false
     ) -> Set<String>? {
         if firstOwnerEnrollmentActive {
-            return ["voice_identity"]
+            // Voice-identity teardown: enrollment no longer exposes a tool.
+            return []
         }
         let explicitMentions = explicitlyMentionedToolNames(
             in: userText,
@@ -349,12 +350,6 @@ enum TurnHelpers {
 
         if containsAny(["settings", "config", "preference", "tool mode", "permission"]) {
             add("self_config", "channel_setup")
-        }
-
-        if containsAny([
-            "voice identity", "speaker profile", "recognize my voice", "wake word"
-        ]) {
-            add("voice_identity")
         }
 
         if matches.count == 1 {
@@ -732,8 +727,6 @@ enum TurnHelpers {
             aliases.formUnion(["type text", "typing tool"])
         case "find_element":
             aliases.formUnion(["find element", "find on screen"])
-        case "voice_identity":
-            aliases.formUnion(["voice identity", "voice profile", "speaker profile"])
         case "activate_skill":
             aliases.formUnion(["activate skill", "skill activation"])
         case "run_skill":
