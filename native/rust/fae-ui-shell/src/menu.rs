@@ -26,6 +26,10 @@ pub enum MenuAction {
     MemoryInbox,
     RescueMode,
     Quit,
+    /// Stdout-only event (plain left-click on the orb body = push-to-talk
+    /// toggle, S18). Never appears in the context menu, so it can only be
+    /// emitted by the click handler — `action_from_id` has no mapping for it.
+    TalkToggle,
 }
 
 impl MenuAction {
@@ -55,6 +59,7 @@ impl MenuAction {
             MenuAction::MemoryInbox => "memory_inbox",
             MenuAction::RescueMode => "rescue_mode",
             MenuAction::Quit => "quit",
+            MenuAction::TalkToggle => "talk_toggle",
         }
     }
 }
@@ -169,6 +174,7 @@ fn id(action: MenuAction) -> MenuId {
         MenuAction::MemoryInbox => "memory_inbox",
         MenuAction::RescueMode => "rescue_mode",
         MenuAction::Quit => "quit",
+        MenuAction::TalkToggle => "talk_toggle",
     })
 }
 

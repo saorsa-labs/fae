@@ -154,4 +154,12 @@ mod tests {
         assert!(!encoded.contains("cowork"));
         Ok(())
     }
+
+    #[test]
+    fn encodes_talk_toggle_event() -> Result<(), serde_json::Error> {
+        // S18: plain left-click on the orb body emits this to the Swift host.
+        let encoded = encode_menu_action(MenuAction::TalkToggle)?;
+        assert_eq!(encoded, r#"{"type":"menu","action":"talk_toggle"}"#);
+        Ok(())
+    }
 }

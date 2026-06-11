@@ -14,7 +14,7 @@ use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
-    keyboard::KeyCode,
+    keyboard::{KeyCode, ModifiersState},
     window::{Window, WindowBuilder},
 };
 use wgpu::util::DeviceExt;
@@ -477,6 +477,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut state = pollster::block_on(State::new(window))?;
     let mut orb_ui = OrbUiModel::new();
     let mut cursor_position = PhysicalPosition::new(210.0, 210.0);
+    let mut modifiers = ModifiersState::default();
     let mut web_panels: Vec<WebPanel> = Vec::new();
 
     event_loop.run(move |event, target, control_flow| {
@@ -525,6 +526,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 WindowEvent::CursorMoved { position, .. } => {
                     cursor_position = position;
                 }
+                WindowEvent::ModifiersChanged(new_modifiers) => {
+                    modifiers = new_modifiers;
+                }
                 WindowEvent::KeyboardInput {
                     event:
                         KeyEvent {
@@ -554,8 +558,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                             Ok(panel) => web_panels.push(panel),
                             Err(error) => log::error!("failed to open messages panel: {error}"),
                         }
-                    } else if let Err(error) = window.drag_window() {
-                        log::warn!("failed to start orb drag: {error}");
+                    } else if modifiers.alt_key() {
+                        // Option+drag moves the orb; a plain click is reserved
+                        // for push-to-talk (S18).
+                        if let Err(error) = window.drag_window() {
+                            log::warn!("failed to start orb drag: {error}");
+                        }
+                    } else {
+                        // Plain left-click on the orb body = talk toggle. The
+                        // Swift host starts/stops push-to-talk capture.
+                        emit_menu_action(MenuAction::TalkToggle);
                     }
                 }
                 _ => {}
