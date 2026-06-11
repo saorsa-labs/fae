@@ -1,7 +1,6 @@
 # CLAUDE.md — Fae Implementation Guide
 
-> **Current workflow:** Pure Swift macOS app from `native/macos/Fae` using `swift build` and `swift test`.
-> No Rust core, no libfae.a, no C ABI — everything runs natively in Swift with MLX.
+> **Current workflow:** Orb-first. The Rust orb host (`native/rust/fae-ui-shell`, tao + wgpu + muda + wry) is the ONLY product UI; the Swift app (`native/macos/Fae`) hosts the voice pipeline, memory, tools, and skills. `just run-dev` and `just run-native-with-ui-shell` (top-level justfile) both build and embed the orb host into the app bundle. The daemon LLM lane (`llm.useDaemonEngine`) routes conversation turns to `fae-daemon` (`crates/`) running Gemma 4 E4B via mistral.rs; the in-process Swift MLX engine is the fallback + training substrate.
 
 Project-specific implementation notes for AI coding agents.
 
@@ -52,38 +51,35 @@ These features are shown in Settings as an **informational showcase** — not to
 
 ## Justfile recipes (canonical commands)
 
-All commands run from `native/macos/Fae/`. Use `just <recipe>` — never raw `swift`/`cargo` commands.
+All commands run from the **repo root** (top-level justfile). Use `just <recipe>` — never raw `swift`/`cargo` commands.
 
 ```bash
-just --list              # Show all available recipes
-just build               # Build Fae (debug)
-just build-release       # Build Fae (release)
-just test                # Run all tests
-just test-target <t>     # Run specific test target
-just check               # Full validation (build + test)
-just clean               # Clean build artifacts
-just run-native          # Build, sign, and run (requires: source ~/.secrets)
-just bundle              # Build signed .app bundle (requires: source ~/.secrets)
-just prod-check          # Production-focused validation for worker-backed runtime
-just build-acpx          # Build acpx standalone binary (requires bun)
-just build-benchmark     # Build benchmark tool (requires xcodebuild)
-just benchmark <model>   # Run benchmark for a model
-just benchmark-all       # Benchmark all models
-just benchmark-tools <m> # Benchmark only tool calling
+just --list                   # Show all available recipes
+just build                    # Build Fae (debug, xcodebuild — compiles Metal shaders)
+just build-release            # Build release
+just test                     # Run all tests (swift test)
+just check                    # Full validation (build + test)
+just build-ui-shell           # Build the Rust orb host (native/rust/fae-ui-shell)
+just check-ui-shell           # fmt + clippy -D warnings + check for the orb host
+just run-dev                  # DEV profile: orb host embedded, isolated config/memory (fae-dev)
+just run-native               # Build, bundle, sign, launch (production)
+just run-native-with-ui-shell # Production launch with the orb host embedded
+just clean                    # Clean build artifacts
 ```
 
-**Launch from project root**: `source ~/.secrets && just run-native` — NEVER open `.build/` artifacts directly.
+Daemon workspace: `cd crates && just check` (fmt + clippy -D warnings + tests).
+
+**Launch from project root**: `source ~/.secrets && just run-dev` — NEVER open `.build/` artifacts directly.
 
 ## Release-validation contract
 
 Canonical validation source: `docs/checklists/app-release-validation.md`.
-Live test scenarios: `docs/checklists/main-and-cowork-live-test-scenarios.md`.
 
-Required for: model swaps, prompt/routing changes, voice capture/STT/TTS/playback changes, approval/permission/popup changes, memory/scheduler/skills/settings changes, Cowork behavior changes.
+Required for: model swaps, prompt/routing changes, voice capture/STT/TTS/playback changes, approval/permission/popup changes, memory/scheduler/skills/settings changes, orb-shell behavior changes.
 
 ## Architecture overview
 
-Pure Swift app powered by [MLX](https://github.com/ml-explore/mlx-swift). All intelligence runs on Apple Silicon — no cloud, no API keys, no data leaves the Mac.
+Swift app (voice pipeline, memory, tools, skills) + Rust orb host (only product UI) + Rust daemon (`crates/fae-daemon`, primary LLM lane). All intelligence runs locally — no cloud, no API keys, no data leaves the machine. The Swift MLX engine remains the macOS fallback and LoRA training substrate.
 
 ```
 Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
@@ -104,7 +100,8 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | Engine | Model | Framework | Purpose |
 |--------|-------|-----------|---------|
 | STT | Qwen3-ASR-1.7B | MLX 4-bit | Speech-to-text |
-| LLM | Qwen3.5 (2B / 4B / 35B-A3B) | MLX 4-bit | Conversation, tool use |
+| LLM (primary) | Gemma 4 E4B | fae-daemon + mistral.rs (Metal/CPU; llama.cpp fallback planned for Vulkan-class hardware) | Conversation, tool use — when `llm.useDaemonEngine = true` |
+| LLM (fallback) | Qwen3.5 (2B / 4B / 35B-A3B) | MLX 4-bit | macOS in-process fallback + LoRA training substrate |
 | TTS | Kokoro-82M (hexgrad) | MLXAudioTTS float32 | Text-to-speech (FaeTTSAdapter, pre-computed voice embeddings, 24 kHz) |
 | VLM (fast) | SmolVLM2-256M | MLXVLM mlx | Always-on vision — presence detection, screen triage (<1GB) |
 | VLM (deep) | SmolVLM2-500M | MLXVLM mlx | On-demand vision — detailed screenshot/camera analysis (1.8GB) |
@@ -113,7 +110,9 @@ Mic (16kHz) → VAD → Speaker ID → STT → LLM → TTS → Speaker
 | Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
 | Turn Detector | SmartTurn (Whisper-encoder classifier) | MLXAudioVAD float32 | Audio-based end-of-utterance prediction for adaptive endpointing (falls back to rule-based heuristics) |
 
-**Auto model selection** (via `voiceModelPreset: "auto"`):
+**Daemon LLM lane**: `llm.useDaemonEngine = true` routes turns through `ML/DaemonLLMEngine.swift` → `fae-daemon` (Unix-socket NDJSON, fail-closed `models.lock` SHA-256 verification). `FAE_DAEMON_BIN` overrides the daemon binary path. If the daemon is unavailable, the pipeline falls back to the in-process MLX engine.
+
+**Auto model selection for the MLX lane** (via `voiceModelPreset: "auto"`):
 
 Target (Gemma 4 — pending [mlx-swift-lm#180](https://github.com/ml-explore/mlx-swift-lm/pull/180)):
 
@@ -141,7 +140,7 @@ LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target).
 
 ### Unified pipeline
 
-1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD + keyword spotter) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 4b. **Keyword classifier** (1D-CNN, populates interrupt keywords for barge-in) → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Qwen3.5, native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
+1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD + keyword spotter) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 4b. **Keyword classifier** (1D-CNN, populates interrupt keywords for barge-in) → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Gemma 4 E4B via daemon lane, or Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
 
 **Latency**: 3s (greetings) to 30s (multi-tool queries). Orb visual state + thinking tone provide feedback throughout.
 
@@ -299,7 +298,7 @@ Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
 
 **Native MLX tool calling**: tool specs passed via `UserInput.tools` → Qwen3.5 chat template. No separate intent classifier.
 
-### Tool security (4-layer model)
+### Tool security (3-layer model)
 
 Voice identity is the security model. Owner gets full access; DamageControlPolicy is the safety net for catastrophic operations.
 
@@ -308,7 +307,6 @@ Voice identity is the security model. Owner gets full access; DamageControlPolic
 | Voice identity | `SpeakerProfileStore` | Primary user verification — only recognized voices get tool access |
 | Damage control | `DamageControlPolicy` | Block/disaster/confirm for catastrophic bash ops + credential path protection |
 | Reversibility | `ReversibilityEngine` + `ReceiptStore` | Pre-mutation file snapshots, undo support, action receipts |
-| CoWork gating | `CoworkToolExecutor` | External LLM calls gated with DamageControlPolicy (nonLocal locality) |
 
 **Simplified ToolExecutor flow** (replaced 14-layer pipeline):
 1. Registry lookup + tool mode filtering
@@ -318,28 +316,12 @@ Voice identity is the security model. Owner gets full access; DamageControlPolic
 
 **Apple tool reads are INTENTIONALLY ungated** — only writes/mutations need approval. macOS permission is the only read gate.
 
-### CoWork security intercept (`CoworkToolExecutor`)
-
-All external (non-local) LLM calls from CoWork are gated by `CoworkToolExecutor`, which calls `DamageControlPolicy.evaluate()` directly with `locality: .nonLocal`. This is a **provider-level** security gate, not a full ToolExecutor pipeline — CoWork provider calls are not individual tool dispatches and do not go through ToolRegistry, TrustedActionBroker, or OutboundExfiltrationGuard.
-
-**What is enforced**: DamageControlPolicy zero-access paths, inbound injection scan, outbound PII detection, fail-closed startup gate, SecurityEventLogger audit, per-provider metrics.
-
-**What is NOT enforced (by design)**: ToolRegistry mode filtering, approval overlay. CoWork provider calls are not individual tool dispatches.
-
-**Why not full ToolExecutor parity**: `ToolExecutor.execute()` checks `registry.isToolAllowed()` at step 1, rejecting unregistered tool names. CoWork uses synthetic names ("external_llm") that are not in the registry. DamageControlPolicy is the layer that matters for provider-level gating.
-
-**Wiring**: `PipelineCoordinator.makeCoworkToolExecutor()` → `FaeCore.coworkToolExecutor` → `CoworkWorkspaceController`.
-
-**Protected paths** (blocked for nonLocal models via DamageControlPolicy):
+**Protected paths** (zero-access via DamageControlPolicy):
 - `~/.fae-vault/` — Git Vault backup
 - `~/Library/Application Support/fae/speakers.json` — voice identity
 - `~/Library/Application Support/fae/directive.md` — system directive
 
-**Inbound response scan**: 10 prompt injection patterns checked on every response. Flagged responses emit `FaeEvent.coworkInjectionFlagged`.
-
-**Outbound PII detection**: When `config.privacy.piiFilterEnabled` (default on), every outbound prompt is scanned by `PrivacyFilterBridge` — a subprocess daemon that runs OpenAI Privacy Filter (1.5B / 50M-active encoder) via `mlx-embeddings`. Detected spans across 8 categories (person, email, phone, address, date, URL, account_number, secret) emit `FaeEvent.coworkPIIRedacted` + bump the `piiDetected` counter + write a `cowork_pii_detected` security log entry. **Detect-only**: the prompt is not mutated yet. **Fail-open**: if the daemon can't start or times out, CoWork proceeds without the scan — PII scrub is a best-effort enhancement, never a hard gate.
-
-**Fail-closed**: if `coworkToolExecutor` is nil (pipeline not started), calls throw `.pipelineNotReady` — no silent fallback to unguarded provider access.
+> CoWork (and its `CoworkToolExecutor` security intercept) was removed in the Great Cleanup (2026-06-11). See `docs/architecture/cowork-removal-plan-2026-06-05.md` and `docs/archive/`.
 
 ### Skill manifest contract
 
@@ -574,272 +556,35 @@ Sources/
   CSQLiteVecCore/         # sqlite-vec C bridge
 ```
 
-## Swift file inventory
+## Source map (directory-level)
+
+> Per-file inventory tables were removed in the Great Cleanup (2026-06-11) — the legacy-UI
+> and CoWork deletions made them stale immediately. For current file lists use `ls`/`rg`
+> against the source tree; this map records each directory's role.
 
 All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 
-### Core/ (27 files)
+| Directory | Role |
+|-----------|------|
+| `Core/` | App facade (`FaeCore`), config (`FaeConfig`, incl. `llm.useDaemonEngine`), event bus + types, system prompt assembly (`PersonalityManager`), soul/directive lifecycle, rescue mode, credentials, permissions, diagnostics, CLI tool augmentation + workspace discovery |
+| `ML/` | Model loading (`ModelManager`), STT/TTS/VLM/embedding engines, `DaemonLLMEngine` (daemon LLM lane client), ECAPA-TDNN speaker encoder + profile store, keyword classifier, turn detector, voice libraries |
+| `Pipeline/` | `PipelineCoordinator` (STT→LLM→TTS, barge-in, `injectProactiveQuery()`), VAD, echo suppression, speaker gating, tool-call/script-block parsing, correction detection, post-ASR vocabulary correction, implicit feedback, conversation state, text processing |
+| `Runtime/` | JSC tool-program runtime (`JSCRuntime`, bridges, `ScriptBudget`, `DryRunPlan`), Python uv runtime + dependency installer, local runtime server, `PrivacyFilterBridge` |
+| `Tools/` | Tool protocol/registry/executor (4-step flow), built-in + Apple + scheduler + skill + vision + voice-identity tools, ACP delegation, security stack (`DamageControlPolicy`, `ReversibilityEngine`, `SafeBashExecutor`, `PathPolicy`, `NetworkTargetPolicy`, `SecurityEventLogger`, redaction) |
+| `Memory/` | `MemoryOrchestrator` (hybrid ANN+FTS5 recall/capture/GC), GRDB SQLite store, sqlite-vec vector store, entity graph + linking, digests, inbox ingestion, `ImprovementStore`, external review gate, shadow evaluator |
+| `Scheduler/` | `FaeScheduler` (~23 tasks), awareness throttle, proactive policy, `ImprovementCycleCoordinator`, `TrainingBridge` (mlx-tune via uv), MetaOpt* (hill-climbing meta-optimization), adapter deployment |
+| `Skills/` | Skill discovery/activation/execution (`SkillManager`), SKILL.md parsing, MANIFEST.json + SHA-256 integrity, security review |
+| `Channels/` | `ChannelGateway` actor + adapters (Discord, WhatsApp, iMessage), cross-channel identity resolver, session store, health monitor with backoff reconnect |
+| `Audio/` | Mic capture (16kHz mono, NaN/Inf validation), playback with barge-in, thinking/listening tones, WAV parsing |
+| `Backup/` | `GitVaultManager` — rolling backup at `~/.fae-vault/` |
+| Top level | App entry (`FaeApp` — AppKit windows, delegate owns state), orb-host bridge + `OrbTypes` (mode/feeling model driving the Rust orb), Settings window + tabs, approval/input overlay panels, onboarding + enrollment, debug console, `TestServer`, Sparkle updater, JIT permissions |
 
-| File | Role |
-|------|------|
-| `FaeCore.swift` | Facade: config, ModelManager, PipelineCoordinator, Scheduler, awareness wiring |
-| `FaeConfig.swift` | Model selection, TTS config, tool mode, speaker config, awareness config, vision config |
-| `FaeEventBus.swift` | Combine-based event bus |
-| `FaeEvent.swift` | Event types |
-| `FaeTypes.swift` | Shared types (LLMMessage with `tag` for proactive cleanup) |
-| `FaeEnvironment.swift` | Runtime environment detection |
-| `FaeInferenceAliases.swift` | Type aliases for FaeInference target (MLXLLMEngine, etc.) |
-| `PersonalityManager.swift` | System prompt assembly (12-layer stack) |
-| `MLProtocols.swift` | ML engine protocols (STT, LLM, TTS, Embedding, Speaker) |
-| `SoulManager.swift` | SOUL.md lifecycle: load, save, reset, ensure user copy |
-| `RescueMode.swift` | Safe boot: read_only tools, default soul, no scheduler |
-| `CredentialManager.swift` | macOS Keychain credential storage |
-| `GlobalHotkeyManager.swift` | Global Ctrl+Shift+A hotkey (Accessibility API) |
-| `VoiceCommandParser.swift` | Voice command detection |
-| `SentimentClassifier.swift` | Sentiment analysis for orb mood |
-| `DiagnosticsManager.swift` | Diagnostics and debug info |
-| `PermissionStatusProvider.swift` | macOS permission status checks |
-| `IntroCrawl.swift` | Intro text crawl animation |
-| `InferencePriorityController.swift` | GPU access serialization (operator > TTS) |
-| `HeartbeatManager.swift` | Heartbeat monitoring |
-| `SensitiveContentPolicy.swift` | Sensitive content detection for delegation |
-| `VoiceIdentityPolicy.swift` | Voice identity gating policy |
-| `CapabilitySnapshotService.swift` | Capability state snapshots |
-| `ChannelSettingsStore.swift` | Channel configuration persistence |
-| `SettingsCapabilityManifest.swift` | Settings capability definitions |
-| `ToolAugmentationManager.swift` | CLI tool discovery, install, workspace scanning, project detection |
-| `ProgressivePhotoCapture.swift` | Camera frame capture for progressive visual identity updates |
+Sibling code outside the Swift app:
 
-### ML/ (16 files)
-
-| File | Role |
-|------|------|
-| `ModelManager.swift` | Loads STT, LLM, TTS, Speaker; on-demand VLM; degraded mode tracking; retry logic |
-| `MLXSTTEngine.swift` | Qwen3-ASR speech-to-text |
-| `FaeTTSAdapter.swift` | **Active TTS** — Kokoro-82M via MLXAudioTTS (streaming, 54 voices, 9 languages) |
-| `SmartTurnAdapter.swift` | SmartTurn audio-based endpoint detection via MLXAudioVAD |
-| `MLXVLMEngine.swift` | Qwen3-VL vision-language model (on-demand) |
-| `MLXEmbeddingEngine.swift` | Hash-384 embedding engine |
-| `NeuralEmbeddingEngine.swift` | Tiered Qwen3-Embedding (8B/4B/0.6B/hash by RAM) |
-| `CoreMLSpeakerEncoder.swift` | ECAPA-TDNN Core ML inference + mel spectrogram |
-| `MLXKeywordClassifier.swift` | Micro 1D-CNN keyword classifier for barge-in interrupt detection (~200K params) |
-| `MLXTurnDetector.swift` | Semantic end-of-utterance detector — SmartTurn (preferred) + rule-based fallback |
-| `SpeakerProfileStore.swift` | Speaker profile enrollment, matching, persistence |
-| `StreamingSTTEngine.swift` | Streaming STT support |
-| `CharacterVoiceLibrary.swift` | Character voice definitions for roleplay |
-| `VoiceLibrary.swift` | Voice preset library |
-| `WakeWordProfileStore.swift` | Wake word profile management |
-
-### Pipeline/ (20 files)
-
-| File | Role |
-|------|------|
-| `PipelineCoordinator.swift` | Unified pipeline: STT→LLM→TTS; `injectProactiveQuery()`; barge-in |
-| `ToolRoutingHelpers.swift` | Pure static helpers: tool routing, repair, intent detection, result processing |
-| `TurnHelpers.swift` | Pure static helpers: memory recall, tool visibility, easy turns, TTS batching |
-| `GateHelpers.swift` | Pure static helpers: idle rearm, silence threshold, speaker verification, voice attention |
-| `BargeInState.swift` | Barge-in state variables + BargeInDecisions pure decision functions |
-| `BargeInTypes.swift` | PendingBargeIn, PlaybackBargeInCandidate, GenerationTakeoverCandidate |
-| `TTSState.swift` | TTS task chain + TTFA telemetry state |
-| `SpeechInputStage.swift` | Speech segment queue, streaming epoch, wake detection state |
-| `SpeakerGateState.swift` | Speaker identity + enrollment + streaming gate state |
-| `ToolCallParsing.swift` | ToolCall, ScriptBlock types + parser |
-| `PipelineTypes.swift` | PipelineMode, PipelineDegradedMode, GateState, etc. |
-| `EchoSuppressor.swift` | Time-based + text-overlap + voice identity echo filtering |
-| `VoiceActivityDetector.swift` | Voice activity detection |
-| `CorrectionDetector.swift` | Detect user corrections: name errors, mishearings, interruptions, wrong actions |
-| `DynamicVocabularyCorrector.swift` | Post-ASR name correction from user's known vocabulary + runtime learning |
-| `SileroVADEngine.swift` | Silero VAD model integration |
-| `KeywordSpotter.swift` | Wake word / keyword detection |
-| `WakeWordAcousticDetector.swift` | Acoustic wake word detection |
-| `VoiceConversationPolicy.swift` | Voice conversation gating policy |
-| `VoiceTagParser.swift` | `<voice>` tag parser for multi-voice roleplay |
-| `ImplicitFeedbackDetector.swift` | 7 implicit feedback signal types (re-ask, abandonment, praise, etc.) |
-| `ConversationState.swift` | History management; `removeMessages(taggedWith:)` |
-| `TextProcessing.swift` | ThinkTagStripper, text cleanup utilities |
-
-### Runtime/ (12 files)
-
-| File | Role |
-|------|------|
-| `JSCRuntime.swift` | Fresh-per-run JavaScriptCore runtime for `<tool_program>` scripts |
-| `JSCToolBridge.swift` | `fae.*` API bridge (fae.tool, fae.log, fae.sleep) for JSC contexts |
-| `JSCTypedAdapters.swift` | Typed JS adapters (fae.calendar, fae.reminders, etc.) |
-| `JSCScriptResult.swift` | Script execution result type (success/failure/cancelled/budgetExceeded) |
-| `JSCExecutionLog.swift` | Structured execution log for developer harness debugging |
-| `JSCDeveloperHarness.swift` | Interactive harness for testing JS tool programs |
-| `ScriptBudget.swift` | Resource limits (max tool calls, wall-clock time, concurrency) |
-| `DryRunPlan.swift` | Dry-run plan recording: intended calls + summary formatting |
-| `DependencyInstaller.swift` | Python/uv dependency installation |
-| `UVRuntime.swift` | Python uv runtime for package-heavy skills |
-| `FaeLocalRuntimeServer.swift` | Local HTTP runtime server |
-| `PrivacyFilterBridge.swift` | Long-lived daemon for OpenAI Privacy Filter (PII detection via mlx-embeddings subprocess, fail-open) |
-
-### Tools/ (25 files)
-
-| File | Role |
-|------|------|
-| `Tool.swift` | Tool protocol definition (ToolRiskLevel, ActionSource, ToolResult) |
-| `ToolRegistry.swift` | Dynamic registration, schema generation, mode filtering |
-| `ToolExecutor.swift` | Simplified 4-step execution pipeline (registry, proactive gate, DamageControl, execute) |
-| `ToolExecutorContext.swift` | Per-call runtime state + ToolExecutorCallbacks |
-| `ToolExecutorDelegate.swift` | ToolExecutorResult + delegate protocol |
-| `BuiltinTools.swift` | Core tools (read, write, edit, bash, self_config, web_search, fetch_url) |
-| `AppleTools.swift` | Apple integration (calendar, contacts, mail, reminders, notes) |
-| `SchedulerTools.swift` | Scheduler management tools |
-| `SkillTools.swift` | activate_skill, run_skill, manage_skill |
-| `VisionTools.swift` | screenshot, camera, read_screen, click, type_text, scroll, find_element |
-| `VoiceIdentityTool.swift` | Voice identity management |
-| `RoleplayTool.swift` | Multi-voice roleplay sessions |
-| `AccessibilityBridge.swift` | macOS AXUIElement wrapper |
-| `AgentDelegateTool.swift` | One-shot agent delegation |
-| `AgentSessionTool.swift` | Multi-turn ACP sessions |
-| `ACPProtocol.swift` | JSON-RPC 2.0 / NDJSON parser |
-| `ACPSessionManager.swift` | ACP session lifecycle (max 5 concurrent) |
-| `ChannelSetupTool.swift` | Channel configuration tool |
-| `WindowControlTool.swift` | Window management tool |
-| `SessionSearchTool.swift` | Session search tool |
-| `TillDoneTool.swift` | Task-driven work with hard gating |
-| `DamageControlPolicy.swift` | Catastrophic operation blocking (bash rules, credential path protection) |
-| `ReversibilityEngine.swift` | Pre-mutation file checkpoints and rollback |
-| `SafeBashExecutor.swift` | Sandboxed bash (process-group kill, timeout, PATH isolation) |
-| `SafeSkillExecutor.swift` | Constrained Python (ulimits, restricted cwd) |
-| `PathPolicy.swift` | Write-path validation (system paths) |
-| `NetworkTargetPolicy.swift` | Blocks localhost, metadata, RFC1918 (used by MCP/skills) |
-| `SecurityEventLogger.swift` | Append-only JSONL security log (5MB rotation) |
-| `SensitiveDataRedactor.swift` | API key/token/password redaction |
-| `ToolAnalytics.swift` | Tool usage analytics |
-
-### Memory/ (17 files)
-
-| File | Role |
-|------|------|
-| `MemoryOrchestrator.swift` | Recall (ANN+FTS5 hybrid), capture, GC, graph context |
-| `SQLiteMemoryStore.swift` | GRDB-backed SQLite: CRUD, search, retention |
-| `MemoryTypes.swift` | MemoryRecord, MemoryKind, MemoryStatus |
-| `MemoryBackup.swift` | Database backup and rotation |
-| `VectorStore.swift` | sqlite-vec ANN tables (`memory_vec`, `fact_vec`) |
-| `EntityStore.swift` | Entity graph: persons, orgs, locations with typed edges |
-| `EntityLinker.swift` | Extract entities and relationships from records |
-| `EntityBackfillRunner.swift` | One-time legacy person records → entity graph |
-| `EmbeddingBackfillRunner.swift` | Background paged backfill into ANN index |
-| `PersonQueryDetector.swift` | Detect person/org/location queries |
-| `EntityContextFormatter.swift` | Format entity profiles with relationship edges |
-| `MemoryDigestService.swift` | Memory digest generation |
-| `MemoryInboxService.swift` | Memory inbox file ingestion |
-| `ImprovementStore.swift` | improvement.db: feedback_events, baselines, state, gaps, shadow_eval |
-| `ExternalReviewGate.swift` | 3-provider fallback review chain (Codex/Claude/internal) |
-| `DirectiveFastTuner.swift` | Pattern-based directive amendments from feedback analysis |
-| `ShadowEvaluator.swift` | Overnight shadow eval with 60% win rate promotion gate |
-
-### Scheduler/ (18 files)
-
-| File | Role |
-|------|------|
-| `FaeScheduler.swift` | Background task scheduler (~23 tasks) |
-| `FaeScheduler+Proactive.swift` | Proactive awareness task implementations |
-| `FaeScheduler+Reliability.swift` | Task reliability and retry logic |
-| `AwarenessThrottle.swift` | Battery/thermal/quiet-hours gating |
-| `ProactivePolicyEngine.swift` | Proactive dispatch policy |
-| `SchedulerPersistenceStore.swift` | Scheduler state persistence |
-| `TaskRunLedger.swift` | Task idempotency and run tracking |
-| `ImprovementCycleCoordinator.swift` | Deterministic state machine for autonomous improvement loop |
-| `TrainingBridge.swift` | Calls mlx-tune Python scripts via uv for export, train, poll, evaluate |
-| `AdapterDeploymentManager.swift` | Semi-auto deploy with earned auto-deploy after 5 cycles |
-| `ImprovementHealthReporter.swift` | Self-diagnostic integration for improvement loop health |
-| `DirectiveTuner.swift` | Legacy pattern detection for directive amendments (used by MetaOptHypothesisGenerator) |
-| `MetaOptimizer.swift` | AutoAgent-inspired hill-climbing on directive, config, skills, memory seeds |
-| `MetaOptTypes.swift` | Types for meta-optimization: DimensionScores, hypotheses, budgets, changes |
-| `MetaOptHypothesisGenerator.swift` | Pattern-based hypothesis generation (directive + config) |
-| `MetaOptSkillGenerator.swift` | Skill template matching + feedback-based skill generation |
-| `MetaOptMemorySeedGenerator.swift` | Strategic memory seeding from feedback patterns |
-| `MetaOptNarrator.swift` | Technical→companion-language translator for briefing + Settings UI + rollback |
-
-### Skills/ (7 files)
-
-| File | Role |
-|------|------|
-| `SkillManager.swift` | Discovery, activation, execution, management |
-| `SkillTypes.swift` | SkillMetadata, SkillRecord, SkillType, SkillTier |
-| `SkillParser.swift` | YAML frontmatter parser for SKILL.md |
-| `SkillMigrator.swift` | Legacy flat `.py` → directory migration |
-| `SkillManifest.swift` | MANIFEST.json schema + SHA-256 integrity |
-| `SkillEditorSheet.swift` | Skill editing UI |
-| `SkillSecurityReview.swift` | Skill security validation |
-
-### Channels/ (10 files)
-
-| File | Role |
-|------|------|
-| `ChannelAdapter.swift` | Protocol for all channel adapters (kind, start, stop, send, onMessage) |
-| `ChannelMessage.swift` | Normalised message envelope (ChannelKind, ChannelMessage, ChannelAttachment) |
-| `ChannelSession.swift` | Per-sender conversation state (SessionKey, ChannelSession with LockedState) |
-| `ChannelSessionStore.swift` | Actor managing sessions, idle cleanup, cross-channel LinkedSessionSummary |
-| `ChannelGateway.swift` | Central routing actor: adapter lifecycle, identity resolution, health monitoring |
-| `ChannelIdentityResolver.swift` | Cross-channel identity linking: phone normalisation, display name matching |
-| `ChannelHealthMonitor.swift` | Adapter health tracking, exponential-backoff auto-reconnect (max 5 retries) |
-| `ChannelManager.swift` | Legacy channel lifecycle (backward compatibility with FaeCore) |
-| `DiscordAdapter.swift` | WebSocket Gateway + REST, ChannelAdapter conformance, 2000-char split |
-| `WhatsAppAdapter.swift` | HTTP webhook + Graph API, ChannelAdapter conformance, HMAC-SHA256 verification |
-| `iMessageAdapter.swift` | SQLite polling + AppleScript, ChannelAdapter conformance, echo filter |
-
-### Cowork/ (12 files)
-
-| File | Role |
-|------|------|
-| `CoworkWindowController.swift` | CoWork window management |
-| `CoworkWorkspaceController.swift` | Workspace state |
-| `CoworkWorkspaceView.swift` | Workspace UI |
-| `CoworkWorkspaceModels.swift` | Workspace data models |
-| `CoworkLLMProvider.swift` | Remote LLM provider protocol |
-| `CoworkModelOption.swift` | Model option definitions |
-| `CoworkModelRegistry.swift` | Available remote model registry |
-| `CoworkRemoteModelCatalog.swift` | Remote model catalog |
-| `CoworkExportPacket.swift` | Conversation export |
-| `CoworkToolExecutor.swift` | DamageControlPolicy gate + inbound scan for external LLM calls |
-| `CoworkToolExecutorError.swift` | Error types for CoWork security pipeline |
-| `WorkWithFaeWorkspace.swift` | "Work with Fae" workspace integration |
-
-### Audio/ (3 files), Backup/ (1 file)
-
-| File | Role |
-|------|------|
-| `Audio/AudioCaptureManager.swift` | Microphone capture (16kHz mono), NaN/Inf validation |
-| `Audio/AudioPlaybackManager.swift` | Audio playback with barge-in support |
-| `Audio/AudioToneGenerator.swift` | Thinking/listening/ready beep tones |
-| `Audio/WAVParser.swift` | Lightweight WAV file parser (PCM 16-bit mono) |
-| `Backup/GitVaultManager.swift` | Git-based rolling backup at `~/.fae-vault/` |
-
-### Top-level files (75 files)
-
-Key top-level files (all under `Sources/Fae/`):
-
-| File | Role |
-|------|------|
-| `FaeApp.swift` | App entry; FaeAppDelegate owns all state; AppKit window creation |
-| `ContentView.swift` | Main view: orb, progress overlay, subtitle |
-| `NativeOrbView.swift` | Metal-rendered orb |
-| `FogCloudOrb.metal` / `NebulaOrb.metal` | Metal shaders |
-| `OrbAnimationState.swift` | Orb animation state machine |
-| `OrbTypes.swift` | OrbMode, OrbFeeling, OrbPalette enums |
-| `OrbStateBridgeController.swift` | Maps events to orb visual state |
-| `WindowStateController.swift` | Adaptive window (120x120 collapsed / 340x500 compact) |
-| `AuxiliaryWindowManager.swift` | Independent NSPanel windows (conversation, canvas) |
-| `ConversationWindowView.swift` | Conversation panel content |
-| `ConversationController.swift` | Conversation state (messages, streaming) |
-| `ConversationBridgeController.swift` | Routes events to conversation UI |
-| `ThinkingTraceViews.swift` | ThinkingCrawlView + ThinkIconBubble (inline thinking display) |
-| `ApprovalOverlayController.swift` | Tool approval + input-request lifecycle |
-| `ApprovalOverlayView.swift` | Floating approval/input cards |
-| `SettingsView.swift` | TabView settings container |
-| `Settings*.swift` | 16 settings tab files |
-| `BackendEventRouter.swift` | FaeEventBus → NotificationCenter |
-| `TestServer.swift` | Test server for scripted testing |
-| `DebugConsoleController.swift` | Debug event log (Cmd+Shift+L, max 500 events) |
-| `SparkleUpdaterController.swift` | Sparkle auto-update |
-| `JitPermissionController.swift` | JIT permission requests (Screen Recording, Camera, Accessibility) |
-| `OnboardingController.swift` | First-run onboarding |
-| `SpeakerEnrollmentView.swift` | Native speaker enrollment UI |
+| Location | Role |
+|----------|------|
+| `native/rust/fae-ui-shell/` | Rust orb host (tao + wgpu + muda + wry) — the only product UI; embedded into the app bundle by `run-dev`/`run-native-with-ui-shell` |
+| `crates/` | Rust daemon workspace: `fae-daemon` (Unix-socket NDJSON listener), `fae-engine` (ProviderAdapter, mistral.rs, fail-closed `models.lock`), `fae-control-plane` (authz core), `fae-envelope-gate` (typed peer boundary). See `crates/README.md` |
 
 ## NotificationCenter names
 
