@@ -120,7 +120,6 @@ struct InputBarView: View {
         Button(action: {
             let shouldRestoreFocus = isTextFieldFocused || !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             conversation.toggleListening()
-            windowState.noteActivity()
             if shouldRestoreFocus {
                 DispatchQueue.main.async {
                     isTextFieldFocused = true
@@ -229,7 +228,6 @@ struct InputBarView: View {
     private var stopButton: some View {
         Button(action: {
             NotificationCenter.default.post(name: .faeCancelGeneration, object: nil)
-            windowState.noteActivity()
         }) {
             Image(systemName: "stop.fill")
                 .font(.system(size: 13, weight: .bold))
@@ -377,7 +375,6 @@ struct InputBarView: View {
         detectAndReportLinks(in: trimmed)
 
         conversation.handleUserSent(trimmed)
-        windowState.noteActivity()
 
         // Animate send button
         isSendAnimating = true

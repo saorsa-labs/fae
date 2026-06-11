@@ -155,51 +155,6 @@ final class BargeInConstantsTests: XCTestCase {
     }
 }
 
-// MARK: - IntroCrawl Tests
-
-final class IntroCrawlTests: XCTestCase {
-
-    func testFullHTMLContainsCSS() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("<style>"))
-        XCTAssertTrue(html.contains("</style>"))
-    }
-
-    func testFullHTMLContainsTitle() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("Fae"))
-    }
-
-    func testFullHTMLContainsFirstContactLabel() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("First Contact"))
-    }
-
-    func testFullHTMLContainsCapabilityPills() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("Listening"))
-        XCTAssertTrue(html.contains("Thinking"))
-        XCTAssertTrue(html.contains("Speaking"))
-    }
-
-    func testFullHTMLContainsLoader() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("Waking up"))
-    }
-
-    func testFullHTMLContainsAuroraBlobs() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("blob-1"))
-        XCTAssertTrue(html.contains("blob-2"))
-        XCTAssertTrue(html.contains("blob-3"))
-    }
-
-    func testFullHTMLHasTransparentBody() {
-        let html = IntroCrawl.fullHTML
-        XCTAssertTrue(html.contains("background: transparent"))
-    }
-}
-
 // MARK: - RescueMode Tests
 
 @MainActor

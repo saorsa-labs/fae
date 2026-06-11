@@ -1,70 +1,107 @@
 import AppKit
 import SwiftUI
 
+/// Reduced companion window content.
+///
+/// The Rust orb host is the product UI. This window survives only as the
+/// text-input companion surface ("Ask Fae"), the onboarding/enrollment host,
+/// and the startup holding view. It stays hidden while the orb host runs and
+/// is surfaced only by explicit user actions (Ask Fae, global hotkey).
 struct ContentView: View {
     @EnvironmentObject private var conversation: ConversationController
-    @EnvironmentObject private var orbState: OrbStateController
-    @EnvironmentObject private var orbAnimation: OrbAnimationState
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
     @EnvironmentObject private var subtitles: SubtitleStateController
     @EnvironmentObject private var windowState: WindowStateController
     @EnvironmentObject private var onboarding: OnboardingController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var faeCore: FaeCore
-    @State private var viewLoaded = false
     @State private var showingNativeEnrollment = false
     @State private var showingPhotoCapture = false
     @State private var listeningBeforeNativeEnrollment = true
 
-    private static var menuHandlersKey: UInt8 = 0
-
     var body: some View {
-        ZStack {
-            if windowState.mode == .collapsed {
-                collapsedView
-            } else {
-                compactView
-            }
+        VStack(spacing: 0) {
+            if pipelineAux.isPipelineReady {
+                // Voice hints — collapsible cheat sheet for wake/silence phrases.
+                VoiceHintsView()
 
-            // Loading placeholder
-            if !viewLoaded {
-                Circle()
-                    .fill(Color.primary.opacity(0.05))
-                    .frame(width: 200, height: 200)
-                    .scaleEffect(0.95)
-                    .opacity(0.5)
-                    .animation(
-                        .easeInOut(duration: 1.5).repeatForever(autoreverses: true),
-                        value: viewLoaded
-                    )
+                // Conversation — scrolling, fills remaining space.
+                ConversationScrollView()
+
+                // Subtle separator
+                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
+
+                // Enrollment invitation — visible until owner voice is enrolled.
+                if !ownerEnrollmentComplete {
+                    EnrollmentInvitationBanner {
+                        beginNativeEnrollment()
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                // Photo setup — visible after voice enrollment until a photo is taken.
+                // Gate on hasOwnerSetUp (synced from speaker profile store during
+                // startup) rather than ownerEnrollmentComplete to avoid showing the
+                // photo banner during the brief window before the owner check runs.
+                if faeCore.hasOwnerSetUp && !faeCore.hasOwnerPhoto {
+                    PhotoSetupBanner {
+                        showingPhotoCapture = true
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                // Input — pinned at bottom once startup fully completes.
+                InputBarView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                startupHoldingView
                     .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Frosted glass in compact mode, clear in collapsed so the orb floats.
         .background {
-            if windowState.mode != .collapsed {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .ignoresSafeArea()
-            }
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
         }
-        .clipShape(
-            windowState.mode == .collapsed
-                ? AnyShape(Circle())
-                : AnyShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        )
-        .accessibilityLabel("Fae orb, currently \(orbState.mode.label) and feeling \(orbState.feeling.label)")
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .background(
             NSWindowAccessor { window in
                 windowState.window = window
             }
         )
-        .animation(.easeInOut(duration: 0.5), value: windowState.mode)
         .animation(.easeInOut(duration: 0.4), value: ownerEnrollmentComplete)
         .animation(.easeInOut(duration: 0.4), value: faeCore.hasOwnerPhoto)
         .animation(.easeInOut(duration: 0.3), value: onboarding.isStateRestored)
         .animation(.easeInOut(duration: 0.2), value: auxiliaryWindows.isApprovalVisible)
+        .overlay {
+            // Emergency stop — visible whenever a tool approval is pending
+            if auxiliaryWindows.isApprovalVisible {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: { auxiliaryWindows.emergencyStop() }) {
+                            Label("Stop", systemImage: "xmark.circle.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.primary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                        .background(FaeDesign.rowanBerry)
+                        .clipShape(Capsule())
+                        .shadow(color: FaeDesign.rowanBerry.opacity(0.5), radius: 6)
+                        .padding(.trailing, 10)
+                        .padding(.top, 8)
+                    }
+                    Spacer()
+                }
+                .transition(.asymmetric(
+                    insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .opacity
+                ))
+            }
+        }
         .sheet(isPresented: $showingNativeEnrollment) {
             SpeakerEnrollmentView(
                 captureManager: faeCore.nativeEnrollmentCaptureManager,
@@ -105,119 +142,8 @@ struct ContentView: View {
             .preferredColorScheme(nil)
         }
         .onReceive(NotificationCenter.default.publisher(for: .faeStartNativeEnrollmentRequested)) { _ in
-            windowState.transitionToCompact()
+            windowState.showWindow()
             beginNativeEnrollment()
-        }
-    }
-
-    // MARK: - Collapsed View
-
-    /// Full-window orb for the 120x120 collapsed mode.
-    private var collapsedView: some View {
-        NativeOrbView(
-            orbAnimation: orbAnimation,
-            audioRMS: pipelineAux.audioRMS,
-            windowMode: windowState.mode.rawValue,
-            reducedRendering: showingNativeEnrollment,
-            onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } },
-            onOrbClicked: {
-                windowState.transitionToCompact()
-                NotificationCenter.default.post(
-                    name: .faeConversationEngage,
-                    object: nil
-                )
-            },
-            onOrbContextMenu: {
-                showCollapsedContextMenu()
-            }
-        )
-        .opacity(viewLoaded ? 1 : 0)
-    }
-
-    // MARK: - Compact View
-
-    /// Three-zone vertical layout: orb crown, conversation scroll, input bar.
-    private var compactView: some View {
-        VStack(spacing: 0) {
-            // Zone 1: Orb Crown — dedicated 160pt hero section, never covered
-            OrbCrownView(
-                onLoad: { withAnimation(.easeIn(duration: 0.4)) { viewLoaded = true } }
-            )
-            .frame(height: 300)
-            .overlay(alignment: .bottom) {
-                SubtitleOverlayView()
-            }
-
-            // Subtle separator
-            Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
-
-            if pipelineAux.isPipelineReady {
-                // Voice hints — collapsible cheat sheet for wake/silence phrases.
-                VoiceHintsView()
-
-                // Zone 2: Conversation — scrolling, fills remaining space
-                ConversationScrollView()
-
-                // Subtle separator
-                Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
-
-                // Enrollment invitation — visible until owner voice is enrolled.
-                if !ownerEnrollmentComplete {
-                    EnrollmentInvitationBanner {
-                        windowState.transitionToCompact()
-                        beginNativeEnrollment()
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-
-                // Photo setup — visible after voice enrollment until a photo is taken.
-                // Gate on hasOwnerSetUp (synced from speaker profile store during
-                // startup) rather than ownerEnrollmentComplete to avoid showing the
-                // photo banner during the brief window before the owner check runs.
-                if faeCore.hasOwnerSetUp && !faeCore.hasOwnerPhoto {
-                    PhotoSetupBanner {
-                        showingPhotoCapture = true
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-
-                // Zone 3: Input — pinned at bottom once startup fully completes.
-                InputBarView()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
-                startupHoldingView
-                    .transition(.opacity)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .opacity(viewLoaded ? 1 : 0)
-        .overlay {
-            // Emergency stop — visible whenever a tool approval is pending
-            if auxiliaryWindows.isApprovalVisible {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button(action: { auxiliaryWindows.emergencyStop() }) {
-                            Label("Stop", systemImage: "xmark.circle.fill")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(.primary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.plain)
-                        .background(FaeDesign.rowanBerry)
-                        .clipShape(Capsule())
-                        .shadow(color: FaeDesign.rowanBerry.opacity(0.5), radius: 6)
-                        .padding(.trailing, 10)
-                        .padding(.top, 8)
-                    }
-                    Spacer()
-                }
-                .transition(.asymmetric(
-                    insertion: .move(edge: .top).combined(with: .opacity),
-                    removal: .opacity
-                ))
-            }
         }
     }
 
@@ -285,55 +211,20 @@ struct ContentView: View {
             userInfo: ["active": listeningBeforeNativeEnrollment]
         )
     }
+}
 
-    // MARK: - Collapsed Context Menu
+// MARK: - Menu Action Handler
 
-    /// Simplified context menu for the collapsed orb (no Reset Conversation —
-    /// that lives in the full compact context menu via OrbCrownView).
-    private func showCollapsedContextMenu() {
+/// Retained Objective-C target for programmatic `NSMenuItem` actions.
+final class MenuActionHandler: NSObject {
+    private let action: () -> Void
 
-        guard let window = windowState.window,
-              let contentView = window.contentView else { return }
+    init(_ action: @escaping () -> Void) {
+        self.action = action
+    }
 
-        let menu = NSMenu()
-
-        let settingsItem = NSMenuItem(
-            title: "Settings\u{2026}",
-            action: Selector(("showSettingsWindow:")),
-            keyEquivalent: ","
-        )
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-
-        let hideHandler = MenuActionHandler { [windowState] in
-            windowState.hideWindow()
-        }
-        let hideItem = NSMenuItem(
-            title: "Hide Fae",
-            action: #selector(MenuActionHandler.invoke),
-            keyEquivalent: ""
-        )
-        hideItem.target = hideHandler
-        menu.addItem(hideItem)
-
-        menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(
-            title: "Quit Fae",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
-        menu.addItem(quitItem)
-
-        objc_setAssociatedObject(
-            menu, &Self.menuHandlersKey,
-            [hideHandler] as NSArray,
-            .OBJC_ASSOCIATION_RETAIN
-        )
-
-        let mouseLocation = window.mouseLocationOutsideOfEventStream
-        menu.popUp(positioning: nil, at: mouseLocation, in: contentView)
+    @objc func invoke() {
+        action()
     }
 }
 

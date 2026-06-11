@@ -1,19 +1,15 @@
 import AppKit
 import Combine
 
-/// Manages the orb window mode (collapsed / compact) and inactivity auto-hide.
+/// Manages the companion window (Ask Fae text surface + onboarding host).
 ///
-/// Panel expansion logic has been removed — conversation and canvas are now
-/// independent native windows managed by `AuxiliaryWindowManager`.
+/// The Rust orb host owns the product UI. This window stays hidden while the
+/// orb host runs and is surfaced only by explicit user actions (Ask Fae,
+/// global hotkey, menu items). The old collapsed/compact orb state machine
+/// was removed with the legacy orb UI (2026-06-11 cleanup).
 ///
 /// The window is fully frameless (`.borderless`) so there is no title bar to
-/// fight with. `isMovableByWindowBackground` allows drag-to-move. The context
-/// menu (right-click) provides Close/Hide/Quit actions.
-///
-/// When the orb collapses due to inactivity, it docks to the top-left corner
-/// of the screen (below the menu bar). When Fae starts speaking (assistant
-/// generating), the window automatically expands back to compact mode and
-/// comes to the front so the user can see the response.
+/// fight with. `isMovableByWindowBackground` allows drag-to-move.
 ///
 /// ## Glass Architecture
 ///
@@ -25,32 +21,10 @@ import Combine
 @MainActor
 final class WindowStateController: ObservableObject {
 
-    // MARK: - Types
-
-    enum Mode: String {
-        case collapsed
-        case compact
-    }
-
-    enum PanelSide: String {
-        case left
-        case right
-    }
-
-    // MARK: - Published State
-
-    @Published var mode: Mode = .compact
-    @Published var panelSide: PanelSide = .right
-
     // MARK: - Constants
 
-    private let compactWidth: CGFloat = 400
-    private let compactHeight: CGFloat = 740
-    private let collapsedSize: CGFloat = 120
-    private let inactivityDelay: TimeInterval = 300.0
-
-    /// Padding from the left edge and top of the visible frame when collapsed.
-    private let collapsedEdgePadding: CGFloat = 12
+    private let windowWidth: CGFloat = 400
+    private let windowHeight: CGFloat = 740
 
     // MARK: - Window Reference
 
@@ -77,7 +51,7 @@ final class WindowStateController: ObservableObject {
             // ── Frame on primary screen ──────────────────────────────
             guard let screen = NSScreen.screens.first ?? NSScreen.main else { return }
             let visible = screen.visibleFrame
-            let size = NSSize(width: compactWidth, height: compactHeight)
+            let size = NSSize(width: windowWidth, height: windowHeight)
             let x = visible.midX - size.width / 2
             let y = visible.midY - size.height / 2
             window.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: false)
@@ -98,277 +72,15 @@ final class WindowStateController: ObservableObject {
         }
     }
 
-    // MARK: - Callbacks
-
-    /// Called whenever the window transitions to collapsed (orb) mode.
-    /// Wire this in `FaeApp` to clear subtitle bubbles on collapse.
-    var onCollapse: (() -> Void)?
-
-    // MARK: - In-Place Collapse (Canvas Mode)
-
-    /// Frame saved before `transitionToCollapsedInPlace()`. Used by
-    /// `transitionToCompact()` to return to the pre-canvas position rather
-    /// than the default top-left docking corner.
-    private var frameBeforeInPlaceCollapse: NSRect?
-
-    // MARK: - Timer
-
-    private var inactivityTimer: Timer?
-
-    /// Notification observers for pipeline events (assistant generating).
-    private var observations: [NSObjectProtocol] = []
-
-    // MARK: - Init / Deinit
-
-    init() {
-        subscribeToAssistantEvents()
-    }
-
-    deinit {
-        for observation in observations {
-            NotificationCenter.default.removeObserver(observation)
-        }
-    }
-
-    // MARK: - Transitions
-
-    func transitionToCollapsed() {
-        guard mode != .collapsed else { return }
-
-        mode = .collapsed
-
-        guard let window else { return }
-
-        guard let screen = window.screen ?? NSScreen.screens.first else { return }
-        let visibleFrame = screen.visibleFrame
-        let targetSize = NSSize(width: collapsedSize, height: collapsedSize)
-
-        // Dock to top-left of the screen, just below the menu bar.
-        let originX = visibleFrame.minX + collapsedEdgePadding
-        let originY = visibleFrame.maxY - targetSize.height - collapsedEdgePadding
-        let targetFrame = NSRect(origin: NSPoint(x: originX, y: originY), size: targetSize)
-
-        // Float above other windows when collapsed.
-        window.level = .floating
-
-        // Temporarily allow the window to go below its minSize for the
-        // collapsed orb (80x80 is smaller than the 280x400 minimum).
-        window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
-
-        // Remove the window shadow in collapsed mode — the shadow appears
-        // as a dark halo around the circular orb.
-        window.hasShadow = false
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.5
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(targetFrame, display: true)
-        }
-
-        cancelInactivityTimer()
-        onCollapse?()
-    }
-
-    /// Collapse the orb in place (shrink to orb size at current centre).
-    ///
-    /// Used when the canvas opens — the orb steps aside to a small floating
-    /// cloud without docking to the screen corner.
-    func transitionToCollapsedInPlace() {
-        guard mode != .collapsed else { return }
-
-        mode = .collapsed
-
-        guard let window else { return }
-
-        // Save the current compact frame so we can restore it when the canvas closes.
-        frameBeforeInPlaceCollapse = window.frame
-
-        let targetSize = NSSize(width: collapsedSize, height: collapsedSize)
-
-        // Stay centred on the current window position.
-        let currentFrame = window.frame
-        let originX = currentFrame.midX - targetSize.width / 2
-        let originY = currentFrame.midY - targetSize.height / 2
-        guard let screen = window.screen ?? NSScreen.screens.first else { return }
-        let visible = screen.visibleFrame
-        let clampedX = max(visible.minX + collapsedEdgePadding,
-                           min(originX, visible.maxX - targetSize.width - collapsedEdgePadding))
-        let clampedY = max(visible.minY + collapsedEdgePadding,
-                           min(originY, visible.maxY - targetSize.height - collapsedEdgePadding))
-        let targetFrame = NSRect(x: clampedX, y: clampedY, width: targetSize.width, height: targetSize.height)
-
-        window.level = .floating
-        window.minSize = NSSize(width: collapsedSize, height: collapsedSize)
-        window.hasShadow = false
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.4
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(targetFrame, display: true)
-        }
-
-        cancelInactivityTimer()
-        onCollapse?()
-    }
-
-    func transitionToCompact() {
-        let wasCollapsed = mode == .collapsed
-        mode = .compact
-
-        guard let window else { return }
-
-        // Restore normal window level, min size, and shadow.
-        window.level = .normal
-        window.minSize = NSSize(width: 400, height: 660)
-        window.hasShadow = true
-
-        guard let screen = window.screen ?? NSScreen.screens.first else { return }
-        let targetSize = NSSize(width: compactWidth, height: compactHeight)
-        let visibleFrame = screen.visibleFrame
-
-        let originX: CGFloat
-        let originY: CGFloat
-
-        if let savedFrame = frameBeforeInPlaceCollapse {
-            // Expanding from a canvas-triggered in-place collapse — restore the
-            // exact pre-canvas compact position rather than jumping to top-left.
-            frameBeforeInPlaceCollapse = nil
-            originX = max(visibleFrame.minX, min(savedFrame.minX, visibleFrame.maxX - targetSize.width))
-            originY = max(visibleFrame.minY, min(savedFrame.minY, visibleFrame.maxY - targetSize.height))
-        } else if wasCollapsed {
-            // Expanding from the inactivity-docked top-left orb — position the
-            // compact window anchored at the top-left of the visible frame
-            // so it feels like a natural expansion from the orb's docked position.
-            originX = visibleFrame.minX + collapsedEdgePadding
-            originY = visibleFrame.maxY - targetSize.height - collapsedEdgePadding
-        } else {
-            // Already in compact mode — center on current position, clamped to screen.
-            let currentFrame = window.frame
-            var x = currentFrame.midX - targetSize.width / 2
-            var y = currentFrame.midY - targetSize.height / 2
-            x = max(visibleFrame.minX, min(x, visibleFrame.maxX - targetSize.width))
-            y = max(visibleFrame.minY, min(y, visibleFrame.maxY - targetSize.height))
-            originX = x
-            originY = y
-        }
-
-        let targetFrame = NSRect(origin: NSPoint(x: originX, y: originY), size: targetSize)
-
-        let duration = wasCollapsed ? 0.3 : 0.25
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(targetFrame, display: true)
-        }
-
-        // Bring the window to the front so the user can see Fae's response —
-        // unless the Rust orb host owns the product UI and the window is
-        // hidden, in which case it must not auto-surface (orb-first product).
-        if !suppressAutoSurface || window.isVisible {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        if wasCollapsed {
-            // After the expand animation, ask the input bar to claim focus so
-            // the user can type immediately without an extra click.
-            let delay = duration + 0.05
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                NotificationCenter.default.post(
-                    name: .faeWillFocusInputField,
-                    object: nil
-                )
-            }
-        }
-
-        startInactivityTimer()
-    }
-
-    // MARK: - Panel Side Computation
-
-    func computePanelSide() {
-        guard let window else { return }
-        guard let screen = window.screen ?? NSScreen.screens.first else { return }
-        let screenCenterX = screen.visibleFrame.midX
-        let windowCenterX = window.frame.midX
-
-        panelSide = windowCenterX > screenCenterX ? .left : .right
-    }
-
-    // MARK: - Interaction / Inactivity
-
-    func noteActivity() {
-        if mode == .collapsed {
-            transitionToCompact()
-        }
-        resetInactivityTimer()
-    }
-
-    private func startInactivityTimer() {
-        cancelInactivityTimer()
-        inactivityTimer = Timer.scheduledTimer(
-            withTimeInterval: inactivityDelay,
-            repeats: false
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleInactivityTimeout()
-            }
-        }
-    }
-
-    private func resetInactivityTimer() {
-        startInactivityTimer()
-    }
-
-    private func cancelInactivityTimer() {
-        inactivityTimer?.invalidate()
-        inactivityTimer = nil
-    }
-
-    private func handleInactivityTimeout() {
-        transitionToCollapsed()
-    }
-
-    // MARK: - Assistant Event Subscription
-
-    /// Subscribe to `.faeAssistantGenerating` so the window automatically
-    /// expands from collapsed to compact when Fae starts speaking. This
-    /// ensures the user always sees Fae's response even if the orb had
-    /// auto-hidden due to inactivity.
-    private func subscribeToAssistantEvents() {
-        let center = NotificationCenter.default
-
-        observations.append(
-            center.addObserver(
-                forName: .faeAssistantGenerating, object: nil, queue: .main
-            ) { [weak self] notification in
-                let active = notification.userInfo?["active"] as? Bool ?? false
-                Task { @MainActor [weak self] in
-                    guard let self, active else { return }
-                    // Fae is generating a response — bring the window back
-                    // to compact mode if it was collapsed.
-                    self.noteActivity()
-                }
-            }
-        )
-
-    }
-
     // MARK: - Visibility
 
-    /// When the Rust orb host is the product UI, the Swift window must never
-    /// surface itself automatically (e.g. on assistant generation). Explicit
-    /// user actions (showWindow via Ask Fae, dock reopen) still surface it.
-    var suppressAutoSurface = false
-
     func hideWindow() {
-        cancelInactivityTimer()
         window?.orderOut(nil)
     }
 
     func showWindow() {
         window?.makeKeyAndOrderFront(nil)
-        startInactivityTimer()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - Window Property Enforcement

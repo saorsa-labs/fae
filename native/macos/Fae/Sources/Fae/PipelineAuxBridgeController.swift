@@ -9,7 +9,7 @@ import Foundation
 /// | Notification / Event | Action |
 /// |---|---|
 /// | `.faePipelineState` (`pipeline.canvas_visibility`) | Toggle auxiliary windows |
-/// | `.faeAudioLevel` | Update `@Published var audioRMS` (read by `NativeOrbView` via SwiftUI binding) |
+/// | `.faeAudioLevel` | Update `@Published var audioRMS` |
 /// | `.faePipelineState` (control/model/error events) | Update `@Published var status` |
 ///
 /// `status` is shown in `SettingsView` under a "Pipeline" diagnostics section.
@@ -61,7 +61,7 @@ final class PipelineAuxBridgeController: ObservableObject {
     }
 
     /// Last audio RMS level received from the pipeline (0.0–1.0).
-    /// Read directly by `NativeOrbView` via SwiftUI property binding.
+    /// Audio level for UI surfaces that visualise speech activity.
     @Published var audioRMS: Double = 0.0
 
     /// Latest voice attention diagnostics for the Settings > Diagnostics screen.

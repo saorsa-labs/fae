@@ -40,9 +40,10 @@ final class RustUiShellController {
     var onMemoryInbox: (() -> Void)?
     var onRescueMode: (() -> Void)?
 
-    /// Called when the orb host exits with a non-zero status so the app can
-    /// fall back to the Swift window instead of leaving Fae invisible.
-    var onUnexpectedExit: (() -> Void)?
+    /// Called after the orb host has crashed repeatedly and automatic
+    /// restarts are exhausted. The app shows a Retry/Quit alert — the orb
+    /// host is the only product UI, so there is no window fallback.
+    var onRestartExhausted: (() -> Void)?
 
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -50,6 +51,19 @@ final class RustUiShellController {
     private var stderrPipe: Pipe?
     private var stdoutBuffer = Data()
     private var cancellables: Set<AnyCancellable> = []
+
+    // MARK: - Crash Restart Policy
+
+    /// Maximum automatic restarts after unexpected exits before asking the
+    /// user. Reset whenever the host stays alive for `stableRunInterval`.
+    private static let maxRestartAttempts = 3
+    /// A run longer than this is considered stable and resets the counter.
+    private static let stableRunInterval: TimeInterval = 60
+    private var restartAttempts = 0
+    private var lastLaunchDate: Date?
+    /// Set during `stop()` so an intentional shutdown never triggers restart.
+    private var isStoppingIntentionally = false
+    private var pendingRestartTask: Task<Void, Never>?
 
     /// True while the Rust orb host process is running. When active, the orb
     /// is the product UI and the Swift main window stays hidden.
@@ -88,15 +102,16 @@ final class RustUiShellController {
 
         process.terminationHandler = { [weak self] terminated in
             Task { @MainActor [weak self] in
-                self?.process = nil
-                self?.stdinPipe = nil
-                self?.stdoutPipe = nil
-                self?.stderrPipe = nil
-                if terminated.terminationStatus == 0 {
+                guard let self else { return }
+                self.process = nil
+                self.stdinPipe = nil
+                self.stdoutPipe = nil
+                self.stderrPipe = nil
+                if self.isStoppingIntentionally || terminated.terminationStatus == 0 {
                     NSLog("RustUiShellController: orb host exited status=%d", terminated.terminationStatus)
                 } else {
                     NSLog("RustUiShellController: orb host exited unexpectedly status=%d", terminated.terminationStatus)
-                    self?.onUnexpectedExit?()
+                    self.scheduleRestartAfterCrash()
                 }
             }
         }
@@ -110,6 +125,7 @@ final class RustUiShellController {
             return
         }
 
+        lastLaunchDate = Date()
         self.process = process
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
@@ -122,6 +138,9 @@ final class RustUiShellController {
     }
 
     func stop() {
+        isStoppingIntentionally = true
+        pendingRestartTask?.cancel()
+        pendingRestartTask = nil
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
         send(["type": "quit"])
@@ -131,6 +150,44 @@ final class RustUiShellController {
         stdoutPipe = nil
         stderrPipe = nil
         cancellables.removeAll()
+    }
+
+    /// Reset the crash counter and relaunch — used by the Retry alert action.
+    func retryAfterExhaustedRestarts() {
+        restartAttempts = 0
+        isStoppingIntentionally = false
+        startIfAvailable()
+    }
+
+    /// Restart the orb host after a crash: up to `maxRestartAttempts` times
+    /// with exponential backoff (1s, 2s, 4s). A stable run of at least
+    /// `stableRunInterval` resets the counter. When attempts are exhausted,
+    /// `onRestartExhausted` fires so the app can offer Retry/Quit.
+    private func scheduleRestartAfterCrash() {
+        // A long stable run means earlier crashes are stale — start fresh.
+        if let lastLaunchDate, Date().timeIntervalSince(lastLaunchDate) >= Self.stableRunInterval {
+            restartAttempts = 0
+        }
+
+        guard restartAttempts < Self.maxRestartAttempts else {
+            NSLog("RustUiShellController: orb host crashed %d times — giving up, asking user", restartAttempts)
+            onRestartExhausted?()
+            return
+        }
+
+        restartAttempts += 1
+        let backoffSeconds = pow(2.0, Double(restartAttempts - 1)) // 1, 2, 4
+        NSLog(
+            "RustUiShellController: restarting orb host (attempt %d/%d) in %.0fs",
+            restartAttempts, Self.maxRestartAttempts, backoffSeconds
+        )
+        pendingRestartTask?.cancel()
+        pendingRestartTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(backoffSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.pendingRestartTask = nil
+            self?.startIfAvailable()
+        }
     }
 
     private func observeBridgeSources() {

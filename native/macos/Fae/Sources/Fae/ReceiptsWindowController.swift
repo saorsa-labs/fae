@@ -6,7 +6,7 @@ import SwiftUI
 /// Manages a floating NSPanel that shows the action receipts timeline.
 ///
 /// The panel is a lightweight non-activating utility window, styled to match
-/// ConversationWindowView. Call `show(receiptStore:)` to open/focus it.
+/// the other floating panels. Call `show(receiptStore:)` to open/focus it.
 ///
 /// Wiring:
 /// - FaeApp creates a single instance and registers for `.faeShowReceiptsPanel`.

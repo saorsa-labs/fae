@@ -60,14 +60,6 @@ private struct FaeRootView: View {
         ZStack {
             ContentView()
 
-            if faeCore.isLicenseAccepted,
-               faeCore.shouldShowStartupIntro,
-               !pipelineAux.isPipelineReady
-            {
-                StartupIntroOverlay()
-                    .transition(.opacity)
-            }
-
             if !faeCore.isLicenseAccepted {
                 LicenseAcceptanceView(
                     onAccept: onAcceptLicense,
@@ -81,30 +73,6 @@ private struct FaeRootView: View {
                 faeCore.markStartupIntroSeen()
             }
         }
-    }
-}
-
-private struct StartupIntroOverlay: View {
-    private let html = LoadingCanvasContent.crawlExperience()
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .ignoresSafeArea()
-
-            CanvasHTMLView(htmlContent: html)
-                .background(Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .ignoresSafeArea()
-        }
-        .overlay(alignment: .bottom) {
-            Text("Fae is loading her local brain, voice, and startup context.")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
-                .padding(.bottom, 18)
-        }
-        .allowsHitTesting(false)
     }
 }
 
@@ -135,7 +103,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let personalityEditor = PersonalityEditorController()
     let handoff = DeviceHandoffController()
     let orbState = OrbStateController()
-    let orbAnimation = OrbAnimationState()
     let orbBridge = OrbStateBridgeController()
     let conversation = ConversationController()
     let conversationBridge = ConversationBridgeController()
@@ -192,8 +159,11 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
 
     nonisolated func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         Task { @MainActor [weak self] in
-            if !flag {
-                self?.mainWindow?.makeKeyAndOrderFront(nil)
+            guard let self else { return }
+            // Orb-first product: when the orb host is running, the orb IS the
+            // UI — dock reopen must not resurrect the legacy Swift window.
+            if !flag, !self.rustUiShell.isActive {
+                self.mainWindow?.makeKeyAndOrderFront(nil)
                 sender.activate(ignoringOtherApps: true)
             }
         }
@@ -287,14 +257,31 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         }
         rustUiShell.onMemoryInbox = { [weak self] in self?.memoryImport.show() }
         rustUiShell.onRescueMode = { [weak self] in self?.toggleRescueMode() }
-        rustUiShell.onUnexpectedExit = { [weak self] in
-            // Orb host died: fall back to the Swift window so Fae stays usable.
-            self?.windowState.suppressAutoSurface = false
-            self?.mainWindow?.makeKeyAndOrderFront(nil)
-            NSApplication.shared.activate(ignoringOtherApps: true)
+        rustUiShell.onRestartExhausted = { [weak self] in
+            // The orb host is the only product UI. After repeated crashes and
+            // exhausted automatic restarts, ask the user instead of silently
+            // resurrecting a legacy window.
+            self?.presentOrbHostFailureAlert()
         }
         rustUiShell.startIfAvailable()
-        windowState.suppressAutoSurface = rustUiShell.isActive
+    }
+
+    /// Shown when the orb host has crashed repeatedly and automatic restarts
+    /// are exhausted. The orb is the only product UI — offer Retry or Quit.
+    private func presentOrbHostFailureAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Fae's orb stopped working"
+        alert.informativeText = "The orb display crashed repeatedly and could not be restarted automatically. You can try again, or quit Fae."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Retry")
+        alert.addButton(withTitle: "Quit Fae")
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            rustUiShell.retryAfterExhaustedRestarts()
+        } else {
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     private func prefillFaePrompt(_ text: String) {
@@ -315,13 +302,11 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Wire controllers.
         dockIcon.start()
         orbBridge.orbState = orbState
-        orbAnimation.bind(to: orbState)
         conversationBridge.subtitleState = subtitles
         conversationBridge.conversationController = conversation
         pipelineAux.canvasController = canvasController
         pipelineAux.auxiliaryWindows = auxiliaryWindows
         pipelineAux.subtitleState = subtitles
-        windowState.onCollapse = { [weak subtitles] in subtitles?.clearAll() }
         auxiliaryWindows.windowState = windowState
         auxiliaryWindows.subtitleState = subtitles
         auxiliaryWindows.inputController = inputOverlay
@@ -433,7 +418,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         )
         .environmentObject(handoff)
         .environmentObject(orbState)
-        .environmentObject(orbAnimation)
         .environmentObject(conversation)
         .environmentObject(conversationBridge)
         .environmentObject(pipelineAux)
@@ -571,9 +555,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Global hotkey — summon Fae from anywhere (Ctrl+Shift+A).
         hotkeyManager.start { [weak self] in
             guard let self else { return }
-            self.windowState.transitionToCompact()
-            NSApp.activate(ignoringOtherApps: true)
-            self.mainWindow?.makeKeyAndOrderFront(nil)
+            self.windowState.showWindow()
         }
 
         // Hold-to-talk (Right Option key) — press to listen, release to stop.

@@ -106,25 +106,35 @@ final class AuxiliaryWindowManager: ObservableObject {
         if approvalPanel == nil { approvalPanel = makeInputPanel(controller: controller) }
         guard let panel = approvalPanel else { return }
 
-        let anchorWindow = windowState?.window
-        // Expand to compact so the approval card and conversation are both visible.
-        windowState?.transitionToCompact()
-        guard let anchorWindow else { return }
-
-        let anchorFrame = anchorWindow.frame
+        // The approval card is a standalone floating panel — it must never
+        // surface the hidden companion window (the orb host is the product
+        // UI). Anchor over the companion window when it's visible, otherwise
+        // center on the main screen.
         let panelSize = NSSize(width: 340, height: 300)
-        let x = anchorFrame.midX - panelSize.width / 2
-        // For large windows, center the panel over the window so it's always
-        // visible regardless of where the window sits on screen. For small
-        // windows (main orb), position above as before.
-        let y: CGFloat
-        if anchorFrame.height > 400 {
-            y = anchorFrame.midY - panelSize.height / 2
+        let frame: NSRect
+        if let anchorWindow = windowState?.window, anchorWindow.isVisible {
+            let anchorFrame = anchorWindow.frame
+            let x = anchorFrame.midX - panelSize.width / 2
+            let y: CGFloat
+            if anchorFrame.height > 400 {
+                y = anchorFrame.midY - panelSize.height / 2
+            } else {
+                y = anchorFrame.maxY + 8
+            }
+            frame = clampToScreenFrame(
+                NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height),
+                screen: anchorWindow.screen
+            )
         } else {
-            y = anchorFrame.maxY + 8
+            let screen = NSScreen.main
+            let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            frame = NSRect(
+                x: visible.midX - panelSize.width / 2,
+                y: visible.midY - panelSize.height / 2,
+                width: panelSize.width,
+                height: panelSize.height
+            )
         }
-        let screen = anchorWindow.screen ?? windowState?.window?.screen
-        let frame = clampToScreenFrame(NSRect(x: x, y: y, width: panelSize.width, height: panelSize.height), screen: screen)
 
         panel.setFrame(frame, display: false)
         panel.alphaValue = 0
