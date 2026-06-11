@@ -31,8 +31,12 @@ impl LocalMistralrsAdapter {
     /// model against `models.lock` first (see [`crate::ModelsLock`]); this
     /// constructor performs the actual mistral.rs load.
     pub async fn load_text(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
+        // Prefix cache disabled: with audio-bearing requests (S18) a cache hit
+        // across consecutive multimodal prompts corrupts the turn (observed as
+        // "heard nothing" / instant empty replies). Correct over fast.
         let model = TextModelBuilder::new(model_id)
             .with_isq(IsqType::Q4K)
+            .with_prefix_cache_n(None)
             .with_logging()
             .build()
             .await
@@ -46,8 +50,11 @@ impl LocalMistralrsAdapter {
     /// Same Q4K ISQ path; the S13 harness validated Gemma-4 through this
     /// loader ("auto-detect loader — needed for multimodal models").
     pub async fn load_auto(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
+        // Prefix cache disabled — same audio-correctness rationale as
+        // [`Self::load_text`].
         let model = ModelBuilder::new(model_id)
             .with_isq(IsqType::Q4K)
+            .with_prefix_cache_n(None)
             .with_logging()
             .build()
             .await
