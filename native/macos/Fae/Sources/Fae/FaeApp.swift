@@ -206,6 +206,16 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let faeCore = self?.faeCore else { return }
             Task { await faeCore.pttToggle() }
         }
+        // Orb long-press: hold starts capture, release sends — mirrors the
+        // Right ⌥ hold-to-talk gesture (and the future touch pattern).
+        rustUiShell.onTalkStart = { [weak self] in
+            guard let faeCore = self?.faeCore else { return }
+            Task { await faeCore.pttStart() }
+        }
+        rustUiShell.onTalkStop = { [weak self] in
+            guard let faeCore = self?.faeCore else { return }
+            Task { await faeCore.pttStop() }
+        }
         rustUiShell.onSendText = { [weak self] text in
             // Composer text follows the typed-input path (trusted owner).
             self?.faeCore.injectText(text)

@@ -26,10 +26,14 @@ pub enum MenuAction {
     MemoryInbox,
     RescueMode,
     Quit,
-    /// Stdout-only event (plain left-click on the orb body = push-to-talk
-    /// toggle, S18). Never appears in the context menu, so it can only be
-    /// emitted by the click handler — `action_from_id` has no mapping for it.
+    /// Push-to-talk toggle: the "Talk to Fae" menu item and the Messages
+    /// panel's mic button (capture ends on pause, second toggle, or Stop).
     TalkToggle,
+    /// Stdout-only events from the orb long-press gesture: press-and-hold
+    /// starts capture, release sends. Never in the context menu —
+    /// `action_from_id` has no mapping for them.
+    TalkStart,
+    TalkStop,
 }
 
 impl MenuAction {
@@ -60,6 +64,8 @@ impl MenuAction {
             MenuAction::RescueMode => "rescue_mode",
             MenuAction::Quit => "quit",
             MenuAction::TalkToggle => "talk_toggle",
+            MenuAction::TalkStart => "talk_start",
+            MenuAction::TalkStop => "talk_stop",
         }
     }
 }
@@ -71,6 +77,9 @@ pub struct OrbMenu {
 impl OrbMenu {
     pub fn new() -> Result<Self, muda::Error> {
         let menu = Menu::new();
+        // Right ⌥ hold-to-talk is the primary gesture; this item is the
+        // discoverable mouse fallback (capture ends on pause or via Stop).
+        append_item(&menu, MenuAction::TalkToggle, "Talk to Fae")?;
         append_item(&menu, MenuAction::Settings, "Settings…")?;
         append_item(&menu, MenuAction::ShowMessages, "Messages…")?;
         append_item(
@@ -175,6 +184,8 @@ fn id(action: MenuAction) -> MenuId {
         MenuAction::RescueMode => "rescue_mode",
         MenuAction::Quit => "quit",
         MenuAction::TalkToggle => "talk_toggle",
+        MenuAction::TalkStart => "talk_start",
+        MenuAction::TalkStop => "talk_stop",
     })
 }
 

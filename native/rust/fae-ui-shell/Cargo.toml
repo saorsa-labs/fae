@@ -14,4 +14,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tao = "0.35"
 wgpu = "0.20"
-wry = "0.55"
+# `transparent` is opt-in (private `drawsBackground` API): without it the
+# whisper pill's webview paints an opaque canvas behind the frosted pill.
+wry = { version = "0.55", features = ["transparent"] }

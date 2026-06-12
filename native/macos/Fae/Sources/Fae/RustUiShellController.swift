@@ -22,6 +22,9 @@ final class RustUiShellController {
     var onResetConversation: (() -> Void)?
     /// Plain left-click on the orb body (S18 push-to-talk toggle).
     var onTalkToggle: (() -> Void)?
+    /// Orb long-press gesture: hold starts capture, release sends.
+    var onTalkStart: (() -> Void)?
+    var onTalkStop: (() -> Void)?
     /// Text submitted from the messages-panel composer.
     var onSendText: ((String) -> Void)?
     var onHideFae: (() -> Void)?
@@ -531,6 +534,8 @@ final class RustUiShellController {
         switch action {
         case "settings": onSettings?()
         case "talk_toggle": onTalkToggle?()
+        case "talk_start": onTalkStart?()
+        case "talk_stop": onTalkStop?()
         case "open_browser_data_panel", "show_messages": break // Handled inside the orb host.
         case "reset_conversation":
             send(["type": "clear_conversation"])

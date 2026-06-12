@@ -14,7 +14,7 @@ use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
-    keyboard::{KeyCode, ModifiersState},
+    keyboard::KeyCode,
     window::{Window, WindowBuilder},
 };
 use wgpu::util::DeviceExt;
@@ -501,20 +501,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut state = pollster::block_on(State::new(window))?;
     let mut orb_ui = OrbUiModel::new();
     let mut cursor_position = PhysicalPosition::new(210.0, 210.0);
-    let mut modifiers = ModifiersState::default();
     let mut web_panels: Vec<WebPanel> = Vec::new();
     let pill = open_pill_panel(&event_loop)?;
     position_pill(window, &pill);
     let mut hovering = false;
     let mut last_pill: Option<(String, String)> = None;
-    refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
+    // When Fae entered thinking mode — drives the pill's elapsed counter so
+    // long turns (NaN retries can take 30s+) read as progress, not a hang.
+    let mut thinking_since: Option<Instant> = None;
+    // Orb long-press gesture (owner design, touch-friendly): press-and-HOLD
+    // starts capture (release sends); moving past the slop before the hold
+    // fires means the user is dragging the orb, not talking.
+    let mut press = PressState::Idle;
+    refresh_pill(&pill, &orb_ui, hovering, None, &mut last_pill);
 
     event_loop.run(move |event, target, control_flow| {
-        *control_flow = if state.active {
+        // A pending long-press needs the loop awake to fire its timer even
+        // while the orb is quiescent (Wait would sleep past the threshold).
+        *control_flow = if state.active || matches!(press, PressState::Pending { .. }) {
             ControlFlow::Poll
         } else {
             ControlFlow::Wait
         };
+
+        // Long-press timer: a stationary press that survives the hold
+        // threshold becomes push-to-talk; the Swift host starts capture.
+        if let PressState::Pending { at, .. } = press {
+            if at.elapsed().as_millis() >= LONG_PRESS_MS {
+                press = PressState::Talking;
+                emit_menu_action(MenuAction::TalkStart);
+            }
+        }
 
         match event {
             Event::UserEvent(UserEvent::Menu(event)) => {
@@ -534,8 +551,21 @@ fn main() -> Result<(), Box<dyn Error>> {
                     control_flow,
                 );
                 // The pill mirrors the orb's visibility and narrates its state.
+                if orb_ui.ui_mode == FaeUiState::Thinking {
+                    if thinking_since.is_none() {
+                        thinking_since = Some(Instant::now());
+                    }
+                } else {
+                    thinking_since = None;
+                }
                 pill.window.set_visible(window.is_visible());
-                refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
+                refresh_pill(
+                    &pill,
+                    &orb_ui,
+                    hovering,
+                    thinking_since.map(|since| since.elapsed().as_secs()),
+                    &mut last_pill,
+                );
                 window.request_redraw();
             }
             Event::UserEvent(UserEvent::PanelAction(action_json)) => {
@@ -557,20 +587,40 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     cursor_position = position;
+                    if let PressState::Pending { origin, .. } = press {
+                        let dx = position.x - origin.x;
+                        let dy = position.y - origin.y;
+                        if (dx * dx + dy * dy).sqrt() > PRESS_SLOP_PX {
+                            // Moved before the hold fired: this is a drag.
+                            press = PressState::Idle;
+                            if let Err(error) = window.drag_window() {
+                                log::warn!("failed to start orb drag: {error}");
+                            }
+                        }
+                    }
                 }
                 WindowEvent::CursorEntered { .. } => {
                     hovering = true;
-                    refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
+                    refresh_pill(
+                        &pill,
+                        &orb_ui,
+                        hovering,
+                        thinking_since.map(|since| since.elapsed().as_secs()),
+                        &mut last_pill,
+                    );
                 }
                 WindowEvent::CursorLeft { .. } => {
                     hovering = false;
-                    refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
+                    refresh_pill(
+                        &pill,
+                        &orb_ui,
+                        hovering,
+                        thinking_since.map(|since| since.elapsed().as_secs()),
+                        &mut last_pill,
+                    );
                 }
                 WindowEvent::Moved(_) => {
                     position_pill(window, &pill);
-                }
-                WindowEvent::ModifiersChanged(new_modifiers) => {
-                    modifiers = new_modifiers;
                 }
                 WindowEvent::KeyboardInput {
                     event:
@@ -601,25 +651,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                             Ok(panel) => web_panels.push(panel),
                             Err(error) => log::error!("failed to open messages panel: {error}"),
                         }
-                    } else if modifiers.alt_key() {
-                        // Option+drag moves the orb; a plain click is reserved
-                        // for push-to-talk (S18).
-                        if let Err(error) = window.drag_window() {
-                            log::warn!("failed to start orb drag: {error}");
-                        }
-                    } else if orb_ui.status_phase == "starting" {
-                        // Clicking while Fae is still waking must never be a
-                        // silent void — nudge the pill so the user sees why
-                        // nothing happened yet.
+                    } else {
+                        // Press intent is decided by what happens next: hold
+                        // still ≥ LONG_PRESS_MS → talk; move first → drag.
+                        press = PressState::Pending {
+                            at: Instant::now(),
+                            origin: cursor_position,
+                        };
+                    }
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => match press {
+                    PressState::Talking => {
+                        // Long-press release = send (mirrors the ⌥ gesture).
+                        press = PressState::Idle;
+                        emit_menu_action(MenuAction::TalkStop);
+                    }
+                    PressState::Pending { .. } => {
+                        // A short stationary click: not a gesture — pulse the
+                        // pill so the hold/drag affordances get taught.
+                        press = PressState::Idle;
                         if let Err(error) = pill.webview.evaluate_script("window.__pillPulse();") {
                             log::warn!("failed to pulse whisper pill: {error}");
                         }
-                    } else {
-                        // Plain left-click on the orb body = talk toggle. The
-                        // Swift host starts/stops push-to-talk capture.
-                        emit_menu_action(MenuAction::TalkToggle);
+                        refresh_pill(
+                            &pill,
+                            &orb_ui,
+                            true,
+                            thinking_since.map(|since| since.elapsed().as_secs()),
+                            &mut last_pill,
+                        );
                     }
-                }
+                    PressState::Idle => {}
+                },
                 _ => {}
             },
             Event::WindowEvent {
@@ -643,6 +710,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             Event::MainEventsCleared if state.active => {
+                // Tick the thinking counter once a second (refresh_pill dedupes
+                // by content, so per-frame calls only repaint on text change).
+                if thinking_since.is_some() {
+                    refresh_pill(
+                        &pill,
+                        &orb_ui,
+                        hovering,
+                        thinking_since.map(|since| since.elapsed().as_secs()),
+                        &mut last_pill,
+                    );
+                }
                 window.request_redraw();
             }
             _ => {}
@@ -834,6 +912,23 @@ struct PillPanel {
     webview: WebView,
 }
 
+/// Orb long-press gesture state: hold ≥ [`LONG_PRESS_MS`] without moving past
+/// [`PRESS_SLOP_PX`] → talk (release sends); move first → drag the orb.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PressState {
+    Idle,
+    Pending {
+        at: Instant,
+        origin: PhysicalPosition<f64>,
+    },
+    Talking,
+}
+
+/// Hold duration before a stationary press becomes push-to-talk.
+const LONG_PRESS_MS: u128 = 400;
+/// Cursor travel that turns a pending press into a window drag.
+const PRESS_SLOP_PX: f64 = 8.0;
+
 fn open_pill_panel(
     target: &tao::event_loop::EventLoop<UserEvent>,
 ) -> Result<PillPanel, Box<dyn Error>> {
@@ -887,7 +982,13 @@ window.__pillPulse=function(){var p=document.getElementById('pill');
 </script></body></html>"#;
 
 /// What the pill should say right now, or None to fade it out.
-fn pill_content(orb_ui: &OrbUiModel, hovering: bool) -> Option<(String, &'static str)> {
+/// Owner decision (2026-06-12): Right ⌥ hold-to-talk is THE capture gesture
+/// — the mouse only moves the orb — so every line teaches the key, not clicks.
+fn pill_content(
+    orb_ui: &OrbUiModel,
+    hovering: bool,
+    thinking_secs: Option<u64>,
+) -> Option<(String, &'static str)> {
     match orb_ui.status_phase.as_str() {
         "starting" => {
             let pct = orb_ui
@@ -899,18 +1000,29 @@ fn pill_content(orb_ui: &OrbUiModel, hovering: bool) -> Option<(String, &'static
         "error" => Some(("Fae needs attention — open Messages".to_string(), "alert")),
         "stopping" | "stopped" => None,
         _ => match orb_ui.ui_mode {
-            FaeUiState::Listening => Some(("Listening — click to send".to_string(), "listen")),
-            FaeUiState::Thinking => Some(("Thinking…".to_string(), "info")),
-            FaeUiState::Speaking => Some(("Speaking — click to interrupt".to_string(), "info")),
+            FaeUiState::Listening => Some(("Listening — let go to send".to_string(), "listen")),
+            FaeUiState::Thinking => {
+                // Long turns (NaN retries) can run 30s+: a ticking counter
+                // reads as progress where a static label reads as a hang.
+                let text = match thinking_secs {
+                    Some(secs) if secs >= 5 => format!("Thinking — {secs}s"),
+                    _ => "Thinking…".to_string(),
+                };
+                Some((text, "info"))
+            }
+            FaeUiState::Speaking => Some(("Speaking — tap ⌥ to interrupt".to_string(), "info")),
             FaeUiState::Quiescent => {
                 if !orb_ui.has_user_message() {
                     // The one teaching moment that matters: shown until the
-                    // user's first turn of the session. Explicit about both
-                    // gestures until people get used to her (owner request).
-                    Some(("Click me — or hold Right ⌥ — and speak".to_string(), "hint"))
+                    // user's first turn of the session.
+                    Some((
+                        "Hold Right ⌥ (or hold me) and speak — let go to send".to_string(),
+                        "hint",
+                    ))
                 } else if hovering {
                     Some((
-                        "Click to talk · ⌥-drag to move · right-click for menu".to_string(),
+                        "Hold ⌥ or press-and-hold to talk · drag to move · right-click for menu"
+                            .to_string(),
                         "hint",
                     ))
                 } else {
@@ -925,9 +1037,10 @@ fn refresh_pill(
     pill: &PillPanel,
     orb_ui: &OrbUiModel,
     hovering: bool,
+    thinking_secs: Option<u64>,
     last: &mut Option<(String, String)>,
 ) {
-    let content = pill_content(orb_ui, hovering);
+    let content = pill_content(orb_ui, hovering, thinking_secs);
     let keyed = content
         .as_ref()
         .map(|(text, kind)| (text.clone(), (*kind).to_string()));
@@ -1084,7 +1197,7 @@ fn messages_html(orb_ui: &OrbUiModel) -> String {
 
     let messages = if orb_ui.messages.is_empty() {
         "<div class='empty'><p class='empty-title'>Say hello</p>\
-         <p>Click the orb — or hold Right&nbsp;⌥ — and just speak.</p>\
+         <p>Hold Right&nbsp;⌥, speak, and let go to send.</p>\
          <p>You can also type below; Fae reads both the same way.</p></div>"
             .to_string()
     } else {
@@ -1162,9 +1275,9 @@ details[open] summary .chev{{transform:rotate(180deg)}}
 </style></head><body><main>
 <details id='help'><summary><span class='badge'>?</span>Voice commands<span class='chev'>▼</span></summary>
 <div class='help-body'>
-<p><b>Click the orb</b> (or hold <b>Right ⌥</b>) and speak — click again to send early, or just pause and Fae sends it for you.</p>
+<p><b>Hold Right ⌥</b> — or <b>press-and-hold the orb</b> — and speak; <b>let go to send</b>. The mic button below also listens (Fae sends when you pause).</p>
 <p>Try: <span class='eg'>“What's on my calendar today?”</span> · <span class='eg'>“Remind me to call Mum at six.”</span> · <span class='eg'>“Search the web for tonight's weather.”</span></p>
-<p><b>⌥-drag</b> moves the orb · <b>right-click</b> opens the menu · typing below works exactly like speaking.</p>
+<p><b>Drag</b> the orb to move it · <b>right-click</b> opens the menu · typing below works exactly like speaking.</p>
 </div></details>
 {status_chip}
 <div id='thread'>{messages}</div>
