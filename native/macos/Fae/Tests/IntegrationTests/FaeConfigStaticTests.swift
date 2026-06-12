@@ -6,14 +6,14 @@ final class FaeConfigStaticTests: XCTestCase {
     // MARK: - [voice] (S18 push-to-talk)
 
     func testVoiceConfigDefaults() {
-        // PTT-only is opt-in: a default install keeps the always-listening
-        // pipeline; nil hotkey means Right Option.
+        // Push-to-talk is THE capture model (S18 kill-list 3/3); nil hotkey
+        // means Right Option.
         let config = FaeConfig()
-        XCTAssertFalse(config.voice.pushToTalkOnly)
         XCTAssertNil(config.voice.pttHotkeyKeyCode)
     }
 
     func testVoiceConfigParsesFromTOML() throws {
+        // The retired pushToTalkOnly key must be silently ignored, not fatal.
         let toml = """
         [voice]
         pushToTalkOnly = true
@@ -25,7 +25,6 @@ final class FaeConfigStaticTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let config = FaeConfig.load(from: url)
-        XCTAssertTrue(config.voice.pushToTalkOnly)
         XCTAssertEqual(config.voice.pttHotkeyKeyCode, 96)
     }
 
@@ -126,12 +125,8 @@ final class FaeConfigStaticTests: XCTestCase {
         XCTAssertNotNil(result)
     }
 
-    // MARK: - recommendedSTTModel
-
-    func testRecommendedSTTModel() {
-        let result = FaeConfig.recommendedSTTModel(totalMemoryBytes: 32 * 1024 * 1024 * 1024, llmPreset: "auto")
-        XCTAssertNotNil(result)
-    }
+    // recommendedSTTModel removed (S18 kill-list 3/3) — ASR happens inside
+    // the LLM turn.
 
     // MARK: - recommendedTTSModel
 

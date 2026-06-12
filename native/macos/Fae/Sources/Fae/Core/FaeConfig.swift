@@ -9,8 +9,6 @@ struct FaeConfig: Codable {
     var vad: VadConfig = VadConfig()
     var llm: LlmConfig = LlmConfig()
     var tts: TtsConfig = TtsConfig()
-    var stt: SttConfig = SttConfig()
-    var streamingASR: StreamingASRConfig = StreamingASRConfig()
     var conversation: ConversationConfig = ConversationConfig()
     var bargeIn: BargeInConfig = BargeInConfig()
     var memory: MemoryConfig = MemoryConfig()
@@ -231,37 +229,9 @@ struct FaeConfig: Codable {
         var useDaemonEngine: Bool = false
     }
 
-    // MARK: - STT
-
-    struct SttConfig: Codable {
-        var modelId: String = "mlx-community/Qwen3-ASR-1.7B-4bit"
-    }
-
-    /// Configuration for the dual-path streaming ASR fast-path.
-    ///
-    /// When enabled, Parakeet TDT runs alongside Qwen3-ASR as a lightweight
-    /// CTC-based streaming recognizer. Parakeet provides low-latency partial
-    /// transcripts during speech, while Qwen3-ASR handles final high-accuracy
-    /// transcription after speech ends.
-    struct StreamingASRConfig: Codable {
-        /// Whether the streaming ASR fast-path is enabled.
-        /// Default: false — Qwen3-ASR growing-buffer (1.6% WER) is the primary path.
-        /// External engines (Parakeet, Moonshine) were evaluated but accuracy/complexity
-        /// tradeoff doesn't justify dual-path.  Set to true when a <2% WER streaming
-        /// engine becomes available.
-        var enabled: Bool = false
-
-        /// HuggingFace model repository for the streaming ASR model.
-        var modelId: String = "UsefulSensors/moonshine-streaming-tiny"
-
-        /// Audio samples to accumulate before each decode pass (16kHz mono).
-        /// Default 8000 = 500ms. Lower values reduce latency but increase GPU load.
-        var chunkSamples: Int = 8_000
-
-        /// Minimum audio samples before the very first decode pass.
-        /// Default 4000 = 250ms. Ensures enough context for meaningful output.
-        var minChunkSamples: Int = 4_000
-    }
+    // STT / streaming-ASR config removed (S18 kill-list 3/3): push-to-talk
+    // audio rides the daemon request directly — ASR happens inside the LLM
+    // turn, so there is no local STT model to configure.
 
     // MARK: - Conversation
 
@@ -455,12 +425,9 @@ struct FaeConfig: Codable {
     // MARK: - Voice interaction (S18 push-to-talk)
 
     struct VoiceConfig: Codable {
-        /// When true, deliberate capture (orb click / hotkey) is the ONLY audio
-        /// entry: the continuous always-listening path — speaker gate, wake
-        /// word, echo suppression, barge-in — is bypassed (not deleted).
-        var pushToTalkOnly: Bool = false
         /// Hotkey for push-to-talk hold (macOS virtual key code). nil falls
-        /// back to Right Option (61).
+        /// back to Right Option (61). Push-to-talk is THE capture model
+        /// (S18 kill-list 3/3) — the old `pushToTalkOnly` flag is retired.
         var pttHotkeyKeyCode: Int?
     }
 
@@ -668,47 +635,8 @@ struct FaeConfig: Codable {
         }
     }
 
-    // MARK: - STT Model Selection
-
-    /// Select the appropriate STT model based on system RAM and LLM preset.
-    ///
-    /// Gemma 4 tier strategy (pending mlx-swift-lm Gemma 4 support):
-    /// - **>=32 GB**: Gemma 4 E2B as dedicated ASR (3.6GB). The LLM is 26B-A4B.
-    /// - **<32 GB**: No separate STT — Gemma 4 E4B/E2B handles audio-direct in the LLM.
-    ///
-    /// Current (Qwen fallback):
-    /// - >=16 GiB: Qwen3-ASR 1.7B (full quality)
-    /// - <16 GiB: Qwen3-ASR 0.6B (compact)
-    ///
-    /// When Gemma 4 audio-direct mode is active (E2B/E4B unified), this method
-    /// returns `nil` to signal that no separate STT model is needed — the LLM
-    /// handles ASR internally via structured `<transcript>` output.
-    static func recommendedSTTModel(
-        totalMemoryBytes: UInt64? = nil,
-        llmPreset: String = "auto"
-    ) -> String? {
-        let canonical = canonicalVoiceModelPreset(llmPreset)
-
-        // Gemma unified tiers: LLM handles ASR directly — no separate STT needed.
-        // (Pending mlx-swift-lm Gemma 4 support; until then, falls through to Qwen.)
-        switch canonical {
-        case "gemma_4_e2b", "gemma_4_e4b":
-            return nil  // Audio-direct: LLM does ASR
-        case "gemma_4_26b_a4b":
-            // Quality tier: E2B as dedicated ASR alongside 26B-A4B LLM.
-            return "mlx-community/gemma-4-e2b-it-4bit"
-        default:
-            break
-        }
-
-        // Qwen fallback (current default path).
-        let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
-        if totalGB >= 16 {
-            return "mlx-community/Qwen3-ASR-1.7B-4bit"
-        } else {
-            return "mlx-community/Qwen3-ASR-0.6B-4bit"
-        }
-    }
+    // STT model selection removed (S18 kill-list 3/3) — ASR happens inside
+    // the LLM turn (push-to-talk audio rides the daemon request directly).
 
     // MARK: - TTS Model Selection
 
@@ -1069,10 +997,8 @@ struct FaeConfig: Codable {
                 default: break
                 }
             case "stt":
-                if key == "modelId" {
-                    guard let v = parseString(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.stt.modelId = v
-                }
+                // Retired section (S18 kill-list 3/3) — silently ignored.
+                break
             case "conversation":
                 switch key {
                 case "wakeWord":
@@ -1104,8 +1030,8 @@ struct FaeConfig: Codable {
             case "voice":
                 switch key {
                 case "pushToTalkOnly":
-                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
-                    config.voice.pushToTalkOnly = v
+                    // Retired (S18 kill-list 3/3): push-to-talk is unconditional.
+                    break
                 case "pttHotkeyKeyCode":
                     guard let v = parseInt(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.voice.pttHotkeyKeyCode = v
@@ -1356,10 +1282,6 @@ struct FaeConfig: Codable {
         lines.append("useDaemonEngine = \(tts.useDaemonEngine ? "true" : "false")")
         lines.append("")
 
-        lines.append("[stt]")
-        lines.append("modelId = \(encodeString(stt.modelId))")
-        lines.append("")
-
         lines.append("[conversation]")
         lines.append("wakeWord = \(encodeString(conversation.wakeWord))")
         lines.append("enabled = \(conversation.enabled ? "true" : "false")")
@@ -1372,7 +1294,6 @@ struct FaeConfig: Codable {
         lines.append("")
 
         lines.append("[voice]")
-        lines.append("pushToTalkOnly = \(voice.pushToTalkOnly ? "true" : "false")")
         if let keyCode = voice.pttHotkeyKeyCode {
             lines.append("pttHotkeyKeyCode = \(keyCode)")
         }

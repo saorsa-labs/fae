@@ -287,18 +287,8 @@ final class KeywordSpotterTests: XCTestCase {
 
     // MARK: - Data Types
 
-    func testStreamingSTTResultDefaults() {
-        let result = StreamingSTTResult(text: "hello", isFinal: false)
-        XCTAssertEqual(result.text, "hello")
-        XCTAssertFalse(result.isFinal)
-        XCTAssertNil(result.confidence)
-    }
-
-    func testStreamingSTTResultEquality() {
-        let a = StreamingSTTResult(text: "hello", isFinal: false, confidence: 0.9)
-        let b = StreamingSTTResult(text: "hello", isFinal: false, confidence: 0.9)
-        XCTAssertEqual(a, b)
-    }
+    // StreamingSTTResult tests removed with the streaming STT path
+    // (S18 kill-list 3/3).
 
     func testKeywordBiasConfigCodableRoundTrip() throws {
         let config = KeywordBiasConfig(

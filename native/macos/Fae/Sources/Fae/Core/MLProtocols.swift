@@ -5,15 +5,8 @@ import Foundation
 
 // MARK: - Engine Protocols
 
-/// Speech-to-text engine protocol.
-///
-/// Implementations: `MLXSTTEngine` (Phase 1, Qwen3-ASR via mlx-audio-swift).
-protocol STTEngine: Actor {
-    func load(modelID: String) async throws
-    func transcribe(samples: [Float], sampleRate: Int) async throws -> STTResult
-    var isLoaded: Bool { get }
-    var loadState: MLEngineLoadState { get }
-}
+// STTEngine protocol removed (S18 kill-list 3/3): ASR happens inside the LLM
+// turn — push-to-talk audio rides the daemon request directly (Gemma ASR).
 
 /// Text-to-speech engine protocol.
 ///

@@ -493,41 +493,8 @@ final class CorpusEvalTests: XCTestCase {
         XCTAssertGreaterThan(detectRate, 0.85, "VAD should detect >85% of speech command utterances")
     }
 
-    // MARK: - Streaming STT Buffer Mechanics on Real Audio
-
-    /// Feed speech command audio through the streaming STT engine to verify
-    /// buffer accumulation and interval mechanics with real audio.
-    func testStreamingSTTBufferOnRealAudio() async {
-        guard FileManager.default.fileExists(atPath: Self.speechCommandsDir.path) else { return }
-
-        let files = Self.sampleWAVFiles(
-            from: Self.speechCommandsDir.appendingPathComponent("stop"),
-            count: 5
-        )
-        guard !files.isEmpty else { return }
-
-        let engine = MLXSTTEngine()
-
-        for file in files {
-            guard let samples = Self.loadPCM16WAV(at: file) else { continue }
-
-            // Feed in 576-sample chunks, same as the pipeline.
-            // Without a loaded model, feedStreamingAudio drops samples safely.
-            let chunkSize = 576
-            var offset = 0
-            while offset + chunkSize <= samples.count {
-                await engine.feedStreamingAudio(Array(samples[offset..<(offset + chunkSize)]))
-                offset += chunkSize
-            }
-
-            // Without a loaded model, the session won't start.
-            let isCurrentlyStreaming = await engine.isStreaming
-            XCTAssertFalse(isCurrentlyStreaming,
-                           "Engine should not be streaming without a loaded model")
-
-            await engine.resetStreaming()
-        }
-    }
+    // Streaming STT buffer eval removed (S18 kill-list 3/3) — the local STT
+    // engine is gone; ASR happens inside the LLM turn.
 
     // MARK: - SNR Estimation Calibration
 

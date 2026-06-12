@@ -3,23 +3,7 @@ import Combine
 import Foundation
 @testable import Fae
 
-// MARK: - Mock STT Engine
-
-actor MockSTTEngine: STTEngine {
-    var isLoaded: Bool = true
-    var loadState: MLEngineLoadState = .loaded
-    var transcription: String = "hello world"
-    var latencyMs: UInt64 = 0
-
-    func load(modelID: String) async throws {}
-
-    func transcribe(samples: [Float], sampleRate: Int) async throws -> STTResult {
-        if latencyMs > 0 {
-            try await Task.sleep(nanoseconds: latencyMs * 1_000_000)
-        }
-        return STTResult(text: transcription, language: "en", confidence: 0.95)
-    }
-}
+// MockSTTEngine removed (S18 kill-list 3/3) — ASR happens inside the LLM turn.
 
 // MARK: - Mock LLM Engine
 

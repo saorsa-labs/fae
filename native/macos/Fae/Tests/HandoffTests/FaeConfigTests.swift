@@ -90,8 +90,6 @@ final class FaeConfigTests: XCTestCase {
         original.tts.speed = 0.95
         original.tts.referenceText = "hello world"
 
-        original.stt.modelId = "mlx-community/Qwen3-ASR-0.6B-4bit"
-
         original.conversation.wakeWord = "hey fae"
         original.conversation.requireDirectAddress = true
         original.conversation.sleepPhrases = ["sleep now", "good night"]
@@ -128,8 +126,6 @@ final class FaeConfigTests: XCTestCase {
         XCTAssertEqual(loaded.tts.voice, "custom")
         XCTAssertEqual(loaded.tts.speed, 0.95, accuracy: 0.0001)
         XCTAssertEqual(loaded.tts.referenceText, "hello world")
-
-        XCTAssertEqual(loaded.stt.modelId, "mlx-community/Qwen3-ASR-0.6B-4bit")
 
         XCTAssertEqual(loaded.conversation.wakeWord, "hey fae")
         XCTAssertTrue(loaded.conversation.requireDirectAddress)

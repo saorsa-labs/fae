@@ -17,11 +17,10 @@ enum PipelineMode: String, Sendable {
 // MARK: - Degraded Mode
 
 /// Degraded operating mode when individual engines fail to load.
+/// (`noSTT` removed in S18 kill-list 3/3 — ASR happens inside the LLM turn.)
 enum PipelineDegradedMode: String, Sendable {
     /// All engines loaded and operational.
     case full
-    /// STT engine unavailable.
-    case noSTT
     /// LLM engine unavailable.
     case noLLM
     /// TTS engine unavailable.

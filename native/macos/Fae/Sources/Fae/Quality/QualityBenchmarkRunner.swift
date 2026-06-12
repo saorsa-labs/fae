@@ -20,19 +20,15 @@ actor QualityBenchmarkRunner {
     }
 
     /// Run all benchmarks and return aggregated results.
+    /// STT benchmarking removed (S18 kill-list 3/3) — ASR happens inside the
+    /// LLM turn, so there is no separate STT engine to benchmark.
     func runAll(
-        stt: (any STTEngine)? = nil,
         llm: (any LLMEngine)? = nil,
         tts: (any TTSEngine)? = nil
     ) async -> BenchmarkResult {
         let runId = UUID().uuidString
         let startedAt = Date()
         var metrics: [QualityMetricRecord] = []
-
-        if let stt {
-            let sttMetrics = await benchmarkSTT(stt, runId: runId)
-            metrics.append(contentsOf: sttMetrics)
-        }
 
         if let llm {
             let llmMetrics = await benchmarkLLM(llm, runId: runId)
@@ -67,30 +63,6 @@ actor QualityBenchmarkRunner {
     }
 
     // MARK: - Individual Benchmarks
-
-    private func benchmarkSTT(_ engine: any STTEngine, runId: String) async -> [QualityMetricRecord] {
-        var metrics: [QualityMetricRecord] = []
-
-        let sampleRate = 16000
-        let samples = [Float](repeating: 0.0, count: sampleRate) // 1 second of silence
-
-        let start = Date()
-        do {
-            _ = try await engine.transcribe(samples: samples, sampleRate: sampleRate)
-            let latency = Date().timeIntervalSince(start) * 1000
-            metrics.append(QualityMetricRecord(
-                metricName: .sttLatencyMs, value: latency,
-                context: "benchmark", runId: runId
-            ))
-        } catch {
-            metrics.append(QualityMetricRecord(
-                metricName: .sttErrorCount, value: 1,
-                context: "benchmark: \(error.localizedDescription)", runId: runId
-            ))
-        }
-
-        return metrics
-    }
 
     private func benchmarkLLM(_ engine: any LLMEngine, runId: String) async -> [QualityMetricRecord] {
         var metrics: [QualityMetricRecord] = []

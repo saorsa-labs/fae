@@ -7,7 +7,6 @@ struct SettingsGeneralTab: View {
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var faeCore: FaeCore
     @StateObject private var audio = AudioDeviceController()
-    @State private var pushToTalkOnly = false
     @State private var pttHotkeySelection = -1
     @State private var pttControlsHydrated = false
 
@@ -74,15 +73,7 @@ struct SettingsGeneralTab: View {
             }
 
             Section("Push to Talk") {
-                Toggle("Push-to-talk only", isOn: $pushToTalkOnly)
-                    .onChange(of: pushToTalkOnly) { _, newValue in
-                        guard pttControlsHydrated else { return }
-                        faeCore.patchConfig(
-                            key: "voice.push_to_talk_only",
-                            payload: ["value": newValue]
-                        )
-                    }
-                Text("Click the orb (or hold the key below) to talk. Continuous listening, wake word and barge-in are bypassed — your speech goes straight to the model.")
+                Text("Click the orb (or hold the key below) to talk — your speech goes straight to the model.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Picker("Hold-to-talk key", selection: $pttHotkeySelection) {
@@ -136,7 +127,6 @@ struct SettingsGeneralTab: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            pushToTalkOnly = faeCore.isPushToTalkOnly()
             pttHotkeySelection = faeCore.pttHotkeyKeyCode() ?? -1
             // Defer the hydrated flag one runloop turn so the assignments
             // above never fire the persisting onChange handlers.

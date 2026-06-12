@@ -59,22 +59,10 @@ actor ModelManager {
     /// Used for camera presence detection, screen triage, app identification.
     private(set) var fastVLMEngine: MLXVLMEngine?
 
-    /// Core ML speech verifier — runs on ANE, preferred over MLX (GPU).
-    /// Falls back to `speechVerifier` (MLX/GPU) if Core ML model not bundled.
-    private(set) var coreMLSpeechVerifier: CoreMLAudioClassifier?
-
-    /// Post-VAD speech verifier — rejects music/noise segments that Silero misclassifies.
-    /// Non-critical: if unavailable, segments pass through with spectral tilt filter only.
-    private(set) var speechVerifier: MLXSpeechVerifier?
-
-    /// Streaming ASR engine (Moonshine V2) — fast-path for partial transcripts.
-    /// Non-critical: if unavailable, streaming falls back to growing-buffer Qwen3-ASR.
-    private(set) var parakeetEngine: (any StreamingSTTEngine)?
-
-    /// Whether the streaming ASR fast-path is available.
-    var parakeetAvailable: Bool {
-        parakeetEngine != nil
-    }
+    // Speech verifiers (Core ML + MLX) and the streaming ASR fast path were
+    // unloaded in S18 kill-list 3/3 — push-to-talk audio rides the daemon
+    // request directly (Gemma ASR), so no post-VAD verification or local STT
+    // runs. The MLXSpeechVerifier/CoreMLAudioClassifier types stay compiled.
 
     /// Get a wired memory ticket for inference using measured or estimated budgets.
     func generationTicket(promptTokens: Int, expectedNewTokens: Int) -> WiredMemoryTicket? {
@@ -237,14 +225,14 @@ actor ModelManager {
         }
     }
 
-    /// Load all pipeline models (STT, LLM, TTS, Speaker) with progress events.
+    /// Load all pipeline models (LLM, TTS, Speaker) with progress events.
     ///
     /// Uses degraded-mode loading: if one engine fails, the others still load.
     /// The LLM is the critical engine — if it fails, the pipeline cannot respond.
-    /// STT/TTS/Speaker failures result in degraded mode (text-only, no voice,
-    /// or no voice identity).
+    /// TTS/Speaker failures result in degraded mode (no voice output, or no
+    /// voice identity). ASR happens inside the LLM turn (S18: push-to-talk
+    /// audio rides the daemon request directly) — there is no separate STT load.
     func loadAll(
-        stt: MLXSTTEngine,
         llm: any LLMEngine,
         tts: any TTSEngine,
         speaker: CoreMLSpeakerEncoder? = nil,
@@ -258,21 +246,7 @@ actor ModelManager {
         self.recommendedContextSize = effectiveContext
         var failedEngines: [String] = []
 
-        // STT — degraded mode if it fails (text input only). Retry up to 3 times
-        // with exponential backoff for transient network/download failures.
-        eventBus.send(.runtimeProgress(stage: "stt", progress: 0))
         eventBus.send(.runtimeProgress(stage: "load_started", progress: 0.05))
-        do {
-            try await retryLoad(engineName: "STT", maxAttempts: 3) {
-                try await stt.load(modelID: config.stt.modelId)
-            }
-            eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.3))
-            eventBus.send(.runtimeProgress(stage: "stt", progress: 1.0))
-        } catch {
-            NSLog("ModelManager: STT load failed after retries (degraded — text input only): %@", error.localizedDescription)
-            failedEngines.append("STT")
-            eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.3))
-        }
 
         // LLM — critical engine, throw if it fails.
         eventBus.send(.runtimeProgress(stage: "llm", progress: 0.33))
@@ -565,51 +539,12 @@ actor ModelManager {
         // barge-in, which push-to-talk bypassed. Interruption is the orb
         // click / hotkey; wake detection uses acoustic templates only.
 
-        // Streaming ASR fast-path — disabled.
-        // Qwen3-ASR growing-buffer (1.6% WER, 362ms first partial) is the primary
-        // streaming path.  External fast-path engines (Parakeet, Moonshine) were
-        // evaluated but their accuracy/complexity tradeoff doesn't justify the cost:
-        // - Parakeet TDT: 7.9% WER (5x worse than Qwen3-ASR)
-        // - Moonshine Tiny: 4.5% WER (3x worse), GPU monopolization issues
-        // The StreamingSTTEngine protocol and PipelineCoordinator fast-path wiring
-        // remain for future engines that achieve <2% WER with streaming support.
-        if config.streamingASR.enabled {
-            NSLog("ModelManager: streaming ASR fast-path disabled (Qwen3-ASR growing-buffer is primary)")
-        }
-
         // Turn detection: SmartTurn removed (S18 kill-list) — PTT endpointing
-        // is click/release/silence; the always-on path uses the rule-based
-        // heuristics in PipelineCoordinator.silenceThresholdMs().
+        // is click/release/silence.
 
-        // Speech verifier — prefer Core ML (ANE) over MLX (GPU).
-        let svCoreMLURL = Bundle.faeResources.url(forResource: "speech_verifier", withExtension: "mlmodelc", subdirectory: "Models")
-        let svConfigURL = Bundle.faeResources.url(forResource: "speech_verifier_config", withExtension: "json", subdirectory: "Models")
-        if let modelURL = svCoreMLURL, let configURL = svConfigURL {
-            let sv = CoreMLAudioClassifier(name: "SpeechVerifier")
-            do {
-                try await sv.load(modelURL: modelURL, configURL: configURL)
-                self.coreMLSpeechVerifier = sv
-                NSLog("ModelManager: speech verifier loaded (Core ML / ANE)")
-            } catch {
-                NSLog("ModelManager: Core ML speech verifier load failed: %@ — trying MLX fallback",
-                      error.localizedDescription)
-            }
-        }
-        // MLX fallback if Core ML not available.
-        if self.coreMLSpeechVerifier == nil, MLXSpeechVerifier.modelExists {
-            let sv = MLXSpeechVerifier()
-            do {
-                try await sv.load(modelPath: MLXSpeechVerifier.defaultModelPath)
-                self.speechVerifier = sv
-                NSLog("ModelManager: speech verifier loaded (MLX / GPU fallback)")
-            } catch {
-                NSLog("ModelManager: speech verifier load failed (spectral tilt fallback): %@",
-                      error.localizedDescription)
-            }
-        }
-        if self.coreMLSpeechVerifier == nil, self.speechVerifier == nil {
-            NSLog("ModelManager: speech verifier not available — using spectral tilt filter only")
-        }
+        // ASR + speech verification: removed (S18 kill-list 3/3). Push-to-talk
+        // audio is WAV-encoded and rides the daemon request (Gemma ASR + LLM
+        // in one turn) — no local STT engine, no post-VAD verifier loads.
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))
 
@@ -663,18 +598,6 @@ actor ModelManager {
         FaeEnvironment.defaults.set(source, forKey: "fae.tts.runtime_voice_source")
         FaeEnvironment.defaults.set(lockApplied, forKey: "fae.tts.runtime_voice_lock_applied")
         FaeEnvironment.defaults.set(Date().timeIntervalSince1970, forKey: "fae.tts.runtime_voice_status_ts")
-    }
-
-    // MARK: - Streaming ASR Fast-Path (Reserved)
-    //
-    // The StreamingSTTEngine protocol, PipelineCoordinator fast-path wiring,
-    // and FaeConfig.StreamingASRConfig are retained for future use.
-    // No engine is loaded — parakeetEngine stays nil and the pipeline uses
-    // Qwen3-ASR growing-buffer exclusively.
-
-    /// Testable check for the `FAE_DISABLE_STREAMING_ASR` env var.
-    static func isStreamingASRDisabledByEnvironment(_ env: [String: String]) -> Bool {
-        env["FAE_DISABLE_STREAMING_ASR"] == "1"
     }
 
     // MARK: - Wired Memory Management (Phase 2)

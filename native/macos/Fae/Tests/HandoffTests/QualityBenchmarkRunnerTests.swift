@@ -4,22 +4,8 @@ import XCTest
 
 // MARK: - Mock Engines for Benchmarking
 
-private actor MockSTTEngineForBenchmark: STTEngine {
-    var isLoaded: Bool = true
-    var loadState: MLEngineLoadState = .loaded
-    let latencyMs: UInt64
-
-    init(latencyMs: UInt64 = 50) {
-        self.latencyMs = latencyMs
-    }
-
-    func load(modelID: String) async throws {}
-
-    func transcribe(samples: [Float], sampleRate: Int) async throws -> STTResult {
-        try await Task.sleep(nanoseconds: latencyMs * 1_000_000)
-        return STTResult(text: "hello", language: "en", confidence: 0.95)
-    }
-}
+// STT mock removed (S18 kill-list 3/3): ASR happens inside the LLM turn —
+// QualityBenchmarkRunner no longer benchmarks a separate STT engine.
 
 private actor MockLLMEngineForBenchmark: LLMEngine {
     var isLoaded: Bool = true
@@ -92,16 +78,6 @@ private actor MockTTSEngineForBenchmark: TTSEngine {
 // MARK: - Tests
 
 final class QualityBenchmarkRunnerTests: XCTestCase {
-    func testBenchmarkSTTRecordsLatencyMetric() async {
-        let runner = QualityBenchmarkRunner()
-        let stt = MockSTTEngineForBenchmark(latencyMs: 50)
-        let result = await runner.runAll(stt: stt)
-
-        let sttMetrics = result.metrics.filter { $0.metricName == .sttLatencyMs }
-        XCTAssertEqual(sttMetrics.count, 1)
-        XCTAssertGreaterThan(sttMetrics.first?.value ?? 0, 0)
-    }
-
     func testBenchmarkLLMRecordsThroughputAndLatency() async {
         let runner = QualityBenchmarkRunner()
         let llm = MockLLMEngineForBenchmark(tokenDelayMs: 10, tokenCount: 5)
@@ -119,11 +95,10 @@ final class QualityBenchmarkRunnerTests: XCTestCase {
 
     func testRunAllProducesBenchmarkResult() async {
         let runner = QualityBenchmarkRunner()
-        let stt = MockSTTEngineForBenchmark()
         let llm = MockLLMEngineForBenchmark()
         let tts = MockTTSEngineForBenchmark()
 
-        let result = await runner.runAll(stt: stt, llm: llm, tts: tts)
+        let result = await runner.runAll(llm: llm, tts: tts)
         XCTAssertFalse(result.runId.isEmpty)
         XCTAssertGreaterThan(result.metrics.count, 0)
         XCTAssertTrue(result.completedAt >= result.startedAt)
@@ -131,21 +106,20 @@ final class QualityBenchmarkRunnerTests: XCTestCase {
 
     func testRunAllPassesWithFastMocks() async {
         let runner = QualityBenchmarkRunner()
-        let stt = MockSTTEngineForBenchmark(latencyMs: 10)
         let llm = MockLLMEngineForBenchmark(tokenDelayMs: 1, tokenCount: 100)
         let tts = MockTTSEngineForBenchmark(chunkDelayMs: 5, chunkCount: 3)
 
-        let result = await runner.runAll(stt: stt, llm: llm, tts: tts)
+        let result = await runner.runAll(llm: llm, tts: tts)
         // Fast mocks should pass all default thresholds
         XCTAssertTrue(result.passed)
     }
 
     func testRunAllFailsWithSlowMocks() async {
         let runner = QualityBenchmarkRunner()
-        // STT taking 5 seconds exceeds 3000ms max threshold
-        let stt = MockSTTEngineForBenchmark(latencyMs: 5000)
+        // First TTS chunk after 4 seconds exceeds the 3000ms max threshold.
+        let tts = MockTTSEngineForBenchmark(chunkDelayMs: 4000, chunkCount: 1)
 
-        let result = await runner.runAll(stt: stt)
+        let result = await runner.runAll(tts: tts)
         XCTAssertFalse(result.passed)
 
         let failedResults = result.thresholdResults.filter { $0.status == .fail }

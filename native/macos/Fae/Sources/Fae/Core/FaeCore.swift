@@ -159,7 +159,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
         ProcessInfo.processInfo.environment["FAE_LOW_MEMORY_TEST_PROFILE"] == "1"
     }
 
-    private let sttEngine = MLXSTTEngine()
     /// Default is the in-process MLX engine; replaced by `DaemonLLMEngine`
     /// during `start()` when `llm.useDaemonEngine` is set and the daemon
     /// launches successfully (falls back to MLX loudly otherwise).
@@ -306,7 +305,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 }
 
                 try await modelManager.loadAll(
-                    stt: sttEngine,
                     llm: llmEngine,
                     tts: ttsEngine,
                     speaker: speakerEncoder,
@@ -453,17 +451,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     speakerProfileStore: speakerProfileStore,
                     audioCaptureManager: captureManager,
                     audioPlaybackManager: playbackManager,
-                    sttEngine: sttEngine,
                     wakeWordProfileStore: wakeWordProfileStore
                 )
                 let toolAnalytics = try? Self.createToolAnalyticsStore()
-                let parakeetEngine = await modelManager.parakeetEngine
                 let coordinator = PipelineCoordinator(
                     eventBus: eventBus,
                     capture: captureManager,
                     playback: playbackManager,
-                    sttEngine: sttEngine,
-                    streamingSTTEngine: parakeetEngine,
                     llmEngine: llmEngine,
                     ttsEngine: ttsEngine,
                     config: pipelineConfig,
@@ -800,11 +794,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     // MARK: - Push-to-Talk (S18)
-
-    /// Live read of `voice.pushToTalkOnly` (Settings can change it at runtime).
-    func isPushToTalkOnly() -> Bool {
-        config.voice.pushToTalkOnly
-    }
 
     /// Live read of `voice.pttHotkeyKeyCode` (nil = default, Right Option).
     func pttHotkeyKeyCode() -> Int? {
@@ -1686,12 +1675,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
             break // Barge-in is always on — ignore config patches.
 
         case "voice.push_to_talk_only":
-            guard let value = value as? Bool else { return }
-            config.voice.pushToTalkOnly = value
-            persistConfig(reason: "config.patch.voice.push_to_talk_only")
-            if let coordinator = pipelineCoordinator {
-                Task { await coordinator.setPushToTalkOnly(value) }
-            }
+            // S18 kill-list 3/3: push-to-talk is the only capture model — the
+            // flag is retired and patches are ignored.
+            break
 
         case "voice.ptt_hotkey_key_code":
             // nil/absent value resets to the default (Right Option).
@@ -2405,18 +2391,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// Check if an owner voiceprint is enrolled in the speaker profile store.
     func hasOwnerVoiceprint() async -> Bool {
         await speakerProfileStore.hasOwnerProfile()
-    }
-
-    /// Capture pre-roll audio when PTT is pressed after a failed wake-word detection.
-    func captureMissedWakeIfNeeded() async {
-        guard let coordinator = pipelineCoordinator else { return }
-        let hadFailed = await coordinator.consumeFailedWake()
-        guard hadFailed, let store = missedWakeStore else { return }
-        let samples = await captureManager.recentAudio(seconds: 2.0)
-        guard !samples.isEmpty else { return }
-        Task.detached(priority: .background) {
-            await store.save(samples: samples)
-        }
     }
 
     /// Mute/unmute the microphone via the pipeline coordinator.

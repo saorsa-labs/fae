@@ -40,6 +40,55 @@ public enum KeywordCategory: String, Sendable {
     case wake
 }
 
+// MARK: - Keyword Bias Configuration
+
+/// Configuration for keyword spotting on transcripts.
+///
+/// Defines phrases that should be detected with low latency. Checked by
+/// `KeywordSpotter`. (Moved here from StreamingSTTEngine.swift when the
+/// streaming STT path was deleted in S18 kill-list 3/3.)
+public struct KeywordBiasConfig: Sendable, Codable {
+    /// Phrases that trigger an immediate pipeline interrupt.
+    public var interruptPhrases: [String]
+
+    /// Phrases that activate Fae's attention (wake words).
+    public var wakePhrases: [String]
+
+    /// Minimum confidence threshold for keyword detection (0.0 = check all).
+    public var minimumConfidence: Float
+
+    /// Whether keyword detection is case-insensitive.
+    public var caseInsensitive: Bool
+
+    /// Whether to use fuzzy matching (Levenshtein edit distance).
+    public var fuzzyMatching: Bool
+
+    public init(
+        interruptPhrases: [String] = KeywordBiasConfig.defaultInterruptPhrases,
+        wakePhrases: [String] = KeywordBiasConfig.defaultWakePhrases,
+        minimumConfidence: Float = 0.0,
+        caseInsensitive: Bool = true,
+        fuzzyMatching: Bool = true
+    ) {
+        self.interruptPhrases = interruptPhrases
+        self.wakePhrases = wakePhrases
+        self.minimumConfidence = minimumConfidence
+        self.caseInsensitive = caseInsensitive
+        self.fuzzyMatching = fuzzyMatching
+    }
+
+    public static let defaultInterruptPhrases: [String] = [
+        "stop", "quiet", "shut up", "that's enough", "enough",
+        "be quiet", "hush", "silence", "cancel", "never mind",
+    ]
+
+    public static let defaultWakePhrases: [String] = [
+        "hey fae", "hi fae", "fae", "okay fae",
+    ]
+
+    public static let `default` = KeywordBiasConfig()
+}
+
 // MARK: - Keyword Spotter
 
 /// Watches streaming partial transcripts for configured keywords.

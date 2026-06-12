@@ -93,22 +93,27 @@ orb click / hotkey → mic capture (16kHz) → WAV → fae-daemon
                                       └── Self-Config
 ```
 
-> S18 (2026-06-11): push-to-talk is the primary capture model. The always-on
-> VAD/speaker-ID/wake-word path is bypassed; voice identity is retired
+> S18 (kill-list 3/3, 2026-06-12): push-to-talk is THE capture model. The
+> always-on VAD/speaker-ID/wake-word speech flow is DELETED (wake-word and
+> speech-verifier types stay compiled, disabled); voice identity is retired
 > (teardown plan: docs/architecture/voice-identity-teardown-plan-2026-06-11.md).
 
 ### Model stack
 
 | Engine | Model | Framework | Purpose |
 |--------|-------|-----------|---------|
-| STT | Qwen3-ASR-1.7B | MLX 4-bit | Speech-to-text |
-| LLM (primary) | Gemma 4 E4B | fae-daemon + mistral.rs (Metal/CPU; llama.cpp fallback planned for Vulkan-class hardware) | Conversation, tool use — when `llm.useDaemonEngine = true` |
+| LLM (primary) | Gemma 4 E4B | fae-daemon + mistral.rs (Metal/CPU; llama.cpp fallback planned for Vulkan-class hardware) | Conversation, ASR + tool use in one audio turn — when `llm.useDaemonEngine = true` |
 | LLM (fallback) | Qwen3.5 (2B / 4B / 35B-A3B) | MLX 4-bit | macOS in-process fallback + LoRA training substrate |
 | TTS | Kokoro-82M (hexgrad) | MLXAudioTTS float32 | Text-to-speech (FaeTTSAdapter, pre-computed voice embeddings, 24 kHz) |
 | VLM (fast) | SmolVLM2-256M | MLXVLM mlx | Always-on vision — presence detection, screen triage (<1GB) |
 | VLM (deep) | SmolVLM2-500M | MLXVLM mlx | On-demand vision — detailed screenshot/camera analysis (1.8GB) |
 | Embedding | Hash-384 | MLX | Semantic memory search |
-| Speaker | ECAPA-TDNN | Core ML fp16 | Voice identity (1024-dim x-vectors) |
+| Speaker | ECAPA-TDNN | Core ML fp16 | fae_self echo rejection (voice identity retired in S18) |
+
+> S18 kill-list 3/3 (2026-06-12): the local STT engine (Qwen3-ASR) and the
+> entire always-on speech flow were deleted. ASR happens inside the LLM turn —
+> push-to-talk audio is WAV-encoded and rides the daemon request directly
+> (`[heard]:` first-line contract). There is no `[stt]` config section.
 
 **Daemon LLM lane**: `llm.useDaemonEngine = true` routes turns through `ML/DaemonLLMEngine.swift` → `fae-daemon` (Unix-socket NDJSON, fail-closed `models.lock` SHA-256 verification). `FAE_DAEMON_BIN` overrides the daemon binary path. If the daemon is unavailable, the pipeline falls back to the in-process MLX engine.
 
@@ -140,17 +145,21 @@ Context scaling: `FaeConfig.recommendedMaxHistory()` = `(contextSize - 5000 - ma
 
 LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target). Main app accesses via `typealias MLXLLMEngine = FaeInference.MLXLLMEngine` in `Core/FaeInferenceAliases.swift`.
 
-### Unified pipeline
+### Unified pipeline (PTT-only, S18)
 
-1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Gemma 4 E4B via daemon lane, or Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
+1. **PTT capture** (orb click / hotkey, 16kHz mono; VAD as plain endpointer — 1.2s trailing silence or 30s cap ends the capture) → 2. **WAV encode** (base64, attached to the turn) → 3. **LLM** (Gemma 4 E4B via daemon lane: ASR + reasoning + tools in one request, `[heard]:` first line is the transcript; Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 4. **Vocab correction** (static + dynamic correctors on the `[heard]` transcript) → 5. **TTS** (Kokoro-82M, sentence-queued) → 6. **Playback** (a new orb click interrupts speech)
+
+There is no always-on listening lane: outside a capture, mic chunks are dropped. Interrupting Fae is the deliberate act of clicking the orb / pressing the hotkey (`pttStart` stops playback and generation).
 
 **Latency**: 3s (greetings) to 30s (multi-tool queries). Orb visual state + thinking tone provide feedback throughout.
 
 **Two-lane tool execution**: The LLM can emit either `<tool_call>` blocks (single tool calls, max 5 per turn) or `<tool_program>` blocks (JavaScript programs executed via JSCRuntime, no call cap). Script blocks run through the same governance stack (ToolExecutor, TrustedActionBroker, DamageControlPolicy) with additional budget enforcement (ScriptBudget) and optional dry-run preview (DryRunPlan).
 
-### Post-ASR vocabulary correction
+### Vocabulary correction on `[heard]` transcripts
 
-Qwen3-ASR has no prompt conditioning or hot-word biasing, so all name corrections happen post-transcription via two layers:
+ASR happens inside the LLM turn, so name corrections apply to the `[heard]:`
+transcript the model returns (extracted in `generateWithTools`, before the
+transcript is stored, displayed, or captured to memory) via two layers:
 
 1. **Static corrections** (`TextProcessing.nameCorrections`): hardcoded patterns for "Fae" name garbles (faith→Fae, phase→Fae, etc.). Applied first via `correctNameRecognition()`.
 
@@ -159,16 +168,11 @@ Qwen3-ASR has no prompt conditioning or hot-word biasing, so all name correction
    - Entity graph (persons, orgs, locations from memory)
    - Enrolled speaker display names
 
-   Generates vowel swaps (a↔e, i↔e), consonant confusion (th↔t, ph↔f, s↔z), and trailing letter variants for each known name. Applied after static corrections, before LLM sees the text.
+   Generates vowel swaps (a↔e, i↔e), consonant confusion (th↔t, ph↔f, s↔z), and trailing letter variants for each known name. Applied after static corrections.
 
 Key files: `Pipeline/TextProcessing.swift` (static), `Pipeline/DynamicVocabularyCorrector.swift` (dynamic), `Memory/MemoryOrchestrator.swift:entityNamesForVocabulary()`.
 
-**Runtime correction learning**: When users say "my name is X not Y", `CorrectionDetector` detects the correction in `PipelineCoordinator.processTranscription()`, stores it as a memory record via `MemoryOrchestrator.storeCorrection()`, and feeds name corrections into `DynamicVocabularyCorrector.addCorrectionPair()` for immediate ASR improvement. Key files: `Pipeline/CorrectionDetector.swift`, `Pipeline/PipelineCoordinator.swift`.
-
-**Future improvements** (documented, not yet implemented):
-- Contextual biasing / hot words at decode time (requires STT model support)
-- Apple SFSpeechRecognizer custom language model as secondary validation
-- LoRA fine-tuning of STT model from conversation correction pairs
+**Runtime correction learning**: When users say "my name is X not Y", `CorrectionDetector` detects the correction — on typed/injected text in `PipelineCoordinator.processTranscription()`, and on the corrected `[heard]` transcript at extraction — stores it as a memory record via `MemoryOrchestrator.storeCorrection()`, and feeds name corrections into `DynamicVocabularyCorrector.addCorrectionPair()` for immediate improvement. Key files: `Pipeline/CorrectionDetector.swift`, `Pipeline/PipelineCoordinator.swift`.
 
 ### Thinking mode
 
@@ -566,8 +570,8 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | Directory | Role |
 |-----------|------|
 | `Core/` | App facade (`FaeCore`), config (`FaeConfig`, incl. `llm.useDaemonEngine`), event bus + types, system prompt assembly (`PersonalityManager`), soul/directive lifecycle, rescue mode, credentials, permissions, diagnostics, CLI tool augmentation + workspace discovery |
-| `ML/` | Model loading (`ModelManager`), STT/TTS/VLM/embedding engines, `DaemonLLMEngine` (daemon LLM lane client), ECAPA-TDNN speaker encoder + profile store, voice libraries |
-| `Pipeline/` | `PipelineCoordinator` (STT→LLM→TTS, barge-in, `injectProactiveQuery()`), VAD, echo suppression, speaker gating, tool-call/script-block parsing, correction detection, post-ASR vocabulary correction, implicit feedback, conversation state, text processing |
+| `ML/` | Model loading (`ModelManager`), TTS/VLM/embedding engines, `DaemonLLMEngine` (daemon LLM lane client), ECAPA-TDNN speaker encoder + profile store, voice libraries |
+| `Pipeline/` | `PipelineCoordinator` (PTT capture→LLM audio turn→TTS, `injectProactiveQuery()`), VAD (PTT endpointer), tool-call/script-block parsing, correction detection, `[heard]` vocabulary correction, implicit feedback, conversation state, text processing |
 | `Runtime/` | JSC tool-program runtime (`JSCRuntime`, bridges, `ScriptBudget`, `DryRunPlan`), Python uv runtime + dependency installer, local runtime server, `PrivacyFilterBridge` |
 | `Tools/` | Tool protocol/registry/executor (4-step flow), built-in + Apple + scheduler + skill + vision tools, ACP delegation, security stack (`DamageControlPolicy`, `ReversibilityEngine`, `SafeBashExecutor`, `PathPolicy`, `NetworkTargetPolicy`, `SecurityEventLogger`, redaction) |
 | `Memory/` | `MemoryOrchestrator` (hybrid ANN+FTS5 recall/capture/GC), GRDB SQLite store, sqlite-vec vector store, entity graph + linking, digests, inbox ingestion, `ImprovementStore`, external review gate, shadow evaluator |

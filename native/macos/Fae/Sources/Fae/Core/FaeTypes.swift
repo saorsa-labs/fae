@@ -129,10 +129,4 @@ enum FaeThinkingLevel: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-struct STTResult: Sendable {
-    let text: String
-    let language: String?
-    let confidence: Float?
-    /// Wall-clock time when the utterance was captured (propagated from VAD onset).
-    var capturedAt: Date? = nil
-}
+// STTResult removed (S18 kill-list 3/3) — ASR happens inside the LLM turn.

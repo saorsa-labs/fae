@@ -1,9 +1,28 @@
 # S18 kill-list 3/3 — Qwen-ASR + non-PTT speech flow removal plan
 
-Status: READY TO EXECUTE (owner decisions locked 2026-06-12). Predecessors
-landed: 1/3 SmartTurn (384f39d7), 2/3 keyword spotter (13480bb8), both CI
-green. Companion context: docs/spikes/S18-pure-gemma-asr-ptt.md ("Post-S18
-consolidation queue").
+Status: EXECUTED 2026-06-12. Predecessors landed: 1/3 SmartTurn (384f39d7),
+2/3 keyword spotter (13480bb8), both CI green. Companion context:
+docs/spikes/S18-pure-gemma-asr-ptt.md ("Post-S18 consolidation queue").
+
+Execution notes (deviations from the delete/keep lists below):
+- `ParakeetStreamingEngine` went with the `StreamingSTTEngine` protocol (its
+  only conformer); `KeywordBiasConfig` moved into `KeywordSpotter.swift`.
+- `AppleSpeechClassifier` DELETED (dead-flow-only, recreatable wrapper).
+- Speech verifiers (CoreML + MLX): confirmed segment-flow-only → coordinator
+  call sites + ModelManager loads removed; type files stay compiled.
+- The ToolRegistry `sttEngine:` param was vestigial (its consumer was the
+  voice_identity tool, deleted in teardown Phase B) — param removed, no tool
+  to migrate.
+- `injectAudio` (companion handoff) now rides the daemon audio lane like a
+  PTT capture (WAV → pendingPTTAudioBase64 → audio turn), marking the turn
+  as owner.
+- Also removed as orphans: `FaeConfig.recommendedSTTModel`, `[stt]` +
+  `[streamingASR]` config sections (legacy keys parse as no-ops),
+  `PipelineDegradedMode.noSTT`, `STTResult`, missed-wake pipeline glue
+  (`markFailedWake`/`consumeFailedWake` — `MissedWakeStore` type kept),
+  speculative prefill, silent-generation buffer, semantic-turn hold, and the
+  in-loop barge-in paths (PTT click is the interrupt; `BargeInState` and the
+  static decision helpers + tests remain).
 
 ## Owner decisions (2026-06-12, verbatim intent)
 

@@ -129,9 +129,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     // Local runtime server for OpenAI-compatible localhost access.
     var localRuntimeServer: FaeLocalRuntimeServer?
 
-    /// Whether the mic was muted before the current PTT press. Used to restore state on release.
-    var micWasMutedBeforePTT: Bool = true
-
     // Test harness (only active with --test-server or FAE_TEST_SERVER=1)
     var testServer: TestServer?
     var debugFileLogger: DebugFileLogger?
@@ -580,11 +577,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Observe PTT notifications. In push-to-talk-only mode (S18) the
-        // hotkey drives deliberate capture: press buffers audio for a direct
-        // audio turn through the daemon. In legacy mode it temporarily
-        // unmutes the always-listening pipeline (restoring prior mute state
-        // on release).
+        // Observe PTT notifications (S18: push-to-talk is THE capture model).
+        // The hotkey drives deliberate capture: press buffers audio for a
+        // direct audio turn through the daemon, release ends-and-sends.
         NotificationCenter.default.addObserver(
             forName: .faePTTPressed,
             object: nil,
@@ -593,15 +588,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let faeCore = self.faeCore
             Task { @MainActor in
-                if faeCore.isPushToTalkOnly() {
-                    await faeCore.pttStart()
-                    return
-                }
-                self.micWasMutedBeforePTT = await faeCore.isMicMuted()
-                await faeCore.pipelineSetMicMuted(false)
-
-                // Capture pre-roll audio if a wake-word detection recently failed.
-                await faeCore.captureMissedWakeIfNeeded()
+                await faeCore.pttStart()
             }
         }
         NotificationCenter.default.addObserver(
@@ -612,11 +599,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let faeCore = self.faeCore
             Task { @MainActor in
-                if faeCore.isPushToTalkOnly() {
-                    await faeCore.pttStop()
-                    return
-                }
-                await faeCore.pipelineSetMicMuted(self.micWasMutedBeforePTT)
+                await faeCore.pttStop()
             }
         }
 

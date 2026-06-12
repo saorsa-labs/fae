@@ -223,38 +223,8 @@ final class AudioEvalHarnessTests: XCTestCase {
         }
     }
 
-    // MARK: - Streaming STT Partial Stability Eval
-
-    func testStreamingPartialStabilityOnCorpus() async {
-        let entries = Self.loadCorpus().filter { !$0.transcript.isEmpty }
-        guard !entries.isEmpty else { return }
-
-        // For each speech clip, verify that the streaming session lifecycle works:
-        // start → feed audio → reset. Without a loaded model, feedStreamingAudio
-        // silently drops samples (session is nil), but the API shouldn't crash.
-        for entry in entries {
-            let wavURL = Self.corpusDir.appendingPathComponent(entry.file)
-            guard let samples = Self.loadWAV(at: wavURL) else { continue }
-
-            let engine = MLXSTTEngine()
-            let chunkSize = 576
-            var offset = 0
-
-            // Without a loaded model, startStreamingSession is a no-op
-            // and feedStreamingAudio drops samples safely.
-            while offset + chunkSize <= samples.count {
-                let chunk = Array(samples[offset..<(offset + chunkSize)])
-                await engine.feedStreamingAudio(chunk)
-                offset += chunkSize
-            }
-
-            let isCurrentlyStreaming = await engine.isStreaming
-            XCTAssertFalse(isCurrentlyStreaming,
-                           "Engine should not be streaming without a loaded model")
-
-            await engine.resetStreaming()
-        }
-    }
+    // Streaming STT partial-stability eval removed (S18 kill-list 3/3) —
+    // the local STT engine is gone; ASR happens inside the LLM turn.
 
     // MARK: - Keyword Classifier Eval (placeholder — requires loaded model)
 

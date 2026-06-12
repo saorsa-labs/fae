@@ -25,7 +25,6 @@ final class ToolRegistry: Sendable {
         speakerProfileStore: SpeakerProfileStore? = nil,
         audioCaptureManager: AudioCaptureManager? = nil,
         audioPlaybackManager: AudioPlaybackManager? = nil,
-        sttEngine: MLXSTTEngine? = nil,
         wakeWordProfileStore: WakeWordProfileStore? = nil
     ) -> ToolRegistry {
         let allTools: [any Tool] = Self.allBuiltinTools(
@@ -37,7 +36,6 @@ final class ToolRegistry: Sendable {
             speakerProfileStore: speakerProfileStore,
             audioCaptureManager: audioCaptureManager,
             audioPlaybackManager: audioPlaybackManager,
-            sttEngine: sttEngine,
             wakeWordProfileStore: wakeWordProfileStore
         )
         return ToolRegistry(tools: allTools)
@@ -53,7 +51,6 @@ final class ToolRegistry: Sendable {
         speakerProfileStore: SpeakerProfileStore? = nil,
         audioCaptureManager: AudioCaptureManager? = nil,
         audioPlaybackManager: AudioPlaybackManager? = nil,
-        sttEngine: MLXSTTEngine? = nil,
         wakeWordProfileStore: WakeWordProfileStore? = nil
     ) -> [any Tool] {
         let sm = skillManager ?? SkillManager()
