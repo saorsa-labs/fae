@@ -25,17 +25,20 @@ tokio = { workspace = true }
 
 # mistral.rs is a hard dependency (owner decision — not feature-gated). Accel is
 # target-conditional: Metal on Apple Silicon, plain candle (CPU/CUDA) elsewhere.
-# Pinned to the v0.8.3 tag commit (crates.io stops at 0.8.1; 0.8.2/0.8.3 carry
-# the Gemma 4 tool-calling fixes + mid-stream grammar enforcement we require).
+# Pinned past v0.8.3 to master c22c2e2b (2026-06-11): picks up the Metal sdpa
+# offset fix (e5b9b93d) and SWA prefill corner-chunking fix (d6e94699) — cures
+# the deterministic "invalid Metal top-k softmax normalizer" inference failure
+# on Gemma 4 turns whose prompt length lands in a bad prefill-chunk window
+# (diagnosed 2026-06-12; replayable payloads in that day's session notes).
 # Git deps use commit SHAs per the supply-chain pinning policy.
 [target.'cfg(target_os = "macos")'.dependencies]
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "ba2f7877ed0fc5d814a5f918865aef137b5179fd", features = ["metal"] } # v0.8.3
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "c22c2e2b622a815821e59056c2b5952b4cbbe010", features = ["metal"] }
 # Kokoro TTS on mlx-rs (Apple Silicon). Exact-pinned per supply-chain policy;
 # the candle port replaces this for non-Apple targets (MockTtsAdapter there).
 voice-tts = "=0.2.1"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "ba2f7877ed0fc5d814a5f918865aef137b5179fd" } # v0.8.3
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "c22c2e2b622a815821e59056c2b5952b4cbbe010" }
 
 [dev-dependencies]
 tokio = { workspace = true }

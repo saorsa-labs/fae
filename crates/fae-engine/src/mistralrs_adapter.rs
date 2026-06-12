@@ -165,7 +165,15 @@ fn map_role(role: Role) -> TextMessageRole {
 /// `AudioInput` and attached via `add_audio_message`; audio composes with
 /// tools in a single request (validated by the S13 harness).
 fn build_request(request: &ChatRequest) -> Result<RequestBuilder, EngineError> {
-    let mut builder = RequestBuilder::new().set_sampler_max_len(request.max_tokens);
+    // top_k above MAX_DEVICE_TOP_K (128) forces mistral.rs onto the CPU
+    // sampling path. The Metal top-k kernel deterministically fails with
+    // "invalid Metal top-k softmax normalizer" when a Gemma 4 prompt's total
+    // length lands in a narrow window relative to the prefill-chunk boundary
+    // (diagnosed 2026-06-12 with replayable payloads; still broken at
+    // upstream c22c2e2b). CPU top-k costs ~1ms/token — correct over fast.
+    let mut builder = RequestBuilder::new()
+        .set_sampler_max_len(request.max_tokens)
+        .set_sampler_topk(160);
     if let Some(system) = &request.system {
         builder = builder.add_message(TextMessageRole::System, system);
     }

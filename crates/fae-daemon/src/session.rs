@@ -452,13 +452,77 @@ async fn inject_text(
     engine: &dyn ProviderAdapter,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
+    // Diagnostic payload dump (dev only): FAE_DUMP_REQUESTS=<dir> writes each
+    // inject_text payload verbatim so failing turns can be replayed offline.
+    if let Ok(dir) = std::env::var("FAE_DUMP_REQUESTS") {
+        if !dir.is_empty() {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis());
+            let path =
+                std::path::Path::new(&dir).join(format!("inject-{stamp}-{}.json", cmd.request_id));
+            if let Err(error) = std::fs::write(&path, cmd.payload.to_string()) {
+                eprintln!("fae-daemon: request dump failed ({error})");
+            }
+        }
+    }
     let request = parse_chat_request(&cmd.payload)?;
-    let mut stream = engine.stream_chat(request).await.map_err(|error| {
-        // The wire carries only a coarse code — keep the real failure visible
-        // in the daemon's own output for diagnosis.
-        eprintln!("fae-daemon: inject_text failed before first token: {error}");
-        "inference_failed"
-    })?;
+
+    // Gemma 4 on Metal produces NaN logits when a prompt's TOTAL length lands
+    // in a narrow window of sequence lengths (mistral.rs kernel tiling edge;
+    // deterministic per payload, diagnosed 2026-06-12, still present at
+    // upstream c22c2e2b). Appending ~50-130 tokens of system-prompt padding
+    // shifts the length out of the window, so a NaN failure is retried with
+    // padding before giving up. The pad asks the model to ignore it.
+    const NAN_PAD_UNIT: &str = "(Padding line for runtime alignment — ignore this line entirely.)";
+    const NAN_RETRY_PADS: [usize; 3] = [4, 24, 80];
+
+    let mut attempt_request = request.clone();
+    for (attempt, pad_units) in std::iter::once(0_usize).chain(NAN_RETRY_PADS).enumerate() {
+        if pad_units > 0 {
+            let pad = std::iter::repeat_n(NAN_PAD_UNIT, pad_units)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let base = request.system.clone().unwrap_or_default();
+            attempt_request = request.clone();
+            attempt_request.system = Some(format!("{base}\n\n{pad}"));
+            eprintln!(
+                "fae-daemon: inject_text retry {attempt} with {pad_units} pad units (NaN-logits length workaround)"
+            );
+        }
+        match run_turn(engine, attempt_request.clone()).await {
+            Ok(value) => return Ok(value),
+            Err(detail) if is_nan_logits_failure(&detail) && attempt < NAN_RETRY_PADS.len() => {
+                eprintln!(
+                    "fae-daemon: inject_text NaN-logits failure (attempt {attempt}): {detail}"
+                );
+                continue;
+            }
+            Err(detail) => {
+                eprintln!("fae-daemon: inject_text failed: {detail}");
+                return Err("inference_failed");
+            }
+        }
+    }
+    Err("inference_failed")
+}
+
+/// True when an engine failure carries the NaN-logits signature that the
+/// prompt-length padding retry can rescue (see `inject_text`).
+fn is_nan_logits_failure(detail: &str) -> bool {
+    detail.contains("NaN") || detail.contains("invalid Metal top-k softmax normalizer")
+}
+
+/// Run one turn through the engine, collecting the streamed events into the
+/// wire result. Errors return the full failure text for diagnosis upstream.
+async fn run_turn(
+    engine: &dyn ProviderAdapter,
+    request: ChatRequest,
+) -> Result<serde_json::Value, String> {
+    let mut stream = engine
+        .stream_chat(request)
+        .await
+        .map_err(|error| format!("before first token: {error}"))?;
     let mut answer = String::new();
     let mut tool_calls = Vec::new();
     let mut finish_reason = "stop".to_owned();
@@ -475,8 +539,7 @@ async fn inject_text(
                 break;
             }
             Err(error) => {
-                eprintln!("fae-daemon: inject_text failed mid-stream: {error}");
-                return Err("inference_failed");
+                return Err(format!("mid-stream: {error}"));
             }
         }
     }
