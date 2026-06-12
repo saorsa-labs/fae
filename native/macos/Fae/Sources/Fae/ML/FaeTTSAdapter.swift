@@ -32,6 +32,11 @@ actor FaeTTSAdapter: TTSEngine {
     /// Speech speed multiplier.
     private var speed: Float = 1.0
 
+    /// Custom voice embedding loaded from the app bundle (Fae's own "fae"
+    /// voice). Passed as `refAudio` so KokoroModel skips its HF-snapshot
+    /// `voices/` lookup, which only contains the stock voices.
+    private var customVoiceEmbedding: MLXArray?
+
     // MARK: - Loading
 
     /// Load the TTS model.
@@ -44,6 +49,16 @@ actor FaeTTSAdapter: TTSEngine {
         let (repo, voice, spd) = Self.parseModelID(modelID)
         voiceName = voice
         speed = spd
+
+        // Non-stock voices (Fae's own "fae") only exist as bundled
+        // embeddings — KokoroModel.loadVoice would throw per-sentence.
+        customVoiceEmbedding = Self.loadBundledVoiceEmbedding(named: voice)
+        if customVoiceEmbedding == nil, !Self.isStockKokoroVoice(voice) {
+            NSLog(
+                "FaeTTSAdapter: voice '%@' has no bundled embedding and is not a stock voice — using af_heart",
+                voice)
+            voiceName = "af_heart"
+        }
 
         NSLog("FaeTTSAdapter: loading model %@ voice=%@ speed=%.1f", repo, voiceName, speed)
         do {
@@ -96,6 +111,7 @@ actor FaeTTSAdapter: TTSEngine {
     /// Switch the default voice for subsequent synthesis calls.
     func switchVoice(to name: String) {
         voiceName = name
+        customVoiceEmbedding = Self.loadBundledVoiceEmbedding(named: name)
         NSLog("FaeTTSAdapter: switched voice to %@", name)
     }
 
@@ -120,11 +136,15 @@ actor FaeTTSAdapter: TTSEngine {
         let t0 = Date()
         var totalSamples = 0
 
+        // The default (custom) voice synthesizes via its bundled embedding;
+        // explicit stock-voice overrides go through the name lookup.
+        let refAudio = effectiveVoice == voiceName ? customVoiceEmbedding : nil
+
         // Use streaming generation for lower time-to-first-audio.
         let stream = model.generateSamplesStream(
             text: text,
             voice: effectiveVoice,
-            refAudio: nil,
+            refAudio: refAudio,
             refText: nil,
             language: "en",
             streamingInterval: 1.0
@@ -183,6 +203,41 @@ actor FaeTTSAdapter: TTSEngine {
         }
         // Plain HuggingFace repo ID.
         return (modelID, "af_heart", 1.0)
+    }
+
+    // MARK: - Custom Voices
+
+    /// Whether a voice name follows the stock Kokoro id pattern
+    /// (`af_heart`, `bm_daniel`, …) and can resolve from the HF snapshot's
+    /// `voices/` directory.
+    static func isStockKokoroVoice(_ name: String) -> Bool {
+        let parts = name.split(separator: "_")
+        return parts.count == 2 && parts[0].count == 2 && !parts[1].isEmpty
+            && name.allSatisfy { ($0.isLowercase && $0.isLetter) || $0 == "_" }
+    }
+
+    /// Load a bundled custom voice embedding (`Resources/Voices/{name}.safetensors`)
+    /// in the squeezed `[510, 256]` shape KokoroModel expects for `refAudio`.
+    /// Returns nil when no bundled embedding exists for the name.
+    static func loadBundledVoiceEmbedding(named name: String) -> MLXArray? {
+        guard let url = Bundle.faeResources.url(forResource: name, withExtension: "safetensors")
+        else { return nil }
+        do {
+            let arrays = try MLX.loadArrays(url: url)
+            guard var voice = arrays["voice"] ?? arrays.values.first else {
+                NSLog("FaeTTSAdapter: bundled voice '%@' has no tensors", name)
+                return nil
+            }
+            voice = voice.asType(.float32)
+            if voice.ndim == 3 { voice = voice.squeezed(axis: 1) }
+            NSLog("FaeTTSAdapter: loaded bundled voice embedding '%@' %@", name, "\(voice.shape)")
+            return voice
+        } catch {
+            NSLog(
+                "FaeTTSAdapter: bundled voice '%@' failed to load: %@",
+                name, error.localizedDescription)
+            return nil
+        }
     }
 
     // MARK: - PCM Buffer
