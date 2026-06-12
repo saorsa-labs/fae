@@ -2187,17 +2187,21 @@ actor PipelineCoordinator {
         }
 
         // Barge-in: if assistant is still active, interrupt and process the new input.
-        // Suppress barge-in when generating but not yet speaking — this happens during
-        // tool follow-up prefill where the model processes 15K+ tokens of prompt.
-        // Ambient noise or echo must not interrupt prefill before the first TTS chunk.
         if assistantSpeaking {
             markGenerationInterrupted()
             ttsState.cancelPending()
             await playback.stop()
-        } else if assistantGenerating && !assistantSpeaking {
-            // Generating but not speaking yet (prefill phase) — suppress barge-in.
-            debugLog(debugConsole, .pipeline, "Suppressed barge-in during prefill (generating, not yet speaking)")
-            return
+        } else if assistantGenerating {
+            // Silent generation in progress. Post-S18 every turn reaching here
+            // is a DELIBERATE act (PTT capture or typed text) — dropping it
+            // made "press, speak, release → nothing" the single most confusing
+            // failure in owner testing. The user's new input wins: interrupt
+            // the stale turn and proceed. (Proactive queries never preempt —
+            // they queue via the deferred-proactive path.)
+            guard proactiveContext == nil else { return }
+            debugLog(debugConsole, .pipeline, "User turn takeover — interrupting in-flight generation")
+            markGenerationInterrupted()
+            endAssistantGeneration()
         }
 
         let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)

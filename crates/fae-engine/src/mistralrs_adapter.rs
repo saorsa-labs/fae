@@ -35,7 +35,7 @@ impl LocalMistralrsAdapter {
         // across consecutive multimodal prompts corrupts the turn (observed as
         // "heard nothing" / instant empty replies). Correct over fast.
         let model = TextModelBuilder::new(model_id)
-            .with_isq(IsqType::Q4K)
+            .with_isq(configured_isq())
             .with_prefix_cache_n(None)
             .with_logging()
             .build()
@@ -53,7 +53,7 @@ impl LocalMistralrsAdapter {
         // Prefix cache disabled — same audio-correctness rationale as
         // [`Self::load_text`].
         let model = ModelBuilder::new(model_id)
-            .with_isq(IsqType::Q4K)
+            .with_isq(configured_isq())
             .with_prefix_cache_n(None)
             .with_logging()
             .build()
@@ -156,6 +156,18 @@ fn map_role(role: Role) -> TextMessageRole {
         Role::User => TextMessageRole::User,
         Role::Assistant => TextMessageRole::Assistant,
         Role::Tool => TextMessageRole::Tool,
+    }
+}
+
+/// In-situ quantisation type, `FAE_ISQ` env override. Q4K is the proven
+/// default; Q8_0 trades ~2x weight RAM for higher numeric headroom — under
+/// test as a cure for the Metal NaN-logits-at-specific-prompt-lengths bug.
+fn configured_isq() -> IsqType {
+    match std::env::var("FAE_ISQ").as_deref() {
+        Ok("Q8_0") | Ok("q8_0") | Ok("Q8") | Ok("q8") => IsqType::Q8_0,
+        Ok("Q6K") | Ok("q6k") => IsqType::Q6K,
+        Ok("Q5K") | Ok("q5k") => IsqType::Q5K,
+        _ => IsqType::Q4K,
     }
 }
 

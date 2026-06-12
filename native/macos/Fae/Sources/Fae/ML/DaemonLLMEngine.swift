@@ -728,6 +728,16 @@ actor DaemonLLMEngine: LLMEngine {
         daemonProcess.executableURL = binary
         var environment = ProcessInfo.processInfo.environment
         environment["FAE_MODEL_ID"] = daemonModelID
+        if environment["FAE_ISQ"] == nil,
+           ProcessInfo.processInfo.physicalMemory >= 32 * 1024 * 1024 * 1024
+        {
+            // Q8 ISQ on high-RAM machines: ~2x weight memory for far better
+            // numeric headroom — in testing it eliminated visible Metal
+            // NaN-logits failures (Q4K needed the daemon's padded retries
+            // and still exhausted them on some prompt lengths). Q4K remains
+            // the default below 32 GB.
+            environment["FAE_ISQ"] = "Q8_0"
+        }
         daemonProcess.environment = environment
 
         let pipe = Pipe()

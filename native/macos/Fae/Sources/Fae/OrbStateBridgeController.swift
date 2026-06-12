@@ -100,7 +100,12 @@ final class OrbStateBridgeController: ObservableObject {
                     guard let self, let orbState = self.orbState else { return }
                     if active {
                         orbState.mode = .thinking
-                    } else if orbState.mode == .thinking {
+                    } else if orbState.mode != .speaking {
+                        // Generation over and not audibly speaking → idle.
+                        // The old `== .thinking` guard stranded the orb (and
+                        // the whisper pill's counter) in thinking/listening
+                        // forever when a failed turn's fallback speech or a
+                        // capture overlap had shifted the mode first.
                         orbState.mode = .idle
                     }
                 }
