@@ -851,12 +851,16 @@ fn open_pill_panel(
     }
     let webview = WebViewBuilder::new()
         .with_transparent(true)
+        // Belt-and-braces: WKWebView paints a white canvas in light mode even
+        // with a transparent body unless the background colour is cleared too.
+        .with_background_color((0, 0, 0, 0))
         .with_html(PILL_HTML)
         .build(&window)?;
     Ok(PillPanel { window, webview })
 }
 
 const PILL_HTML: &str = r#"<!doctype html><html><head><meta charset='utf-8'><style>
+:root{color-scheme:dark}
 html,body{margin:0;background:transparent;overflow:hidden;height:100%}
 #pill{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:94%;
  display:flex;align-items:center;gap:7px;padding:7px 14px;border-radius:9999px;
@@ -901,8 +905,9 @@ fn pill_content(orb_ui: &OrbUiModel, hovering: bool) -> Option<(String, &'static
             FaeUiState::Quiescent => {
                 if !orb_ui.has_user_message() {
                     // The one teaching moment that matters: shown until the
-                    // user's first turn of the session.
-                    Some(("Click me and speak".to_string(), "hint"))
+                    // user's first turn of the session. Explicit about both
+                    // gestures until people get used to her (owner request).
+                    Some(("Click me — or hold Right ⌥ — and speak".to_string(), "hint"))
                 } else if hovering {
                     Some((
                         "Click to talk · ⌥-drag to move · right-click for menu".to_string(),

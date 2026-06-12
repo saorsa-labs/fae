@@ -60,6 +60,12 @@ final class RustUiShellController {
     /// shown by the whisper pill + Messages status chip while starting.
     private var startupProgress: Double = 0
 
+    /// Pipeline state as received from the `$pipelineState` sink. @Published
+    /// publishers fire BEFORE the property is written, so re-reading
+    /// `faeCore?.pipelineState` inside the sink sees the STALE value — that
+    /// kept the pill saying "Loading … 100%" forever after startup finished.
+    private var lastPipelineState: FaePipelineState?
+
     // MARK: - Crash Restart Policy
 
     /// Maximum automatic restarts after unexpected exits before asking the
@@ -222,6 +228,7 @@ final class RustUiShellController {
                     // Fresh startup (or restart) — progress climbs from zero.
                     self?.startupProgress = 0
                 }
+                self?.lastPipelineState = state
                 self?.sendRuntimeStatus()
                 self?.refreshWorkspaceSnapshot()
             }
@@ -234,7 +241,9 @@ final class RustUiShellController {
             .compactMap { $0.userInfo?["progress"] as? Double }
             .receive(on: RunLoop.main)
             .sink { [weak self] progress in
-                guard let self, self.faeCore?.pipelineState == .starting else { return }
+                guard let self,
+                      (self.lastPipelineState ?? self.faeCore?.pipelineState) == .starting
+                else { return }
                 let next = max(self.startupProgress, min(max(progress, 0), 1))
                 // Only re-send when the visible percentage actually moves.
                 if Int(next * 100) != Int(self.startupProgress * 100) {
@@ -314,11 +323,14 @@ final class RustUiShellController {
     }
 
     private func sendRuntimeStatus() {
-        let phase = faeCore?.pipelineState.rawValue ?? "starting"
+        // lastPipelineState is the sink-delivered value; the property read is
+        // a fallback for calls outside the sink (panel open, label change).
+        let state = lastPipelineState ?? faeCore?.pipelineState
+        let phase = state?.rawValue ?? "starting"
         let model = conversation?.loadedModelLabel.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let message: String
         let progress: Double?
-        switch faeCore?.pipelineState {
+        switch state {
         case .starting:
             message = model.isEmpty ? "Starting local runtime" : "Loading \(model)"
             // Real overall startup fraction from runtimeProgress events —
