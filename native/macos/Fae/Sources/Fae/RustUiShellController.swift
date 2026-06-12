@@ -56,6 +56,10 @@ final class RustUiShellController {
     private var stdoutBuffer = Data()
     private var cancellables: Set<AnyCancellable> = []
 
+    /// Overall startup fraction (monotonic max of runtimeProgress events) —
+    /// shown by the whisper pill + Messages status chip while starting.
+    private var startupProgress: Double = 0
+
     // MARK: - Crash Restart Policy
 
     /// Maximum automatic restarts after unexpected exits before asking the
@@ -213,9 +217,32 @@ final class RustUiShellController {
 
         faeCore?.$pipelineState
             .removeDuplicates()
-            .sink { [weak self] _ in
+            .sink { [weak self] state in
+                if state == .starting {
+                    // Fresh startup (or restart) — progress climbs from zero.
+                    self?.startupProgress = 0
+                }
                 self?.sendRuntimeStatus()
                 self?.refreshWorkspaceSnapshot()
+            }
+            .store(in: &cancellables)
+
+        // Real startup progress for the whisper pill + status chip. The model
+        // stages emit overall fractions (0.05…1.0); forward the monotonic max
+        // so the bar never walks backwards as stages interleave.
+        NotificationCenter.default.publisher(for: .faeRuntimeProgress)
+            .compactMap { $0.userInfo?["progress"] as? Double }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] progress in
+                guard let self, self.faeCore?.pipelineState == .starting else { return }
+                let next = max(self.startupProgress, min(max(progress, 0), 1))
+                // Only re-send when the visible percentage actually moves.
+                if Int(next * 100) != Int(self.startupProgress * 100) {
+                    self.startupProgress = next
+                    self.sendRuntimeStatus()
+                } else {
+                    self.startupProgress = next
+                }
             }
             .store(in: &cancellables)
 
@@ -294,7 +321,9 @@ final class RustUiShellController {
         switch faeCore?.pipelineState {
         case .starting:
             message = model.isEmpty ? "Starting local runtime" : "Loading \(model)"
-            progress = 0.35
+            // Real overall startup fraction from runtimeProgress events —
+            // nil until the first stage reports, never a fake placeholder.
+            progress = startupProgress > 0 ? startupProgress : nil
         case .running:
             message = model.isEmpty ? "Ready" : "Ready · \(model)"
             progress = 1.0
