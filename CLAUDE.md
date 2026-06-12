@@ -82,7 +82,7 @@ Required for: model swaps, prompt/routing changes, voice capture/STT/TTS/playbac
 Swift app (voice pipeline, memory, tools, skills) + Rust orb host (only product UI) + Rust daemon (`crates/fae-daemon`, primary LLM lane). All intelligence runs locally — no cloud, no API keys, no data leaves the machine. The Swift MLX engine remains the macOS fallback and LoRA training substrate.
 
 ```
-orb click / hotkey → mic capture (16kHz) → WAV → fae-daemon
+Right ⌥ hold / orb long-press → mic capture (16kHz) → WAV → fae-daemon
 (Gemma 4 E4B: ASR + LLM + tools in one request) → TTS → Speaker
                                       │
                                       ├── Memory (SQLite + ANN + FTS5)
@@ -147,9 +147,9 @@ LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target).
 
 ### Unified pipeline (PTT-only, S18)
 
-1. **PTT capture** (orb click / hotkey, 16kHz mono; VAD as plain endpointer — 1.2s trailing silence or 30s cap ends the capture) → 2. **WAV encode** (base64, attached to the turn) → 3. **LLM** (Gemma 4 E4B via daemon lane: ASR + reasoning + tools in one request, `[heard]:` first line is the transcript; Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 4. **Vocab correction** (static + dynamic correctors on the `[heard]` transcript) → 5. **TTS** (Kokoro-82M, sentence-queued) → 6. **Playback** (a new orb click interrupts speech)
+1. **PTT capture** (16kHz mono — hold gestures: Right ⌥ hold or orb long-press ≥400ms, release sends, 30s cap; toggle gestures: menu "Talk to Fae" / Messages-panel mic, where the VAD endpointer sends after 1.2s trailing silence; bare orb click only pulses the hint pill, drag moves the orb) → 2. **WAV encode** (base64, attached to the turn) → 3. **LLM** (Gemma 4 E4B via daemon lane: ASR + reasoning + tools in one request, `[heard]:` first line is the transcript; Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 4. **Vocab correction** (static + dynamic correctors on the `[heard]` transcript) → 5. **TTS** (Kokoro-82M, sentence-queued) → 6. **Playback** (starting a new capture interrupts speech)
 
-There is no always-on listening lane: outside a capture, mic chunks are dropped. Interrupting Fae is the deliberate act of clicking the orb / pressing the hotkey (`pttStart` stops playback and generation).
+There is no always-on listening lane: outside a capture, mic chunks are dropped. Interrupting Fae is the deliberate act of starting a new capture — holding Right ⌥ or long-pressing the orb (`pttStart` stops playback and generation).
 
 **Latency**: 3s (greetings) to 30s (multi-tool queries). Orb visual state + thinking tone provide feedback throughout.
 

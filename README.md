@@ -35,7 +35,7 @@ Fae is not a hugely-capable chatbot. She is a hugely-**personalised** agent: a m
                        │ host bridge
         ┌──────────────▼───────────────────────────────┐
         │            Fae app (Swift, macOS)             │
-        │  push-to-talk capture (orb click / hotkey)    │
+        │  push-to-talk capture (hold ⌥ / orb press)    │
         │  memory (SQLite ANN+FTS5) · scheduler · tools │
         │  skills · nightly improvement loop · vault    │
         └────────┬──────────────────────────┬──────────┘
@@ -119,7 +119,7 @@ This is how Fae becomes a **conductor**: your Mac, your Linux box, and your home
 ## Privacy and security
 
 - **Local by default.** Inference, memory, and training all happen on your hardware.
-- **Deliberate capture gates tools.** Talking to Fae is a physical act at the machine (orb click / push-to-talk) — that act is the owner check. Remote channel senders are text-only guests with no tool access unless you grant it.
+- **Deliberate capture gates tools.** Talking to Fae is a physical act at the machine (hold Right ⌥ / press-and-hold the orb) — that act is the owner check. Remote channel senders are text-only guests with no tool access unless you grant it.
 - **Damage control.** Catastrophic bash operations are blocked or require confirmation; credential paths are protected; pre-mutation file snapshots make actions undoable.
 - **Fail-closed daemon.** Model weights verified against `models.lock` (SHA-256); every daemon command authorized per-capability and audited.
 - **Typed peer boundary.** x0x peer traffic is schema-checked and signature-verified before anything touches the LLM.
