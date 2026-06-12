@@ -184,6 +184,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             faeCore.cancel()
             faeCore.stop()
         }
+        // The daemon must die WITH the app: faeCore.stop()'s async teardown
+        // never runs before .terminateNow exits, so kill it synchronously
+        // here (recurring orphan bug — fae-daemon survived every quit).
+        DaemonProcessRegistry.terminateAll()
         // Belt-and-braces: never hang inside AppKit's own shutdown either.
         DispatchQueue.global().asyncAfter(deadline: .now() + 3.0) {
             NSLog("FaeAppDelegate: termination failsafe fired — exiting")

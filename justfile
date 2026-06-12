@@ -46,7 +46,7 @@ run-ui-shell: build-ui-shell
     cd native/rust/fae-ui-shell && cargo run --release
 
 # Build and launch the Swift app with the Rust UI shell bridge enabled.
-run-native-with-ui-shell: build-ui-shell build _bundle-app _embed-ui-shell _sign-bundle _kill-fae
+run-native-with-ui-shell: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _sign-bundle _kill-fae
     FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
 
 # Validate the Rust orb UI shell prototype.
@@ -78,7 +78,7 @@ run-native: build _bundle-app _sign-bundle _kill-fae
 # Build, bundle, sign, and launch in DEV mode (isolated data directory).
 # Uses ~/Library/Application Support/fae-dev/ — does NOT touch production Fae.
 # Reads config.toml from fae-dev/. Uses separate UserDefaults, memories, skills.
-run-dev: build-ui-shell build _bundle-app _embed-ui-shell _sign-bundle _kill-fae
+run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _sign-bundle _kill-fae
     FAE_DEV=1 FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1 --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae (DEV) launched — logs: tail -f /tmp/fae-dev.log"
     @echo "  Data: ~/Library/Application Support/fae-dev/"
@@ -396,6 +396,26 @@ _embed-ui-shell:
     chmod 755 "$BUNDLE/Contents/MacOS/fae-ui-shell"
     echo "  → Embedded fae-ui-shell"
 
+# Build the Rust daemon (primary LLM lane).
+build-daemon:
+    cd crates && cargo build --release -p fae-daemon
+
+# (internal) Embed the explicitly-built fae-daemon in the .app bundle so the
+# daemon lane works without FAE_DAEMON_BIN or llm.daemonBinaryPath.
+_embed-daemon:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUNDLE="{{_app_bundle}}"
+    DAEMON="$(git rev-parse --show-toplevel)/crates/target/release/fae-daemon"
+    if [ ! -x "$DAEMON" ]; then
+        echo "Missing executable fae-daemon: $DAEMON" >&2
+        echo "Run: just build-daemon" >&2
+        exit 1
+    fi
+    cp "$DAEMON" "$BUNDLE/Contents/MacOS/fae-daemon"
+    chmod 755 "$BUNDLE/Contents/MacOS/fae-daemon"
+    echo "  → Embedded fae-daemon"
+
 # (internal) Sign the .app bundle with Developer ID.
 _sign-bundle:
     #!/usr/bin/env bash
@@ -424,6 +444,10 @@ _sign-bundle:
     if [ -f "$BUNDLE/Contents/MacOS/fae-ui-shell" ]; then
         codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
             "$BUNDLE/Contents/MacOS/fae-ui-shell"
+    fi
+    if [ -f "$BUNDLE/Contents/MacOS/fae-daemon" ]; then
+        codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
+            "$BUNDLE/Contents/MacOS/fae-daemon"
     fi
     codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
         --entitlements "$ENT" "$BUNDLE"

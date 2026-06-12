@@ -2,6 +2,43 @@ import Darwin
 import Foundation
 import MLXLMCommon
 
+// MARK: - Daemon process registry
+
+/// PIDs of every fae-daemon this app has spawned, killable SYNCHRONOUSLY from
+/// `applicationShouldTerminate`. The actor's async `shutdown()` never runs on
+/// quit (the delegate returns `.terminateNow` before any Task gets scheduled),
+/// which left orphaned daemons holding the model in RAM after every app quit.
+enum DaemonProcessRegistry {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var pids: [Int32] = []
+
+    static func register(_ pid: Int32) {
+        lock.lock()
+        pids.append(pid)
+        lock.unlock()
+    }
+
+    static func unregister(_ pid: Int32) {
+        lock.lock()
+        pids.removeAll { $0 == pid }
+        lock.unlock()
+    }
+
+    /// SIGTERM every registered daemon. Safe to call multiple times and for
+    /// already-dead PIDs (kill on a reaped pid just returns ESRCH).
+    static func terminateAll() {
+        lock.lock()
+        let snapshot = pids
+        pids.removeAll()
+        lock.unlock()
+        for pid in snapshot {
+            if kill(pid, SIGTERM) == 0 {
+                NSLog("DaemonProcessRegistry: sent SIGTERM to fae-daemon pid %d", pid)
+            }
+        }
+    }
+}
+
 // MARK: - Errors
 
 /// Errors surfaced by `DaemonLLMEngine`. Every case carries enough context to
@@ -703,13 +740,22 @@ actor DaemonLLMEngine: LLMEngine {
         return "r\(requestCounter)"
     }
 
+    /// Resolution order: `FAE_DAEMON_BIN` env → `llm.daemonBinaryPath` config
+    /// → the daemon embedded in the app bundle (`Contents/MacOS/fae-daemon`,
+    /// shipped by `just run-dev` / `run-native-with-ui-shell`).
     private func resolveBinaryURL() throws -> URL {
         let environment = ProcessInfo.processInfo.environment
         let candidate: String?
         if let env = environment["FAE_DAEMON_BIN"], !env.isEmpty {
             candidate = env
+        } else if let configured = configuredBinaryPath, !configured.isEmpty {
+            candidate = configured
+        } else if let bundled = Bundle.main.url(forAuxiliaryExecutable: "fae-daemon"),
+                  FileManager.default.isExecutableFile(atPath: bundled.path)
+        {
+            return bundled
         } else {
-            candidate = configuredBinaryPath
+            candidate = nil
         }
         guard let raw = candidate, !raw.isEmpty else {
             throw DaemonLLMEngineError.binaryNotConfigured
@@ -760,6 +806,7 @@ actor DaemonLLMEngine: LLMEngine {
                 "could not exec \(binary.path): \(error.localizedDescription)")
         }
         process = daemonProcess
+        DaemonProcessRegistry.register(daemonProcess.processIdentifier)
         NSLog(
             "DaemonLLMEngine: launched fae-daemon pid %d (FAE_MODEL_ID=%@)",
             daemonProcess.processIdentifier, daemonModelID)
@@ -861,8 +908,11 @@ actor DaemonLLMEngine: LLMEngine {
         connection?.close()
         connection = nil
         endpoints = nil
-        if let process, process.isRunning {
-            process.terminate()
+        if let process {
+            if process.isRunning {
+                process.terminate()
+            }
+            DaemonProcessRegistry.unregister(process.processIdentifier)
         }
         process = nil
     }

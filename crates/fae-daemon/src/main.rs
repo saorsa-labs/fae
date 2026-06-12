@@ -39,6 +39,8 @@ type DaemonResult<T> = Result<T, Box<dyn std::error::Error>>;
 async fn main() -> DaemonResult<()> {
     println!("fae-daemon (Phase 1, chunk 2a) — protocol v{PROTOCOL_VERSION}");
 
+    spawn_parent_watch();
+
     let run_dir = run_directory()?;
     create_private_dir(&run_dir)?;
     let socket_path = run_dir.join("fae-daemon.sock");
@@ -163,6 +165,37 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
         }
         None => Arc::new(MockAdapter::new("mock-echo")),
     }
+}
+
+/// Exit when the launching parent dies. The daemon must never outlive the
+/// app that spawned it (recurring orphan bug: fae-daemon survived app quit
+/// holding the model in RAM). When the parent exits, the daemon is reparented
+/// (getppid changes), which a 2 s poll catches — this also covers parent
+/// crashes and SIGKILL, where no clean shutdown command ever arrives.
+/// `FAE_NO_PARENT_WATCH=1` disables it for standalone/diagnostic runs.
+fn spawn_parent_watch() {
+    if std::env::var_os("FAE_NO_PARENT_WATCH").is_some() {
+        return;
+    }
+    let parent = std::os::unix::process::parent_id();
+    if parent <= 1 {
+        return; // already daemonized — nothing meaningful to watch
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if std::os::unix::process::parent_id() != parent {
+            // stderr is a pipe into the parent — it is gone too, so this
+            // write may fail with EPIPE. eprintln! would PANIC on that and
+            // kill only this thread, leaving the orphan alive; write
+            // best-effort instead and exit unconditionally.
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "fae-daemon: parent process {parent} exited — shutting down"
+            );
+            std::process::exit(0);
+        }
+    });
 }
 
 /// Diagnostic TCP port from `FAE_DIAGNOSTIC_TCP_PORT`, if set to a non-zero

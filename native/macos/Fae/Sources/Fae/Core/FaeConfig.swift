@@ -112,16 +112,17 @@ struct FaeConfig: Codable {
         /// - deep: more deliberate reasoning with a larger local response budget.
         var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
 
-        // MARK: Daemon LLM lane (experimental)
+        // MARK: Daemon LLM lane (primary)
 
         /// Route LLM turns to the local Rust fae-daemon (mistral.rs) instead of
         /// the in-process MLX engine. Falls back to MLX (loudly) if the daemon
-        /// cannot be launched. Default false.
-        var useDaemonEngine: Bool = false
+        /// cannot be launched. Default true — the daemon is the primary lane;
+        /// the bundled `Contents/MacOS/fae-daemon` makes this work out of the box.
+        var useDaemonEngine: Bool = true
 
-        /// Absolute path to the fae-daemon binary (e.g. built via
-        /// `cargo build -p fae-daemon --release`). Required when
-        /// `useDaemonEngine` is true; the `FAE_DAEMON_BIN` env var overrides it.
+        /// Absolute path to the fae-daemon binary. Optional: resolution order
+        /// is `FAE_DAEMON_BIN` env → this path → the daemon embedded in the
+        /// app bundle.
         var daemonBinaryPath: String? = nil
 
         // MARK: KV Cache Optimization (Phase 1)
@@ -218,15 +219,15 @@ struct FaeConfig: Codable {
         /// synthesis does not degrade prosody.
         var preferFinalOnly: Bool = false
 
-        // MARK: Daemon TTS lane (experimental)
+        // MARK: Daemon TTS lane (primary)
 
         /// Route TTS through the local Rust fae-daemon (`tts.synthesize`,
         /// Kokoro via voice-tts) instead of the in-process MLX Kokoro engine.
         /// Requires the daemon LLM lane (`llm.useDaemonEngine`) — the TTS
         /// engine opens a second socket connection to the same daemon process.
         /// Falls back to FaeTTSAdapter (loudly) when the daemon is
-        /// unavailable. Default false.
-        var useDaemonEngine: Bool = false
+        /// unavailable. Default true — the daemon is the primary lane.
+        var useDaemonEngine: Bool = true
     }
 
     // STT / streaming-ASR config removed (S18 kill-list 3/3): push-to-talk

@@ -106,8 +106,11 @@ final class DaemonTTSAudioContractTests: XCTestCase {
 
 final class DaemonTTSConfigTests: XCTestCase {
 
-    func testUseDaemonEngineDefaultsOff() {
-        XCTAssertFalse(FaeConfig().tts.useDaemonEngine)
+    func testUseDaemonEngineDefaultsOn() {
+        // Daemon TTS is the primary lane (daemon-default, 2026-06-13): a fresh
+        // install synthesizes via the daemon's Kokoro, with FaeTTSAdapter as
+        // the loud fallback.
+        XCTAssertTrue(FaeConfig().tts.useDaemonEngine)
     }
 
     func testUseDaemonEngineParsesAndRoundTrips() throws {

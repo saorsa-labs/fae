@@ -266,9 +266,13 @@ final class DaemonLLMConfigTests: XCTestCase {
         XCTAssertEqual(FaeConfig.daemonModelId(preset: "qwen3_5_4b"), "google/gemma-4-E4B-it")
     }
 
-    func testUseDaemonEngineDefaultsOff() {
+    func testUseDaemonEngineDefaultsOn() {
+        // The daemon is the PRIMARY LLM lane (daemon-default, 2026-06-13):
+        // a fresh install with no config.toml must route turns to the bundled
+        // fae-daemon. No binary path is required — resolution falls back to
+        // the daemon embedded in the app bundle.
         let config = FaeConfig()
-        XCTAssertFalse(config.llm.useDaemonEngine)
+        XCTAssertTrue(config.llm.useDaemonEngine)
         XCTAssertNil(config.llm.daemonBinaryPath)
     }
 }
