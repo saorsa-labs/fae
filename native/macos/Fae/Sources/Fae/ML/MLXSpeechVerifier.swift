@@ -11,7 +11,7 @@ import MLXNN
 /// Inference is ~5ms on M-series, designed to run in the segment processing
 /// path without adding perceptible latency.
 ///
-/// The architecture matches ``MLXKeywordClassifier`` exactly (same Conv1D
+/// The architecture matches the former keyword classifier exactly (same Conv1D
 /// backbone, mel pipeline, and model discovery pattern).
 actor MLXSpeechVerifier {
 

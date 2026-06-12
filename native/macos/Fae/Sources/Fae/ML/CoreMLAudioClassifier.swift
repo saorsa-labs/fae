@@ -4,7 +4,7 @@ import Foundation
 
 /// Core ML audio classifier that runs 1D-CNN models on the Apple Neural Engine.
 ///
-/// Replaces MLX-based classifiers (MLXKeywordClassifier, MLXSpeechVerifier) for
+/// Replaces MLX-based classifiers (MLXSpeechVerifier; formerly also the keyword classifier) for
 /// production use. Running on ANE frees the GPU for LLM/STT/TTS inference and
 /// eliminates per-frame GPU context switching.
 ///

@@ -497,27 +497,16 @@ actor PipelineCoordinator {
     /// Shadow-mode evaluator for acoustic wake-word detection promotion/demotion.
     private let shadowWakeEvaluator = ShadowWakeWordEvaluator()
 
-    /// Micro keyword classifier for audio-based interrupt detection.
-    /// When available, classifies accumulated barge-in audio to populate
-    /// `PendingBargeIn.hasInterruptKeyword` and `partialTranscript`.
-    private var keywordClassifier: MLXKeywordClassifier?
-
     /// Post-VAD speech verifier — rejects music/noise segments.
     private var speechVerifier: MLXSpeechVerifier?
 
     /// Core ML speech verifier — preferred over MLX (runs on ANE, frees GPU).
     private var coreMLSpeechVerifier: CoreMLAudioClassifier?
 
-    /// Core ML keyword classifier — preferred over MLX (runs on ANE, frees GPU).
-    private var coreMLKeywordClassifier: CoreMLAudioClassifier?
-
     /// Apple SoundAnalysis classifier — filters speech from music/TV/noise.
     /// Uses Apple's built-in 303-category sound classifier as a pre-filter
     /// before speaker verification.
     private let appleSpeechClassifier = AppleSpeechClassifier()
-
-    /// Minimum audio samples before running keyword classification (500ms at 16kHz).
-    private static let keywordClassifierMinSamples = 8_000
 
     /// Task consuming streaming transcription events from MLXSTTEngine's
     /// StreamingInferenceSession. Replaces the old single-slot guard.
@@ -899,11 +888,9 @@ actor PipelineCoordinator {
         await personalLexicon.load()
         await rebuildVocabularyCorrections()
 
-        // Wire keyword classifier from ModelManager (non-critical).
-        // Core ML (ANE) versions are preferred over MLX (GPU) to reduce GPU contention.
+        // Wire speech verifier from ModelManager (non-critical).
+        // Core ML (ANE) version is preferred over MLX (GPU) to reduce GPU contention.
         if let mm = modelManager {
-            self.coreMLKeywordClassifier = await mm.coreMLKeywordClassifier
-            self.keywordClassifier = await mm.keywordClassifier
             self.coreMLSpeechVerifier = await mm.coreMLSpeechVerifier
             self.speechVerifier = await mm.speechVerifier
         }
@@ -1905,18 +1892,10 @@ actor PipelineCoordinator {
             templates: templates
         )
 
-        // Get classifier wake confidence if available.
-        var classifierScore: Float?
-        if let classifier = keywordClassifier {
-            if let result = try? await classifier.classify(audio: prefix, sampleRate: segment.sampleRate),
-               result.label == .wake {
-                classifierScore = result.confidence
-            }
-        }
-
-        // Fuse scores from both detectors.
+        // Keyword classifier removed (S18 kill-list) — wake detection is
+        // template-only; fusion handles a nil classifier score natively.
         let fusionResult = WakeWordScoreFusion.fuse(
-            classifierScore: classifierScore,
+            classifierScore: nil,
             templateSimilarities: similarities
         )
 
@@ -2005,17 +1984,8 @@ actor PipelineCoordinator {
             sampleRate: AudioCaptureManager.targetSampleRate,
             templates: templates
         )
-        var streamClassifierScore: Float?
-        if let classifier = keywordClassifier {
-            if let result = try? await classifier.classify(
-                audio: speechInputStage.streamingWakeSamples,
-                sampleRate: AudioCaptureManager.targetSampleRate
-            ), result.label == .wake {
-                streamClassifierScore = result.confidence
-            }
-        }
         let streamFusion = WakeWordScoreFusion.fuse(
-            classifierScore: streamClassifierScore,
+            classifierScore: nil,  // keyword classifier removed (S18 kill-list)
             templateSimilarities: streamSimilarities
         )
         await shadowWakeEvaluator.recordResult(
@@ -3138,27 +3108,8 @@ actor PipelineCoordinator {
                         }
                         bargeInState.playbackCandidate = candidate
 
-                        // Run keyword classifier on playback candidate (Path A).
-                        if candidate.audioSamples.count >= Self.keywordClassifierMinSamples,
-                           (!bargeInState.playbackWakeWordDetected || !bargeInState.playbackInterruptKeywordDetected),
-                           let classifier = keywordClassifier,
-                           await classifier.isLoaded
-                        {
-                            if let classification = try? await classifier.classify(
-                                audio: candidate.audioSamples,
-                                sampleRate: config.audio.inputSampleRate
-                            ) {
-                                if classification.label == .interrupt && classification.confidence > 0.85 {
-                                    bargeInState.playbackInterruptKeywordDetected = true
-                                    debugLog(debugConsole, .command,
-                                             "Keyword classifier (Path A): interrupt (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
-                                } else if classification.label == .wake && classification.confidence > 0.85 {
-                                    bargeInState.playbackWakeWordDetected = true
-                                    debugLog(debugConsole, .command,
-                                             "Keyword classifier (Path A): wake (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
-                                }
-                            }
-                        }
+                        // Keyword classifier removed (S18 kill-list): Path A
+                        // relies on RMS/speech signals and transcripts only.
 
                         // Evaluate once enough audio is collected for identity check.
                         if candidate.audioSamples.count >= PlaybackBargeInCandidate.minSamplesForIdentity {
@@ -3190,35 +3141,8 @@ actor PipelineCoordinator {
                     bargeInSuppressed: bargeInState.isSuppressed,
                     inDenyCooldown: inDenyCooldown
                 )
-                // Run keyword classifier on accumulated audio (Path B).
-                if var barge = bargeInState.pendingBargeIn,
-                   !barge.hasInterruptKeyword,
-                   barge.audioSamples.count >= Self.keywordClassifierMinSamples,
-                   let classifier = keywordClassifier,
-                   await classifier.isLoaded
-                {
-                    if let classification = try? await classifier.classify(
-                        audio: barge.audioSamples,
-                        sampleRate: config.audio.inputSampleRate
-                    ) {
-                        switch classification.label {
-                        case .interrupt where classification.confidence > 0.85:
-                            barge.hasInterruptKeyword = true
-                            barge.partialTranscript = classification.keyword
-                            debugLog(debugConsole, .command,
-                                     "Keyword classifier: interrupt (\(classification.keyword ?? "?"), conf=\(String(format: "%.2f", classification.confidence)))")
-                        case .wake where classification.confidence > 0.85:
-                            barge.hasInterruptKeyword = true
-                            barge.partialTranscript = classification.keyword
-                            bargeInState.playbackWakeWordDetected = true
-                            debugLog(debugConsole, .command,
-                                     "Keyword classifier: wake (conf=\(String(format: "%.2f", classification.confidence)))")
-                        case .speech, .silence, .noise, .interrupt, .wake:
-                            break
-                        }
-                        bargeInState.pendingBargeIn = barge
-                    }
-                }
+                // Keyword classifier removed (S18 kill-list): Path B decides
+                // on overlap duration / RMS / StreamingSTT transcripts only.
 
                 if let barge = bargeInState.pendingBargeIn {
                     // Compute overlap duration from accumulated speech samples.
@@ -3329,21 +3253,8 @@ actor PipelineCoordinator {
                             candidate.audioSamples.append(contentsOf: chunk.samples.prefix(remaining))
                         }
 
-                        // Run keyword classifier once we have enough audio.
-                        if !candidate.hasInterruptKeyword,
-                           candidate.audioSamples.count >= GenerationTakeoverCandidate.minSamplesForKeyword,
-                           let classifier = keywordClassifier,
-                           await classifier.isLoaded
-                        {
-                            if let classification = try? await classifier.classify(
-                                audio: candidate.audioSamples,
-                                sampleRate: config.audio.inputSampleRate
-                            ), classification.label == .interrupt && classification.confidence > 0.85 {
-                                candidate.hasInterruptKeyword = true
-                                debugLog(debugConsole, .command,
-                                         "PATH C keyword: interrupt (conf=\(String(format: "%.2f", classification.confidence)))")
-                            }
-                        }
+                        // Keyword classifier removed (S18 kill-list): Path C
+                        // takeover decisions use speech-chunk counts and RMS.
 
                         bargeInState.generationTakeoverCandidate = candidate
 

@@ -109,7 +109,6 @@ orb click / hotkey → mic capture (16kHz) → WAV → fae-daemon
 | VLM (deep) | SmolVLM2-500M | MLXVLM mlx | On-demand vision — detailed screenshot/camera analysis (1.8GB) |
 | Embedding | Hash-384 | MLX | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML fp16 | Voice identity (1024-dim x-vectors) |
-| Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
 
 **Daemon LLM lane**: `llm.useDaemonEngine = true` routes turns through `ML/DaemonLLMEngine.swift` → `fae-daemon` (Unix-socket NDJSON, fail-closed `models.lock` SHA-256 verification). `FAE_DAEMON_BIN` overrides the daemon binary path. If the daemon is unavailable, the pipeline falls back to the in-process MLX engine.
 
@@ -143,7 +142,7 @@ LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target).
 
 ### Unified pipeline
 
-1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD + keyword spotter) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 4b. **Keyword classifier** (1D-CNN, populates interrupt keywords for barge-in) → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Gemma 4 E4B via daemon lane, or Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
+1. **Audio capture** (16kHz mono) → 2. **VAD** (SileroVAD) → 3. **Speaker ID** (ECAPA-TDNN) → 4. **Echo suppression** → 5. **STT** (Qwen3-ASR) → 6. **LLM** (Gemma 4 E4B via daemon lane, or Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 7. **TTS** (Kokoro-82M, sentence-queued) → 8. **Playback** (with barge-in)
 
 **Latency**: 3s (greetings) to 30s (multi-tool queries). Orb visual state + thinking tone provide feedback throughout.
 
@@ -567,7 +566,7 @@ All paths under `native/macos/Fae/Sources/Fae/` unless noted.
 | Directory | Role |
 |-----------|------|
 | `Core/` | App facade (`FaeCore`), config (`FaeConfig`, incl. `llm.useDaemonEngine`), event bus + types, system prompt assembly (`PersonalityManager`), soul/directive lifecycle, rescue mode, credentials, permissions, diagnostics, CLI tool augmentation + workspace discovery |
-| `ML/` | Model loading (`ModelManager`), STT/TTS/VLM/embedding engines, `DaemonLLMEngine` (daemon LLM lane client), ECAPA-TDNN speaker encoder + profile store, keyword classifier, turn detector, voice libraries |
+| `ML/` | Model loading (`ModelManager`), STT/TTS/VLM/embedding engines, `DaemonLLMEngine` (daemon LLM lane client), ECAPA-TDNN speaker encoder + profile store, voice libraries |
 | `Pipeline/` | `PipelineCoordinator` (STT→LLM→TTS, barge-in, `injectProactiveQuery()`), VAD, echo suppression, speaker gating, tool-call/script-block parsing, correction detection, post-ASR vocabulary correction, implicit feedback, conversation state, text processing |
 | `Runtime/` | JSC tool-program runtime (`JSCRuntime`, bridges, `ScriptBudget`, `DryRunPlan`), Python uv runtime + dependency installer, local runtime server, `PrivacyFilterBridge` |
 | `Tools/` | Tool protocol/registry/executor (4-step flow), built-in + Apple + scheduler + skill + vision tools, ACP delegation, security stack (`DamageControlPolicy`, `ReversibilityEngine`, `SafeBashExecutor`, `PathPolicy`, `NetworkTargetPolicy`, `SecurityEventLogger`, redaction) |

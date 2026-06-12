@@ -1,6 +1,6 @@
 /// Fuses wake-word detection scores from multiple detectors.
 ///
-/// When the MLXKeywordClassifier model is available, combines its score
+/// Historical: an MLX keyword classifier score could fuse with template
 /// with acoustic template cosine similarity using weighted fusion.
 /// When the classifier is unavailable, falls back to template-only detection
 /// with a higher confidence threshold.
@@ -46,7 +46,7 @@ struct WakeWordScoreFusion {
     /// When neither input is available, the result is a score of 0 with no activation.
     ///
     /// - Parameters:
-    ///   - classifierScore: Score from MLXKeywordClassifier (nil if model not loaded).
+    ///   - classifierScore: Optional classifier score (always nil since the S18 kill-list removed the keyword classifier; template-only mode).
     ///   - templateSimilarities: Cosine similarities from WakeWordAcousticDetector templates.
     /// - Returns: A ``Result`` with the fused score, activation status, and detection mode.
     static func fuse(

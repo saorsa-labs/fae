@@ -59,17 +59,9 @@ actor ModelManager {
     /// Used for camera presence detection, screen triage, app identification.
     private(set) var fastVLMEngine: MLXVLMEngine?
 
-    /// Keyword classifier for barge-in interrupt detection.
-    /// Non-critical: if unavailable, barge-in falls back to acoustic-only decisions.
-    private(set) var keywordClassifier: MLXKeywordClassifier?
-
     /// Core ML speech verifier — runs on ANE, preferred over MLX (GPU).
     /// Falls back to `speechVerifier` (MLX/GPU) if Core ML model not bundled.
     private(set) var coreMLSpeechVerifier: CoreMLAudioClassifier?
-
-    /// Core ML keyword classifier — runs on ANE, preferred over MLX (GPU).
-    /// Falls back to `keywordClassifier` (MLX/GPU) if Core ML model not bundled.
-    private(set) var coreMLKeywordClassifier: CoreMLAudioClassifier?
 
     /// Post-VAD speech verifier — rejects music/noise segments that Silero misclassifies.
     /// Non-critical: if unavailable, segments pass through with spectral tilt filter only.
@@ -569,21 +561,9 @@ actor ModelManager {
             }
         }
 
-        // Keyword classifier — non-critical, degrades gracefully to acoustic-only barge-in.
-        if MLXKeywordClassifier.modelExists {
-            let classifier = MLXKeywordClassifier()
-            do {
-                try await classifier.load(modelPath: MLXKeywordClassifier.defaultModelPath)
-                self.keywordClassifier = classifier
-                NSLog("ModelManager: keyword classifier loaded")
-            } catch {
-                NSLog("ModelManager: keyword classifier load failed (degraded — acoustic-only barge-in): %@",
-                      error.localizedDescription)
-            }
-        } else {
-            NSLog("ModelManager: keyword classifier not found at %@ — acoustic-only barge-in",
-                  MLXKeywordClassifier.defaultModelPath.path)
-        }
+        // Keyword classifier: removed (S18 kill-list) — it served acoustic
+        // barge-in, which push-to-talk bypassed. Interruption is the orb
+        // click / hotkey; wake detection uses acoustic templates only.
 
         // Streaming ASR fast-path — disabled.
         // Qwen3-ASR growing-buffer (1.6% WER, 362ms first partial) is the primary
@@ -629,21 +609,6 @@ actor ModelManager {
         }
         if self.coreMLSpeechVerifier == nil, self.speechVerifier == nil {
             NSLog("ModelManager: speech verifier not available — using spectral tilt filter only")
-        }
-
-        // Keyword classifier — prefer Core ML (ANE) over MLX (GPU).
-        let kwCoreMLURL = Bundle.faeResources.url(forResource: "keyword_classifier", withExtension: "mlmodelc", subdirectory: "Models")
-        let kwConfigURL = Bundle.faeResources.url(forResource: "keyword_classifier_config", withExtension: "json", subdirectory: "Models")
-        if let modelURL = kwCoreMLURL, let configURL = kwConfigURL {
-            let kw = CoreMLAudioClassifier(name: "KeywordClassifier")
-            do {
-                try await kw.load(modelURL: modelURL, configURL: configURL)
-                self.coreMLKeywordClassifier = kw
-                NSLog("ModelManager: keyword classifier loaded (Core ML / ANE)")
-            } catch {
-                NSLog("ModelManager: Core ML keyword classifier load failed: %@ — trying MLX fallback",
-                      error.localizedDescription)
-            }
         }
 
         eventBus.send(.runtimeProgress(stage: "verify_started", progress: 0.9))

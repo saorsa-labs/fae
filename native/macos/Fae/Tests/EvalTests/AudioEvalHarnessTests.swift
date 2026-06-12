@@ -262,9 +262,9 @@ final class AudioEvalHarnessTests: XCTestCase {
         let entries = Self.loadCorpus().filter { $0.expectedKeywords != nil && !($0.expectedKeywords ?? []).isEmpty }
         guard !entries.isEmpty else { return }
 
-        // Without a loaded MLXKeywordClassifier, we can only verify that
+        // The keyword classifier was removed (S18 kill-list); verify only that
         // corpus entries with expected keywords have the right metadata.
-        // Full evaluation requires a loaded MLXKeywordClassifier model.
+        // corpus metadata stays well-formed for any future audio classifier.
         for entry in entries {
             XCTAssertFalse(
                 (entry.expectedKeywords ?? []).isEmpty,
