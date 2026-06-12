@@ -118,7 +118,11 @@ fn build_tts_engine() -> Arc<dyn TtsAdapter> {
             .ok()
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| "prince-canuma/Kokoro-82M".to_owned());
-        match fae_engine::VoiceTtsAdapter::spawn(model_repo) {
+        let voices_dir = local_voices_directory();
+        if let Some(dir) = &voices_dir {
+            println!("voices  : {} (custom voices, optional)", dir.display());
+        }
+        match fae_engine::VoiceTtsAdapter::spawn(model_repo, voices_dir) {
             Ok(adapter) => return Arc::new(adapter),
             Err(error) => {
                 eprintln!("fae-daemon: tts worker spawn failed ({error}); using mock tts");
@@ -126,6 +130,17 @@ fn build_tts_engine() -> Arc<dyn TtsAdapter> {
         }
     }
     Arc::new(MockTtsAdapter::new("mock-tts"))
+}
+
+/// Directory holding custom voice embeddings (`{voice}.safetensors`) checked
+/// before the HF repo — `<fae data dir>/voices`, sibling of the run dir. The
+/// Swift frontend installs Fae's own voice here. `None` when HOME is unset
+/// (the adapter then serves HF repo voices only).
+#[cfg(target_os = "macos")]
+fn local_voices_directory() -> Option<PathBuf> {
+    run_directory()
+        .ok()
+        .and_then(|run| run.parent().map(|base| base.join("voices")))
 }
 
 /// Build the inference backend. With `FAE_MODEL_ID` set, load that mistral.rs

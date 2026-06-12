@@ -5,18 +5,17 @@ import XCTest
 
 // MARK: - Voice mapping
 //
-// The daemon's voice-tts backend only knows Kokoro voice ids (af_heart,
-// bm_daniel, …). Fae's configured default voice is "fae" — a custom embedding
-// the daemon cannot load yet. Sending it verbatim would fail EVERY synthesis
-// call, so the engine must map non-Kokoro names to the daemon fallback voice
-// before any request is made.
+// The daemon resolves voice names itself: its local voices directory first
+// (custom voices like Fae's own "fae", installed by installBundledVoices()),
+// then the HF repo, then its fallback voice. The client therefore passes any
+// plain voice name through verbatim — mapping "fae" to a stock voice here
+// would permanently silence Fae's own voice. Only non-names (descriptions,
+// empty strings) are mapped to the fallback client-side.
 
 final class DaemonTTSVoiceMappingTests: XCTestCase {
 
-    func testCustomFaeVoiceFallsBackToDaemonVoice() {
-        XCTAssertEqual(
-            DaemonTTSEngine.daemonVoice(from: "fae"),
-            DaemonTTSEngine.fallbackVoice)
+    func testCustomFaeVoicePassesThroughToDaemon() {
+        XCTAssertEqual(DaemonTTSEngine.daemonVoice(from: "fae"), "fae")
     }
 
     func testKokoroVoiceIdsPassThrough() {
@@ -43,17 +42,20 @@ final class DaemonTTSVoiceMappingTests: XCTestCase {
             "af_heart")
     }
 
-    func testMalformedNamesFallBack() {
+    func testNonNamesFallBackClientSide() {
         XCTAssertEqual(DaemonTTSEngine.daemonVoice(from: ""), DaemonTTSEngine.fallbackVoice)
+        XCTAssertEqual(DaemonTTSEngine.daemonVoice(from: "   "), DaemonTTSEngine.fallbackVoice)
+        // Descriptions (spaces) are instructs, not voice names.
         XCTAssertEqual(
             DaemonTTSEngine.daemonVoice(from: "totally custom voice"),
             DaemonTTSEngine.fallbackVoice)
-        XCTAssertEqual(
-            DaemonTTSEngine.daemonVoice(from: "abc_def"),  // 3-char prefix is not a Kokoro id
-            DaemonTTSEngine.fallbackVoice)
-        XCTAssertEqual(
-            DaemonTTSEngine.daemonVoice(from: "af_"),
-            DaemonTTSEngine.fallbackVoice)
+    }
+
+    func testUnknownPlainNamesPassThrough() {
+        // Unknown plain names reach the daemon, which degrades them to its
+        // own fallback voice — resolution lives daemon-side where the local
+        // voices directory is visible.
+        XCTAssertEqual(DaemonTTSEngine.daemonVoice(from: "abc_def"), "abc_def")
     }
 }
 

@@ -99,6 +99,7 @@ let package = Package(
                 .copy("Resources/damage-control-default.yaml"),
                 .copy("Resources/Voices/fae.wav"),
                 .copy("Resources/Voices/fae.bin"),
+                .copy("Resources/Voices/fae.safetensors"),
                 .copy("Resources/App/AppIconFace.jpg"),
                 .copy("Resources/Scripts"),
             ],

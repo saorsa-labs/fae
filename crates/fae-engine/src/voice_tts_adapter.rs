@@ -11,6 +11,7 @@
 //! the protocol surface is identical.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use async_trait::async_trait;
@@ -21,6 +22,11 @@ use crate::tts::{encode_wav_pcm16, TtsAdapter, TtsAudio};
 
 /// Kokoro generates 24 kHz audio.
 const KOKORO_SAMPLE_RATE: u32 = 24_000;
+
+/// Voice used when the requested voice cannot be loaded from the local voices
+/// directory or the HuggingFace repo. Synthesis must degrade to a different
+/// voice, never to silence.
+const FALLBACK_VOICE: &str = "af_heart";
 
 enum Job {
     Synthesize {
@@ -40,8 +46,13 @@ pub struct VoiceTtsAdapter {
 impl VoiceTtsAdapter {
     /// Spawn the worker thread. `model_repo` is a HuggingFace id (the same
     /// `prince-canuma/Kokoro-82M` the Swift lane uses, so the cache is warm).
-    /// Weights load on the first synthesize call, not here.
-    pub fn spawn(model_repo: impl Into<String>) -> Result<VoiceTtsAdapter, EngineError> {
+    /// `local_voices_dir`, when set, is checked for `{voice}.safetensors`
+    /// before the HF repo — custom voices (Fae's own) live there. Weights load
+    /// on the first synthesize call, not here.
+    pub fn spawn(
+        model_repo: impl Into<String>,
+        local_voices_dir: Option<PathBuf>,
+    ) -> Result<VoiceTtsAdapter, EngineError> {
         let model_repo = model_repo.into();
         let info = AdapterInfo {
             backend: "voice-tts".to_owned(),
@@ -50,7 +61,7 @@ impl VoiceTtsAdapter {
         let (jobs, receiver) = mpsc::channel::<Job>();
         std::thread::Builder::new()
             .name("fae-tts-worker".to_owned())
-            .spawn(move || worker(&receiver, &model_repo))
+            .spawn(move || worker(&receiver, &model_repo, local_voices_dir.as_deref()))
             .map_err(|error| EngineError::Load(format!("tts worker spawn failed: {error}")))?;
         Ok(VoiceTtsAdapter { jobs, info })
     }
@@ -85,7 +96,11 @@ impl TtsAdapter for VoiceTtsAdapter {
 
 /// Worker loop: owns the (non-`Send`) model and voice cache for the process
 /// lifetime, loading both lazily on first use.
-fn worker(receiver: &mpsc::Receiver<Job>, model_repo: &str) {
+fn worker(
+    receiver: &mpsc::Receiver<Job>,
+    model_repo: &str,
+    local_voices_dir: Option<&std::path::Path>,
+) {
     let mut model: Option<voice_tts::KokoroModel> = None;
     let mut voices: HashMap<String, voice_tts::Array> = HashMap::new();
 
@@ -96,16 +111,41 @@ fn worker(receiver: &mpsc::Receiver<Job>, model_repo: &str) {
             speed,
             reply,
         } = job;
-        let result = run_synthesis(&mut model, &mut voices, model_repo, &text, &voice, speed);
+        let result = run_synthesis(
+            &mut model,
+            &mut voices,
+            model_repo,
+            local_voices_dir,
+            &text,
+            &voice,
+            speed,
+        );
         // A dropped receiver just means the caller went away mid-request.
         let _ = reply.send(result);
     }
 }
 
+/// Load a voice embedding: local `{dir}/{voice}.safetensors` first (custom
+/// voices like Fae's own), then the HF model repo's `voices/` directory.
+fn load_voice_embedding(
+    local_voices_dir: Option<&std::path::Path>,
+    voice: &str,
+) -> Result<voice_tts::Array, voice_tts::VoicersError> {
+    if let Some(dir) = local_voices_dir {
+        let candidate = dir.join(format!("{voice}.safetensors"));
+        if candidate.is_file() {
+            return voice_tts::voice::load_voice_from_file(&candidate);
+        }
+    }
+    voice_tts::load_voice(voice, None)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_synthesis(
     model: &mut Option<voice_tts::KokoroModel>,
     voices: &mut HashMap<String, voice_tts::Array>,
     model_repo: &str,
+    local_voices_dir: Option<&std::path::Path>,
     text: &str,
     voice: &str,
     speed: f32,
@@ -124,8 +164,24 @@ fn run_synthesis(
     };
 
     if !voices.contains_key(voice) {
-        let embedding = voice_tts::load_voice(voice, None)
-            .map_err(|error| EngineError::Load(format!("voice '{voice}' load failed: {error}")))?;
+        let embedding = match load_voice_embedding(local_voices_dir, voice) {
+            Ok(embedding) => embedding,
+            Err(error) if voice != FALLBACK_VOICE => {
+                // An unknown voice must degrade to a different voice, never
+                // to an error (speech would silently stop downstream).
+                eprintln!(
+                    "fae-daemon: voice '{voice}' load failed ({error}); using {FALLBACK_VOICE}"
+                );
+                load_voice_embedding(local_voices_dir, FALLBACK_VOICE).map_err(|error| {
+                    EngineError::Load(format!("fallback voice load failed: {error}"))
+                })?
+            }
+            Err(error) => {
+                return Err(EngineError::Load(format!(
+                    "voice '{voice}' load failed: {error}"
+                )));
+            }
+        };
         voices.insert(voice.to_owned(), embedding);
     }
     let Some(embedding) = voices.get(voice) else {

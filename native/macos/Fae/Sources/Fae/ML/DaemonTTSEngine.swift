@@ -79,6 +79,7 @@ actor DaemonTTSEngine: TTSEngine {
     func load(modelID: String) async throws {
         if isLoaded { return }
         loadState = .loading
+        Self.installBundledVoices()
         do {
             try await connectAndAuthenticate()
             loadState = .loaded
@@ -245,21 +246,56 @@ actor DaemonTTSEngine: TTSEngine {
             : mapped
     }
 
-    /// Map the configured `tts.voice` to a daemon-side Kokoro voice id.
-    /// Kokoro ids look like `af_heart` / `bm_daniel` (accent+gender prefix,
-    /// underscore, name). Anything else — notably Fae's custom "fae" embedding,
-    /// which voice-tts cannot load yet — falls back to `fallbackVoice`.
+    /// Map the configured `tts.voice` to a daemon-side voice id. Any plain
+    /// voice name passes through — Kokoro ids (`af_heart`, `bm_daniel`) load
+    /// from the HF repo and custom names (Fae's own "fae", installed by
+    /// `installBundledVoices()`) from the daemon's local voices directory;
+    /// the daemon itself degrades unknown names to its fallback voice.
+    /// Anything that is not a plain name (descriptions, empty) maps to
+    /// `fallbackVoice` client-side.
     static func daemonVoice(from configured: String) -> String {
         let candidate = configured.lowercased().trimmingCharacters(in: .whitespaces)
-        let parts = candidate.split(separator: "_")
-        guard parts.count == 2,
-              parts[0].count == 2,
-              !parts[1].isEmpty,
-              candidate.allSatisfy({ $0.isLowercase || $0 == "_" })
+        guard !candidate.isEmpty,
+              candidate.count < 64,
+              candidate.allSatisfy({ ($0.isLowercase && $0.isLetter) || $0.isNumber || $0 == "_" })
         else {
             return fallbackVoice
         }
         return candidate
+    }
+
+    /// Copy bundled custom voice embeddings into the daemon's voices
+    /// directory (`<fae data dir>/voices/`), where `VoiceTtsAdapter` looks
+    /// before the HF repo. Idempotent and best-effort: a failed install only
+    /// costs the custom voice (the daemon falls back), never speech.
+    static func installBundledVoices() {
+        guard let bundled = Bundle.faeResources.url(forResource: "fae", withExtension: "safetensors")
+        else {
+            NSLog("DaemonTTSEngine: no bundled fae.safetensors — daemon serves repo voices only")
+            return
+        }
+        let voicesDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("fae", isDirectory: true)
+            .appendingPathComponent("voices", isDirectory: true)
+        let target = voicesDir.appendingPathComponent("fae.safetensors")
+        do {
+            let fm = FileManager.default
+            try fm.createDirectory(at: voicesDir, withIntermediateDirectories: true)
+            let bundledSize = (try? bundled.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+            let installedSize = (try? target.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -2
+            guard bundledSize != installedSize else { return }
+            if fm.fileExists(atPath: target.path) {
+                try fm.removeItem(at: target)
+            }
+            try fm.copyItem(at: bundled, to: target)
+            NSLog("DaemonTTSEngine: installed fae voice embedding at %@", target.path)
+        } catch {
+            NSLog(
+                "DaemonTTSEngine: voice install failed (%@) — daemon will fall back",
+                error.localizedDescription)
+        }
     }
 
     /// Wrap mono Float32 samples in an `AVAudioPCMBuffer` for the playback path.
