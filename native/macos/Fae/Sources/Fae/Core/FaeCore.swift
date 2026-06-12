@@ -34,11 +34,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     @Published var thinkingLevel: FaeThinkingLevel = .fast
     @Published var hasOwnerPhoto: Bool = false
 
-    var nativeEnrollmentCaptureManager: AudioCaptureManager { captureManager }
-    var nativeEnrollmentSpeakerEncoder: CoreMLSpeakerEncoder { speakerEncoder }
-    var nativeEnrollmentSpeakerProfileStore: SpeakerProfileStore { speakerProfileStore }
-    var nativeEnrollmentWakeWordProfileStore: WakeWordProfileStore { wakeWordProfileStore }
-
     /// Whether Fae is currently speaking (TTS playback in progress).
     /// Exposed for the test harness to wait until speech completes.
     func isSpeaking() async -> Bool {
@@ -175,9 +170,6 @@ final class FaeCore: ObservableObject, HostCommandSender {
     private var ttsEngine: any TTSEngine = FaeTTSAdapter()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
-    /// Enrollment now uses the pipeline's captureManager directly — see
-    /// nativeEnrollmentCaptureManager. A separate engine caused two AVAudioEngine
-    /// instances to compete for the mic, silencing enrollment on some hardware.
     private let playbackManager = AudioPlaybackManager()
     private let conversationState = ConversationStateTracker()
     private lazy var modelManager = ModelManager(eventBus: eventBus)
@@ -2306,12 +2298,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
         userName = trimmedName
         config.userName = trimmedName
 
-        // Enable voice identity in enforce mode — only the owner's voice gets
-        // full access, and liveness detection rejects replayed/TV/video audio.
-        config.voiceIdentity.enabled = true
-        config.voiceIdentity.mode = "enforce"
-        FaeEnvironment.defaults.set(true, forKey: "voiceIdentityEnabled")
-        FaeEnvironment.defaults.set("enforce", forKey: "voiceIdentityMode")
+        // S18 voice-identity teardown: enrollment no longer re-enables
+        // enforce mode — speaker profiles only serve attribution and echo
+        // suppression now, never access control.
 
         persistConfig(reason: "native_owner_enrollment")
 
