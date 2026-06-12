@@ -810,13 +810,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
         await coordinator.pttToggle()
     }
 
-    /// Hotkey press: begin a deliberate capture.
+    /// Hotkey press / orb long-press: begin a deliberate HOLD capture —
+    /// the release ends and sends it (no silence endpointer).
     func pttStart() async {
         guard let coordinator = pipelineCoordinator else {
             NSLog("FaeCore: PTT press ignored — pipeline still starting (state=%@)", pipelineState.rawValue)
             return
         }
-        await coordinator.pttStart()
+        await coordinator.pttStart(holdMode: true)
     }
 
     /// Hotkey release: end the capture and send it.

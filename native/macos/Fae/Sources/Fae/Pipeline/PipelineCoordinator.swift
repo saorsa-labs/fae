@@ -128,6 +128,10 @@ actor PipelineCoordinator {
     private var pttSpeechSeen = false
     private var pttSilenceSamples = 0
     private var pttMicWasMuted = false
+    /// Hold gestures (Right ⌥ / orb long-press) end on RELEASE, never on the
+    /// silence endpointer — a mid-sentence pause must not send the turn early
+    /// (toggle captures — panel mic, "Talk to Fae" menu — keep the endpointer).
+    private var pttHoldMode = false
     /// Base64 WAV consumed by the next user-turn generation (S18 audio turn).
     private var pendingPTTAudioBase64: String?
     /// The `[heard]:` transcription extracted from the model's first reply of
@@ -160,7 +164,10 @@ actor PipelineCoordinator {
     }
 
     /// Begin a deliberate capture (orb click / hotkey press).
-    func pttStart() async {
+    ///
+    /// `holdMode: true` (hotkey hold / orb long-press) disables the silence
+    /// endpointer — only the release (or the 30 s cap) ends the capture.
+    func pttStart(holdMode: Bool = false) async {
         guard !pttCapturing else { return }
         // A deliberate capture interrupts whatever Fae is saying.
         if assistantSpeaking {
@@ -169,6 +176,7 @@ actor PipelineCoordinator {
             await playback.stop()
         }
         pttCapturing = true
+        pttHoldMode = holdMode
         pttBuffer = []
         pttBuffer.reserveCapacity(Self.pttMaximumSamples)
         pttSpeechSeen = false
@@ -179,6 +187,7 @@ actor PipelineCoordinator {
             await capture.setMuted(false)
         }
         eventBus.send(.orbStateChanged(mode: "listening", feeling: OrbFeeling.curiosity.rawValue, palette: nil))
+        NSLog("PipelineCoordinator: PTT capture started (holdMode=%d)", holdMode ? 1 : 0)
         debugLog(debugConsole, .pipeline, "PTT capture started")
     }
 
@@ -203,7 +212,7 @@ actor PipelineCoordinator {
             pttSilenceSamples += chunk.samples.count
         }
 
-        if pttSpeechSeen && pttSilenceSamples >= Self.pttEndpointSilenceSamples {
+        if !pttHoldMode, pttSpeechSeen, pttSilenceSamples >= Self.pttEndpointSilenceSamples {
             await finishPTTCapture(reason: "silence_endpoint")
         } else if pttBuffer.count >= Self.pttMaximumSamples {
             await finishPTTCapture(reason: "max_duration")
@@ -220,11 +229,15 @@ actor PipelineCoordinator {
         await capture.setMuted(pttMicWasMuted)
         vad.reset()
         eventBus.send(.orbStateChanged(mode: "idle", feeling: OrbFeeling.neutral.rawValue, palette: nil))
+        NSLog(
+            "PipelineCoordinator: PTT capture finished (%@): %d samples, speech=%d",
+            reason, samples.count, pttSpeechSeen ? 1 : 0)
         debugLog(
             debugConsole, .pipeline,
             "PTT capture finished (\(reason)): \(samples.count) samples, speech=\(pttSpeechSeen)")
 
         guard pttSpeechSeen, samples.count >= Self.pttMinimumSamples else {
+            NSLog("PipelineCoordinator: PTT capture discarded (no usable speech)")
             debugLog(debugConsole, .pipeline, "PTT capture discarded (no usable speech)")
             return
         }

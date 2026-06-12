@@ -529,6 +529,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let PressState::Pending { at, .. } = press {
             if at.elapsed().as_millis() >= LONG_PRESS_MS {
                 press = PressState::Talking;
+                eprintln!("[gesture] long-press hold fired → talk_start");
                 emit_menu_action(MenuAction::TalkStart);
             }
         }
@@ -668,6 +669,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     PressState::Talking => {
                         // Long-press release = send (mirrors the ⌥ gesture).
                         press = PressState::Idle;
+                        eprintln!("[gesture] long-press release → talk_stop");
                         emit_menu_action(MenuAction::TalkStop);
                     }
                     PressState::Pending { .. } => {

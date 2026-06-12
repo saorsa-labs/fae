@@ -21,6 +21,8 @@ final class GlobalHotkeyManager {
 
     private var pttMonitor: Any?
     private var pttKeyUpMonitor: Any?
+    private var pttLocalMonitor: Any?
+    private var pttLocalKeyUpMonitor: Any?
     private var pttOnPress: (() -> Void)?
     private var pttOnRelease: (() -> Void)?
     private var pttKeyIsDown: Bool = false
@@ -90,37 +92,60 @@ final class GlobalHotkeyManager {
             return
         }
 
+        // Global monitors only see events routed to OTHER apps — when Fae
+        // itself is frontmost (settings open, just launched) the key would
+        // be invisible. Register a local monitor alongside so the hold works
+        // everywhere.
         if let flag = Self.modifierFlag(for: keyCode) {
-            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let handleFlags: (NSEvent) -> Void = { [weak self] event in
                 guard event.keyCode == keyCode else { return }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
                     let pressed = event.modifierFlags.contains(flag)
                     if pressed, !self.pttKeyIsDown {
                         self.pttKeyIsDown = true
+                        NSLog("GlobalHotkeyManager: PTT press (keyCode %d)", keyCode)
                         self.pttOnPress?()
                     } else if !pressed, self.pttKeyIsDown {
                         self.pttKeyIsDown = false
+                        NSLog("GlobalHotkeyManager: PTT release (keyCode %d)", keyCode)
                         self.pttOnRelease?()
                     }
                 }
             }
+            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: handleFlags)
+            pttLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                handleFlags(event)
+                return event
+            }
         } else {
-            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let handleDown: (NSEvent) -> Void = { [weak self] event in
                 guard event.keyCode == keyCode else { return }
                 DispatchQueue.main.async { [weak self] in
                     guard let self, !self.pttKeyIsDown else { return }
                     self.pttKeyIsDown = true
+                    NSLog("GlobalHotkeyManager: PTT press (keyCode %d)", keyCode)
                     self.pttOnPress?()
                 }
             }
-            pttKeyUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            let handleUp: (NSEvent) -> Void = { [weak self] event in
                 guard event.keyCode == keyCode else { return }
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.pttKeyIsDown else { return }
                     self.pttKeyIsDown = false
+                    NSLog("GlobalHotkeyManager: PTT release (keyCode %d)", keyCode)
                     self.pttOnRelease?()
                 }
+            }
+            pttMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handleDown)
+            pttKeyUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyUp, handler: handleUp)
+            pttLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                handleDown(event)
+                return event
+            }
+            pttLocalKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { event in
+                handleUp(event)
+                return event
             }
         }
         NSLog("GlobalHotkeyManager: hold-to-talk monitor started (keyCode %d)", keyCode)
@@ -137,6 +162,14 @@ final class GlobalHotkeyManager {
         if let m = pttKeyUpMonitor {
             NSEvent.removeMonitor(m)
             pttKeyUpMonitor = nil
+        }
+        if let m = pttLocalMonitor {
+            NSEvent.removeMonitor(m)
+            pttLocalMonitor = nil
+        }
+        if let m = pttLocalKeyUpMonitor {
+            NSEvent.removeMonitor(m)
+            pttLocalKeyUpMonitor = nil
         }
         pttKeyIsDown = false
         pttOnPress = nil
@@ -163,6 +196,12 @@ final class GlobalHotkeyManager {
             NSEvent.removeMonitor(m)
         }
         if let m = pttKeyUpMonitor {
+            NSEvent.removeMonitor(m)
+        }
+        if let m = pttLocalMonitor {
+            NSEvent.removeMonitor(m)
+        }
+        if let m = pttLocalKeyUpMonitor {
             NSEvent.removeMonitor(m)
         }
     }

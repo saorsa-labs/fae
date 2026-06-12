@@ -533,9 +533,15 @@ final class RustUiShellController {
     private func handleMenuAction(_ action: String) {
         switch action {
         case "settings": onSettings?()
-        case "talk_toggle": onTalkToggle?()
-        case "talk_start": onTalkStart?()
-        case "talk_stop": onTalkStop?()
+        case "talk_toggle":
+            NSLog("RustUiShellController: talk_toggle received")
+            onTalkToggle?()
+        case "talk_start":
+            NSLog("RustUiShellController: talk_start received")
+            onTalkStart?()
+        case "talk_stop":
+            NSLog("RustUiShellController: talk_stop received")
+            onTalkStop?()
         case "open_browser_data_panel", "show_messages": break // Handled inside the orb host.
         case "reset_conversation":
             send(["type": "clear_conversation"])
