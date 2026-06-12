@@ -502,14 +502,6 @@ actor PipelineCoordinator {
     /// `PendingBargeIn.hasInterruptKeyword` and `partialTranscript`.
     private var keywordClassifier: MLXKeywordClassifier?
 
-    /// Semantic turn detector for adaptive endpointing.
-    /// Predicts end-of-utterance probability from streaming partial transcripts.
-    private var turnDetector: MLXTurnDetector?
-
-    /// Most recent EOU probability from the turn detector (0-1).
-    /// Fed into `silenceThresholdMs()` for adaptive endpointing.
-    private var lastEOUProbability: Float?
-
     /// Post-VAD speech verifier — rejects music/noise segments.
     private var speechVerifier: MLXSpeechVerifier?
 
@@ -907,12 +899,11 @@ actor PipelineCoordinator {
         await personalLexicon.load()
         await rebuildVocabularyCorrections()
 
-        // Wire keyword classifier and turn detector from ModelManager (non-critical).
+        // Wire keyword classifier from ModelManager (non-critical).
         // Core ML (ANE) versions are preferred over MLX (GPU) to reduce GPU contention.
         if let mm = modelManager {
             self.coreMLKeywordClassifier = await mm.coreMLKeywordClassifier
             self.keywordClassifier = await mm.keywordClassifier
-            self.turnDetector = await mm.turnDetector
             self.coreMLSpeechVerifier = await mm.coreMLSpeechVerifier
             self.speechVerifier = await mm.speechVerifier
         }
@@ -1003,7 +994,6 @@ actor PipelineCoordinator {
         speechInputStage.incrementStreamingEpoch()
         speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
-        lastEOUProbability = nil
 
         let activeTTSTask = ttsState.pendingTask
         ttsState.pendingTask = nil
@@ -1039,7 +1029,6 @@ actor PipelineCoordinator {
         speechInputStage.incrementStreamingEpoch()
         speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
-        lastEOUProbability = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
         cancelStreamingEventConsumer()
@@ -2585,7 +2574,6 @@ actor PipelineCoordinator {
         lastAssistantResponseText = ""
         speechInputStage.lastStreamingPartialTranscript = nil
         lastFastPathPartial = nil
-        lastEOUProbability = nil
         speculativePrefillTask?.cancel()
         speculativePrefillTask = nil
         speechInputStage.incrementStreamingEpoch()
@@ -3300,7 +3288,7 @@ actor PipelineCoordinator {
                 bargeInSilenceMs: config.bargeIn.bargeInSilenceMs,
                 lastPartialTranscript: speechInputStage.lastStreamingPartialTranscript,
                 emaSuggestedMs: vad.emaSuggestedSilenceMs,
-                eouProbability: lastEOUProbability
+                eouProbability: nil  // SmartTurn removed (S18 kill-list) — rule-based endpointing
             )
             vad.setSilenceThresholdMs(silenceThresholdMs)
             if assistantSpeaking {
@@ -4004,16 +3992,6 @@ actor PipelineCoordinator {
             return
         }
 
-        // Run turn detector on streaming partial for adaptive endpointing.
-        // Pass audio samples when available so SmartTurn can use audio features.
-        if let td = turnDetector {
-            let audioSamples = lastProcessedSegment?.samples
-            let prediction = await td.predictEndOfTurn(
-                lastUserText: correctedText,
-                lastAudioSamples: audioSamples
-            )
-            lastEOUProbability = prediction.probability
-        }
     }
 
     private func handleSpeechSegment(_ segment: SpeechSegment) async {

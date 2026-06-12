@@ -71,10 +71,6 @@ actor ModelManager {
     /// Falls back to `keywordClassifier` (MLX/GPU) if Core ML model not bundled.
     private(set) var coreMLKeywordClassifier: CoreMLAudioClassifier?
 
-    /// Semantic turn detector for adaptive endpointing.
-    /// Non-critical: if unavailable, endpointing falls back to rule-based heuristics.
-    private(set) var turnDetector: MLXTurnDetector?
-
     /// Post-VAD speech verifier — rejects music/noise segments that Silero misclassifies.
     /// Non-critical: if unavailable, segments pass through with spectral tilt filter only.
     private(set) var speechVerifier: MLXSpeechVerifier?
@@ -601,28 +597,9 @@ actor ModelManager {
             NSLog("ModelManager: streaming ASR fast-path disabled (Qwen3-ASR growing-buffer is primary)")
         }
 
-        // Turn detector — non-critical, degrades gracefully to rule-based heuristics.
-        // SmartTurn (audio-based) is preferred; LiveKit text model is a secondary option.
-        do {
-            let td = MLXTurnDetector()
-            // Try SmartTurn first (audio-based endpoint detection via MLXAudioVAD).
-            await td.loadSmartTurn()
-            if await td.smartTurnAvailable {
-                NSLog("ModelManager: turn detector loaded (SmartTurn audio-based)")
-            } else if MLXTurnDetector.modelExists {
-                // Fall back to LiveKit text-based model if available locally.
-                try await td.load(modelPath: MLXTurnDetector.defaultModelPath)
-                NSLog("ModelManager: turn detector loaded (LiveKit text-based)")
-            } else {
-                NSLog("ModelManager: turn detector using rule-based endpointing only")
-            }
-            self.turnDetector = td
-        } catch {
-            NSLog("ModelManager: turn detector load failed (rule-based fallback): %@",
-                  error.localizedDescription)
-            // Still create the detector — it works with rule-based heuristics.
-            self.turnDetector = MLXTurnDetector()
-        }
+        // Turn detection: SmartTurn removed (S18 kill-list) — PTT endpointing
+        // is click/release/silence; the always-on path uses the rule-based
+        // heuristics in PipelineCoordinator.silenceThresholdMs().
 
         // Speech verifier — prefer Core ML (ANE) over MLX (GPU).
         let svCoreMLURL = Bundle.faeResources.url(forResource: "speech_verifier", withExtension: "mlmodelc", subdirectory: "Models")

@@ -281,48 +281,7 @@ final class EchoTextOverlapTests: XCTestCase {
                        "Continuation cue should override EMA")
     }
 
-    // MARK: - Turn Detector Types
-
-    func testTurnDetectorLanguageThresholds() {
-        XCTAssertEqual(MLXTurnDetector.languageThresholds["en"], 0.0049)
-        XCTAssertEqual(MLXTurnDetector.languageThresholds["ja"], 0.0027)
-        XCTAssertGreaterThan(MLXTurnDetector.languageThresholds.count, 10)
-    }
-
-    func testTurnDetectorMergeAdjacentTurns() {
-        let turns: [(role: String, text: String)] = [
-            ("user", "hello"),
-            ("user", "how are you"),
-            ("assistant", "I'm fine"),
-            ("user", "great"),
-        ]
-        let merged = MLXTurnDetector.mergeAdjacentTurns(turns)
-        XCTAssertEqual(merged.count, 3)
-        XCTAssertEqual(merged[0].text, "hello how are you")
-        XCTAssertEqual(merged[1].text, "I'm fine")
-        XCTAssertEqual(merged[2].text, "great")
-    }
-
-    func testTurnDetectorNormalization() {
-        let normalized = MLXTurnDetector.normalizeForTurnDetection("Hello, World! It's a TEST.")
-        XCTAssertEqual(normalized, "hello world it's a test")
-    }
-
-    func testTurnDetectorPredictionForIncompleteTurn() async {
-        let detector = MLXTurnDetector()
-        let prediction = await detector.predictEndOfTurn(
-            lastUserText: "I want to book a flight to"
-        )
-        XCTAssertTrue(prediction.isUnlikely,
-                      "Trailing preposition should be detected as unlikely EOU")
-    }
-
-    func testTurnDetectorPredictionForCompleteTurn() async {
-        let detector = MLXTurnDetector()
-        let prediction = await detector.predictEndOfTurn(
-            lastUserText: "What's the weather like today"
-        )
-        XCTAssertFalse(prediction.isUnlikely,
-                       "Complete question should not be flagged as unlikely EOU")
-    }
+    // Turn Detector tests removed with MLXTurnDetector (S18 kill-list):
+    // PTT endpointing is click/release/silence; the rule-based heuristics
+    // covered above (silenceThresholdMs) are the only endpointing left.
 }

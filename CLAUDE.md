@@ -110,7 +110,6 @@ orb click / hotkey → mic capture (16kHz) → WAV → fae-daemon
 | Embedding | Hash-384 | MLX | Semantic memory search |
 | Speaker | ECAPA-TDNN | Core ML fp16 | Voice identity (1024-dim x-vectors) |
 | Keyword | 1D-CNN (~200K params) | MLX float32 | Barge-in interrupt keyword detection (5-class: interrupt/wake/speech/silence/noise) |
-| Turn Detector | SmartTurn (Whisper-encoder classifier) | MLXAudioVAD float32 | Audio-based end-of-utterance prediction for adaptive endpointing (falls back to rule-based heuristics) |
 
 **Daemon LLM lane**: `llm.useDaemonEngine = true` routes turns through `ML/DaemonLLMEngine.swift` → `fae-daemon` (Unix-socket NDJSON, fail-closed `models.lock` SHA-256 verification). `FAE_DAEMON_BIN` overrides the daemon binary path. If the daemon is unavailable, the pipeline falls back to the in-process MLX engine.
 
