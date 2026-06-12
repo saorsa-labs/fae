@@ -219,6 +219,16 @@ struct FaeConfig: Codable {
         /// giving lower time-to-first-audio. Kokoro is stateless per call so per-sentence
         /// synthesis does not degrade prosody.
         var preferFinalOnly: Bool = false
+
+        // MARK: Daemon TTS lane (experimental)
+
+        /// Route TTS through the local Rust fae-daemon (`tts.synthesize`,
+        /// Kokoro via voice-tts) instead of the in-process MLX Kokoro engine.
+        /// Requires the daemon LLM lane (`llm.useDaemonEngine`) — the TTS
+        /// engine opens a second socket connection to the same daemon process.
+        /// Falls back to FaeTTSAdapter (loudly) when the daemon is
+        /// unavailable. Default false.
+        var useDaemonEngine: Bool = false
     }
 
     // MARK: - STT
@@ -1051,6 +1061,9 @@ struct FaeConfig: Codable {
                 case "preferFinalOnly", "prefer_final_only":
                     guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
                     config.tts.preferFinalOnly = v
+                case "useDaemonEngine":
+                    guard let v = parseBool(rawValue) else { throw ParseError.malformedValue(key: key, value: rawValue) }
+                    config.tts.useDaemonEngine = v
                 case "emotionalProsody", "warmth":
                     break // Legacy keys — silently ignored (emotional prosody removed in v2.0).
                 default: break
@@ -1340,6 +1353,7 @@ struct FaeConfig: Codable {
         lines.append("customReferenceText = \(encodeStringOrNil(tts.customReferenceText))")
         lines.append("voiceIdentityLock = \(tts.voiceIdentityLock ? "true" : "false")")
         lines.append("preferFinalOnly = \(tts.preferFinalOnly ? "true" : "false")")
+        lines.append("useDaemonEngine = \(tts.useDaemonEngine ? "true" : "false")")
         lines.append("")
 
         lines.append("[stt]")

@@ -114,6 +114,8 @@ orb click / hotkey → mic capture (16kHz) → WAV → fae-daemon
 
 **Daemon LLM lane**: `llm.useDaemonEngine = true` routes turns through `ML/DaemonLLMEngine.swift` → `fae-daemon` (Unix-socket NDJSON, fail-closed `models.lock` SHA-256 verification). `FAE_DAEMON_BIN` overrides the daemon binary path. If the daemon is unavailable, the pipeline falls back to the in-process MLX engine.
 
+**Daemon TTS lane**: `tts.useDaemonEngine = true` (requires the daemon LLM lane) routes synthesis through `ML/DaemonTTSEngine.swift` → the daemon's `tts.synthesize` (Kokoro via voice-tts, 24 kHz 16-bit PCM WAV). The engine opens a second socket connection to the same daemon — LLM turns serialize for minutes and TTS must not queue behind them. Custom voices (e.g. "fae") map to `af_heart` until the embedding is ported; `tts.speed` is applied once at playback, never sent to the daemon. Falls back to `FaeTTSAdapter` (in-process Kokoro) loudly.
+
 **Auto model selection for the MLX lane** (via `voiceModelPreset: "auto"`):
 
 Target (Gemma 4 — pending [mlx-swift-lm#180](https://github.com/ml-explore/mlx-swift-lm/pull/180)):

@@ -340,14 +340,22 @@ private final class DaemonOutputAccumulator: @unchecked Sendable {
 /// private dispatch queue. `roundTrip` performs write + read-until-match as one
 /// atomic operation, so concurrent callers can never interleave frames or steal
 /// each other's responses.
-private final class DaemonSocketConnection: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "fae.daemon-llm.socket")
+///
+/// Shared by `DaemonLLMEngine` and `DaemonTTSEngine` — each opens its OWN
+/// connection (LLM turns serialize for minutes; TTS must not queue behind
+/// them), distinguished by `queueLabel`.
+final class DaemonSocketConnection: @unchecked Sendable {
+    private let queue: DispatchQueue
     private var fd: Int32 = -1
     private var buffer = Data()
 
     /// Receive timeout per recv() call. Generous: a full local turn on a large
     /// model can take minutes.
     private static let receiveTimeoutSeconds: Int = 600
+
+    init(queueLabel: String = "fae.daemon-llm.socket") {
+        self.queue = DispatchQueue(label: queueLabel)
+    }
 
     func connect(to path: String) throws {
         try queue.sync { try connectLocked(to: path) }
@@ -530,6 +538,11 @@ actor DaemonLLMEngine: LLMEngine {
     private var connection: DaemonSocketConnection?
     private var requestCounter = 0
     private let output = DaemonOutputAccumulator()
+
+    /// Socket/token paths of the live daemon, set once connected. Exposed so
+    /// sibling lanes (daemon TTS) can open their own connection to the same
+    /// daemon process instead of queueing behind LLM turns on this one.
+    private(set) var endpoints: (socketPath: String, tokenPath: String)?
 
     private(set) var loadState: MLEngineLoadState = .notStarted
 
@@ -828,11 +841,13 @@ actor DaemonLLMEngine: LLMEngine {
         }
 
         connection = establishedConnection
+        endpoints = (socketPath: socketPath, tokenPath: tokenPath)
     }
 
     private func internalShutdown() {
         connection?.close()
         connection = nil
+        endpoints = nil
         if let process, process.isRunning {
             process.terminate()
         }

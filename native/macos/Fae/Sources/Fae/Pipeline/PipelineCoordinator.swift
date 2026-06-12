@@ -449,6 +449,8 @@ actor PipelineCoordinator {
     func setTTSVoice(_ voice: String) async {
         if let adapter = ttsEngine as? FaeTTSAdapter {
             await adapter.switchVoice(to: voice)
+        } else if let daemon = ttsEngine as? DaemonTTSEngine {
+            await daemon.switchVoice(to: voice)
         }
     }
 

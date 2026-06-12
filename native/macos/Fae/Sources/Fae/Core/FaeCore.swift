@@ -169,7 +169,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
     /// during `start()` when `llm.useDaemonEngine` is set and the daemon
     /// launches successfully (falls back to MLX loudly otherwise).
     private var llmEngine: any LLMEngine = MLXLLMEngine()
-    private let ttsEngine: any TTSEngine = FaeTTSAdapter()
+    /// Default is the in-process Kokoro adapter; replaced by `DaemonTTSEngine`
+    /// during `start()` when `tts.useDaemonEngine` is set and the daemon LLM
+    /// lane came up (falls back to in-process Kokoro loudly otherwise).
+    private var ttsEngine: any TTSEngine = FaeTTSAdapter()
     private let speakerEncoder = CoreMLSpeakerEncoder()
     private let captureManager = AudioCaptureManager()
     /// Enrollment now uses the pipeline's captureManager directly — see
@@ -278,12 +281,36 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         NSLog(
                             "FaeCore: daemon LLM lane ACTIVE — fae-daemon (mistral.rs) serving %@",
                             daemonModelId)
+
+                        // Daemon TTS lane: second socket connection to the
+                        // same daemon (LLM turns serialize for minutes — TTS
+                        // must not queue behind them on one connection).
+                        if runtimeConfig.tts.useDaemonEngine,
+                           let endpoints = await daemonEngine.endpoints
+                        {
+                            let daemonTTS = DaemonTTSEngine(
+                                socketPath: endpoints.socketPath,
+                                tokenPath: endpoints.tokenPath,
+                                configuredVoice: runtimeConfig.tts.voice)
+                            do {
+                                try await daemonTTS.load(modelID: runtimeConfig.tts.modelId)
+                                ttsEngine = daemonTTS
+                                NSLog("FaeCore: daemon TTS lane ACTIVE — tts.synthesize via fae-daemon")
+                            } catch {
+                                NSLog(
+                                    "FaeCore: ⚠️ daemon TTS engine FAILED to connect — falling back to in-process Kokoro: %@",
+                                    error.localizedDescription)
+                            }
+                        }
                     } catch {
                         NSLog(
                             "FaeCore: ⚠️ daemon LLM engine FAILED to start — falling back to in-process MLX: %@",
                             error.localizedDescription)
                         await daemonEngine.shutdown()
                     }
+                } else if runtimeConfig.tts.useDaemonEngine {
+                    NSLog(
+                        "FaeCore: ⚠️ tts.useDaemonEngine requires llm.useDaemonEngine (the daemon process) — using in-process Kokoro")
                 }
 
                 try await modelManager.loadAll(
