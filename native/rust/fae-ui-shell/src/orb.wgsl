@@ -118,9 +118,10 @@ fn gaussian_ring(r: f32, center: f32, width: f32) -> f32 {
 
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    if u.is_active < 0.5 {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    // S18: the orb is the push-to-talk button — it must stay visible while
+    // idle. Inactive renders the same fog, dimmed, never discarded (a fully
+    // transparent quiescent orb made every click read as a vanish).
+    let presence = mix(0.5, 1.0, clamp(u.is_active, 0.0, 1.0));
 
     let frag = position.xy;
     let min_res = min(u.resolution.x, u.resolution.y);
@@ -266,6 +267,6 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     col = col + GOLD * msg_ring * 0.30;
     col = col + CREAM * msg_core * 0.30;
 
-    let alpha = clamp(outer_mask + rim_core * 0.25 + halo + msg_ring * 0.20, 0.0, 1.0);
+    let alpha = clamp(outer_mask + rim_core * 0.25 + halo + msg_ring * 0.20, 0.0, 1.0) * presence;
     return vec4<f32>(col * alpha, alpha);
 }

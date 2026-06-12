@@ -388,6 +388,13 @@ impl State {
             self.uniforms.audio += (target - self.uniforms.audio) * 0.08;
         } else {
             self.uniforms.audio = 0.0;
+            // Inactive frames are single stills (ControlFlow::Wait stops the
+            // per-frame easing) — snap demeanor to target so the idle orb
+            // renders the canonical quiescent fog, never a frozen
+            // mid-transition frame.
+            self.uniforms.mode = self.target_mode;
+            self.uniforms.warmth = self.target_warmth;
+            self.uniforms.energy = self.target_energy;
         }
         // Ease emotion params toward their targets so demeanor shifts read as
         // the fog changing its mind, never as a palette snap (~1s settle).
