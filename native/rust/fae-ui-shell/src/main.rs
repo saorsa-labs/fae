@@ -109,6 +109,12 @@ struct OrbUiModel {
     status_phase: String,
     status_message: String,
     status_progress: Option<f32>,
+    /// Latest pipeline mode from the State command — drives the whisper pill
+    /// and the Messages-panel mic affordance.
+    ui_mode: FaeUiState,
+    /// Tool-access mode + thinking level for the panel's Controls strip.
+    access: String,
+    thinking: String,
     messages: Vec<TranscriptMessage>,
     scheduler_tasks: Vec<SchedulerTask>,
     skills: Vec<SkillSummary>,
@@ -120,10 +126,21 @@ impl OrbUiModel {
             status_phase: "starting".to_string(),
             status_message: "Starting Fae".to_string(),
             status_progress: None,
+            ui_mode: FaeUiState::Quiescent,
+            access: "full".to_string(),
+            thinking: "fast".to_string(),
             messages: Vec::new(),
             scheduler_tasks: Vec::new(),
             skills: Vec::new(),
         }
+    }
+
+    /// True once the user has said or typed anything this session — gates the
+    /// first-run "Click me and speak" teaching hint.
+    fn has_user_message(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| message.role.eq_ignore_ascii_case("user"))
     }
 
     fn set_status(&mut self, phase: String, message: String, progress: Option<f32>) {
@@ -486,6 +503,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut cursor_position = PhysicalPosition::new(210.0, 210.0);
     let mut modifiers = ModifiersState::default();
     let mut web_panels: Vec<WebPanel> = Vec::new();
+    let pill = open_pill_panel(&event_loop)?;
+    position_pill(window, &pill);
+    let mut hovering = false;
+    let mut last_pill: Option<(String, String)> = None;
+    refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
 
     event_loop.run(move |event, target, control_flow| {
         *control_flow = if state.active {
@@ -511,6 +533,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &mut web_panels,
                     control_flow,
                 );
+                // The pill mirrors the orb's visibility and narrates its state.
+                pill.window.set_visible(window.is_visible());
+                refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
                 window.request_redraw();
             }
             Event::UserEvent(UserEvent::PanelAction(action_json)) => {
@@ -532,6 +557,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     cursor_position = position;
+                }
+                WindowEvent::CursorEntered { .. } => {
+                    hovering = true;
+                    refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
+                }
+                WindowEvent::CursorLeft { .. } => {
+                    hovering = false;
+                    refresh_pill(&pill, &orb_ui, hovering, &mut last_pill);
+                }
+                WindowEvent::Moved(_) => {
+                    position_pill(window, &pill);
                 }
                 WindowEvent::ModifiersChanged(new_modifiers) => {
                     modifiers = new_modifiers;
@@ -570,6 +606,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         // for push-to-talk (S18).
                         if let Err(error) = window.drag_window() {
                             log::warn!("failed to start orb drag: {error}");
+                        }
+                    } else if orb_ui.status_phase == "starting" {
+                        // Clicking while Fae is still waking must never be a
+                        // silent void — nudge the pill so the user sees why
+                        // nothing happened yet.
+                        if let Err(error) = pill.webview.evaluate_script("window.__pillPulse();") {
+                            log::warn!("failed to pulse whisper pill: {error}");
                         }
                     } else {
                         // Plain left-click on the orb body = talk toggle. The
@@ -678,10 +721,12 @@ fn apply_bridge_command(
                 ui_state,
                 FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
             );
+            orb_ui.ui_mode = ui_state;
             state.set_active(active);
             state.set_audio(audio);
             state.set_emotion(ui_state, feeling.as_deref());
             state.set_status_progress(None, false);
+            refresh_messages_panels(web_panels, orb_ui);
             window.set_visible(true);
         }
         ShellCommand::Status {
@@ -716,6 +761,11 @@ fn apply_bridge_command(
         ShellCommand::SkillsSnapshot { skills } => {
             orb_ui.set_skills(skills);
             refresh_skills_panels(web_panels, orb_ui);
+        }
+        ShellCommand::ControlsSnapshot { access, thinking } => {
+            orb_ui.access = access;
+            orb_ui.thinking = thinking;
+            refresh_messages_panels(web_panels, orb_ui);
         }
         ShellCommand::ShowMessages => {
             log::info!(
@@ -773,6 +823,137 @@ fn handle_menu_action(
     }
 }
 
+/// The whisper pill: a small frosted, click-through caption window that sits
+/// beneath the orb and says what Fae is doing — waking progress, the first-run
+/// "Click me and speak" hint, listening/thinking/speaking, and gesture help on
+/// hover. It exists because the orb alone cannot teach a new user the
+/// click-to-talk gesture or show load progress legibly (owner-approved UX,
+/// 2026-06-12). Click-through so it never steals the orb's clicks.
+struct PillPanel {
+    window: Window,
+    webview: WebView,
+}
+
+fn open_pill_panel(
+    target: &tao::event_loop::EventLoop<UserEvent>,
+) -> Result<PillPanel, Box<dyn Error>> {
+    let window = WindowBuilder::new()
+        .with_title("Fae Status")
+        .with_inner_size(PhysicalSize::new(380, 48))
+        .with_resizable(false)
+        .with_decorations(false)
+        .with_transparent(true)
+        .with_always_on_top(true)
+        .with_focused(false)
+        .build(target)?;
+    if let Err(error) = window.set_ignore_cursor_events(true) {
+        log::warn!("pill window could not be made click-through: {error}");
+    }
+    let webview = WebViewBuilder::new()
+        .with_transparent(true)
+        .with_html(PILL_HTML)
+        .build(&window)?;
+    Ok(PillPanel { window, webview })
+}
+
+const PILL_HTML: &str = r#"<!doctype html><html><head><meta charset='utf-8'><style>
+html,body{margin:0;background:transparent;overflow:hidden;height:100%}
+#pill{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:94%;
+ display:flex;align-items:center;gap:7px;padding:7px 14px;border-radius:9999px;
+ background:rgba(26,24,32,.84);border:1px solid rgba(180,168,196,.25);
+ color:#CEC4DC;font:12px -apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap;
+ overflow:hidden;text-overflow:ellipsis;opacity:0;
+ transition:opacity .2s cubic-bezier(0,0,.2,1);box-shadow:0 8px 30px rgba(0,0,0,.35)}
+#pill.show{opacity:1}
+#pill.hint{border-color:rgba(212,169,52,.5);color:#E6C05A}
+#pill.listen{border-color:rgba(122,155,142,.7)}
+#pill.alert{border-color:rgba(196,120,138,.6);color:#C4788A}
+#dot{width:7px;height:7px;border-radius:50%;background:#7A9B8E;display:none;flex:none}
+#pill.listen #dot{display:block;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+@keyframes nudge{0%,100%{transform:translate(-50%,-50%) scale(1)}40%{transform:translate(-50%,-50%) scale(1.07)}}
+</style></head><body>
+<div id='pill'><span id='dot'></span><span id='txt'></span></div>
+<script>
+window.__setPill=function(text,kind){var p=document.getElementById('pill');
+ if(!text){p.className='';return;}
+ document.getElementById('txt').textContent=text;p.className='show '+(kind||'info');};
+window.__pillPulse=function(){var p=document.getElementById('pill');
+ p.style.animation='none';void p.offsetWidth;p.style.animation='nudge .3s ease-out';};
+</script></body></html>"#;
+
+/// What the pill should say right now, or None to fade it out.
+fn pill_content(orb_ui: &OrbUiModel, hovering: bool) -> Option<(String, &'static str)> {
+    match orb_ui.status_phase.as_str() {
+        "starting" => {
+            let pct = orb_ui
+                .status_progress
+                .map(|value| format!(" · {}%", (value * 100.0).round()))
+                .unwrap_or_default();
+            Some((format!("{}{}", orb_ui.status_message, pct), "info"))
+        }
+        "error" => Some(("Fae needs attention — open Messages".to_string(), "alert")),
+        "stopping" | "stopped" => None,
+        _ => match orb_ui.ui_mode {
+            FaeUiState::Listening => Some(("Listening — click to send".to_string(), "listen")),
+            FaeUiState::Thinking => Some(("Thinking…".to_string(), "info")),
+            FaeUiState::Speaking => Some(("Speaking — click to interrupt".to_string(), "info")),
+            FaeUiState::Quiescent => {
+                if !orb_ui.has_user_message() {
+                    // The one teaching moment that matters: shown until the
+                    // user's first turn of the session.
+                    Some(("Click me and speak".to_string(), "hint"))
+                } else if hovering {
+                    Some((
+                        "Click to talk · ⌥-drag to move · right-click for menu".to_string(),
+                        "hint",
+                    ))
+                } else {
+                    None
+                }
+            }
+        },
+    }
+}
+
+fn refresh_pill(
+    pill: &PillPanel,
+    orb_ui: &OrbUiModel,
+    hovering: bool,
+    last: &mut Option<(String, String)>,
+) {
+    let content = pill_content(orb_ui, hovering);
+    let keyed = content
+        .as_ref()
+        .map(|(text, kind)| (text.clone(), (*kind).to_string()));
+    if *last == keyed {
+        return;
+    }
+    *last = keyed;
+    let script = match content {
+        Some((text, kind)) => {
+            let text_json = serde_json::to_string(&text).unwrap_or_else(|_| "\"\"".to_string());
+            format!("window.__setPill({text_json}, '{kind}');")
+        }
+        None => "window.__setPill(null);".to_string(),
+    };
+    if let Err(error) = pill.webview.evaluate_script(&script) {
+        log::warn!("failed to refresh whisper pill: {error}");
+    }
+}
+
+/// Keep the pill tucked beneath the orb's glass, horizontally centred.
+fn position_pill(orb_window: &Window, pill: &PillPanel) {
+    let Ok(orb_position) = orb_window.outer_position() else {
+        return;
+    };
+    let orb_size = orb_window.outer_size();
+    let pill_size = pill.window.outer_size();
+    let x = orb_position.x + (orb_size.width as i32 - pill_size.width as i32) / 2;
+    let y = orb_position.y + (orb_size.height as f32 * 0.84) as i32;
+    pill.window.set_outer_position(PhysicalPosition::new(x, y));
+}
+
 fn is_messages_button_hit(position: PhysicalPosition<f64>, size: PhysicalSize<u32>) -> bool {
     let x = position.x as f32;
     let y = position.y as f32;
@@ -821,16 +1002,29 @@ fn refresh_panel_kind(web_panels: &[WebPanel], kind: WebPanelKind, html: String)
             return;
         }
     };
-    // Preserve the composer's draft text + focus across the rewrite — the
-    // panel re-renders on every conversation update, mid-typing included.
+    // Preserve the composer's draft text + focus, the help/controls collapse
+    // state, and the thread scroll position across the rewrite — the panel
+    // re-renders on every conversation update, mid-typing included.
     let script = format!(
         "(function() {{\
            const prior = document.getElementById('composer');\
            const draft = prior ? prior.value : '';\
            const hadFocus = prior && document.activeElement === prior;\
+           const helpEl = document.getElementById('help');\
+           const helpOpen = helpEl ? helpEl.open : null;\
+           const ctrlEl = document.getElementById('controls');\
+           const ctrlOpen = ctrlEl ? ctrlEl.open : null;\
+           const thread = document.getElementById('thread');\
+           const nearBottom = thread ? (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < 90 : true;\
            document.open();document.write({js_payload});document.close();\
            const next = document.getElementById('composer');\
            if (next) {{ next.value = draft; if (hadFocus) next.focus(); }}\
+           const help = document.getElementById('help');\
+           if (help && helpOpen !== null) help.open = helpOpen;\
+           const ctrl = document.getElementById('controls');\
+           if (ctrl && ctrlOpen !== null) ctrl.open = ctrlOpen;\
+           const t2 = document.getElementById('thread');\
+           if (t2 && nearBottom) t2.scrollTop = t2.scrollHeight;\
          }})();"
     );
     for panel in web_panels.iter().filter(|panel| panel.kind == kind) {
@@ -853,58 +1047,171 @@ fn refresh_skills_panels(web_panels: &[WebPanel], orb_ui: &OrbUiModel) {
 }
 
 fn messages_html(orb_ui: &OrbUiModel) -> String {
-    let progress = orb_ui
-        .status_progress
-        .map(|value| format!("{}%", (value * 100.0).round()))
-        .unwrap_or_else(|| "—".to_string());
+    // Status: a slim one-line chip. While waking it carries a progress bar;
+    // once running it collapses to a quiet "● Ready · model" line; errors go
+    // rowan-berry. The old full-width status card read as a permanent
+    // dashboard widget and drowned the conversation.
+    let status_chip = match orb_ui.status_phase.as_str() {
+        "running" => format!(
+            "<div class='chip ready'><span class='dot ok'></span>{}</div>",
+            html_escape(&orb_ui.status_message)
+        ),
+        "error" => format!(
+            "<div class='chip error'><span class='dot bad'></span>{}</div>",
+            html_escape(&orb_ui.status_message)
+        ),
+        _ => {
+            let pct = orb_ui
+                .status_progress
+                .map(|value| format!(" · {}%", (value * 100.0).round()))
+                .unwrap_or_default();
+            format!(
+                "<div class='chip waking'><span class='dot warm'></span>{}{}<div class='progress'><div class='bar' style='width:{}'></div></div></div>",
+                html_escape(&orb_ui.status_message),
+                pct,
+                orb_ui
+                    .status_progress
+                    .map(|value| format!("{}%", value * 100.0))
+                    .unwrap_or_else(|| "0%".to_string())
+            )
+        }
+    };
+
     let messages = if orb_ui.messages.is_empty() {
-        "<p class='empty'>No conversation messages yet.</p>".to_string()
+        "<div class='empty'><p class='empty-title'>Say hello</p>\
+         <p>Click the orb — or hold Right&nbsp;⌥ — and just speak.</p>\
+         <p>You can also type below; Fae reads both the same way.</p></div>"
+            .to_string()
     } else {
         orb_ui
             .messages
             .iter()
             .map(|message| {
+                let role_class = match message.role.to_lowercase().as_str() {
+                    "user" => "user",
+                    "fae" | "assistant" => "fae",
+                    "tool" => "tool",
+                    _ => "other",
+                };
                 format!(
-                    "<article class='msg {role_class}'><div class='role'>{role}</div><p>{text}</p></article>",
-                    role_class = html_escape(&message.role.to_lowercase()),
-                    role = html_escape(&message.role),
+                    "<article class='msg {role_class}'><p>{text}</p></article>",
                     text = html_escape(&message.text)
                 )
             })
             .collect::<Vec<_>>()
             .join("\n")
     };
+
+    let listening = orb_ui.ui_mode == FaeUiState::Listening;
+    let access_full = orb_ui.access != "assistant";
+    let thinking = orb_ui.thinking.as_str();
+
     format!(
         r#"<!doctype html>
 <html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <style>
-:root{{color-scheme:dark}}body{{margin:0;background:radial-gradient(circle at 50% 0,#221F28,#0F1013 62%);color:#CEC4DC;font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}main{{padding:22px;display:grid;gap:14px}}.status{{border:1px solid rgba(180,168,196,.25);border-radius:16px;padding:16px;background:#1A1820;box-shadow:0 20px 70px rgba(0,0,0,.28)}}h1{{font-size:20px;margin:0 0 8px;font-family:'Instrument Serif',Georgia,serif;color:#E8DED2}}.muted,.empty{{color:#9A90A8}}.progress{{height:8px;border-radius:99px;background:rgba(255,255,255,.10);overflow:hidden;margin-top:12px}}.bar{{height:100%;width:{progress_width};background:linear-gradient(90deg,#7A9B8E,#C8D3D5)}}.msg{{border-radius:16px;padding:14px 9px 14px 16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}}.msg.user{{background:#38476B;border-color:rgba(89,115,166,.5)}}.msg.fae,.msg.assistant{{background:#3D334D;border-color:rgba(180,168,196,.25)}}.role{{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#9A90A8;margin-bottom:6px}}p{{white-space:pre-wrap;line-height:1.45;margin:0;font-family:Georgia,'Times New Roman',serif;font-size:13px;color:#CEC4DC}}.composer{{display:flex;gap:8px;position:sticky;bottom:0;padding:10px 0}}.composer input{{flex:1;border:1px solid rgba(180,168,196,.25);border-radius:12px;background:#1A1820;color:#CEC4DC;padding:10px 14px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;outline:none}}.composer input:focus{{border-color:rgba(122,155,142,.6)}}.composer button{{border:1px solid rgba(122,155,142,.5);border-radius:12px;background:#2A3A33;color:#C8D3D5;padding:10px 16px;font:600 13px -apple-system,BlinkMacSystemFont,sans-serif;cursor:pointer}}
+:root{{color-scheme:dark}}
+html,body{{height:100%}}
+body{{margin:0;background:radial-gradient(circle at 50% 0,#221F28,#0F1013 62%);color:#CEC4DC;font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}
+main{{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;padding:14px 16px 12px;gap:10px}}
+details{{border:1px solid rgba(180,168,196,.22);border-radius:12px;background:rgba(26,24,32,.7);overflow:hidden}}
+summary{{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:9px 13px;font:600 12px -apple-system,BlinkMacSystemFont,sans-serif;color:#CEC4DC;user-select:none}}
+summary::-webkit-details-marker{{display:none}}
+summary .badge{{width:15px;height:15px;border-radius:50%;border:1px solid rgba(180,168,196,.5);display:inline-flex;align-items:center;justify-content:center;font:600 10px Georgia,serif;color:#CEC4DC;flex:none}}
+summary .chev{{margin-left:auto;color:#9A90A8;font-size:10px;transition:transform .2s}}
+details[open] summary .chev{{transform:rotate(180deg)}}
+.help-body{{padding:2px 14px 12px;font-size:12px;line-height:1.55;color:#9A90A8}}
+.help-body b{{color:#CEC4DC;font-weight:600}}
+.help-body .eg{{color:#E6C05A}}
+.chip{{display:flex;align-items:center;gap:8px;font-size:11px;color:#9A90A8;padding:0 2px;flex-wrap:wrap}}
+.chip.error{{color:#C4788A}}
+.dot{{width:7px;height:7px;border-radius:50%;flex:none}}
+.dot.ok{{background:#8FB8A2}}
+.dot.bad{{background:#C4788A}}
+.dot.warm{{background:#E6C05A;animation:breathe 1.6s ease-in-out infinite}}
+@keyframes breathe{{0%,100%{{opacity:.45}}50%{{opacity:1}}}}
+.progress{{flex-basis:100%;height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:4px}}
+.bar{{height:100%;background:linear-gradient(90deg,#C17F24,#D4A934)}}
+#thread{{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px}}
+.msg{{border-radius:16px;padding:10px 14px;max-width:78%;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.05)}}
+.msg.user{{margin-left:auto;background:#38476B;border-color:rgba(89,115,166,.5)}}
+.msg.fae{{margin-right:auto;background:#3D334D;border-color:rgba(180,168,196,.25)}}
+.msg.tool,.msg.other{{margin-right:auto;font-size:12px;color:#9A90A8}}
+.msg p{{white-space:pre-wrap;line-height:1.5;margin:0;font-family:Georgia,'Times New Roman',serif;font-size:13px;color:#E8E2EE}}
+.msg.user p{{color:#E6ECFA}}
+.empty{{margin:auto;text-align:center;color:#9A90A8;font-size:13px;line-height:1.6;max-width:260px}}
+.empty-title{{font-family:Georgia,serif;font-size:19px;color:#E8DED2;margin:0 0 6px}}
+.composer{{display:flex;gap:8px;align-items:center}}
+.composer input{{flex:1;border:1px solid rgba(180,168,196,.25);border-radius:9999px;background:#1A1820;color:#CEC4DC;padding:10px 16px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;outline:none}}
+.composer input:focus{{border-color:rgba(212,169,52,.55)}}
+.round{{width:38px;height:38px;border-radius:50%;border:1px solid rgba(180,168,196,.3);background:#1A1820;color:#CEC4DC;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:none;padding:0}}
+.round:hover{{background:#221F28}}
+#mic{{border-color:rgba(122,155,142,.55)}}
+#mic svg{{width:16px;height:16px;fill:#8FB8A2}}
+#mic.listening{{border-color:#7A9B8E;box-shadow:0 0 0 0 rgba(122,155,142,.6);animation:ring 1.4s ease-out infinite}}
+@keyframes ring{{0%{{box-shadow:0 0 0 0 rgba(122,155,142,.55)}}70%{{box-shadow:0 0 0 9px rgba(122,155,142,0)}}100%{{box-shadow:0 0 0 0 rgba(122,155,142,0)}}}}
+#send{{border-color:rgba(212,169,52,.5);color:#E6C05A;font:600 15px -apple-system,sans-serif}}
+#controls .controls-body{{display:flex;gap:28px;padding:4px 14px 12px}}
+#controls label{{display:flex;flex-direction:column;gap:5px;font:600 10px -apple-system,sans-serif;letter-spacing:.1em;color:#9A90A8}}
+#controls select{{border:1px solid rgba(180,168,196,.3);border-radius:8px;background:#1A1820;color:#CEC4DC;padding:5px 8px;font:12px -apple-system,sans-serif;outline:none}}
 </style></head><body><main>
-<section class='status'><h1>Fae</h1><p class='muted'>{phase}: {message}</p><p class='muted'>progress: {progress}</p><div class='progress'><div class='bar'></div></div></section>
-<section>{messages}</section>
-<section class='composer'><input id='composer' placeholder='Message Fae…' autocomplete='off'><button id='composer-send'>Send</button></section>
+<details id='help'><summary><span class='badge'>?</span>Voice commands<span class='chev'>▼</span></summary>
+<div class='help-body'>
+<p><b>Click the orb</b> (or hold <b>Right ⌥</b>) and speak — click again to send early, or just pause and Fae sends it for you.</p>
+<p>Try: <span class='eg'>“What's on my calendar today?”</span> · <span class='eg'>“Remind me to call Mum at six.”</span> · <span class='eg'>“Search the web for tonight's weather.”</span></p>
+<p><b>⌥-drag</b> moves the orb · <b>right-click</b> opens the menu · typing below works exactly like speaking.</p>
+</div></details>
+{status_chip}
+<div id='thread'>{messages}</div>
+<div class='composer'>
+<button id='mic' class='round{mic_class}' title='Talk to Fae'><svg viewBox='0 0 16 16'><path d='M8 1a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0v-4A2.5 2.5 0 0 0 8 1zm-4.5 6.5a.75.75 0 0 1 1.5 0 3 3 0 0 0 6 0 .75.75 0 0 1 1.5 0 4.5 4.5 0 0 1-3.75 4.44V14h1.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5h1.5v-2.06A4.5 4.5 0 0 1 3.5 7.5z'/></svg></button>
+<input id='composer' placeholder='Message Fae…' autocomplete='off'>
+<button id='send' class='round' title='Send'>↑</button>
+</div>
+<details id='controls'><summary>Controls<span class='chev'>▼</span></summary>
+<div class='controls-body'>
+<label>ACCESS<select id='access'>
+<option value='full'{access_full_sel}>Everything</option>
+<option value='assistant'{access_assist_sel}>Assistant (read-only)</option>
+</select></label>
+<label>THINKING<select id='thinking'>
+<option value='fast'{think_fast}>Fast</option>
+<option value='balanced'{think_balanced}>Balanced</option>
+<option value='deep'{think_deep}>Deep</option>
+</select></label>
+</div></details>
 <script>
 (function() {{
+  const post = (obj) => window.ipc.postMessage(JSON.stringify(obj));
   const input = document.getElementById('composer');
   const send = () => {{
     const text = input.value.trim();
     if (!text) return;
-    window.ipc.postMessage(JSON.stringify({{ type: 'send_text', text }}));
+    post({{ type: 'send_text', text }});
     input.value = '';
   }};
-  document.getElementById('composer-send').addEventListener('click', send);
+  document.getElementById('send').addEventListener('click', send);
   input.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') send(); }});
+  document.getElementById('mic').addEventListener('click', () => post({{ type: 'menu', action: 'talk_toggle' }}));
+  document.getElementById('access').addEventListener('change', (e) => post({{ type: 'set_access', value: e.target.value }}));
+  document.getElementById('thinking').addEventListener('change', (e) => post({{ type: 'set_thinking', value: e.target.value }}));
+  const thread = document.getElementById('thread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
 }})();
 </script>
 </main></body></html>"#,
-        phase = html_escape(&orb_ui.status_phase),
-        message = html_escape(&orb_ui.status_message),
-        progress = html_escape(&progress),
-        progress_width = orb_ui
-            .status_progress
-            .map(|value| format!("{}%", value * 100.0))
-            .unwrap_or_else(|| "0%".to_string()),
-        messages = messages
+        status_chip = status_chip,
+        messages = messages,
+        mic_class = if listening { " listening" } else { "" },
+        access_full_sel = if access_full { " selected" } else { "" },
+        access_assist_sel = if access_full { "" } else { " selected" },
+        think_fast = if thinking == "fast" { " selected" } else { "" },
+        think_balanced = if thinking == "balanced" {
+            " selected"
+        } else {
+            ""
+        },
+        think_deep = if thinking == "deep" { " selected" } else { "" },
     )
 }
 

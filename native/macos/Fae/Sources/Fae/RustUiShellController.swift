@@ -137,6 +137,7 @@ final class RustUiShellController {
         observeBridgeSources()
         sendStateForCurrentOrbMode()
         sendRuntimeStatus()
+        sendControlsSnapshot()
         sendConversationSnapshot()
         refreshWorkspaceSnapshot()
     }
@@ -215,6 +216,22 @@ final class RustUiShellController {
             .sink { [weak self] _ in
                 self?.sendRuntimeStatus()
                 self?.refreshWorkspaceSnapshot()
+            }
+            .store(in: &cancellables)
+
+        // Controls strip (Messages panel): keep the shell's ACCESS/THINKING
+        // dropdowns in sync with the live config.
+        faeCore?.$toolMode
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                self?.sendControlsSnapshot()
+            }
+            .store(in: &cancellables)
+
+        faeCore?.$thinkingLevel
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                self?.sendControlsSnapshot()
             }
             .store(in: &cancellables)
 
@@ -335,6 +352,15 @@ final class RustUiShellController {
         send(["type": "skills_snapshot", "skills": skills])
     }
 
+    private func sendControlsSnapshot() {
+        guard let faeCore else { return }
+        send([
+            "type": "controls_snapshot",
+            "access": faeCore.toolMode,
+            "thinking": faeCore.thinkingLevel.rawValue,
+        ])
+    }
+
     private func sendConversationSnapshot(_ messages: [ChatMessage]? = nil) {
         send(["type": "clear_conversation"])
         let snapshot = (messages ?? conversation?.messages ?? []).suffix(40)
@@ -406,6 +432,20 @@ final class RustUiShellController {
             // Messages-panel composer (typed input from the orb's panel).
             guard let text = event.text, !text.isEmpty else { return }
             onSendText?(text)
+        case "set_access":
+            // Messages-panel Controls strip → tool access mode.
+            guard let faeCore, let value = event.value, !value.isEmpty else { return }
+            Task { @MainActor in
+                faeCore.patchConfig(key: "tool_mode", payload: ["value": value])
+            }
+        case "set_thinking":
+            // Messages-panel Controls strip → reasoning depth.
+            guard let faeCore, let value = event.value,
+                  let level = FaeThinkingLevel(rawValue: value)
+            else { return }
+            Task { @MainActor in
+                faeCore.setThinkingLevel(level)
+            }
         default:
             NSLog("RustUiShellController: unknown shell event type %@", event.type)
         }
@@ -515,4 +555,5 @@ private struct ShellEvent: Decodable {
     let enabled: Bool?
     let active: Bool?
     let text: String?
+    let value: String?
 }

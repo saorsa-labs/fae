@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::menu::MenuAction;
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FaeUiState {
     Quiescent,
@@ -40,6 +40,12 @@ pub enum ShellCommand {
     },
     SkillsSnapshot {
         skills: Vec<SkillSummary>,
+    },
+    /// Current tool-access mode + thinking level for the Messages panel's
+    /// Controls strip. Swift sends one on startup and on every change.
+    ControlsSnapshot {
+        access: String,
+        thinking: String,
     },
     ClearConversation,
     ShowMessages,
