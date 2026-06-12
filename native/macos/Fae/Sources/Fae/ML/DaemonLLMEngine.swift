@@ -531,7 +531,10 @@ final class DaemonSocketConnection: @unchecked Sendable {
 /// are no-ops because every turn ships the full message history.
 actor DaemonLLMEngine: LLMEngine {
     private let configuredBinaryPath: String?
-    private let daemonModelID: String
+    /// Model the daemon serves (exported as `FAE_MODEL_ID` at launch). Exposed
+    /// so ModelManager can report the REAL model in UI labels instead of the
+    /// ignored MLX preset id.
+    let daemonModelID: String
     private let eventBus: FaeEventBus?
 
     private var process: Process?

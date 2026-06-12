@@ -278,8 +278,12 @@ actor ModelManager {
             } else {
                 try await llm.load(modelID: modelId)
             }
-            loadedModelId = modelId
-            eventBus.send(.modelLoaded(engine: "llm", modelId: modelId))
+            // Report the model that is ACTUALLY serving turns: the daemon lane
+            // ignores the MLX preset id, so use its model for UI labels
+            // (otherwise the Messages panel claims the MLX fallback is loading).
+            let servingModelId = (llm as? DaemonLLMEngine)?.daemonModelID ?? modelId
+            loadedModelId = servingModelId
+            eventBus.send(.modelLoaded(engine: "llm", modelId: servingModelId))
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.6))
             eventBus.send(.runtimeProgress(stage: "llm", progress: 1.0))
 
@@ -350,7 +354,7 @@ actor ModelManager {
             }
 
             // Persist model ID for Settings UI
-            FaeEnvironment.defaults.set(modelId, forKey: "fae.loaded_model_id")
+            FaeEnvironment.defaults.set(servingModelId, forKey: "fae.loaded_model_id")
             FaeEnvironment.defaults.set(true, forKey: "fae.runtime.operator_loaded")
         } catch {
             FaeEnvironment.defaults.set(false, forKey: "fae.runtime.operator_loaded")

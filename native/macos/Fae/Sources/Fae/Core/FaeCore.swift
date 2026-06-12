@@ -801,13 +801,22 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     /// Orb click: start a deliberate capture, or end-and-send one in progress.
+    /// Clicks during startup are dropped — the pipeline does not exist yet.
     func pttToggle() async {
-        await pipelineCoordinator?.pttToggle()
+        guard let coordinator = pipelineCoordinator else {
+            NSLog("FaeCore: orb click ignored — pipeline still starting (state=%@)", pipelineState.rawValue)
+            return
+        }
+        await coordinator.pttToggle()
     }
 
     /// Hotkey press: begin a deliberate capture.
     func pttStart() async {
-        await pipelineCoordinator?.pttStart()
+        guard let coordinator = pipelineCoordinator else {
+            NSLog("FaeCore: PTT press ignored — pipeline still starting (state=%@)", pipelineState.rawValue)
+            return
+        }
+        await coordinator.pttStart()
     }
 
     /// Hotkey release: end the capture and send it.
