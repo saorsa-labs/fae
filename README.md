@@ -2,7 +2,7 @@
 
 > ## :warning: UNDER HEAVY DEVELOPMENT — DO NOT USE AS THIS COULD BE DANGEROUS SOFTWARE :warning:
 >
-> This project is in active early development. APIs, functionality, and behavior may change without notice. **Do not use in production or any environment where safety is a concern.** Use at your own risk.
+> This project is in active early development and is **not ready for release**. APIs, functionality, and behavior may change without notice. **Any builds or tagged releases exist purely for testing — they are not to be used in production** or any environment where safety is a concern. Use at your own risk.
 
 ![Fae](assets/fae.jpg)
 
@@ -15,11 +15,11 @@ Fae is not a hugely-capable chatbot. She is a hugely-**personalised** agent: a m
 ## The strategy in 60 seconds
 
 - **Orb-first UI.** The orb (a Rust UI shell) is the only product surface — transcript panel, approval cards, settings. No dashboard, no chat window sprawl.
-- **Gemma 4 tool-calling brain, served by a Rust daemon.** `fae-daemon` (in `crates/`) runs Gemma 4 E4B through **mistral.rs** (Metal/CPU), with a **llama.cpp fallback for Vulkan-class hardware** — the cross-platform path to Linux and Windows. On macOS the Swift MLX engine remains as fallback and training substrate.
+- **The head-butler pattern, served by a Rust daemon.** Fae is not built around any one model — she is a *pattern*: a modest local tool-calling brain surrounded by deep tools, skills, durable memory, and nightly personal retraining. `fae-daemon` (in `crates/`) serves the brain through **mistral.rs** (Metal/CPU), with a **llama.cpp fallback for Vulkan-class hardware** — the cross-platform path to Linux and Windows. On macOS the Swift MLX engine remains as fallback and training substrate. Models are swappable details; the butler is the product.
 - **Nightly personal retraining.** Every night Fae mines the day's feedback, fine-tunes a personal LoRA adapter, and **only deploys if benchmarks pass** (FaeBenchmark gate + external review + rollback). Your Fae gets better at being *your* Fae.
-- **Skills.** 29 built-in skills, write-your-own via the **forge** skill (scaffold → compile → test → release), and subscriptions to secure skill repos — all under signed manifests with SHA-256 integrity checks.
+- **Skills.** 27 built-in skills, write-your-own via the **forge** skill (scaffold → compile → test → release), and subscriptions to secure skill repos — all under signed manifests with SHA-256 integrity checks.
 - **x0x: your machines, one harness.** [x0x](https://github.com/saorsa-labs/x0x) (v0.23.1) is a post-quantum encrypted gossip network for agents. It connects your own machines into a single Fae harness, and connects your Fae to other agents to communicate and collaborate.
-- **Voice identity is the security model.** Only recognised voices get tool access. Not settings toggles — speaker verification (ECAPA-TDNN x-vectors on the Neural Engine).
+- **Deliberate capture is the security model.** Talking to Fae is a physical act — click the orb or hold the push-to-talk key. The person at the machine is the owner; no always-on listening, no voiceprint gating.
 - **Local by default.** Models, memory, voice prints, training data, backups: all on disk, all yours. SQLite memory, Git-based vault backup, no cloud dependency.
 
 ## Architecture
@@ -35,17 +35,18 @@ Fae is not a hugely-capable chatbot. She is a hugely-**personalised** agent: a m
                        │ host bridge
         ┌──────────────▼───────────────────────────────┐
         │            Fae app (Swift, macOS)             │
-        │  voice pipeline: VAD → speaker ID → STT → TTS │
+        │  push-to-talk capture (orb click / hotkey)    │
         │  memory (SQLite ANN+FTS5) · scheduler · tools │
         │  skills · nightly improvement loop · vault    │
         └────────┬──────────────────────────┬──────────┘
                  │ NDJSON / Unix socket     │
         ┌────────▼────────────┐   ┌─────────▼─────────────┐
         │  fae-daemon (Rust)  │   │   x0x (PQC P2P net)    │
-        │  Gemma 4 E4B brain  │   │  ML-DSA-65 identity ·  │
-        │  mistral.rs primary │   │  your other machines · │
-        │  llama.cpp fallback │   │  other agents          │
-        │  (Vulkan-class HW)  │   └────────────────────────┘
+        │  head-butler brain  │   │  ML-DSA-65 identity ·  │
+        │  (speech + tools in │   │  your other machines · │
+        │  one request) · TTS │   │  other agents          │
+        │  mistral.rs primary │   └────────────────────────┘
+        │  llama.cpp fallback │
         │  MLX fallback (mac) │
         └─────────────────────┘
 ```
@@ -71,19 +72,23 @@ source ~/.secrets && just run-native # production launch
 
 Both `run-dev` and `run-native-with-ui-shell` build and embed the Rust orb host into the app bundle. First run downloads models (~8 GB) — the orb shows progress throughout.
 
-To route conversation turns through the Rust daemon brain, enable `llm.useDaemonEngine` in config (Gemma 4 E4B via mistral.rs). If the daemon is unavailable, Fae fails over to the in-process MLX engine.
+To route conversation turns through the Rust daemon brain, enable `llm.useDaemonEngine` in config. If the daemon is unavailable, Fae fails over to the in-process MLX engine. Which models back each layer is a swappable detail — see `docs/guides/model-switching.md`.
 
-## The brain
+## The brain — the head-butler pattern
+
+The brain is deliberately a *pattern*, not a model: a modest local
+tool-calling LLM that hears your speech directly (no separate ASR pass),
+reasons, and calls tools in one request — surrounded by the systems that
+actually make Fae personal. Specific models are swappable deployment details,
+documented in `docs/guides/model-switching.md`.
 
 | Layer | What runs | Notes |
 |---|---|---|
-| LLM (primary) | Gemma 4 E4B via `fae-daemon` + mistral.rs | Tool calling, 128K context; fail-closed `models.lock` (SHA-256) |
-| LLM (portable) | llama.cpp adapter | Fallback for Vulkan-class hardware; the Linux/Windows path |
-| LLM (macOS fallback) | Qwen3.5 via MLX (Swift) | Also the LoRA training substrate |
-| STT | Qwen3-ASR (MLX) | Plus post-ASR vocabulary correction learned from your corrections |
-| TTS | Kokoro-82M (MLX) | Streaming, sentence-queued, barge-in always on |
-| Speaker ID | ECAPA-TDNN (Core ML) | The security model — voice identity gates all tool access |
-| Vision | SmolVLM2 (MLX) | Presence detection, screen context, on-demand analysis |
+| Brain (primary) | Local audio-capable LLM via `fae-daemon` + mistral.rs | Speech in, tool calls out — one request; fail-closed `models.lock` (SHA-256) |
+| Brain (portable) | llama.cpp adapter | Fallback for Vulkan-class hardware; the Linux/Windows path |
+| Brain (macOS fallback) | MLX text model (Swift) | Also the LoRA training substrate |
+| TTS | Kokoro-82M | Served by the Rust daemon (`tts.synthesize`); Swift MLX fallback |
+| Vision | Small local VLMs (MLX) | Presence detection, screen context, on-demand analysis |
 
 ## Memory and self-improvement
 
@@ -95,7 +100,7 @@ To route conversation turns through the Rust daemon brain, enable `llm.useDaemon
 
 Skills are markdown-plus-scripts packages with signed manifests (SHA-256 checksums, schema-versioned). Three lanes:
 
-1. **Built-in** — 29 ship with Fae: voice identity, proactive awareness, morning briefings, overnight research, email triage, file organisation, channel integrations (Discord/WhatsApp/iMessage), training orchestration, and more.
+1. **Built-in** — 27 ship with Fae: proactive awareness, morning briefings, overnight research, email triage, file organisation, channel integrations (Discord/WhatsApp/iMessage), training orchestration, and more.
 2. **Write your own** — the **forge** skill scaffolds, compiles, tests, and releases new tools (Zig/Python); **toolbox** registers them locally; **mesh** shares them with your other machines.
 3. **Subscribe** — secure skill-repo subscriptions extend the same integrity model to third-party skill collections.
 
@@ -113,8 +118,8 @@ This is how Fae becomes a **conductor**: your Mac, your Linux box, and your home
 
 ## Privacy and security
 
-- **Local by default.** Inference, memory, voice prints, and training all happen on your hardware.
-- **Voice identity gates tools.** Pre-enrollment: no tool calls. Enrolled owner: full access. Guests: nothing unless you grant it.
+- **Local by default.** Inference, memory, and training all happen on your hardware.
+- **Deliberate capture gates tools.** Talking to Fae is a physical act at the machine (orb click / push-to-talk) — that act is the owner check. Remote channel senders are text-only guests with no tool access unless you grant it.
 - **Damage control.** Catastrophic bash operations are blocked or require confirmation; credential paths are protected; pre-mutation file snapshots make actions undoable.
 - **Fail-closed daemon.** Model weights verified against `models.lock` (SHA-256); every daemon command authorized per-capability and audited.
 - **Typed peer boundary.** x0x peer traffic is schema-checked and signature-verified before anything touches the LLM.
@@ -128,7 +133,8 @@ This is how Fae becomes a **conductor**: your Mac, your Linux box, and your home
 | Rust daemon (crates/) | `crates/README.md`, `docs/architecture/headless-core-impl-plan-2026-06-01.md` |
 | Conductor / x0x integration | `docs/architecture/conductor-positioning-and-scope-2026-06-05.md` |
 | Memory system | `docs/guides/Memory.md` |
-| Voice identity | `docs/guides/voice-identity.md` |
+| Model selection | `docs/guides/model-switching.md` |
+| Voice-identity retirement | `docs/architecture/voice-identity-teardown-plan-2026-06-11.md` |
 | Self-improvement loop | `docs/guides/self-improvement-and-proactive-architecture.md` |
 | Release validation | `docs/checklists/app-release-validation.md` |
 | ADRs (decision record) | `docs/adr/` |

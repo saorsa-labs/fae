@@ -80,14 +80,20 @@ final class DocsContractTests: XCTestCase {
             XCTAssertEqual(selection.contextSize, contextSize)
         }
 
-        // Check model names are mentioned in docs. The strategy README leads
-        // with Gemma 4 (daemon lane); the MLX fallback family must still be
-        // named there, but quantization variants (Unsloth) are a
-        // model-switching-guide detail, asserted below.
-        XCTAssertTrue(readme.contains("Qwen3.5") || readme.contains("qwen3_5"),
-                      "README should mention the Qwen3.5 fallback family")
-        XCTAssertTrue(readme.contains("Gemma 4") || readme.contains("gemma-4"),
-                      "README should mention the Gemma 4 primary brain")
+        // Owner policy (2026-06-12): the strategy README presents the
+        // head-butler PATTERN, never a specific brain model — model names are
+        // a model-switching-guide detail. It must also carry the
+        // testing-only release warning.
+        XCTAssertFalse(readme.lowercased().contains("gemma"),
+                       "README must not name the brain model — head-butler pattern only")
+        XCTAssertFalse(readme.contains("Qwen3.5"),
+                       "README must not name the fallback model family")
+        XCTAssertTrue(readme.contains("head-butler pattern") || readme.contains("head butler pattern"),
+                      "README should present the head-butler pattern")
+        XCTAssertTrue(readme.contains("not ready for release"),
+                      "README must state the project is not ready for release")
+        XCTAssertTrue(readme.contains("purely for testing"),
+                      "README must state releases are testing-only, never production")
 
         XCTAssertTrue(modelSwitchingGuide.contains("`Auto (Recommended)` resolves by RAM"))
         XCTAssertTrue(modelSwitchingGuide.contains("| `<8 GB` | Qwen3.5-2B OptiQ |"))
