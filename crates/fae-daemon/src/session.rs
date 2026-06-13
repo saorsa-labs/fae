@@ -296,25 +296,43 @@ async fn dispatch(
         }
         "conversation.inject_text" => inject_text(backends.engine, cmd).await,
         "tts.synthesize" => synthesize_tts(backends.tts, cmd).await,
-        "audio.devices" => {
-            serde_json::to_value(backends.audio.devices()).map_err(|_| "internal_error")
+        "audio.devices" => audio_devices(backends.audio).await,
+        "audio.capture_start" | "audio.start_capture" => audio_capture_start(backends.audio).await,
+        "audio.capture_stop" | "audio.stop_capture" => {
+            audio_capture_stop(backends.audio, cmd).await
         }
-        "audio.capture_start" | "audio.start_capture" => audio_capture_start(backends.audio),
-        "audio.capture_stop" | "audio.stop_capture" => audio_capture_stop(backends.audio, cmd),
-        "audio.play" | "audio.playback_control" => audio_play(backends.audio, cmd),
+        "audio.play" | "audio.playback_control" => audio_play(backends.audio, cmd).await,
         _ => Err("not_implemented"),
     }
 }
 
-fn audio_capture_start(audio: &AudioManager) -> Result<serde_json::Value, &'static str> {
-    let capture_id = audio.capture_start().map_err(|error| {
-        eprintln!("fae-daemon: audio.capture_start failed: {error}");
-        "audio_error"
-    })?;
+async fn audio_devices(audio: &AudioManager) -> Result<serde_json::Value, &'static str> {
+    let audio = (*audio).clone();
+    let devices = tokio::task::spawn_blocking(move || audio.devices())
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.devices worker join failed: {error}");
+            "internal_error"
+        })?;
+    serde_json::to_value(devices).map_err(|_| "internal_error")
+}
+
+async fn audio_capture_start(audio: &AudioManager) -> Result<serde_json::Value, &'static str> {
+    let audio = (*audio).clone();
+    let capture_id = tokio::task::spawn_blocking(move || audio.capture_start())
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.capture_start worker join failed: {error}");
+            "internal_error"
+        })?
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.capture_start failed: {error}");
+            "audio_error"
+        })?;
     Ok(serde_json::json!({ "capture_id": capture_id }))
 }
 
-fn audio_capture_stop(
+async fn audio_capture_stop(
     audio: &AudioManager,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
@@ -323,14 +341,22 @@ fn audio_capture_stop(
         .payload
         .get("capture_id")
         .and_then(serde_json::Value::as_str)
-        .ok_or("bad_request")?;
-    let captured = audio.capture_stop(capture_id).map_err(|error| {
-        eprintln!("fae-daemon: audio.capture_stop failed: {error}");
-        match error {
-            fae_audio::AudioError::CaptureNotFound => "not_found",
-            _ => "audio_error",
-        }
-    })?;
+        .ok_or("bad_request")?
+        .to_owned();
+    let audio = (*audio).clone();
+    let captured = tokio::task::spawn_blocking(move || audio.capture_stop(&capture_id))
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.capture_stop worker join failed: {error}");
+            "internal_error"
+        })?
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.capture_stop failed: {error}");
+            match error {
+                fae_audio::AudioError::CaptureNotFound => "not_found",
+                _ => "audio_error",
+            }
+        })?;
     Ok(serde_json::json!({
         "wav_base64": base64::engine::general_purpose::STANDARD.encode(captured.wav),
         "duration_ms": captured.duration_ms,
@@ -338,7 +364,10 @@ fn audio_capture_stop(
     }))
 }
 
-fn audio_play(audio: &AudioManager, cmd: &Command) -> Result<serde_json::Value, &'static str> {
+async fn audio_play(
+    audio: &AudioManager,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
     use base64::Engine as _;
     let encoded = cmd
         .payload
@@ -348,10 +377,17 @@ fn audio_play(audio: &AudioManager, cmd: &Command) -> Result<serde_json::Value, 
     let wav = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|_| "bad_request")?;
-    let played_ms = audio.play_wav(&wav).map_err(|error| {
-        eprintln!("fae-daemon: audio.play failed: {error}");
-        "audio_error"
-    })?;
+    let audio = (*audio).clone();
+    let played_ms = tokio::task::spawn_blocking(move || audio.play_wav(&wav))
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.play worker join failed: {error}");
+            "internal_error"
+        })?
+        .map_err(|error| {
+            eprintln!("fae-daemon: audio.play failed: {error}");
+            "audio_error"
+        })?;
     Ok(serde_json::json!({ "played_ms": played_ms }))
 }
 
