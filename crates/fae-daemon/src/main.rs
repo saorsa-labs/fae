@@ -26,7 +26,9 @@ use fae_control_plane::{
     generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, TicketStore,
     PROTOCOL_VERSION,
 };
-use fae_engine::{LocalMistralrsAdapter, MockAdapter, MockTtsAdapter, ProviderAdapter, TtsAdapter};
+use fae_engine::{
+    LocalMistralrsAdapter, MockAdapter, MockTtsAdapter, ModelsLock, ProviderAdapter, TtsAdapter,
+};
 
 mod diagnostic;
 mod session;
@@ -38,6 +40,14 @@ type DaemonResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[tokio::main]
 async fn main() -> DaemonResult<()> {
+    if std::env::args().any(|arg| arg == "--version") {
+        println!(
+            "fae-daemon {} — protocol v{PROTOCOL_VERSION}",
+            env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
+
     println!("fae-daemon (Phase 1, chunk 2a) — protocol v{PROTOCOL_VERSION}");
 
     spawn_parent_watch();
@@ -157,8 +167,18 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
         .filter(|id| !id.is_empty())
     {
         Some(model_id) => {
+            let pinned_revision = match verify_models_lock(&model_id) {
+                Ok(revision) => revision,
+                Err(error) => exit_models_lock_fatal(&model_id, &error.to_string()),
+            };
             println!("engine  : loading mistral.rs model {model_id} (this can take a while)…");
-            match LocalMistralrsAdapter::load(&model_id).await {
+            let loaded = match pinned_revision.as_deref() {
+                Some(revision) => {
+                    LocalMistralrsAdapter::load_with_revision(&model_id, revision).await
+                }
+                None => LocalMistralrsAdapter::load(&model_id).await,
+            };
+            match loaded {
                 Ok(adapter) => Arc::new(adapter),
                 Err(error) => {
                     eprintln!("fae-daemon: model load failed ({error}); using mock engine");
@@ -168,6 +188,93 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
         }
         None => Arc::new(MockAdapter::new("mock-echo")),
     }
+}
+
+fn verify_models_lock(model_id: &str) -> DaemonResult<Option<String>> {
+    if std::env::var("FAE_MODELS_LOCK").is_ok_and(|value| value == "off") {
+        eprintln!("fae-daemon: WARNING: FAE_MODELS_LOCK=off — skipping models.lock verification");
+        return Ok(None);
+    }
+
+    let lock_path = models_lock_path()?;
+    let lock = ModelsLock::load(&lock_path)?;
+    let (models_dir, revision) = resolve_models_dir(model_id, &lock)?;
+    let mut verified = 0usize;
+    for artifact in lock
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.source_repo == model_id)
+    {
+        artifact.verify(&models_dir)?;
+        verified += 1;
+    }
+    if verified == 0 {
+        return Err(std::io::Error::other(format!(
+            "models.lock contains no artifacts for {model_id}"
+        ))
+        .into());
+    }
+    println!(
+        "models.lock: verified {verified} artifact(s) for {model_id} revision {revision} at {}",
+        models_dir.display()
+    );
+    Ok(Some(revision))
+}
+
+fn models_lock_path() -> DaemonResult<PathBuf> {
+    if let Some(path) = std::env::var_os("FAE_MODELS_LOCK_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+    Ok(data_directory()?.join("models.lock"))
+}
+
+fn resolve_models_dir(model_id: &str, lock: &ModelsLock) -> DaemonResult<(PathBuf, String)> {
+    let revision = lock
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.source_repo == model_id && !artifact.source_revision.is_empty())
+        .map(|artifact| artifact.source_revision.clone())
+        .ok_or_else(|| {
+            std::io::Error::other(format!(
+                "models.lock contains no source_revision for {model_id}"
+            ))
+        })?;
+    if let Some(path) = std::env::var_os("FAE_MODELS_DIR") {
+        return Ok((PathBuf::from(path), revision));
+    }
+    let repo_dir = model_id.replace('/', "--");
+    let models_dir = huggingface_home()?
+        .join("hub")
+        .join(format!("models--{repo_dir}"))
+        .join("snapshots")
+        .join(&revision);
+    if !models_dir.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "Hugging Face snapshot directory not found: {}",
+            models_dir.display()
+        ))
+        .into());
+    }
+    Ok((models_dir, revision))
+}
+
+fn huggingface_home() -> DaemonResult<PathBuf> {
+    if let Some(path) = std::env::var_os("HF_HOME") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".cache/huggingface"))
+}
+
+fn exit_models_lock_fatal(model_id: &str, detail: &str) -> ! {
+    let event = serde_json::json!({
+        "event": "fatal",
+        "component": "models_lock",
+        "model_id": model_id,
+        "error": detail,
+    });
+    eprintln!("fae-daemon: fatal: {event}");
+    std::process::exit(78);
 }
 
 /// Exit when the launching parent dies. The daemon must never outlive the
@@ -212,7 +319,7 @@ fn diagnostic_port() -> Option<u16> {
 
 /// Owner-private run directory: `~/Library/Application Support/fae/run` on macOS,
 /// `$XDG_DATA_HOME/fae/run` (or `~/.local/share/fae/run`) on Linux.
-fn run_directory() -> DaemonResult<PathBuf> {
+fn data_directory() -> DaemonResult<PathBuf> {
     let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
     let home = PathBuf::from(home);
     #[cfg(target_os = "macos")]
@@ -222,7 +329,11 @@ fn run_directory() -> DaemonResult<PathBuf> {
         Some(xdg) => PathBuf::from(xdg).join("fae"),
         None => home.join(".local/share/fae"),
     };
-    Ok(base.join("run"))
+    Ok(base)
+}
+
+fn run_directory() -> DaemonResult<PathBuf> {
+    Ok(data_directory()?.join("run"))
 }
 
 /// Create the private run directory with `0700` from birth. The leaf is created

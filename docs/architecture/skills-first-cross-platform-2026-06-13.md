@@ -60,6 +60,9 @@ which is the bridge.
   absorb; the rest is fallback engines or macOS-adapter code.
 - As of 2026-06-13 the daemon is the **default** LLM + TTS lane
   (`llm/tts.useDaemonEngine = true`, fae-daemon bundled in the app).
+- P5 ship gates now enforce that release bundles embed `fae-daemon` and that
+  daemon Gemma loads verify a generated `models.lock` (size + SHA-256 + pinned
+  HF revision) before mistral.rs touches the weights.
 
 ### UI stack maturity
 
@@ -80,7 +83,7 @@ which is the bridge.
 | **P2 — Productivity skills wave** | mail (himalaya/IMAP), calendar (CalDAV incl. iCloud), contacts (CardDAV); agentskills.io-compatible frontmatter | Cross-platform hands that ALSO improve macOS Fae today (mail doesn't exist yet). Additive — `AppleTools.swift` stays as the privileged macOS path |
 | **P3 — Orb host absorbs UI** | settings → onboarding → approvals as wry panels (macOS first) | Settings panel is implemented in the Rust orb host with Swift bridge sync; onboarding/approvals remain later work. Panels are designed opaque-fallback-tolerant |
 | **P4 — Linux render spike** | orb + pill + opaque Settings panel on Ubuntu (CI/Xvfb, then X11 + Wayland desktop) | CI/Xvfb passed for the opaque Settings panel on WebKitGTK with artifact color validation; Linux desktop X11/Wayland and transparent pill compositor behavior remain follow-up |
-| **P5 — Ship gates** | release.yml daemon embedding; models.lock generation + fail-closed enforcement | Daemon-default cannot ship without them |
+| **P5 — Ship gates** | release.yml daemon embedding; models.lock generation + fail-closed enforcement | Release dry-run CI passed on PR branch; ready for review |
 
 ### What stays Swift (deliberately)
 
@@ -99,7 +102,7 @@ which is the bridge.
   Keychain, no cloud lock-in.
 - The orb host owns Settings on macOS via a `settings_snapshot` / `settings_set` wry panel; onboarding/approvals remain next migration targets. AppKit windows for
   those are deleted.
-- Release artifacts contain fae-daemon with an enforced models.lock.
+- Release artifacts contain `fae-daemon` in `Contents/MacOS` with an enforced, generated `models.lock`; tampered Gemma artifacts fail closed before model load.
 
 ## Risks
 

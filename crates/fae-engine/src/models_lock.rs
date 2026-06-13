@@ -120,11 +120,11 @@ impl Artifact {
     /// non-hash.
     pub fn verify(&self, models_dir: &Path) -> Result<(), LockError> {
         let path = self.resolved_path(models_dir);
-        let bytes = std::fs::read(&path).map_err(|_| LockError::Missing {
+        let metadata = std::fs::metadata(&path).map_err(|_| LockError::Missing {
             id: self.id.clone(),
             path: path.display().to_string(),
         })?;
-        let actual_size = bytes.len() as u64;
+        let actual_size = metadata.len();
         if self.size_bytes != 0 && actual_size != self.size_bytes {
             return Err(LockError::Size {
                 id: self.id.clone(),
@@ -138,7 +138,11 @@ impl Artifact {
                 id: self.id.clone(),
             });
         }
-        if sha256_hex(&bytes) != expected {
+        let actual = sha256_file(&path).map_err(|_| LockError::Missing {
+            id: self.id.clone(),
+            path: path.display().to_string(),
+        })?;
+        if actual != expected {
             return Err(LockError::Checksum {
                 id: self.id.clone(),
             });
@@ -147,6 +151,25 @@ impl Artifact {
     }
 }
 
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+
+    use sha2::{Digest, Sha256};
+
+    let mut file = std::fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+#[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     hex::encode(Sha256::digest(bytes))
@@ -156,21 +179,20 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn write(dir: &Path, name: &str, contents: &[u8]) -> std::path::PathBuf {
+    fn write(dir: &Path, name: &str, contents: &[u8]) -> std::io::Result<std::path::PathBuf> {
         let path = dir.join(name);
-        std::fs::write(&path, contents).expect("write fixture");
-        path
+        std::fs::write(&path, contents)?;
+        Ok(path)
     }
 
-    fn unique_dir(tag: &str) -> std::path::PathBuf {
+    fn unique_dir(tag: &str) -> std::io::Result<std::path::PathBuf> {
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
+            .map_or(0, |duration| duration.as_nanos());
         let dir = std::env::temp_dir().join(format!("fae-engine-{tag}-{nanos}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     fn lock_with(filename: &str, size_bytes: u64, sha256: &str) -> ModelsLock {
@@ -205,10 +227,10 @@ mod tests {
     }
 
     #[test]
-    fn verify_succeeds_on_matching_size_and_hash() -> Result<(), LockError> {
-        let dir = unique_dir("ok");
+    fn verify_succeeds_on_matching_size_and_hash() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = unique_dir("ok")?;
         let body = b"weights-bytes";
-        write(&dir, "model.bin", body);
+        write(&dir, "model.bin", body)?;
         let lock = lock_with("model.bin", body.len() as u64, &sha256_hex(body));
         lock.verify_all(&dir)?;
         assert_eq!(lock.verified_path("m", &dir)?, dir.join("model.bin"));
@@ -217,8 +239,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_fails_closed_on_missing_size_and_hash() {
-        let dir = unique_dir("fail");
+    fn verify_fails_closed_on_missing_size_and_hash() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = unique_dir("fail")?;
         let body = b"weights-bytes";
         let good = sha256_hex(body);
 
@@ -229,7 +251,7 @@ mod tests {
             Err(LockError::Missing { .. })
         ));
 
-        write(&dir, "model.bin", body);
+        write(&dir, "model.bin", body)?;
         // Size mismatch.
         let lock = lock_with("model.bin", 999, &good);
         assert!(matches!(lock.verify_all(&dir), Err(LockError::Size { .. })));
@@ -247,18 +269,21 @@ mod tests {
         ));
 
         std::fs::remove_dir_all(&dir).ok();
+        Ok(())
     }
 
     #[test]
-    fn example_template_is_failclosed_until_real_hashes() {
+    fn example_template_is_failclosed_until_real_hashes() -> Result<(), Box<dyn std::error::Error>>
+    {
         // The shipped template uses placeholder hashes — it must never verify.
-        let dir = unique_dir("tmpl");
-        write(&dir, "model.safetensors", b"x");
+        let dir = unique_dir("tmpl")?;
+        write(&dir, "model.safetensors", b"x")?;
         let lock = lock_with("model.safetensors", 0, "<64-hex-sha256>");
         assert!(matches!(
             lock.verify_all(&dir),
             Err(LockError::Checksum { .. })
         ));
         std::fs::remove_dir_all(&dir).ok();
+        Ok(())
     }
 }

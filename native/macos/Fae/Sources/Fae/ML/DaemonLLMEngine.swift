@@ -592,22 +592,58 @@ actor DaemonLLMEngine: LLMEngine {
     /// first launch (weights download + load), so this is deliberately long.
     private static let socketWaitTimeoutSeconds: TimeInterval = 600
 
-    private static var defaultRunDirectory: URL {
-        // Mirrors fae-daemon's run_directory(): macOS uses Application
+    private static var defaultDataDirectory: URL {
+        // Mirrors fae-daemon's data_directory(): macOS uses Application
         // Support; the .local/share path is the Linux/XDG layout.
         #if os(macOS)
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("fae", isDirectory: true)
-            .appendingPathComponent("run", isDirectory: true)
         #else
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local", isDirectory: true)
             .appendingPathComponent("share", isDirectory: true)
             .appendingPathComponent("fae", isDirectory: true)
-            .appendingPathComponent("run", isDirectory: true)
         #endif
+    }
+
+    private static var defaultRunDirectory: URL {
+        defaultDataDirectory.appendingPathComponent("run", isDirectory: true)
+    }
+
+    /// Copy the bundled fail-closed model lock into `<fae data dir>/models.lock`,
+    /// where `fae-daemon` verifies Gemma artifacts before loading mistral.rs.
+    /// Idempotent: an existing byte-identical file is left untouched; a
+    /// different lock is replaced by the bundled release pin so production
+    /// launches always enforce the reviewed snapshot.
+    static func installBundledModelsLock() {
+        guard let bundled = Bundle.faeResources.url(
+            forResource: "models", withExtension: "lock", subdirectory: "Models")
+        else {
+            NSLog("DaemonLLMEngine: no bundled models.lock — daemon will fail closed if lock is required")
+            return
+        }
+        let target = defaultDataDirectory.appendingPathComponent("models.lock")
+        do {
+            let fm = FileManager.default
+            try fm.createDirectory(at: defaultDataDirectory, withIntermediateDirectories: true)
+            if let installed = try? Data(contentsOf: target),
+               let bundledData = try? Data(contentsOf: bundled),
+               installed == bundledData
+            {
+                return
+            }
+            if fm.fileExists(atPath: target.path) {
+                try fm.removeItem(at: target)
+            }
+            try fm.copyItem(at: bundled, to: target)
+            NSLog("DaemonLLMEngine: installed models.lock at %@", target.path)
+        } catch {
+            NSLog(
+                "DaemonLLMEngine: models.lock install failed (%@) — daemon will fail closed",
+                error.localizedDescription)
+        }
     }
 
     /// - Parameters:
@@ -768,6 +804,7 @@ actor DaemonLLMEngine: LLMEngine {
     }
 
     private func launchAndConnect() async throws {
+        Self.installBundledModelsLock()
         let binary = try resolveBinaryURL()
 
         let daemonProcess = Process()
@@ -783,6 +820,9 @@ actor DaemonLLMEngine: LLMEngine {
             // and still exhausted them on some prompt lengths). Q4K remains
             // the default below 32 GB.
             environment["FAE_ISQ"] = "Q8_0"
+        }
+        if environment["FAE_DEV"] == "1", environment["FAE_MODELS_LOCK"] == nil {
+            environment["FAE_MODELS_LOCK"] = "off"
         }
         daemonProcess.environment = environment
 

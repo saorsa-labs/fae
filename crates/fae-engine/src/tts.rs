@@ -120,11 +120,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_synthesizes_valid_wav_and_rejects_empty_text() {
+    async fn mock_synthesizes_valid_wav_and_rejects_empty_text(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let tts = MockTtsAdapter::new("mock-tts");
-        let audio = tts.synthesize("hello", "af_heart", 1.0).await.unwrap();
+        let audio = tts.synthesize("hello", "af_heart", 1.0).await?;
         assert_eq!(audio.sample_rate, 24_000);
         assert_eq!(&audio.wav[0..4], b"RIFF");
         assert!(tts.synthesize("   ", "af_heart", 1.0).await.is_err());
+        Ok(())
     }
 }
