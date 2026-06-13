@@ -63,7 +63,7 @@ impl ProviderAdapter for MockAdapter {
 mod tests {
     use super::*;
     use crate::provider::{ChatMessage, Role};
-    use futures_util::StreamExt;
+    use futures_util::TryStreamExt;
 
     fn user_request(text: &str) -> ChatRequest {
         ChatRequest {
@@ -75,15 +75,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_streams_echo_then_done() {
+    async fn mock_streams_echo_then_done() -> Result<(), Box<dyn std::error::Error>> {
         let adapter = MockAdapter::new("mock-1");
         assert_eq!(adapter.describe().backend, "mock");
 
-        let stream = adapter
-            .stream_chat(user_request("hello"))
-            .await
-            .expect("stream");
-        let events: Vec<_> = stream.map(|event| event.expect("event")).collect().await;
+        let stream = adapter.stream_chat(user_request("hello")).await?;
+        let events: Vec<_> = stream.try_collect().await?;
         assert_eq!(
             events,
             vec![
@@ -94,21 +91,24 @@ mod tests {
                 },
             ]
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn mock_echoes_audio_marker_for_audio_messages() {
+    async fn mock_echoes_audio_marker_for_audio_messages() -> Result<(), Box<dyn std::error::Error>>
+    {
         use base64::Engine as _;
         let adapter = MockAdapter::new("mock-1");
         let mut request = user_request("speak");
         request.messages[0].audio_wav_base64 =
             Some(base64::engine::general_purpose::STANDARD.encode([0u8; 16]));
-        let stream = adapter.stream_chat(request).await.expect("stream");
-        let events: Vec<_> = stream.map(|event| event.expect("event")).collect().await;
+        let stream = adapter.stream_chat(request).await?;
+        let events: Vec<_> = stream.try_collect().await?;
         assert_eq!(
             events[1],
             ChatEvent::Token("[audio:16 bytes] speak".to_owned())
         );
+        Ok(())
     }
 
     #[tokio::test]

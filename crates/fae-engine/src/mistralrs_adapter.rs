@@ -31,13 +31,24 @@ impl LocalMistralrsAdapter {
     /// model against `models.lock` first (see [`crate::ModelsLock`]); this
     /// constructor performs the actual mistral.rs load.
     pub async fn load_text(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
+        Self::load_text_pinned(model_id, None).await
+    }
+
+    async fn load_text_pinned(
+        model_id: &str,
+        revision: Option<&str>,
+    ) -> Result<LocalMistralrsAdapter, EngineError> {
         // Prefix cache disabled: with audio-bearing requests (S18) a cache hit
         // across consecutive multimodal prompts corrupts the turn (observed as
         // "heard nothing" / instant empty replies). Correct over fast.
-        let model = TextModelBuilder::new(model_id)
+        let mut builder = TextModelBuilder::new(model_id)
             .with_isq(configured_isq())
             .with_prefix_cache_n(None)
-            .with_logging()
+            .with_logging();
+        if let Some(revision) = revision.filter(|value| !value.is_empty()) {
+            builder = builder.with_hf_revision(revision);
+        }
+        let model = builder
             .build()
             .await
             .map_err(|error| EngineError::Load(error.to_string()))?;
@@ -50,12 +61,23 @@ impl LocalMistralrsAdapter {
     /// Same Q4K ISQ path; the S13 harness validated Gemma-4 through this
     /// loader ("auto-detect loader — needed for multimodal models").
     pub async fn load_auto(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
+        Self::load_auto_pinned(model_id, None).await
+    }
+
+    async fn load_auto_pinned(
+        model_id: &str,
+        revision: Option<&str>,
+    ) -> Result<LocalMistralrsAdapter, EngineError> {
         // Prefix cache disabled — same audio-correctness rationale as
         // [`Self::load_text`].
-        let model = ModelBuilder::new(model_id)
+        let mut builder = ModelBuilder::new(model_id)
             .with_isq(configured_isq())
             .with_prefix_cache_n(None)
-            .with_logging()
+            .with_logging();
+        if let Some(revision) = revision.filter(|value| !value.is_empty()) {
+            builder = builder.with_hf_revision(revision);
+        }
+        let model = builder
             .build()
             .await
             .map_err(|error| EngineError::Load(error.to_string()))?;
@@ -67,10 +89,27 @@ impl LocalMistralrsAdapter {
     /// the daemon's default load path: correct for both dense text models and
     /// Gemma-4-style multimodal registrations, with one download either way.
     pub async fn load(model_id: &str) -> Result<LocalMistralrsAdapter, EngineError> {
-        match Self::load_text(model_id).await {
+        Self::load_pinned(model_id, None).await
+    }
+
+    /// Load a verified Hugging Face revision. The daemon calls this after
+    /// `models.lock` validation so mistral.rs cannot silently move to a newer
+    /// remote snapshot than the one whose files were hashed.
+    pub async fn load_with_revision(
+        model_id: &str,
+        revision: &str,
+    ) -> Result<LocalMistralrsAdapter, EngineError> {
+        Self::load_pinned(model_id, Some(revision)).await
+    }
+
+    async fn load_pinned(
+        model_id: &str,
+        revision: Option<&str>,
+    ) -> Result<LocalMistralrsAdapter, EngineError> {
+        match Self::load_text_pinned(model_id, revision).await {
             Ok(adapter) => Ok(adapter),
             Err(EngineError::Load(reason)) if reason.contains("ForConditionalGeneration") => {
-                Self::load_auto(model_id).await
+                Self::load_auto_pinned(model_id, revision).await
             }
             Err(error) => Err(error),
         }

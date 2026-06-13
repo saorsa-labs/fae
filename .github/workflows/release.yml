@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and validate artifacts without notarizing/publishing"
+        type: boolean
+        default: true
+      version:
+        description: "Version override for dry-run artifacts (defaults to VERSION file)"
+        type: string
+        required: false
 
 env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
@@ -21,11 +31,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches VERSION file
+      - name: Resolve release version
         id: version
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            VERSION="${INPUT_VERSION:-$FILE_VERSION}"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "Release dry-run v$VERSION (VERSION file: $FILE_VERSION)"
+            exit 0
+          fi
+
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
             echo "::error::Tag version ($TAG_VERSION) does not match VERSION file ($FILE_VERSION)"
             exit 1
@@ -60,8 +78,11 @@ jobs:
   # ── Build macOS app bundle (Apple Silicon) ────────────────────────
   build-macos:
     name: Build macOS (arm64)
-    needs: test
+    needs: [preflight, test]
     runs-on: macos-26
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,7 +123,23 @@ jobs:
           find .build/xcode -name "Sparkle.framework" -type d 2>/dev/null | head -5 || true
           popd
 
+      - name: Install stable Rust for bundled auxiliaries
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust auxiliary builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates -> target
+            native/rust/fae-ui-shell -> target
+
+      - name: Build bundled Rust auxiliaries
+        run: |
+          cd crates && cargo build --release -p fae-daemon
+          cd ../native/rust/fae-ui-shell && cargo build --release
+
       - name: Import signing certificate
+        if: env.RELEASE_DRY_RUN != 'true'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -153,7 +190,7 @@ jobs:
             "$SWIFT_APP_BINARY"
 
       - name: Notarize binaries
-        if: env.SIGNING_ENABLED == 'true'
+        if: env.SIGNING_ENABLED == 'true' && env.RELEASE_DRY_RUN != 'true'
         env:
           MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
           MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
@@ -217,7 +254,6 @@ jobs:
 
       - name: Prepare release payloads
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
           DIST_DIR="$RUNNER_TEMP/fae-dist"
           APP_BUNDLE="$RUNNER_TEMP/Fae.app"
           ARCHIVE_STAGING="$RUNNER_TEMP/fae-archive-staging"
@@ -232,10 +268,25 @@ jobs:
           cp "$SWIFT_APP_BINARY" "$UPDATE_ASSET"
           chmod +x "$UPDATE_ASSET"
 
-          # Build native macOS app bundle (pure Swift + MLX).
+          # Build native macOS app bundle (Swift host + explicitly-built Rust auxiliaries).
           cp "$SWIFT_APP_BINARY" "$APP_BUNDLE/Contents/MacOS/Fae"
           cp assets/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
           chmod +x "$APP_BUNDLE/Contents/MacOS/Fae"
+
+          UI_SHELL="native/rust/fae-ui-shell/target/release/fae-ui-shell"
+          DAEMON="crates/target/release/fae-daemon"
+          if [ ! -x "$UI_SHELL" ]; then
+            echo "::error::Missing executable Rust UI shell: $UI_SHELL"
+            exit 1
+          fi
+          if [ ! -x "$DAEMON" ]; then
+            echo "::error::Missing executable fae-daemon: $DAEMON"
+            exit 1
+          fi
+          cp "$UI_SHELL" "$APP_BUNDLE/Contents/MacOS/fae-ui-shell"
+          cp "$DAEMON" "$APP_BUNDLE/Contents/MacOS/fae-daemon"
+          chmod 755 "$APP_BUNDLE/Contents/MacOS/fae-ui-shell" "$APP_BUNDLE/Contents/MacOS/fae-daemon"
+          echo "Embedded Rust auxiliaries: fae-ui-shell, fae-daemon"
 
           # acpx (ACP agent client) is installed on-demand by Fae at runtime,
           # not bundled in the app (58MB binary, user may not need it).
@@ -420,6 +471,17 @@ jobs:
             echo "  Signed: $FNAME"
           done
 
+          echo "=== Signing Rust auxiliary executables ==="
+          for helper in "$APP_BUNDLE/Contents/MacOS/fae-ui-shell" "$APP_BUNDLE/Contents/MacOS/fae-daemon"; do
+            if [ -f "$helper" ]; then
+              codesign --force --options runtime \
+                --sign "$MACOS_SIGNING_IDENTITY" \
+                --timestamp \
+                "$helper"
+              echo "  Signed: $helper"
+            fi
+          done
+
           echo "=== Signing main executable ==="
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
@@ -446,6 +508,23 @@ jobs:
           # Note: spctl check skipped here — the app bundle is not yet notarized.
           # The DMG (which contains this bundle) gets notarized and stapled below.
 
+      - name: Ad-hoc sign Rust auxiliaries for dry-run validation
+        if: env.SIGNING_ENABLED != 'true'
+        run: |
+          for helper in "$APP_BUNDLE/Contents/MacOS/fae-ui-shell" "$APP_BUNDLE/Contents/MacOS/fae-daemon"; do
+            if [ -f "$helper" ]; then
+              codesign --force --sign - "$helper"
+              echo "Ad-hoc signed: $helper"
+            fi
+          done
+
+      - name: Verify embedded fae-daemon
+        run: |
+          DAEMON="$APP_BUNDLE/Contents/MacOS/fae-daemon"
+          test -x "$DAEMON"
+          codesign --verify --verbose=2 "$DAEMON"
+          "$DAEMON" --version
+
       - name: Free disk space before DMG creation
         run: |
           # Remove notarization zip and build intermediates to reclaim space
@@ -458,7 +537,6 @@ jobs:
 
       - name: Build macOS installer (.dmg)
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
           DMG_STAGING="$RUNNER_TEMP/fae-dmg-staging"
           INSTALLER_DMG="$DIST_DIR/fae-${VERSION}-macos-arm64.dmg"
 
@@ -477,7 +555,7 @@ jobs:
           echo "INSTALLER_DMG=$INSTALLER_DMG" >> "$GITHUB_ENV"
 
       - name: Notarize installer (.dmg)
-        if: env.SIGNING_ENABLED == 'true'
+        if: env.SIGNING_ENABLED == 'true' && env.RELEASE_DRY_RUN != 'true'
         env:
           MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.MACOS_NOTARIZATION_APPLE_ID }}
           MACOS_NOTARIZATION_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PASSWORD }}
@@ -568,7 +646,6 @@ jobs:
 
       - name: Extract release notes from CHANGELOG
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
           python3 -c "
           import re, html, sys
 
@@ -634,7 +711,6 @@ jobs:
 
           # Generate Sparkle appcast.xml if signature available.
           if [ -n "$SPARKLE_SIGNATURE" ]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
             DMG_FILENAME="fae-${VERSION}-macos-arm64.dmg"
             REPO="${GITHUB_REPOSITORY}"
             DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${DMG_FILENAME}"
@@ -736,6 +812,7 @@ jobs:
   release:
     name: Create Release
     needs: [build-macos]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

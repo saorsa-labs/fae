@@ -2,6 +2,18 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Skills-first cross-platform P5
+
+### CI / Build
+- Release workflow dry-runs can now build a reviewable macOS bundle without notarization or GitHub Release publishing.
+- `release.yml` builds `fae-daemon` and `fae-ui-shell` as Rust auxiliary binaries, embeds them in `Contents/MacOS`, signs helpers, and verifies the embedded daemon with `codesign` plus `fae-daemon --version`.
+- The no-Rust-reintroduction guard now allows Rust only in the explicit Linux render-spike workflow and this release auxiliary embedding workflow.
+
+### Security
+- Added a generated `models.lock` for the reviewed `google/gemma-4-E4B-it` Hugging Face snapshot and wired daemon startup to fail closed before model load on missing, mismatched, or unpinned artifacts.
+- Daemon model loading now passes the verified HF revision into mistral.rs so the runtime cannot silently move to a newer snapshot than the one hashed in `models.lock`.
+- Swift installs the bundled lock into `<fae data dir>/models.lock`; `FAE_MODELS_LOCK=off` remains a loud dev-only escape hatch under `FAE_DEV=1`.
+
 ## Unreleased — Skills-first cross-platform P4
 
 ### CI / Build
