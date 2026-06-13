@@ -43,6 +43,8 @@ pub enum AudioError {
 pub struct AudioDeviceInfo {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
+    pub default_input: Option<String>,
+    pub default_output: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,11 +115,15 @@ impl AudioManager {
             return AudioDeviceInfo {
                 inputs: Vec::new(),
                 outputs: Vec::new(),
+                default_input: None,
+                default_output: None,
             };
         }
         rx.recv().unwrap_or_else(|_| AudioDeviceInfo {
             inputs: Vec::new(),
             outputs: Vec::new(),
+            default_input: None,
+            default_output: None,
         })
     }
 
@@ -189,9 +195,7 @@ impl AudioWorker {
 
     fn capture_start_impl(&mut self) -> AudioResult<String> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or(AudioError::NoInputDevice)?;
+        let device = select_input_device(&host)?;
         let supported = device
             .default_input_config()
             .map_err(|error| AudioError::DeviceConfig(error.to_string()))?;
@@ -264,9 +268,10 @@ impl AudioWorker {
             .map_err(|_| AudioError::CaptureStateUnavailable)?
             .clone();
         let mono = resample_linear(&raw, session.input_rate, TARGET_SAMPLE_RATE);
-        let duration_ms = duration_ms(mono.len(), TARGET_SAMPLE_RATE);
+        let normalized = normalize_capture_gain(&mono);
+        let duration_ms = duration_ms(normalized.len(), TARGET_SAMPLE_RATE);
         Ok(CapturedAudio {
-            wav: encode_wav_pcm16(&mono, TARGET_SAMPLE_RATE),
+            wav: encode_wav_pcm16(&normalized, TARGET_SAMPLE_RATE),
             duration_ms,
             sample_rate: TARGET_SAMPLE_RATE,
         })
@@ -292,6 +297,12 @@ impl AudioWorker {
 
 fn devices_impl() -> AudioDeviceInfo {
     let host = cpal::default_host();
+    let default_input = host
+        .default_input_device()
+        .and_then(|device| device.name().ok());
+    let default_output = host
+        .default_output_device()
+        .and_then(|device| device.name().ok());
     let inputs = host
         .input_devices()
         .map(|devices| devices.filter_map(|device| device.name().ok()).collect())
@@ -300,15 +311,71 @@ fn devices_impl() -> AudioDeviceInfo {
         .output_devices()
         .map(|devices| devices.filter_map(|device| device.name().ok()).collect())
         .unwrap_or_default();
-    AudioDeviceInfo { inputs, outputs }
+    AudioDeviceInfo {
+        inputs,
+        outputs,
+        default_input,
+        default_output,
+    }
+}
+
+fn select_input_device(host: &cpal::Host) -> AudioResult<cpal::Device> {
+    select_named_device(
+        host.input_devices(),
+        std::env::var("FAE_AUDIO_INPUT_DEVICE").ok(),
+        AudioError::NoInputDevice,
+    )?
+    .or_else(|| host.default_input_device())
+    .ok_or(AudioError::NoInputDevice)
+}
+
+fn select_output_device(host: &cpal::Host) -> AudioResult<cpal::Device> {
+    select_named_device(
+        host.output_devices(),
+        std::env::var("FAE_AUDIO_OUTPUT_DEVICE").ok(),
+        AudioError::NoOutputDevice,
+    )?
+    .or_else(|| host.default_output_device())
+    .ok_or(AudioError::NoOutputDevice)
+}
+
+fn select_named_device<I>(
+    devices: Result<I, cpal::DevicesError>,
+    requested: Option<String>,
+    missing: AudioError,
+) -> AudioResult<Option<cpal::Device>>
+where
+    I: IntoIterator<Item = cpal::Device>,
+{
+    let Some(requested) = requested.filter(|name| !name.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let requested_lower = requested.to_ascii_lowercase();
+    let devices = devices.map_err(|error| AudioError::DeviceConfig(error.to_string()))?;
+    for device in devices {
+        let name = match device.name() {
+            Ok(name) => name,
+            Err(_) => continue,
+        };
+        if name.to_ascii_lowercase().contains(&requested_lower) {
+            return Ok(Some(device));
+        }
+    }
+    Err(match missing {
+        AudioError::NoInputDevice => {
+            AudioError::DeviceConfig(format!("input device matching '{requested}' not found"))
+        }
+        AudioError::NoOutputDevice => {
+            AudioError::DeviceConfig(format!("output device matching '{requested}' not found"))
+        }
+        other => other,
+    })
 }
 
 fn play_wav_impl(wav: &[u8]) -> AudioResult<u64> {
     let decoded = decode_wav_mono(wav)?;
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or(AudioError::NoOutputDevice)?;
+    let device = select_output_device(&host)?;
     let supported = device
         .default_output_config()
         .map_err(|error| AudioError::DeviceConfig(error.to_string()))?;
@@ -612,6 +679,33 @@ fn decode_float32(data: &[u8], channels: usize, sample_rate: u32) -> AudioResult
     })
 }
 
+fn normalize_capture_gain(input: &[f32]) -> Vec<f32> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    let rms = (input
+        .iter()
+        .map(|sample| f64::from(*sample) * f64::from(*sample))
+        .sum::<f64>()
+        / input.len() as f64)
+        .sqrt() as f32;
+    if rms < 0.001 {
+        return input.to_vec();
+    }
+    let peak = input
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max);
+    let target_rms = 0.10_f32;
+    let rms_gain = (target_rms / rms).clamp(1.0, 12.0);
+    let peak_gain = if peak > 0.0 { 0.98 / peak } else { rms_gain };
+    let gain = rms_gain.min(peak_gain.max(1.0));
+    input
+        .iter()
+        .map(|sample| (sample * gain).clamp(-1.0, 1.0))
+        .collect()
+}
+
 fn duration_ms(samples: usize, sample_rate: u32) -> u64 {
     if sample_rate == 0 {
         return 0;
@@ -680,6 +774,32 @@ mod tests {
         }
         worker.reap_captures();
         assert!(worker.captures.is_empty());
+    }
+
+    #[test]
+    fn capture_gain_lifts_quiet_speech_without_clipping() {
+        let quiet: Vec<f32> = (0..16_000)
+            .map(|i| ((i as f32 * 440.0 * std::f32::consts::TAU) / 16_000.0).sin() * 0.01)
+            .collect();
+        let normalized = normalize_capture_gain(&quiet);
+        let rms = (normalized
+            .iter()
+            .map(|sample| f64::from(*sample) * f64::from(*sample))
+            .sum::<f64>()
+            / normalized.len() as f64)
+            .sqrt();
+        let peak = normalized
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0_f32, f32::max);
+        assert!(rms > 0.07, "rms after gain: {rms}");
+        assert!(peak <= 0.98, "peak after gain: {peak}");
+    }
+
+    #[test]
+    fn capture_gain_leaves_near_silence_alone() {
+        let silence = vec![0.0001_f32; 128];
+        assert_eq!(normalize_capture_gain(&silence), silence);
     }
 
     #[test]

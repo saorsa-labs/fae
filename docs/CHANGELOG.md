@@ -8,9 +8,10 @@ Detailed version history moved from CLAUDE.md. For current architecture, see `CL
 - Added `fae-audio`, a cpal-backed daemon audio crate for portable PTT capture and WAV playback.
 - Added daemon NDJSON commands `audio.devices`, `audio.capture_start`, `audio.capture_stop`, and `audio.play` behind the existing control-plane auth/scopes.
 - Added a live repro script at `crates/fae-daemon/scripts/fae_audio_repro.py` for capture → playback → audio turn → TTS → playback validation.
+- Added capture gain normalization plus `FAE_AUDIO_INPUT_DEVICE` / `FAE_AUDIO_OUTPUT_DEVICE` overrides for reproducible cpal diagnostics.
 
 ### Tests
-- Added WAV encode round-trip, 48 kHz → 16 kHz sine resampling, capture-cap reaping, audio command scope, and daemon auth rejection coverage.
+- Added WAV encode round-trip, 48 kHz → 16 kHz sine resampling, capture gain, capture-cap reaping, audio command scope, and daemon auth rejection coverage.
 
 ## v0.8.183 — Autonomous Self-Improvement Loop (2026-03-30)
 

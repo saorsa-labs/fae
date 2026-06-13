@@ -101,6 +101,13 @@ def main() -> int:
         client.command(
             "conversation.inject_text",
             {
+                "system": (
+                    "The next user message contains an audio clip and "
+                    "intentionally has empty text content. You MUST listen to "
+                    "the attached WAV audio, transcribe the speech, and output "
+                    "exactly one line beginning '[heard]: ' followed by the "
+                    "transcript. Do not output an empty string."
+                ),
                 "messages": [
                     {
                         "role": "user",

@@ -245,7 +245,7 @@ client  : authenticate with {"command":"session.authenticate","payload":{"client
 fae-daemon: listening on /tmp/fae-audio-p1-home/Library/Application Support/fae/run/fae-daemon.sock (NDJSON)
 ```
 
-### Capture → save WAV → playback → audio turn → TTS → playback
+### Capture → save WAV → playback → audio turn → TTS → playback (mock lane)
 
 Command:
 
@@ -285,24 +285,77 @@ Audit log with timestamps:
 2026-06-12T23:34:28.611000 audio.play allow allow
 ```
 
+### Warm-cache real Gemma/Kokoro closure proof
+
+After P1 acceptance, I reran the repro with the real cached Gemma/Kokoro lane and no sandbox `HOME`:
+
+```bash
+HF_HOME="$HOME/.cache/huggingface" \
+FAE_MODEL_ID=google/gemma-4-E4B-it \
+FAE_NO_PARENT_WATCH=1 \
+FAE_AUDIO_INPUT_DEVICE='MacBook Pro Microphone' \
+FAE_AUDIO_OUTPUT_DEVICE='MacBook Pro Speakers' \
+target/debug/fae-daemon
+```
+
+Daemon warm-load evidence:
+
+```text
+engine  : loading mistral.rs model google/gemma-4-E4B-it (this can take a while)…
+2026-06-13T08:53:54.893608Z INFO mistralrs_core: git revision: c22c2e2b622a815821e59056c2b5952b4cbbe010
+2026-06-13T08:53:54.893913Z INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video, 🔊 Audio]
+2026-06-13T08:53:54.893939Z INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+engine  : mistralrs (google/gemma-4-E4B-it)
+voices  : /Users/davidirvine/Library/Application Support/fae/voices (custom voices, optional)
+tts     : voice-tts (prince-canuma/Kokoro-82M)
+fae-daemon: listening on /Users/davidirvine/Library/Application Support/fae/run/fae-daemon.sock (NDJSON)
+```
+
+Known phrase spoken via macOS `say`: `hello fae audio proof`.
+
+Command:
+
+```bash
+python3 -u crates/fae-daemon/scripts/fae_audio_repro.py \
+  --home "$HOME" \
+  --out /tmp/fae-cpal-warm-real-6.wav \
+  --capture-seconds 3.5
+```
+
+Real transcript:
+
+```text
+audio.devices -> {"ok": true, "request_id": "r2", "result": {"default_input": "MacBook Pro Microphone", "default_output": "MacBook Pro Speakers", "inputs": ["David’s iPhone Microphone", "MacBook Pro Microphone", "Microsoft Teams Audio"], "outputs": ["MacBook Pro Speakers", "Microsoft Teams Audio"]}, "v": 2}
+audio.capture_start -> {"ok": true, "request_id": "r3", "result": {"capture_id": "cap-3"}, "v": 2}
+Speak now for 3.5s...
+audio.capture_stop -> {"ok": true, "request_id": "r4", "result": {"duration_ms": 3498, "sample_rate": 16000, "wav_base64": "..."}, "v": 2}
+saved_wav -> channels=1 rate=16000 frames=55979 duration=3.499s
+audio.play -> {"ok": true, "request_id": "r5", "result": {"played_ms": 3498}, "v": 2}
+conversation.inject_text -> {"ok": true, "request_id": "r6", "result": {"finish_reason": "stop", "text": "[heard]: hello fay audio proof", "tool_calls": []}, "v": 2}
+heard_turn -> {"finish_reason": "stop", "text": "[heard]: hello fay audio proof", "tool_calls": []}
+tts.synthesize -> {"ok": true, "request_id": "r7", "result": {"sample_rate": 24000, "wav_base64": "..."}, "v": 2}
+audio.play -> {"ok": true, "request_id": "r8", "result": {"played_ms": 2250}, "v": 2}
+```
+
+`[heard]: hello fay audio proof` is an acceptable phonetic transcript of `hello fae audio proof`; P1 headline criterion is closed.
+
 Shutdown by exact PID:
 
 ```text
-PID=$(cat /tmp/fae-audio-p1-daemon.pid); kill "$PID"
-stopped 50979
+PID=$(cat /tmp/fae-audio-p1-warm-real-daemon.pid); kill "$PID"
+stopped 68133
 ```
 
 ## 4. Deviations from prompt + why
 
 - `fae-audio` is a new crate. This keeps the cpal worker, WAV parsing/encoding, and resampling out of `fae-daemon` session dispatch.
-- The live end-to-end `[heard]:` transcript was exercised with the daemon mock engine (`echo: [audio:48172 bytes]`) rather than a completed real Gemma turn. I attempted `FAE_MODEL_ID=google/gemma-4-E4B-it` with the cached HF repo, but daemon startup remained at `engine  : loading mistral.rs model google/gemma-4-E4B-it (this can take a while)…` for ~10 minutes with no control socket, so I killed the exact PID and kept the mock proof as the audio-lane evidence.
-- Cross-compilation is blocked by host sysroot tooling (`alsa-sys` requires Linux ALSA pkg-config/sysroot on this macOS machine). The code path compiles locally for macOS; `cd crates && just check` is green.
+- The initial mock-lane evidence was superseded by the warm-cache real Gemma/Kokoro proof above. The real run required capture gain normalization and a stronger audio-transcription repro prompt while preserving the empty audio-message content contract.
+- Cross-compilation is blocked by host sysroot tooling (`alsa-sys` requires Linux ALSA pkg-config/sysroot on this macOS machine). Per owner direction, this is deferred to P4's Ubuntu CI job. The code path compiles locally for macOS; `cd crates && just check` is green.
 - Exact root `just check` timed out in Swift Contacts/CoreData XPC/TCC access, outside the Rust P1 changes. `just build` and the documented local `swift test --skip VocabularyHarvestTests` path passed.
 
 ## 5. Known gaps / follow-ups
 
-- Configure a Linux ALSA sysroot or run the cross-compile proof on an actual Linux builder to satisfy the `cargo zigbuild --target x86_64-unknown-linux-gnu -p fae-daemon` gate.
-- Re-run the live repro with `FAE_MODEL_ID=google/gemma-4-E4B-it` and real TTS if/when local model weights are available; current proof uses mock engine/TTS.
+- Linux ALSA cross-build proof is deferred to P4's Ubuntu CI job.
 - `audio.play` is intentionally blocking v1 and uses WAV payloads only.
 - No daemon-side VAD/AEC/barge-in streaming was added (out of scope for P1).
 
