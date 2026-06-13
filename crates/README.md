@@ -14,6 +14,7 @@ core lands fully tested before any network surface exists.
 | `fae-control-plane` | Transport-free security core: capability scopes, per-command authorization, anti-DNS-rebind `Host`/`Origin` checks, CSPRNG session tokens (hashed at rest, constant-time verify), audit. | **Chunk 1 ✅** (tested) |
 | `fae-envelope-gate` | G5 peer-envelope gate (promoted from `phase0/g5-envelope-gate`, reviewed): typed, closed-`kind`, schema-versioned, signature-checked, audited boundary. No free-form peer text reaches LLM/memory/tools. | **Chunk 1 ✅** (tested) |
 | `fae-engine` | Engine-agnostic inference boundary: `ProviderAdapter` trait (`stream_chat` → Token/ToolCall/Done events) + **fail-closed `models.lock`** SHA-256 loader + `MockAdapter` + **`LocalMistralrsAdapter`** (mistral.rs 0.8, hard dep, Metal/CPU). | **Chunk 3a–b ✅** (tested) |
+| `fae-audio` | Portable cpal voice spine for daemon-side PTT capture/playback: device listing, 16 kHz mono WAV capture output, WAV playback, and deterministic unit-tested WAV/resampling helpers. | **P1 ✅** (macOS live-tested) |
 | `fae-daemon` | Daemon binary. Bootstrap (run dir `0700`, token `0600`) + **Unix-socket NDJSON listener** (default) and an **opt-in TCP-loopback HTTP/WS diagnostic listener** (`FAE_DIAGNOSTIC_TCP_PORT`): per-connection/per-request auth, `Host`/`Origin` enforcement, defensive headers, single-use stream tickets, per-message `authorize`, fail-closed audit. | **Chunk 2 ✅** (live-tested) |
 
 ## Build / test
@@ -42,4 +43,4 @@ just run            # bootstrap + demo authz (no ports opened)
 - **Carried (gate features, not chunks):** adversarial-memory enforcement (W3), supply-chain `models.lock`/signed-updates (W4), peer-tool design, metadata threat-model sign-off. Peer-memory / peer-tool / group paths stay blocked until G5 is enforced in code (+ groups: TreeKEM). CUDA-perf + Gemma-4-12B + same-weights parity = early-Phase-1 tasks on a GPU box.
 
 ## Not yet wired
-Memory (`fae.db` migration — G4), pipeline, skills, scheduler, TTS/STT, Apple tools (`objc2`), x0x — all selective ports/rewrites per the G3 audit, behind this control plane.
+Memory (`fae.db` migration — G4), pipeline, skills, scheduler, Apple tools (`objc2`), x0x — all selective ports/rewrites per the G3 audit, behind this control plane. Daemon TTS and cpal capture/playback are wired as local control-plane commands; Swift still owns the default macOS mic/speaker lane until the portable lane is promoted.

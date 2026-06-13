@@ -2,6 +2,16 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Skills-first cross-platform P1
+
+### New Features
+- Added `fae-audio`, a cpal-backed daemon audio crate for portable PTT capture and WAV playback.
+- Added daemon NDJSON commands `audio.devices`, `audio.capture_start`, `audio.capture_stop`, and `audio.play` behind the existing control-plane auth/scopes.
+- Added a live repro script at `crates/fae-daemon/scripts/fae_audio_repro.py` for capture → playback → audio turn → TTS → playback validation.
+
+### Tests
+- Added WAV encode round-trip, 48 kHz → 16 kHz sine resampling, capture-cap reaping, audio command scope, and daemon auth rejection coverage.
+
 ## v0.8.183 — Autonomous Self-Improvement Loop (2026-03-30)
 
 ### New Features

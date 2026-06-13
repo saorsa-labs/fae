@@ -9,12 +9,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use fae_audio::AudioManager;
 use fae_control_plane::{append_audit_jsonl, ClientRegistry, Response};
 use fae_engine::{ProviderAdapter, TtsAdapter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::session::{handle_frame, SessionState};
+use crate::session::{handle_frame, SessionBackends, SessionState};
 use crate::{next_event_id, now_ms};
 
 /// Reject any single NDJSON frame larger than this **before authentication**.
@@ -38,6 +39,7 @@ pub async fn serve_unix(
     registry: Arc<ClientRegistry>,
     engine: Arc<dyn ProviderAdapter>,
     tts: Arc<dyn TtsAdapter>,
+    audio: Arc<AudioManager>,
     audit_path: PathBuf,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
@@ -59,6 +61,7 @@ pub async fn serve_unix(
         let registry = Arc::clone(&registry);
         let engine = Arc::clone(&engine);
         let tts = Arc::clone(&tts);
+        let audio = Arc::clone(&audio);
         let audit_path = audit_path.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
@@ -66,6 +69,7 @@ pub async fn serve_unix(
                 &registry,
                 engine.as_ref(),
                 tts.as_ref(),
+                audio.as_ref(),
                 &audit_path,
             )
             .await
@@ -82,6 +86,7 @@ async fn handle_connection(
     registry: &ClientRegistry,
     engine: &dyn ProviderAdapter,
     tts: &dyn TtsAdapter,
+    audio: &AudioManager,
     audit_path: &Path,
 ) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
@@ -112,7 +117,8 @@ async fn handle_connection(
 
         let now = now_ms();
         let event_id = next_event_id(now);
-        let outcome = handle_frame(registry, engine, tts, &mut state, trimmed, now, event_id).await;
+        let backends = SessionBackends { engine, tts, audio };
+        let outcome = handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;
 
         // Fail closed: a frame must be audited before its response is sent. If
         // the audit write fails, surface an error response and drop the

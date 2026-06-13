@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fae_audio::AudioManager;
 use fae_control_plane::{
     generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, TicketStore,
     PROTOCOL_VERSION,
@@ -79,6 +80,7 @@ async fn main() -> DaemonResult<()> {
     let tts = build_tts_engine();
     let tts_info = tts.describe();
     println!("tts     : {} ({})", tts_info.backend, tts_info.model_id);
+    let audio = Arc::new(AudioManager::new());
     println!("audit   : {} (jsonl)", audit_path.display());
     println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
 
@@ -88,6 +90,7 @@ async fn main() -> DaemonResult<()> {
             registry: Arc::clone(&registry),
             engine: Arc::clone(&engine),
             tts: Arc::clone(&tts),
+            audio: Arc::clone(&audio),
             tickets: Arc::clone(&tickets),
             audit_path: audit_path.clone(),
             port,
@@ -102,7 +105,7 @@ async fn main() -> DaemonResult<()> {
     println!();
 
     // Serves until the process is killed. Fails closed on bind/permission error.
-    transport::serve_unix(socket_path, registry, engine, tts, audit_path).await?;
+    transport::serve_unix(socket_path, registry, engine, tts, audio, audit_path).await?;
     Ok(())
 }
 
