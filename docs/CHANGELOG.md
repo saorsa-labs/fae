@@ -2,6 +2,17 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Skills-first cross-platform P4
+
+### CI / Build
+- Added a dedicated `linux-render-spike` GitHub Actions workflow for Ubuntu WebKitGTK shell builds and ALSA-backed daemon builds.
+- Added an Xvfb smoke mode for the Rust UI shell that opens the opaque Settings panel, captures a WebKitGTK screenshot artifact in CI, and rejects blank captures via ImageMagick color-count validation.
+- Folded the P1-deferred Linux `fae-daemon` build proof into the same Ubuntu job with `libasound2-dev`, `pkg-config`, and `cargo zigbuild`.
+- Switched Linux `wry` panels to `WebViewBuilderExtUnix::build_gtk` against tao's GTK container after the generic `build(&window)` path produced blank Xvfb captures.
+
+### Docs
+- Added `docs/architecture/linux-render-spike-2026-06.md` to track opaque Settings panel, pill transparency, and Linux shell go/no-go findings.
+
 ## Unreleased — Skills-first cross-platform P3
 
 ### New Features

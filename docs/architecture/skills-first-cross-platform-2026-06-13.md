@@ -79,7 +79,7 @@ which is the bridge.
 | **P1 — Voice spine in Rust** | cpal capture + playback in fae-daemon | daemon + orb host = a complete *talking* Fae on any OS; capture is trivially portable post-S18 (16 kHz buffer + endpoint + WAV) |
 | **P2 — Productivity skills wave** | mail (himalaya/IMAP), calendar (CalDAV incl. iCloud), contacts (CardDAV); agentskills.io-compatible frontmatter | Cross-platform hands that ALSO improve macOS Fae today (mail doesn't exist yet). Additive — `AppleTools.swift` stays as the privileged macOS path |
 | **P3 — Orb host absorbs UI** | settings → onboarding → approvals as wry panels (macOS first) | Settings panel is implemented in the Rust orb host with Swift bridge sync; onboarding/approvals remain later work. Panels are designed opaque-fallback-tolerant |
-| **P4 — Linux render spike** | orb + pill + one panel on Ubuntu (X11 + Wayland) | Measure WebKitGTK pain directly before committing panel architecture to it |
+| **P4 — Linux render spike** | orb + pill + opaque Settings panel on Ubuntu (CI/Xvfb, then X11 + Wayland desktop) | CI/Xvfb passed for the opaque Settings panel on WebKitGTK with artifact color validation; Linux desktop X11/Wayland and transparent pill compositor behavior remain follow-up |
 | **P5 — Ship gates** | release.yml daemon embedding; models.lock generation + fail-closed enforcement | Daemon-default cannot ship without them |
 
 ### What stays Swift (deliberately)

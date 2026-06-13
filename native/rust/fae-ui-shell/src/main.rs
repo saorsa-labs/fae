@@ -5,17 +5,17 @@ use std::{
     error::Error,
     io::{self, BufRead, Write},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use menu::{MenuAction, OrbMenu};
 use protocol::{
-    FaeUiState, SchedulerTask, SettingItem, SettingsCard, SettingsSection, ShellCommand,
-    SkillSummary,
+    FaeUiState, SchedulerTask, SettingItem, SettingOption, SettingsCard, SettingsSection,
+    ShellCommand, SkillSummary,
 };
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
-    event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
+    event::{ElementState, Event, KeyEvent, MouseButton, StartCause, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
     keyboard::KeyCode,
     window::{Window, WindowBuilder},
@@ -478,6 +478,10 @@ impl State {
 
 fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+    if std::env::args().any(|arg| arg == "--smoke-settings-panel") {
+        return run_settings_panel_smoke();
+    }
+
     let mut event_loop_builder = EventLoopBuilder::<UserEvent>::with_user_event();
     #[allow(unused_mut)]
     let mut event_loop = event_loop_builder.build();
@@ -743,6 +747,109 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 }
 
+fn run_settings_panel_smoke() -> Result<(), Box<dyn Error>> {
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let panel_proxy = proxy.clone();
+    let exit_proxy = proxy.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(10));
+        let _ = exit_proxy.send_event(UserEvent::Bridge(ShellCommand::Quit));
+    });
+
+    let mut orb_ui = OrbUiModel::new();
+    orb_ui.set_settings(smoke_settings_sections(), smoke_settings_cards());
+    let mut web_panels = Vec::new();
+    let mut opened = false;
+
+    event_loop.run(move |event, target, control_flow| {
+        *control_flow = ControlFlow::Poll;
+        match event {
+            Event::NewEvents(StartCause::Init) if !opened => {
+                opened = true;
+                match open_settings_panel(target, &orb_ui, &panel_proxy) {
+                    Ok(panel) => {
+                        log::info!("smoke settings panel opened");
+                        web_panels.push(panel);
+                    }
+                    Err(error) => {
+                        log::error!("failed to open smoke settings panel: {error}");
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::Bridge(ShellCommand::Quit)) => {
+                log::info!("smoke settings panel exit");
+                *control_flow = ControlFlow::Exit;
+            }
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                *control_flow = ControlFlow::Exit;
+            }
+            _ => {}
+        }
+    });
+}
+
+fn smoke_settings_sections() -> Vec<SettingsSection> {
+    vec![SettingsSection {
+        id: "voice".to_string(),
+        title: "Voice".to_string(),
+        description: Some("Opaque WebKitGTK smoke controls for Linux rendering.".to_string()),
+        settings: vec![
+            SettingItem {
+                key: "tts.speed".to_string(),
+                title: "Playback speed".to_string(),
+                description: "Adjust how quickly Fae speaks.".to_string(),
+                kind: "number".to_string(),
+                value: "1.10".to_string(),
+                options: None,
+                min: Some("0.7".to_string()),
+                max: Some("1.4".to_string()),
+                step: Some("0.05".to_string()),
+                unit: Some("multiplier".to_string()),
+                read_only: Some(false),
+            },
+            SettingItem {
+                key: "llm.thinking_level".to_string(),
+                title: "Thinking depth".to_string(),
+                description: "Reasoning budget for future turns.".to_string(),
+                kind: "select".to_string(),
+                value: "fast".to_string(),
+                options: Some(vec![
+                    SettingOption {
+                        value: "fast".to_string(),
+                        label: "Fast".to_string(),
+                    },
+                    SettingOption {
+                        value: "deep".to_string(),
+                        label: "Deep".to_string(),
+                    },
+                ]),
+                min: None,
+                max: None,
+                step: None,
+                unit: None,
+                read_only: Some(false),
+            },
+        ],
+    }]
+}
+
+fn smoke_settings_cards() -> Vec<SettingsCard> {
+    vec![SettingsCard {
+        title: "Opaque fallback".to_string(),
+        body:
+            "This card validates the Settings panel on WebKitGTK without relying on transparency."
+                .to_string(),
+        detail: Some(
+            "The pill may still show compositor-specific transparency artifacts.".to_string(),
+        ),
+    }]
+}
+
 fn spawn_stdin_bridge(proxy: tao::event_loop::EventLoopProxy<UserEvent>) {
     thread::spawn(move || {
         let stdin = io::stdin();
@@ -952,6 +1059,27 @@ const LONG_PRESS_MS: u128 = 400;
 /// Cursor travel that turns a pending press into a window drag.
 const PRESS_SLOP_PX: f64 = 8.0;
 
+fn build_webview_for_window<'a>(
+    window: &'a Window,
+    builder: WebViewBuilder<'a>,
+) -> Result<WebView, Box<dyn Error>> {
+    #[cfg(target_os = "linux")]
+    {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+
+        let container = window
+            .default_vbox()
+            .ok_or_else(|| io::Error::other("tao GTK window missing default vbox"))?;
+        Ok(builder.build_gtk(container)?)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(builder.build(window)?)
+    }
+}
+
 fn open_pill_panel(
     target: &tao::event_loop::EventLoop<UserEvent>,
 ) -> Result<PillPanel, Box<dyn Error>> {
@@ -967,13 +1095,15 @@ fn open_pill_panel(
     if let Err(error) = window.set_ignore_cursor_events(true) {
         log::warn!("pill window could not be made click-through: {error}");
     }
-    let webview = WebViewBuilder::new()
-        .with_transparent(true)
-        // Belt-and-braces: WKWebView paints a white canvas in light mode even
-        // with a transparent body unless the background colour is cleared too.
-        .with_background_color((0, 0, 0, 0))
-        .with_html(PILL_HTML)
-        .build(&window)?;
+    let webview = build_webview_for_window(
+        &window,
+        WebViewBuilder::new()
+            .with_transparent(true)
+            // Belt-and-braces: WKWebView paints a white canvas in light mode even
+            // with a transparent body unless the background colour is cleared too.
+            .with_background_color((0, 0, 0, 0))
+            .with_html(PILL_HTML),
+    )?;
     Ok(PillPanel { window, webview })
 }
 
@@ -1120,14 +1250,17 @@ fn open_messages_panel(
         .build(target)?;
     let html = messages_html(orb_ui);
     let proxy = panel_proxy.clone();
-    let webview = WebViewBuilder::new()
-        .with_html(html)
-        .with_ipc_handler(move |request| {
-            if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone())) {
-                log::warn!("failed to forward messages panel IPC: {error}");
-            }
-        })
-        .build(&window)?;
+    let webview = build_webview_for_window(
+        &window,
+        WebViewBuilder::new()
+            .with_html(html)
+            .with_ipc_handler(move |request| {
+                if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone()))
+                {
+                    log::warn!("failed to forward messages panel IPC: {error}");
+                }
+            }),
+    )?;
     Ok(WebPanel {
         kind: WebPanelKind::Messages,
         window,
@@ -1378,7 +1511,7 @@ fn open_browser_data_panel(
         .with_decorations(true)
         .build(target)?;
     let html = browser_data_html(orb_ui);
-    let webview = WebViewBuilder::new().with_html(html).build(&window)?;
+    let webview = build_webview_for_window(&window, WebViewBuilder::new().with_html(html))?;
     Ok(WebPanel {
         kind: WebPanelKind::BrowserData,
         window,
@@ -1422,14 +1555,17 @@ fn open_settings_panel(
         .build(target)?;
     window.set_focus();
     let proxy = panel_proxy.clone();
-    let webview = WebViewBuilder::new()
-        .with_html(settings_html(orb_ui))
-        .with_ipc_handler(move |request| {
-            if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone())) {
-                log::warn!("failed to forward settings panel IPC: {error}");
-            }
-        })
-        .build(&window)?;
+    let webview = build_webview_for_window(
+        &window,
+        WebViewBuilder::new()
+            .with_html(settings_html(orb_ui))
+            .with_ipc_handler(move |request| {
+                if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone()))
+                {
+                    log::warn!("failed to forward settings panel IPC: {error}");
+                }
+            }),
+    )?;
     window.set_focus();
     Ok(WebPanel {
         kind: WebPanelKind::Settings,
@@ -1639,14 +1775,17 @@ fn open_scheduler_panel(
         .with_always_on_top(true)
         .build(target)?;
     let proxy = panel_proxy.clone();
-    let webview = WebViewBuilder::new()
-        .with_html(scheduler_html(orb_ui))
-        .with_ipc_handler(move |request| {
-            if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone())) {
-                log::warn!("failed to forward scheduler panel IPC: {error}");
-            }
-        })
-        .build(&window)?;
+    let webview = build_webview_for_window(
+        &window,
+        WebViewBuilder::new()
+            .with_html(scheduler_html(orb_ui))
+            .with_ipc_handler(move |request| {
+                if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone()))
+                {
+                    log::warn!("failed to forward scheduler panel IPC: {error}");
+                }
+            }),
+    )?;
     Ok(WebPanel {
         kind: WebPanelKind::Scheduler,
         window,
@@ -1666,14 +1805,17 @@ fn open_skills_panel(
         .with_always_on_top(true)
         .build(target)?;
     let proxy = panel_proxy.clone();
-    let webview = WebViewBuilder::new()
-        .with_html(skills_html(orb_ui))
-        .with_ipc_handler(move |request| {
-            if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone())) {
-                log::warn!("failed to forward skills panel IPC: {error}");
-            }
-        })
-        .build(&window)?;
+    let webview = build_webview_for_window(
+        &window,
+        WebViewBuilder::new()
+            .with_html(skills_html(orb_ui))
+            .with_ipc_handler(move |request| {
+                if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone()))
+                {
+                    log::warn!("failed to forward skills panel IPC: {error}");
+                }
+            }),
+    )?;
     Ok(WebPanel {
         kind: WebPanelKind::Skills,
         window,
@@ -1759,7 +1901,7 @@ fn show_context_menu(menu: &OrbMenu, window: &Window, position: PhysicalPosition
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (menu, window, position);
-        log::warn!("context menu popup is only wired for macOS in this POC");
+        let _ = (&menu.menu, window, position);
+        log::warn!("context menu popup is not wired for this platform yet");
     }
 }

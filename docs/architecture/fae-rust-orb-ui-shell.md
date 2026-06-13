@@ -115,7 +115,7 @@ Settings, Messages, Scheduler, and Skills now have live orb-owned panel behavior
 
 ### Webview panels
 
-`Settings…` opens an opaque `wry` panel owned by the Rust shell. Swift sends a structured `settings_snapshot`; the panel sends `settings_set { key, value }` back to the Swift bridge, which validates/coerces and persists through `FaeCore.patchConfig()`. `Settings (legacy)…` keeps the previous SwiftUI window available until parity is complete.
+`Settings…` opens an opaque `wry` panel owned by the Rust shell. Swift sends a structured `settings_snapshot`; the panel sends `settings_set { key, value }` back to the Swift bridge, which validates/coerces and persists through `FaeCore.patchConfig()`. `Settings (legacy)…` keeps the previous SwiftUI window available until parity is complete. On Linux, panels are built through `WebViewBuilderExtUnix::build_gtk` against tao's GTK container; the generic `build(&window)` path compiled but rendered blank under Xvfb.
 
 `Open Browser/Data Panel` opens a `wry` webview with placeholder sections for charts, video/rich media, and tools/permissions. This proves the new rule: rich output belongs in browser/webview panels, not in a custom canvas.
 
@@ -198,7 +198,7 @@ The Swift UI should be treated as legacy/migration source. Do not add new produc
 
 ## Cross-platform notes
 
-`wgpu` supports the orb renderer on modern desktop and mobile GPU APIs. `tao`, `muda`, and `wry` cover desktop shell/menu/webview behavior; mobile packaging and lifecycle need dedicated follow-up work.
+`wgpu` supports the orb renderer on modern desktop and mobile GPU APIs. `tao`, `muda`, and `wry` cover desktop shell/menu/webview behavior; mobile packaging and lifecycle need dedicated follow-up work. The P4 Linux render spike passed for the opaque Settings panel on Ubuntu/WebKitGTK/Xvfb with a screenshot artifact and color-count guard; transparent pill behavior remains compositor-sensitive and should not be used as the Linux go/no-go criterion.
 
 For a full cross-platform product shell, compare:
 

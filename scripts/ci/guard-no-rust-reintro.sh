@@ -9,6 +9,12 @@ fail=0
 echo "[guard-no-rust] checking active CI workflows for rust/cargo reintroduction..."
 for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
   [ -e "$wf" ] || continue
+  case "$(basename "$wf")" in
+    linux-render-spike.yml|linux-render-spike.yaml)
+      echo "[guard-no-rust] allowing explicit Linux render-spike Rust workflow: $wf"
+      continue
+      ;;
+  esac
   if grep -nEi '\b(cargo|rustup|actions-rs|dtolnay/rust-toolchain|Swatinem/rust-cache)\b' "$wf"; then
     echo "[guard-no-rust] ERROR: forbidden rust/cargo references found in active workflow: $wf" >&2
     fail=1
