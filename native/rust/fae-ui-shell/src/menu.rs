@@ -3,6 +3,7 @@ use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
     Settings,
+    SettingsLegacy,
     OpenBrowserDataPanel,
     ShowMessages,
     ResetConversation,
@@ -40,6 +41,7 @@ impl MenuAction {
     pub fn as_str(self) -> &'static str {
         match self {
             MenuAction::Settings => "settings",
+            MenuAction::SettingsLegacy => "settings_legacy",
             MenuAction::OpenBrowserDataPanel => "open_browser_data_panel",
             MenuAction::ShowMessages => "show_messages",
             MenuAction::ResetConversation => "reset_conversation",
@@ -81,6 +83,7 @@ impl OrbMenu {
         // discoverable mouse fallback (capture ends on pause or via Stop).
         append_item(&menu, MenuAction::TalkToggle, "Talk to Fae")?;
         append_item(&menu, MenuAction::Settings, "Settings…")?;
+        append_item(&menu, MenuAction::SettingsLegacy, "Settings (legacy)…")?;
         append_item(&menu, MenuAction::ShowMessages, "Messages…")?;
         append_item(
             &menu,
@@ -160,6 +163,7 @@ fn append_separator(menu: &Menu) -> Result<(), muda::Error> {
 fn id(action: MenuAction) -> MenuId {
     MenuId::new(match action {
         MenuAction::Settings => "settings",
+        MenuAction::SettingsLegacy => "settings_legacy",
         MenuAction::OpenBrowserDataPanel => "open_browser_data_panel",
         MenuAction::ShowMessages => "show_messages",
         MenuAction::ResetConversation => "reset_conversation",
@@ -192,6 +196,7 @@ fn id(action: MenuAction) -> MenuId {
 fn action_from_id(id: &MenuId) -> Option<MenuAction> {
     match id.as_ref() {
         "settings" => Some(MenuAction::Settings),
+        "settings_legacy" => Some(MenuAction::SettingsLegacy),
         "open_browser_data_panel" => Some(MenuAction::OpenBrowserDataPanel),
         "show_messages" => Some(MenuAction::ShowMessages),
         "reset_conversation" => Some(MenuAction::ResetConversation),

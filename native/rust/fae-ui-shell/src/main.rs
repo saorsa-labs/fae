@@ -9,7 +9,10 @@ use std::{
 };
 
 use menu::{MenuAction, OrbMenu};
-use protocol::{FaeUiState, SchedulerTask, ShellCommand, SkillSummary};
+use protocol::{
+    FaeUiState, SchedulerTask, SettingItem, SettingsCard, SettingsSection, ShellCommand,
+    SkillSummary,
+};
 use tao::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, Event, KeyEvent, MouseButton, WindowEvent},
@@ -89,6 +92,7 @@ enum WebPanelKind {
     BrowserData,
     Messages,
     Scheduler,
+    Settings,
     Skills,
 }
 
@@ -118,6 +122,8 @@ struct OrbUiModel {
     messages: Vec<TranscriptMessage>,
     scheduler_tasks: Vec<SchedulerTask>,
     skills: Vec<SkillSummary>,
+    settings_sections: Vec<SettingsSection>,
+    settings_cards: Vec<SettingsCard>,
 }
 
 impl OrbUiModel {
@@ -132,6 +138,8 @@ impl OrbUiModel {
             messages: Vec::new(),
             scheduler_tasks: Vec::new(),
             skills: Vec::new(),
+            settings_sections: Vec::new(),
+            settings_cards: Vec::new(),
         }
     }
 
@@ -169,6 +177,11 @@ impl OrbUiModel {
 
     fn set_skills(&mut self, skills: Vec<SkillSummary>) {
         self.skills = skills;
+    }
+
+    fn set_settings(&mut self, sections: Vec<SettingsSection>, cards: Vec<SettingsCard>) {
+        self.settings_sections = sections;
+        self.settings_cards = cards;
     }
 }
 
@@ -847,6 +860,10 @@ fn apply_bridge_command(
             orb_ui.thinking = thinking;
             refresh_messages_panels(web_panels, orb_ui);
         }
+        ShellCommand::SettingsSnapshot { sections, cards } => {
+            orb_ui.set_settings(sections, cards);
+            refresh_settings_panels(web_panels, orb_ui);
+        }
         ShellCommand::ShowMessages => {
             log::info!(
                 "show_messages bridge command ignored; Messages opens from orb-owned menu/button"
@@ -880,6 +897,10 @@ fn handle_menu_action(
     panel_proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
 ) {
     match action {
+        MenuAction::Settings => match open_settings_panel(target, orb_ui, panel_proxy) {
+            Ok(panel) => web_panels.push(panel),
+            Err(error) => log::error!("failed to open settings panel: {error}"),
+        },
         MenuAction::ShowMessages => match open_messages_panel(target, orb_ui, panel_proxy) {
             Ok(panel) => web_panels.push(panel),
             Err(error) => log::error!("failed to open messages panel: {error}"),
@@ -896,7 +917,7 @@ fn handle_menu_action(
             Ok(panel) => web_panels.push(panel),
             Err(error) => log::error!("failed to open skills panel: {error}"),
         },
-        MenuAction::HideFae | MenuAction::Quit | MenuAction::Stop => {}
+        MenuAction::SettingsLegacy | MenuAction::HideFae | MenuAction::Quit | MenuAction::Stop => {}
         other => {
             log::info!("stubbed Fae menu action: {other:?}");
         }
@@ -1166,6 +1187,10 @@ fn refresh_skills_panels(web_panels: &[WebPanel], orb_ui: &OrbUiModel) {
     refresh_panel_kind(web_panels, WebPanelKind::Skills, skills_html(orb_ui));
 }
 
+fn refresh_settings_panels(web_panels: &[WebPanel], orb_ui: &OrbUiModel) {
+    refresh_panel_kind(web_panels, WebPanelKind::Settings, settings_html(orb_ui));
+}
+
 fn messages_html(orb_ui: &OrbUiModel) -> String {
     // Status: a slim one-line chip. While waking it carries a progress bar;
     // once running it collapses to a quiet "● Ready · model" line; errors go
@@ -1380,6 +1405,225 @@ fn browser_data_html(orb_ui: &OrbUiModel) -> String {
         message = html_escape(&orb_ui.status_message),
         progress = html_escape(&progress),
         message_count = message_count
+    )
+}
+
+fn open_settings_panel(
+    target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
+    orb_ui: &OrbUiModel,
+    panel_proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
+) -> Result<WebPanel, Box<dyn Error>> {
+    let window = WindowBuilder::new()
+        .with_title("Fae Settings")
+        .with_inner_size(PhysicalSize::new(880, 680))
+        .with_decorations(true)
+        .with_always_on_top(true)
+        .with_focused(true)
+        .build(target)?;
+    window.set_focus();
+    let proxy = panel_proxy.clone();
+    let webview = WebViewBuilder::new()
+        .with_html(settings_html(orb_ui))
+        .with_ipc_handler(move |request| {
+            if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone())) {
+                log::warn!("failed to forward settings panel IPC: {error}");
+            }
+        })
+        .build(&window)?;
+    window.set_focus();
+    Ok(WebPanel {
+        kind: WebPanelKind::Settings,
+        window,
+        webview,
+    })
+}
+
+fn settings_html(orb_ui: &OrbUiModel) -> String {
+    let sections = if orb_ui.settings_sections.is_empty() {
+        "<section class='card'><h2>Waiting for settings</h2><p class='muted'>The Swift host has not sent a settings snapshot yet.</p></section>".to_string()
+    } else {
+        orb_ui
+            .settings_sections
+            .iter()
+            .map(settings_section_html)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let cards = if orb_ui.settings_cards.is_empty() {
+        String::new()
+    } else {
+        orb_ui
+            .settings_cards
+            .iter()
+            .map(settings_card_html)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        r#"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>
+:root{{color-scheme:dark;--bg:#0F1013;--panel:#1A1820;--panel2:#221F28;--text:#CEC4DC;--soft:#9A90A8;--cream:#E8DED2;--gold:#E6C05A;--glen:#8FB8A2;--berry:#C4788A}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:linear-gradient(135deg,#0F1013 0%,#18151D 52%,#221F28 100%);color:var(--text);font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}
+main{{min-height:100vh;padding:28px;display:grid;gap:18px}}
+header{{border:1px solid rgba(180,168,196,.24);border-radius:22px;padding:24px;background:#1A1820;box-shadow:0 24px 80px rgba(0,0,0,.38)}}
+h1{{margin:0 0 8px;font:42px 'Instrument Serif',Georgia,serif;color:var(--cream);letter-spacing:.01em}}
+.lede{{margin:0;color:var(--soft);line-height:1.55;max-width:760px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;align-items:start}}
+.card{{border:1px solid rgba(180,168,196,.22);border-radius:18px;background:#1A1820;padding:18px;box-shadow:0 18px 48px rgba(0,0,0,.28)}}
+h2{{margin:0 0 6px;font:27px 'Instrument Serif',Georgia,serif;color:var(--cream)}}
+h3{{margin:0 0 5px;font-size:14px;color:var(--text)}}
+p{{margin:0;line-height:1.5}}.muted{{color:var(--soft)}}
+.setting{{display:grid;grid-template-columns:1fr minmax(120px,190px);gap:14px;align-items:center;padding:13px 0;border-top:1px solid rgba(255,255,255,.07)}}
+.setting:first-of-type{{border-top:0}}
+.desc{{font-size:12px;color:var(--soft)}}
+input,select{{width:100%;border:1px solid rgba(180,168,196,.30);border-radius:10px;background:#0F1013;color:var(--text);padding:8px 10px;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none}}
+input:focus,select:focus{{border-color:rgba(230,192,90,.68);box-shadow:0 0 0 3px rgba(230,192,90,.10)}}
+input[type='checkbox']{{width:22px;height:22px;justify-self:end;accent-color:var(--gold)}}
+.number-control{{display:grid;grid-template-columns:34px 1fr 34px;gap:6px;align-items:center}}
+.stepper{{border-radius:10px;padding:8px 0;line-height:1;color:var(--cream);background:rgba(230,192,90,.10)}}
+.unit{{font-size:11px;color:var(--soft);margin-top:4px;text-align:right}}
+.info-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}}
+.info{{border:1px solid rgba(143,184,162,.24);border-radius:16px;padding:15px;background:#17201D}}
+.info h3{{color:#DDE8E1}}.info .detail{{margin-top:8px;font-size:12px;color:#A9BFB4}}
+button{{border:1px solid rgba(230,192,90,.48);border-radius:999px;background:rgba(230,192,90,.14);color:var(--gold);padding:8px 13px;font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer}}
+.toolbar{{display:flex;gap:10px;align-items:center;justify-content:flex-end}}
+@media(max-width:640px){{main{{padding:18px}}.setting{{grid-template-columns:1fr}}input[type='checkbox']{{justify-self:start}}}}
+</style></head><body><main>
+<header><h1>Fae Settings</h1><p class='lede'>Orb-owned settings for the adjustable runtime surface. Changes are sent to Swift through the bridge and persisted by FaeCore. Capability showcases below are informational cards, not authority toggles.</p></header>
+<div class='toolbar'><button onclick='requestSnapshot()'>Refresh from Swift</button></div>
+<div class='grid'>{sections}</div>
+<section class='card'><h2>Always-on capabilities</h2><div class='info-grid'>{cards}</div></section>
+<script>
+function post(obj){{window.ipc.postMessage(JSON.stringify(obj));}}
+function requestSnapshot(){{post({{type:'settings_request_snapshot'}});}}
+function sendSetting(el){{
+  const key = el.dataset.key;
+  if (!key || el.disabled) return;
+  const value = el.type === 'checkbox' ? String(el.checked) : String(el.value);
+  post({{type:'settings_set', key, value}});
+}}
+function stepSetting(button){{
+  const key = button.dataset.stepKey;
+  const input = document.querySelector(`[data-key="${{key}}"]`);
+  if (!input || input.disabled) return;
+  const step = Number.parseFloat(button.dataset.step || input.step || '1');
+  const direction = Number.parseFloat(button.dataset.direction || '0');
+  const min = input.min === '' ? Number.NEGATIVE_INFINITY : Number.parseFloat(input.min);
+  const max = input.max === '' ? Number.POSITIVE_INFINITY : Number.parseFloat(input.max);
+  const current = Number.parseFloat(input.value || '0');
+  const decimals = Math.max(0, ((input.step || '').split('.')[1] || '').length);
+  const next = Math.min(max, Math.max(min, current + step * direction));
+  input.value = next.toFixed(decimals);
+  sendSetting(input);
+}}
+document.querySelectorAll('[data-key]').forEach((el)=>{{el.addEventListener('change',()=>sendSetting(el));}});
+document.querySelectorAll('[data-step-key]').forEach((el)=>{{el.addEventListener('click',()=>stepSetting(el));}});
+</script></main></body></html>"#,
+        sections = sections,
+        cards = cards
+    )
+}
+
+fn settings_section_html(section: &SettingsSection) -> String {
+    let description = section
+        .description
+        .as_deref()
+        .map(|text| format!("<p class='muted'>{}</p>", html_escape(text)))
+        .unwrap_or_default();
+    let controls = section
+        .settings
+        .iter()
+        .map(setting_item_html)
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "<section class='card' data-section='{id}'><h2>{title}</h2>{description}{controls}</section>",
+        id = html_escape(&section.id),
+        title = html_escape(&section.title),
+        description = description,
+        controls = controls
+    )
+}
+
+fn setting_item_html(setting: &SettingItem) -> String {
+    let control = setting_control_html(setting);
+    format!(
+        "<div class='setting'><div><h3>{title}</h3><p class='desc'>{description}</p></div><div>{control}{unit}</div></div>",
+        title = html_escape(&setting.title),
+        description = html_escape(&setting.description),
+        control = control,
+        unit = setting
+            .unit
+            .as_deref()
+            .map(|unit| format!("<div class='unit'>{}</div>", html_escape(unit)))
+            .unwrap_or_default()
+    )
+}
+
+fn setting_control_html(setting: &SettingItem) -> String {
+    let key = html_escape(&setting.key);
+    let value = html_escape(&setting.value);
+    let disabled = if setting.read_only.unwrap_or(false) {
+        " disabled"
+    } else {
+        ""
+    };
+    match setting.kind.as_str() {
+        "select" => {
+            let options = setting
+                .options
+                .as_ref()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|option| {
+                            let selected = if option.value == setting.value {
+                                " selected"
+                            } else {
+                                ""
+                            };
+                            format!(
+                                "<option value='{value}'{selected}>{label}</option>",
+                                value = html_escape(&option.value),
+                                selected = selected,
+                                label = html_escape(&option.label)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .unwrap_or_default();
+            format!("<select data-key='{key}'{disabled}>{options}</select>")
+        }
+        "bool" => {
+            let checked = if setting.value == "true" { " checked" } else { "" };
+            format!("<input data-key='{key}' type='checkbox'{checked}{disabled}>")
+        }
+        "number" | "int" => format!(
+            "<div class='number-control'><button class='stepper' type='button' data-step-key='{key}' data-step='{step}' data-direction='-1'{disabled}>−</button><input data-key='{key}' type='number' value='{value}' min='{min}' max='{max}' step='{step}'{disabled}><button class='stepper' type='button' data-step-key='{key}' data-step='{step}' data-direction='1'{disabled}>+</button></div>",
+            min = html_escape(setting.min.as_deref().unwrap_or("")),
+            max = html_escape(setting.max.as_deref().unwrap_or("")),
+            step = html_escape(setting.step.as_deref().unwrap_or("1"))
+        ),
+        "readonly" => format!("<input value='{value}' disabled>"),
+        _ => format!("<input data-key='{key}' value='{value}'{disabled}>"),
+    }
+}
+
+fn settings_card_html(card: &SettingsCard) -> String {
+    let detail = card
+        .detail
+        .as_deref()
+        .map(|text| format!("<p class='detail'>{}</p>", html_escape(text)))
+        .unwrap_or_default();
+    format!(
+        "<article class='info'><h3>{title}</h3><p>{body}</p>{detail}</article>",
+        title = html_escape(&card.title),
+        body = html_escape(&card.body),
+        detail = detail
     )
 }
 

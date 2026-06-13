@@ -2,6 +2,17 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Skills-first cross-platform P3
+
+### New Features
+- Added an orb-owned Settings panel in `fae-ui-shell` with `settings_snapshot` / `settings_set` bridge sync to Swift `FaeCore.patchConfig`.
+- Added adjustable Settings controls for tool access, thinking depth, LLM temperature, TTS speed, awareness cadence, and privacy posture, plus informational always-on capability cards.
+- Kept the SwiftUI Settings window available as **Settings (legacy)…** during parity migration.
+
+### Tests
+- Added Rust bridge protocol coverage for `settings_snapshot` and the legacy settings menu action.
+- Live-verified panel-driven `tts.speed` persistence plus Right Option and orb long-press PTT regressions.
+
 ## Unreleased — Skills-first cross-platform P2
 
 ### New Features

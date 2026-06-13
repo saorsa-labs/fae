@@ -946,6 +946,214 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
+    // MARK: - Orb Settings Snapshot
+
+    func settingsSnapshot() -> [String: Any] {
+        [
+            "sections": [
+                Self.settingsSection(
+                    id: "conversation",
+                    title: "Conversation",
+                    description: "Access and reasoning controls for future turns.",
+                    settings: [
+                        Self.setting(
+                            key: "tool_mode",
+                            title: "Tool access",
+                            description: "Assistant mode is read-mostly. Full mode enables Fae's normal owner-gated tool surface.",
+                            kind: "select",
+                            value: config.toolMode,
+                            options: [
+                                Self.option("assistant", "Assistant"),
+                                Self.option("full", "Full"),
+                            ]
+                        ),
+                        Self.setting(
+                            key: "llm.thinking_level",
+                            title: "Thinking depth",
+                            description: "Fast minimizes deliberate reasoning; deep gives Fae more room for hard work.",
+                            kind: "select",
+                            value: config.llm.resolvedThinkingLevel.rawValue,
+                            options: [
+                                Self.option(FaeThinkingLevel.fast.rawValue, "Fast"),
+                                Self.option(FaeThinkingLevel.balanced.rawValue, "Balanced"),
+                                Self.option(FaeThinkingLevel.deep.rawValue, "Deep"),
+                            ]
+                        ),
+                        Self.setting(
+                            key: "llm.temperature",
+                            title: "Temperature",
+                            description: "Higher values make wording more varied; lower values are steadier.",
+                            kind: "number",
+                            value: Self.decimal(config.llm.temperature),
+                            min: "0.3",
+                            max: "1.0",
+                            step: "0.05"
+                        ),
+                    ]
+                ),
+                Self.settingsSection(
+                    id: "voice",
+                    title: "Voice",
+                    description: "Speech playback controls for Kokoro/Fae voice output.",
+                    settings: [
+                        Self.setting(
+                            key: "tts.speed",
+                            title: "Playback speed",
+                            description: "Adjust how quickly Fae speaks.",
+                            kind: "number",
+                            value: Self.decimal(config.tts.speed),
+                            min: "0.7",
+                            max: "1.4",
+                            step: "0.05",
+                            unit: "×"
+                        ),
+                        Self.setting(
+                            key: "tts.voice",
+                            title: "Voice",
+                            description: "Current named voice profile.",
+                            kind: "readonly",
+                            value: config.tts.voice,
+                            readOnly: true
+                        ),
+                    ]
+                ),
+                Self.settingsSection(
+                    id: "awareness",
+                    title: "Awareness cadence",
+                    description: "Intensity controls for proactive camera and screen observation.",
+                    settings: [
+                        Self.setting(
+                            key: "awareness.camera_interval_seconds",
+                            title: "Camera interval",
+                            description: "How often Fae checks presence when awareness is active.",
+                            kind: "select",
+                            value: String(config.awareness.cameraIntervalSeconds),
+                            options: [Self.option("10", "10s"), Self.option("30", "30s"), Self.option("60", "60s"), Self.option("120", "120s")]
+                        ),
+                        Self.setting(
+                            key: "awareness.screen_interval_seconds",
+                            title: "Screen interval",
+                            description: "How often Fae refreshes silent screen context.",
+                            kind: "select",
+                            value: String(config.awareness.screenIntervalSeconds),
+                            options: [Self.option("10", "10s"), Self.option("19", "19s"), Self.option("30", "30s"), Self.option("60", "60s")]
+                        ),
+                        Self.setting(
+                            key: "awareness.pause_on_battery",
+                            title: "Pause on battery",
+                            description: "Reduce background observation while unplugged.",
+                            kind: "bool",
+                            value: config.awareness.pauseOnBattery ? "true" : "false"
+                        ),
+                        Self.setting(
+                            key: "awareness.pause_on_thermal_pressure",
+                            title: "Pause when Mac is hot",
+                            description: "Pause lower-priority observations during thermal pressure.",
+                            kind: "bool",
+                            value: config.awareness.pauseOnThermalPressure ? "true" : "false"
+                        ),
+                    ]
+                ),
+                Self.settingsSection(
+                    id: "privacy",
+                    title: "Privacy posture",
+                    description: "Local-first network policy for future tasks.",
+                    settings: [
+                        Self.setting(
+                            key: "privacy.mode",
+                            title: "Mode",
+                            description: "Strict local avoids remote services; connected allows approved network tools.",
+                            kind: "select",
+                            value: config.privacy.mode,
+                            options: [
+                                Self.option("strict_local", "Strict local"),
+                                Self.option("local_preferred", "Local preferred"),
+                                Self.option("connected", "Connected"),
+                            ]
+                        ),
+                    ]
+                ),
+            ],
+            "cards": [
+                Self.settingsCard(
+                    title: "Local voice spine",
+                    body: "Push-to-talk capture, Gemma audio turns, and Kokoro playback run through the local daemon path.",
+                    detail: "The Swift audio lane remains available while the portable lane matures."
+                ),
+                Self.settingsCard(
+                    title: "Owner-gated tools",
+                    body: "Fae's tools remain governed by existing approval, audit, and reversal systems.",
+                    detail: "This panel does not expose per-tool authority toggles."
+                ),
+                Self.settingsCard(
+                    title: "Portable skills",
+                    body: "Mail, CalDAV, and CardDAV skills extend Fae without replacing Apple-local integrations.",
+                    detail: "Secrets stay in Keychain and are injected only at execution time."
+                ),
+                Self.settingsCard(
+                    title: "Memory and receipts",
+                    body: "Memory, action receipts, and backups continue to be handled by the Swift runtime.",
+                    detail: "Use the legacy Settings window for surfaces not yet represented here."
+                ),
+            ],
+        ]
+    }
+
+    private static func settingsSection(
+        id: String,
+        title: String,
+        description: String,
+        settings: [[String: Any]]
+    ) -> [String: Any] {
+        [
+            "id": id,
+            "title": title,
+            "description": description,
+            "settings": settings,
+        ]
+    }
+
+    private static func setting(
+        key: String,
+        title: String,
+        description: String,
+        kind: String,
+        value: String,
+        options: [[String: String]]? = nil,
+        min: String? = nil,
+        max: String? = nil,
+        step: String? = nil,
+        unit: String? = nil,
+        readOnly: Bool = false
+    ) -> [String: Any] {
+        var object: [String: Any] = [
+            "key": key,
+            "title": title,
+            "description": description,
+            "kind": kind,
+            "value": value,
+            "read_only": readOnly,
+        ]
+        if let options { object["options"] = options }
+        if let min { object["min"] = min }
+        if let max { object["max"] = max }
+        if let step { object["step"] = step }
+        if let unit { object["unit"] = unit }
+        return object
+    }
+
+    private static func option(_ value: String, _ label: String) -> [String: String] {
+        ["value": value, "label": label]
+    }
+
+    private static func settingsCard(title: String, body: String, detail: String) -> [String: Any] {
+        ["title": title, "body": body, "detail": detail]
+    }
+
+    private static func decimal(_ value: Float) -> String {
+        String(format: "%.2f", Double(value))
+    }
+
     // MARK: - HostCommandSender Conformance
 
     /// Handles commands from `HostCommandBridge`, Settings tabs, and relay server.
@@ -2779,6 +2987,11 @@ final class FaeCore: ObservableObject, HostCommandSender {
         do {
             try config.save()
             NSLog("FaeCore: config persisted (%@)", reason)
+            NotificationCenter.default.post(
+                name: .faeSettingsChanged,
+                object: nil,
+                userInfo: ["reason": reason]
+            )
             // Fast config-only vault backup.
             if let vault = vaultManager {
                 Task.detached(priority: .utility) {
@@ -3143,4 +3356,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
             return ["payload": [:] as [String: Any]]
         }
     }
+}
+
+extension Notification.Name {
+    static let faeSettingsChanged = Notification.Name("faeSettingsChanged")
 }
