@@ -9,6 +9,8 @@ fail=0
 echo "[guard-no-rust] checking active CI workflows for rust/cargo reintroduction..."
 for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
   [ -e "$wf" ] || continue
+  # Explicit Rust workflow exemptions are filename-coupled: if one of these
+  # workflows is renamed, update this allowlist in the same commit.
   case "$(basename "$wf")" in
     linux-render-spike.yml|linux-render-spike.yaml)
       echo "[guard-no-rust] allowing explicit Linux render-spike Rust workflow: $wf"

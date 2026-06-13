@@ -80,6 +80,7 @@ struct CaptureSession {
 /// Shared daemon audio manager. Public methods are thread-safe; all cpal
 /// streams live on a dedicated worker thread because CoreAudio streams are not
 /// `Send` on macOS.
+#[derive(Clone)]
 pub struct AudioManager {
     tx: mpsc::Sender<AudioRequest>,
 }
