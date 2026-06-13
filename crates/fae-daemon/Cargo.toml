@@ -12,6 +12,7 @@ name = "fae-daemon"
 path = "src/main.rs"
 
 [dependencies]
+fae-audio = { path = "../fae-audio" }
 fae-control-plane = { path = "../fae-control-plane" }
 fae-envelope-gate = { path = "../fae-envelope-gate" }
 fae-engine = { path = "../fae-engine" }

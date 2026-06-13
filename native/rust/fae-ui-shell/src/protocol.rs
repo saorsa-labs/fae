@@ -47,6 +47,10 @@ pub enum ShellCommand {
         access: String,
         thinking: String,
     },
+    SettingsSnapshot {
+        sections: Vec<SettingsSection>,
+        cards: Vec<SettingsCard>,
+    },
     ClearConversation,
     ShowMessages,
     Show,
@@ -73,6 +77,42 @@ pub struct SkillSummary {
     pub tier: String,
     pub enabled: bool,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsSection {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub settings: Vec<SettingItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingItem {
+    pub key: String,
+    pub title: String,
+    pub description: String,
+    pub kind: String,
+    pub value: String,
+    pub options: Option<Vec<SettingOption>>,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub step: Option<String>,
+    pub unit: Option<String>,
+    pub read_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsCard {
+    pub title: String,
+    pub body: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,6 +206,32 @@ mod tests {
         // S18: plain left-click on the orb body emits this to the Swift host.
         let encoded = encode_menu_action(MenuAction::TalkToggle)?;
         assert_eq!(encoded, r#"{"type":"menu","action":"talk_toggle"}"#);
+        Ok(())
+    }
+
+    #[test]
+    fn encodes_legacy_settings_event() -> Result<(), serde_json::Error> {
+        let encoded = encode_menu_action(MenuAction::SettingsLegacy)?;
+        assert_eq!(encoded, r#"{"type":"menu","action":"settings_legacy"}"#);
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_settings_snapshot() -> Result<(), serde_json::Error> {
+        let command: ShellCommand = serde_json::from_str(
+            r#"{"type":"settings_snapshot","sections":[{"id":"voice","title":"Voice","description":"Speech","settings":[{"key":"tts.speed","title":"Speed","description":"Playback speed","kind":"number","value":"1.1","options":null,"min":"0.7","max":"1.4","step":"0.05","unit":"×","read_only":false}]}],"cards":[{"title":"Local first","body":"Everything stays on this Mac","detail":null}]}"#,
+        )?;
+        let decoded = match command {
+            ShellCommand::SettingsSnapshot { sections, cards } => {
+                sections.len() == 1
+                    && sections[0].settings.len() == 1
+                    && sections[0].settings[0].key == "tts.speed"
+                    && cards.len() == 1
+                    && cards[0].title == "Local first"
+            }
+            _ => false,
+        };
+        assert!(decoded);
         Ok(())
     }
 }

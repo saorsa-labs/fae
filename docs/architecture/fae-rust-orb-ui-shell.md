@@ -94,7 +94,8 @@ The renderer uses `ControlFlow::Poll` only while active and `ControlFlow::Wait` 
 
 Menu items include:
 
-- Settings…
+- Settings… (Rust/wry panel)
+- Settings (legacy)… (SwiftUI fallback during parity migration)
 - Open Browser/Data Panel
 - Reset Conversation
 - Hide Fae
@@ -110,9 +111,11 @@ Menu items include:
 - Rescue Mode…
 - Quit Fae
 
-Only a subset has live POC behavior today. The rest are bridge stubs.
+Settings, Messages, Scheduler, and Skills now have live orb-owned panel behavior. The remaining menu items are bridge stubs or Swift-backed actions.
 
-### Webview panel
+### Webview panels
+
+`Settings…` opens an opaque `wry` panel owned by the Rust shell. Swift sends a structured `settings_snapshot`; the panel sends `settings_set { key, value }` back to the Swift bridge, which validates/coerces and persists through `FaeCore.patchConfig()`. `Settings (legacy)…` keeps the previous SwiftUI window available until parity is complete. On Linux, panels are built through `WebViewBuilderExtUnix::build_gtk` against tao's GTK container; the generic `build(&window)` path compiled but rendered blank under Xvfb.
 
 `Open Browser/Data Panel` opens a `wry` webview with placeholder sections for charts, video/rich media, and tools/permissions. This proves the new rule: rich output belongs in browser/webview panels, not in a custom canvas.
 
@@ -131,6 +134,7 @@ status    -> startup/error/status appears through the orb while non-ready, inclu
 conversation -> transcript entries are stored by the orb host for the Messages affordance and live-refreshed panels
 scheduler_snapshot -> scheduler tasks/statuses populate the orb-owned Scheduler panel
 skills_snapshot -> skill inventory/statuses populate the orb-owned Skills panel
+settings_snapshot -> settings sections/cards populate the orb-owned Settings panel
 ```
 
 Example JSONL commands:
@@ -140,12 +144,14 @@ Example JSONL commands:
 {"type":"conversation","role":"user","text":"Hello Fae"}
 {"type":"conversation","role":"fae","text":"Hello — I’m here."}
 {"type":"show_messages"}
+{"type":"settings_snapshot","sections":[],"cards":[]}
 ```
 
 ### Shell menu -> runtime command
 
 ```text
 settings
+settings_legacy
 open_browser_data_panel
 reset_conversation
 hide_fae
@@ -178,7 +184,7 @@ Possible future transports if needed:
 The Swift app remains the authoritative live implementation for now and launches the Rust orb host when a bundled or configured binary is available:
 
 - voice pipeline
-- settings
+- settings persistence and legacy Settings fallback
 - permissions/onboarding
 - memory
 - scheduler runtime
@@ -188,11 +194,11 @@ The Swift app remains the authoritative live implementation for now and launches
 
 The Swift bridge resolves the orb host from `FAE_UI_SHELL_BIN`, then from `Fae.app/Contents/MacOS/fae-ui-shell`, then from the local development target path. Shell-enabled bundle recipes copy/sign the Rust binary into the app bundle when it has been built explicitly.
 
-The Swift UI should be treated as legacy/migration source. Do not add new product UI surfaces to canvas, and do not restore Cowork as a product surface. Scheduler/Skills product entry points stay orb-owned while their backing runtime remains Swift; Swift sends compact snapshots over the bridge to populate those panels.
+The Swift UI should be treated as legacy/migration source. Do not add new product UI surfaces to canvas, and do not restore Cowork as a product surface. Settings/Scheduler/Skills product entry points stay orb-owned while their backing runtime remains Swift; Swift sends compact snapshots over the bridge to populate those panels.
 
 ## Cross-platform notes
 
-`wgpu` supports the orb renderer on modern desktop and mobile GPU APIs. `tao`, `muda`, and `wry` cover desktop shell/menu/webview behavior; mobile packaging and lifecycle need dedicated follow-up work.
+`wgpu` supports the orb renderer on modern desktop and mobile GPU APIs. `tao`, `muda`, and `wry` cover desktop shell/menu/webview behavior; mobile packaging and lifecycle need dedicated follow-up work. The P4 Linux render spike passed for the opaque Settings panel on Ubuntu/WebKitGTK/Xvfb with a screenshot artifact and color-count guard; transparent pill behavior remains compositor-sensitive and should not be used as the Linux go/no-go criterion.
 
 For a full cross-platform product shell, compare:
 

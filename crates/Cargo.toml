@@ -8,6 +8,7 @@ members = [
   "fae-control-plane",
   "fae-envelope-gate",
   "fae-engine",
+  "fae-audio",
   "fae-daemon",
 ]
 

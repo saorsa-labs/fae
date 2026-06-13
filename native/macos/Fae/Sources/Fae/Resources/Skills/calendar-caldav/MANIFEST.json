@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "calendar",
+    "personal_data"
+  ],
+  "riskTier": "high",
+  "timeoutSeconds": 180,
+  "allowNetwork": true,
+  "allowSubprocess": false,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "b44cdad6db7a0cb827b626450bbe3df6dd16a7d29364760b9b5bc9dae78574f2",
+      "scripts/calendar_caldav.py": "f74cf06584c703b455f0d7eb1bc57e29d9a7309e14f0eb3e8a752816a4d455ed"
+    },
+    "signature": null
+  }
+}

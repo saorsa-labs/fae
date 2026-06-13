@@ -1,0 +1,14 @@
+[package]
+name = "fae-audio"
+version = "0.1.0"
+description = "Portable audio capture/playback spine for fae-daemon."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+cpal = "0.15"
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -187,8 +187,12 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "host.ping" | "host.version" | "runtime.status" => &[Scope::StatusRead],
         "conversation.inject_text" => &[Scope::ConversationWrite],
         "conversation.subscribe" => &[Scope::ConversationRead],
-        "audio.start_capture" | "audio.stop_capture" => &[Scope::AudioCapture],
-        "audio.playback_control" => &[Scope::AudioPlayback],
+        "audio.capture_start"
+        | "audio.capture_stop"
+        | "audio.start_capture"
+        | "audio.stop_capture" => &[Scope::AudioCapture],
+        "audio.devices" => &[Scope::StatusRead],
+        "audio.play" | "audio.playback_control" => &[Scope::AudioPlayback],
         // S19: daemon-side Kokoro TTS — synthesis produces playback audio.
         "tts.synthesize" => &[Scope::AudioPlayback],
         "memory.search" => &[Scope::MemoryRead],
@@ -228,6 +232,7 @@ impl ClientClass {
                     Scope::StatusRead,
                     Scope::ConversationWrite,
                     Scope::ConversationRead,
+                    Scope::AudioCapture,
                     Scope::AudioPlayback,
                 ]
             }
@@ -805,6 +810,41 @@ mod tests {
     }
 
     #[test]
+    fn audio_commands_use_capture_playback_and_status_scopes() {
+        let capture = client(&[Scope::AudioCapture], 1000, None);
+        assert_eq!(
+            authorize(&capture, &cmd("audio.capture_start"), 10),
+            AuthzDecision::Allow
+        );
+        assert_eq!(
+            authorize(&capture, &cmd("audio.capture_stop"), 10),
+            AuthzDecision::Allow
+        );
+        assert_eq!(
+            authorize(&capture, &cmd("audio.play"), 10),
+            AuthzDecision::Deny(DenyReason::MissingScope)
+        );
+        assert_eq!(
+            authorize(&capture, &cmd("audio.start_capture"), 10),
+            AuthzDecision::Allow
+        );
+        let playback = client(&[Scope::AudioPlayback], 1000, None);
+        assert_eq!(
+            authorize(&playback, &cmd("audio.play"), 10),
+            AuthzDecision::Allow
+        );
+        assert_eq!(
+            authorize(&playback, &cmd("audio.playback_control"), 10),
+            AuthzDecision::Allow
+        );
+        let status = client(&[Scope::StatusRead], 1000, None);
+        assert_eq!(
+            authorize(&status, &cmd("audio.devices"), 10),
+            AuthzDecision::Allow
+        );
+    }
+
+    #[test]
     fn host_validation_rejects_rebind_and_lan() {
         assert!(host_header_allowed("127.0.0.1:12700", 12700));
         assert!(host_header_allowed("[::1]:12700", 12700));
@@ -1023,13 +1063,13 @@ mod tests {
     }
 
     #[test]
-    fn default_scopes_are_conservative() {
+    fn default_scopes_include_frontend_voice_lane_but_not_sensitive_tools() {
         assert!(ClientClass::X0xPeerBridge.default_scopes().is_empty());
-        assert!(!ClientClass::SwiftFrontend
-            .default_scopes()
-            .contains(&Scope::AudioCapture));
-        assert!(ClientClass::SwiftFrontend
-            .default_scopes()
-            .contains(&Scope::ConversationWrite));
+        let frontend = ClientClass::SwiftFrontend.default_scopes();
+        assert!(frontend.contains(&Scope::AudioCapture));
+        assert!(frontend.contains(&Scope::AudioPlayback));
+        assert!(frontend.contains(&Scope::ConversationWrite));
+        assert!(!frontend.contains(&Scope::ToolExecuteDangerous));
+        assert!(!frontend.contains(&Scope::MemoryWrite));
     }
 }

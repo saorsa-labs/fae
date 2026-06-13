@@ -1,12 +1,13 @@
 # Fae — Current State
 
 > What fae actually is today, not what was planned.
-> Last updated: 2026-04-07
+> Last updated: 2026-06-13
 
 ## Tech Stack (v0.8.189)
 
-- **Language**: Pure Swift (no Rust, no C bindings)
-- **UI**: SwiftUI + AppKit
+- **Primary runtime language**: Swift macOS app (no embedded Rust core / C ABI in the active runtime path)
+- **Portable UI shell**: Rust `fae-ui-shell` for the canonical orb, whisper pill, Messages/Scheduler/Skills panels, and the new orb-owned Settings panel; Ubuntu WebKitGTK CI now proves the opaque Settings panel renders under Xvfb
+- **UI**: Rust orb host for new product surfaces; SwiftUI + AppKit remain as migration/legacy surfaces including Settings (legacy)
 - **ML Framework**: MLX (Apple Silicon, on-device only)
 - **Database**: SQLite via GRDB + sqlite-vec (ANN) + FTS5
 - **Update**: Sparkle 2 (EdDSA signed)
@@ -42,7 +43,8 @@ Gemma 4 E4B benchmarked 2026-04-02: 100% tool calling, 100% Fae capability, 100%
 ## Key Capabilities
 
 - **37 built-in tools** (bash, calendar, mail, web_search, screenshot, click, etc.)
-- **29 built-in skills** (voice-identity, forge, toolbox, channels, training-orchestrator, etc.)
+- **30 built-in skills** (forge, toolbox, channels, training-orchestrator, mail-himalaya, CalDAV/CardDAV productivity, etc.)
+- **Orb-owned Settings panel** (Rust/wry): bridge-synced settings snapshot/set controls for tool access, thinking, temperature, TTS speed, awareness cadence, and privacy posture; Linux panels use `build_gtk` and have a CI screenshot artifact guard
 - **~23 scheduled tasks** (memory reflection, overnight research, morning briefing, etc.)
 - **Memory**: hybrid ANN (60%) + FTS5 (40%) search, entity graph (persons/orgs/locations)
 - **Self-improvement**: implicit feedback → meta-optimization (directive, config, skills, memory seeds via hill-climbing) → SFT/DPO export → LoRA training → evaluation → deploy

@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use fae_audio::AudioManager;
 use fae_control_plane::{
     append_audit_jsonl, host_header_allowed, origin_allowed, AuditDecision, AuditEvent, AuthError,
     ClientRecord, ClientRegistry, ConsumedTicket, Response as CpResponse, Scope, TicketStore,
@@ -31,7 +32,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use crate::session::{handle_frame, session_from_ticket, SessionState};
+use crate::session::{handle_frame, session_from_ticket, SessionBackends, SessionState};
 use crate::{next_event_id, now_ms};
 
 /// WS stream endpoints live under this prefix; the full path is the ticket's
@@ -53,6 +54,7 @@ pub struct DiagnosticState {
     pub registry: Arc<ClientRegistry>,
     pub engine: Arc<dyn ProviderAdapter>,
     pub tts: Arc<dyn TtsAdapter>,
+    pub audio: Arc<AudioManager>,
     pub tickets: Arc<Mutex<TicketStore>>,
     pub audit_path: PathBuf,
     pub port: u16,
@@ -399,6 +401,7 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
         &state.registry,
         state.engine.as_ref(),
         state.tts.as_ref(),
+        state.audio.as_ref(),
         &state.audit_path,
     )
     .await
@@ -410,6 +413,7 @@ async fn ws_message_loop(
     registry: &ClientRegistry,
     engine: &dyn ProviderAdapter,
     tts: &dyn TtsAdapter,
+    audio: &AudioManager,
     audit_path: &Path,
 ) -> std::io::Result<()> {
     while let Some(message) = ws.next().await {
@@ -424,7 +428,8 @@ async fn ws_message_loop(
         }
         let now = now_ms();
         let event_id = next_event_id(now);
-        let outcome = handle_frame(registry, engine, tts, &mut session, line, now, event_id).await;
+        let backends = SessionBackends { engine, tts, audio };
+        let outcome = handle_frame(registry, &backends, &mut session, line, now, event_id).await;
 
         // Same fail-closed audit contract as the Unix socket: no response before
         // the frame is durably audited.

@@ -19,6 +19,7 @@ final class RustUiShellController {
     weak var faeCore: FaeCore?
 
     var onSettings: (() -> Void)?
+    var onSettingsLegacy: (() -> Void)?
     var onResetConversation: (() -> Void)?
     /// Plain left-click on the orb body (S18 push-to-talk toggle).
     var onTalkToggle: (() -> Void)?
@@ -151,6 +152,7 @@ final class RustUiShellController {
         sendStateForCurrentOrbMode()
         sendRuntimeStatus()
         sendControlsSnapshot()
+        sendSettingsSnapshot()
         sendConversationSnapshot()
         refreshWorkspaceSnapshot()
     }
@@ -271,6 +273,14 @@ final class RustUiShellController {
             .removeDuplicates()
             .sink { [weak self] _ in
                 self?.sendControlsSnapshot()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .faeSettingsChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.sendControlsSnapshot()
+                self?.sendSettingsSnapshot()
             }
             .store(in: &cancellables)
 
@@ -405,6 +415,20 @@ final class RustUiShellController {
         ])
     }
 
+    private func sendSettingsSnapshot() {
+        guard let faeCore else { return }
+        var snapshot = faeCore.settingsSnapshot()
+        snapshot["type"] = "settings_snapshot"
+        send(snapshot)
+        let sectionCount = (snapshot["sections"] as? [[String: Any]])?.count ?? 0
+        let cardCount = (snapshot["cards"] as? [[String: Any]])?.count ?? 0
+        NSLog(
+            "RustUiShellController: settings_snapshot sent sections=%d cards=%d",
+            sectionCount,
+            cardCount
+        )
+    }
+
     private func sendConversationSnapshot(_ messages: [ChatMessage]? = nil) {
         send(["type": "clear_conversation"])
         let snapshot = (messages ?? conversation?.messages ?? []).suffix(40)
@@ -490,8 +514,60 @@ final class RustUiShellController {
             Task { @MainActor in
                 faeCore.setThinkingLevel(level)
             }
+        case "settings_request_snapshot":
+            sendSettingsSnapshot()
+        case "settings_set":
+            guard let key = event.key, let value = event.value else {
+                NSLog("RustUiShellController: settings_set missing key/value")
+                return
+            }
+            NSLog("RustUiShellController: settings_set received key=%@", key)
+            applySettingsPanelValue(key: key, rawValue: value)
         default:
             NSLog("RustUiShellController: unknown shell event type %@", event.type)
+        }
+    }
+
+    private func applySettingsPanelValue(key: String, rawValue: String) {
+        guard let faeCore else { return }
+        guard let value = Self.coerceSettingsPanelValue(key: key, rawValue: rawValue) else {
+            NSLog("RustUiShellController: rejected settings_set key=%@ value=%@", key, rawValue)
+            sendSettingsSnapshot()
+            return
+        }
+        faeCore.patchConfig(key: key, payload: ["value": value])
+        NSLog("RustUiShellController: settings_set applied key=%@", key)
+        sendSettingsSnapshot()
+    }
+
+    private static func coerceSettingsPanelValue(key: String, rawValue: String) -> Any? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch key {
+        case "tool_mode":
+            let migrated = FaeConfig.migrateToolMode(trimmed)
+            return ["assistant", "full"].contains(migrated) ? migrated : nil
+        case "llm.thinking_level":
+            return FaeThinkingLevel(rawValue: trimmed)?.rawValue
+        case "privacy.mode":
+            return ["strict_local", "local_preferred", "connected"].contains(trimmed) ? trimmed : nil
+        case "awareness.pause_on_battery", "awareness.pause_on_thermal_pressure":
+            if trimmed == "true" { return true }
+            if trimmed == "false" { return false }
+            return nil
+        case "awareness.camera_interval_seconds":
+            guard let interval = Int(trimmed), [10, 30, 60, 120].contains(interval) else { return nil }
+            return interval
+        case "awareness.screen_interval_seconds":
+            guard let interval = Int(trimmed), [10, 19, 30, 60].contains(interval) else { return nil }
+            return interval
+        case "tts.speed":
+            guard let speed = Double(trimmed), (0.7 ... 1.4).contains(speed) else { return nil }
+            return speed
+        case "llm.temperature":
+            guard let temperature = Double(trimmed), (0.3 ... 1.0).contains(temperature) else { return nil }
+            return temperature
+        default:
+            return nil
         }
     }
 
@@ -532,7 +608,8 @@ final class RustUiShellController {
 
     private func handleMenuAction(_ action: String) {
         switch action {
-        case "settings": onSettings?()
+        case "settings": sendSettingsSnapshot()
+        case "settings_legacy": onSettingsLegacy?()
         case "talk_toggle":
             NSLog("RustUiShellController: talk_toggle received")
             onTalkToggle?()
@@ -607,5 +684,6 @@ private struct ShellEvent: Decodable {
     let enabled: Bool?
     let active: Bool?
     let text: String?
+    let key: String?
     let value: String?
 }

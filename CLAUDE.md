@@ -87,7 +87,7 @@ Right ⌥ hold / orb long-press → mic capture (16kHz) → WAV → fae-daemon
                                       │
                                       ├── Memory (SQLite + ANN + FTS5)
                                       ├── Tools (36 built-in)
-                                      ├── Skills (27 built-in)
+                                      ├── Skills (30 built-in)
                                       ├── Scheduler (~23 tasks)
                                       ├── Backup (Git Vault)
                                       └── Self-Config
@@ -338,7 +338,7 @@ cd native/macos/Fae/Sources/Fae/Resources/Skills/<skill-name>
 for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d' ' -f1)\""; done
 ```
 
-## Built-in skills (27)
+## Built-in skills (30)
 
 | Skill | Type | Purpose |
 |-------|------|---------|
@@ -358,6 +358,9 @@ for f in SKILL.md scripts/*.py; do echo "\"$f\": \"$(shasum -a 256 "$f" | cut -d
 | `training-orchestrator` | Executable | Personal fine-tuning via mlx-tune: SFT, DPO, STT LoRA adapters |
 | `training-data-bridge` | Executable | Extract SFT/DPO training data from memory |
 | `huggingface-scout` | Executable | Search HuggingFace Hub for models/datasets |
+| `mail-himalaya` | Executable | Portable IMAP/SMTP mail via the himalaya CLI |
+| `calendar-caldav` | Executable | Portable CalDAV calendar list/create/update/delete |
+| `contacts-carddav` | Executable | Portable CardDAV contact search |
 | `self-diagnostic` | Instruction | Comprehensive health check: system, pipeline, memory, tools, speaker |
 | `channel-discord` | Executable | Discord channel integration |
 | `channel-whatsapp` | Executable | WhatsApp channel integration |

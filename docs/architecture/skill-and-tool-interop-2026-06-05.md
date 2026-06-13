@@ -25,7 +25,7 @@ The two are reconcilable with a thin **bidirectional adapter** — Fae stays spe
 | Schema | — | `schemaVersion: 1` | → `metadata.fae.schemaVersion` |
 | Integrity | — (spec has none) | `integrity.checksums` (SHA-256) | → `metadata.fae.integrity` **(Fae-computed on import, see §4)** |
 
-**Body conventions:** adopt Hermes' section order (`# X Skill` · intro · `## When to Use / Prerequisites / How to Run / Quick Reference / Procedure / Pitfalls / Verification`) for Fae-authored and exported skills — improves quality and makes Fae skills portable-readable by other harnesses.
+**Body conventions:** adopt Hermes' section order (`# X Skill` · intro · `## When to Use / Prerequisites / How to Run / Quick Reference / Procedure / Pitfalls / Verification`) for Fae-authored and exported skills — improves quality and makes Fae skills portable-readable by other harnesses. The P2 productivity wave (`mail-himalaya`, `calendar-caldav`, `contacts-carddav`) is the reference implementation for executable built-ins that keep agentskills.io-compatible frontmatter while enforcing Fae's stricter SHA-256 `MANIFEST.json` integrity layer.
 
 **Progressive disclosure:** already 1:1 — Fae injects names+descriptions in the prompt (`SkillManager.promptMetadata()`) and loads the full body on `activate_skill`. The standard's three tiers (metadata ~100 tok → body <5000 tok → resources on demand) map exactly. No change.
 

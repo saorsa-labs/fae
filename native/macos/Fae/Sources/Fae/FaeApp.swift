@@ -204,7 +204,10 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         rustUiShell.conversation = conversation
         rustUiShell.faeCore = faeCore
         rustUiShell.onSettings = { [weak self] in
-            self?.openSettingsWindow(reason: "rust-ui-shell")
+            self?.rustUiShell.refreshWorkspaceSnapshot()
+        }
+        rustUiShell.onSettingsLegacy = { [weak self] in
+            self?.openSettingsWindow(reason: "rust-ui-shell-legacy")
         }
         rustUiShell.onTalkToggle = { [weak self] in
             guard let faeCore = self?.faeCore else { return }

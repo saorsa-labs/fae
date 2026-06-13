@@ -2,6 +2,49 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Skills-first cross-platform P4
+
+### CI / Build
+- Added a dedicated `linux-render-spike` GitHub Actions workflow for Ubuntu WebKitGTK shell builds and ALSA-backed daemon builds.
+- Added an Xvfb smoke mode for the Rust UI shell that opens the opaque Settings panel, captures a WebKitGTK screenshot artifact in CI, and rejects blank captures via ImageMagick color-count validation.
+- Folded the P1-deferred Linux `fae-daemon` build proof into the same Ubuntu job with `libasound2-dev`, `pkg-config`, and `cargo zigbuild`.
+- Switched Linux `wry` panels to `WebViewBuilderExtUnix::build_gtk` against tao's GTK container after the generic `build(&window)` path produced blank Xvfb captures.
+
+### Docs
+- Added `docs/architecture/linux-render-spike-2026-06.md` to track opaque Settings panel, pill transparency, and Linux shell go/no-go findings.
+
+## Unreleased — Skills-first cross-platform P3
+
+### New Features
+- Added an orb-owned Settings panel in `fae-ui-shell` with `settings_snapshot` / `settings_set` bridge sync to Swift `FaeCore.patchConfig`.
+- Added adjustable Settings controls for tool access, thinking depth, LLM temperature, TTS speed, awareness cadence, and privacy posture, plus informational always-on capability cards.
+- Kept the SwiftUI Settings window available as **Settings (legacy)…** during parity migration.
+
+### Tests
+- Added Rust bridge protocol coverage for `settings_snapshot` and the legacy settings menu action.
+- Live-verified panel-driven `tts.speed` persistence plus Right Option and orb long-press PTT regressions.
+
+## Unreleased — Skills-first cross-platform P2
+
+### New Features
+- Added executable built-in skills `mail-himalaya`, `calendar-caldav`, and `contacts-carddav` with agentskills.io-compatible frontmatter plus Fae SHA-256 manifests.
+- Added PEP 723 Python CalDAV/CardDAV scripts for portable calendar/contact workflows with Keychain-injected environment variables.
+- Added `himalaya` to the extended tool augmentation registry for portable IMAP/SMTP mail.
+
+### Tests
+- Extended bundled skill discovery/manifest coverage for the productivity skills and added registry coverage for `himalaya`.
+
+## Unreleased — Skills-first cross-platform P1
+
+### New Features
+- Added `fae-audio`, a cpal-backed daemon audio crate for portable PTT capture and WAV playback.
+- Added daemon NDJSON commands `audio.devices`, `audio.capture_start`, `audio.capture_stop`, and `audio.play` behind the existing control-plane auth/scopes.
+- Added a live repro script at `crates/fae-daemon/scripts/fae_audio_repro.py` for capture → playback → audio turn → TTS → playback validation.
+- Added capture gain normalization plus `FAE_AUDIO_INPUT_DEVICE` / `FAE_AUDIO_OUTPUT_DEVICE` overrides for reproducible cpal diagnostics.
+
+### Tests
+- Added WAV encode round-trip, 48 kHz → 16 kHz sine resampling, capture gain, capture-cap reaping, audio command scope, and daemon auth rejection coverage.
+
 ## v0.8.183 — Autonomous Self-Improvement Loop (2026-03-30)
 
 ### New Features
