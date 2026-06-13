@@ -61,6 +61,8 @@ enum ToolAugmentationManager {
                 brewFormula: "pandoc", category: .media, tier: .extended),
         CLITool(name: "yq", binary: "yq", description: "YAML processor",
                 brewFormula: "yq", category: .data, tier: .extended),
+        CLITool(name: "himalaya", binary: "himalaya", description: "IMAP/SMTP email CLI for portable mail skills",
+                brewFormula: "himalaya", category: .data, tier: .extended),
         CLITool(name: "delta", binary: "delta", description: "Better git diffs",
                 brewFormula: "git-delta", category: .git, tier: .extended),
         CLITool(name: "ImageMagick", binary: "magick", description: "Image processing",
@@ -152,6 +154,7 @@ enum ToolAugmentationManager {
         if installed["tree"] != nil { hints.append("tree") }
         if installed["tokei"] != nil { hints.append("tokei (code stats)") }
         if installed["ffmpeg"] != nil { hints.append("ffmpeg") }
+        if installed["himalaya"] != nil { hints.append("himalaya (mail)") }
 
         guard !hints.isEmpty else { return nil }
 

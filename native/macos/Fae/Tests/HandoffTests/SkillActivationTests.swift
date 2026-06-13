@@ -16,7 +16,7 @@ final class SkillActivationTests: XCTestCase {
         let manager = SkillManager()
         let skills = await manager.discoverSkills()
 
-        XCTAssertGreaterThanOrEqual(skills.count, 26, "Expected at least 26 bundled skills (21 original + 5 new)")
+        XCTAssertGreaterThanOrEqual(skills.count, 30, "Expected at least 30 bundled skills including productivity wave")
 
         for skill in skills {
             XCTAssertFalse(skill.name.isEmpty, "Skill name must not be empty")
@@ -38,6 +38,9 @@ final class SkillActivationTests: XCTestCase {
             "file-organizer",
             "smart-home",
             "channel-hub",
+            "mail-himalaya",
+            "calendar-caldav",
+            "contacts-carddav",
         ]
 
         for expected in expectedNew {
@@ -100,6 +103,9 @@ final class SkillActivationTests: XCTestCase {
         XCTAssertTrue(names.contains("file-organizer"))
         XCTAssertTrue(names.contains("smart-home"))
         XCTAssertTrue(names.contains("channel-hub"))
+        XCTAssertTrue(names.contains("mail-himalaya"))
+        XCTAssertTrue(names.contains("calendar-caldav"))
+        XCTAssertTrue(names.contains("contacts-carddav"))
     }
 
     /// Prompt metadata descriptions are concise (under 200 chars for built-in skills).
@@ -133,6 +139,7 @@ final class SkillActivationTests: XCTestCase {
         let skillNames = [
             "document-analyst", "email-triage", "focus-defender",
             "system-health", "file-organizer", "smart-home", "channel-hub",
+            "mail-himalaya", "calendar-caldav", "contacts-carddav",
         ]
 
         for name in skillNames {
@@ -170,6 +177,7 @@ final class SkillActivationTests: XCTestCase {
         let skillNames = [
             "document-analyst", "email-triage", "focus-defender",
             "system-health", "file-organizer", "smart-home", "channel-hub",
+            "mail-himalaya", "calendar-caldav", "contacts-carddav",
         ]
 
         for name in skillNames {

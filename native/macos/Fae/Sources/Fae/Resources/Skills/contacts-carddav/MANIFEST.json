@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "contacts",
+    "personal_data"
+  ],
+  "riskTier": "high",
+  "timeoutSeconds": 120,
+  "allowNetwork": true,
+  "allowSubprocess": false,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "af4b44d213798d39a7c256f07772ace2ff01ce0813744ff0fa7f1622ebf6f192",
+      "scripts/contacts_carddav.py": "3f0d05d8d693d403011ffe286262839a9f6a352be1b2f42c22257b9101b16626"
+    },
+    "signature": null
+  }
+}

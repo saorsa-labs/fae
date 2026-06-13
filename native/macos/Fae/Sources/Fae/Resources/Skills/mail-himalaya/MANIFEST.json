@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "email",
+    "contacts",
+    "personal_data"
+  ],
+  "riskTier": "high",
+  "timeoutSeconds": 120,
+  "allowNetwork": true,
+  "allowSubprocess": true,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "51e75de3d05ab6bc2bf0e934848a09f05c6e13241d92b79d1254c0e31ddab097",
+      "scripts/mail_himalaya.py": "639518c887d91e448a6001c08f4050de33d0ff28300d81170171b7dd12010c5a"
+    },
+    "signature": null
+  }
+}

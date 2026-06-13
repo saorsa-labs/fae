@@ -42,6 +42,13 @@ final class ToolAugmentationManagerTests: XCTestCase {
         XCTAssertTrue(fragment!.contains("jq"))
     }
 
+    func testRegistryIncludesHimalayaAsExtendedTool() {
+        let tool = ToolAugmentationManager.registry.first { $0.binary == "himalaya" }
+        XCTAssertNotNil(tool)
+        XCTAssertEqual(tool?.brewFormula, "himalaya")
+        XCTAssertEqual(tool?.tier, .extended)
+    }
+
     // MARK: - formatProjectsForMemory
 
     func testFormatProjectsForMemoryEmpty() {

@@ -42,7 +42,7 @@ Gemma 4 E4B benchmarked 2026-04-02: 100% tool calling, 100% Fae capability, 100%
 ## Key Capabilities
 
 - **37 built-in tools** (bash, calendar, mail, web_search, screenshot, click, etc.)
-- **29 built-in skills** (voice-identity, forge, toolbox, channels, training-orchestrator, etc.)
+- **30 built-in skills** (forge, toolbox, channels, training-orchestrator, mail-himalaya, CalDAV/CardDAV productivity, etc.)
 - **~23 scheduled tasks** (memory reflection, overnight research, morning briefing, etc.)
 - **Memory**: hybrid ANN (60%) + FTS5 (40%) search, entity graph (persons/orgs/locations)
 - **Self-improvement**: implicit feedback → meta-optimization (directive, config, skills, memory seeds via hill-climbing) → SFT/DPO export → LoRA training → evaluation → deploy

@@ -2,6 +2,16 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Skills-first cross-platform P2
+
+### New Features
+- Added executable built-in skills `mail-himalaya`, `calendar-caldav`, and `contacts-carddav` with agentskills.io-compatible frontmatter plus Fae SHA-256 manifests.
+- Added PEP 723 Python CalDAV/CardDAV scripts for portable calendar/contact workflows with Keychain-injected environment variables.
+- Added `himalaya` to the extended tool augmentation registry for portable IMAP/SMTP mail.
+
+### Tests
+- Extended bundled skill discovery/manifest coverage for the productivity skills and added registry coverage for `himalaya`.
+
 ## Unreleased — Skills-first cross-platform P1
 
 ### New Features
