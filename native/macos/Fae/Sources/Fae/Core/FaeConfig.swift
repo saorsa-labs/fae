@@ -272,6 +272,12 @@ struct FaeConfig: Codable {
     struct MemoryConfig: Codable {
         var enabled: Bool = true
         var maxRecallResults: Int = 5
+        /// Character budget for the memory-recall block injected into the
+        /// system prompt (Lever 2 of the prompt-budget plan). The recall
+        /// assembly already enforced a hardcoded 2000; this makes it tunable
+        /// without changing the default. Lower it to shave prompt tokens
+        /// (latency + NaN-window avoidance); raise it for memory-heavy use.
+        var maxRecallChars: Int = 2000
         var autoIngestInbox: Bool = true
         var generateDigests: Bool = true
     }
