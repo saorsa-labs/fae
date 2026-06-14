@@ -110,6 +110,90 @@ final class DaemonWireTests: XCTestCase {
         XCTAssertEqual((tools[0]["parameters"] as? [String: Any])?["type"] as? String, "object")
     }
 
+    func testPromptBudgetMetricsCountsTextAndTools() throws {
+        let specs: [[String: any Sendable]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "read",
+                    "description": "Read a file",
+                    "parameters": ["type": "object", "properties": ["path": ["type": "string"]]] as [String: Any],
+                ] as [String: Any],
+            ]
+        ]
+        var options = GenerationOptions(maxTokens: 64)
+        options.tools = specs
+        let payload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hello")],
+            systemPrompt: "You are Fae.",
+            options: options)
+
+        let metrics = DaemonWire.promptBudgetMetrics(for: payload)
+        XCTAssertEqual(metrics.systemChars, "You are Fae.".count)
+        XCTAssertEqual(metrics.messageChars, "hello".count)
+        XCTAssertEqual(metrics.toolCount, 1)
+        XCTAssertGreaterThan(metrics.toolBytes, 0)
+        XCTAssertGreaterThan(metrics.payloadBytes, metrics.toolBytes)
+        XCTAssertEqual(
+            metrics.estimatedTextTokens,
+            metrics.estimatedSystemTokens + metrics.estimatedMessageTokens + metrics.estimatedToolTokens
+        )
+    }
+
+    func testPromptBudgetMetricsReportsZeroForNoTools() {
+        let payload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hello")],
+            systemPrompt: "You are Fae.",
+            options: GenerationOptions(maxTokens: 64)
+        )
+        let metrics = DaemonWire.promptBudgetMetrics(for: payload)
+        XCTAssertEqual(metrics.toolCount, 0)
+        XCTAssertEqual(metrics.toolBytes, 0)
+        XCTAssertEqual(metrics.estimatedToolTokens, 0)
+    }
+
+    func testPromptBudgetWorkingSetReducesGenericToolPayload() throws {
+        let registry = ToolRegistry.buildDefault()
+        let allTools = try XCTUnwrap(registry.nativeToolSpecs(for: "full"))
+        let workingSet = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "hello fae",
+            availableToolNames: registry.toolNames,
+            proactiveAllowedTools: nil
+        )
+        let workingTools = try XCTUnwrap(
+            registry.nativeToolSpecs(for: "full", limitedTo: workingSet)
+        )
+
+        var allOptions = GenerationOptions(maxTokens: 64)
+        allOptions.tools = allTools
+        let allPayload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hello fae")],
+            systemPrompt: "You are Fae.",
+            options: allOptions
+        )
+        var workingOptions = GenerationOptions(maxTokens: 64)
+        workingOptions.tools = workingTools
+        let workingPayload = DaemonWire.injectTextPayload(
+            messages: [LLMMessage(role: .user, content: "hello fae")],
+            systemPrompt: "You are Fae.",
+            options: workingOptions
+        )
+
+        let allMetrics = DaemonWire.promptBudgetMetrics(for: allPayload)
+        let workingMetrics = DaemonWire.promptBudgetMetrics(for: workingPayload)
+        NSLog(
+            "PromptBudgetTest: generic all_tools=%d all_tool_tokens=%d working_tools=%d working_tool_tokens=%d reduction_tokens=%d",
+            allMetrics.toolCount,
+            allMetrics.estimatedToolTokens,
+            workingMetrics.toolCount,
+            workingMetrics.estimatedToolTokens,
+            allMetrics.estimatedToolTokens - workingMetrics.estimatedToolTokens
+        )
+        XCTAssertLessThan(workingMetrics.toolCount, allMetrics.toolCount)
+        XCTAssertLessThan(workingMetrics.estimatedToolTokens, allMetrics.estimatedToolTokens)
+    }
+
     func testDaemonToolsSkipsSpecsWithoutNames() {
         let specs: [[String: any Sendable]] = [
             ["type": "function", "function": ["description": "nameless"] as [String: Any]]

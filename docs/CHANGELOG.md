@@ -2,6 +2,13 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Task #11 Prompt budget
+
+### Changed
+- Added native progressive tool disclosure: ordinary turns keep a compact index of all allowed tools but send full JSON schemas only for a conservative working set plus explicit/inferred long-tail tools.
+- Added daemon prompt-budget metrics logging (`prompt_budget`) with approximate text-token, payload-byte, and tool-schema counts per turn.
+- Added regression coverage for generic/core tool working sets, inferred long-tail expansion, proactive allowlist narrowing, strict-local filtering, and prompt-budget metric reductions.
+
 ## Unreleased — Task #10 Thinking liveness
 
 ### Fixed
