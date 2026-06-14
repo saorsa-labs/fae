@@ -4,6 +4,12 @@ Status: EXECUTED 2026-06-12. Predecessors landed: 1/3 SmartTurn (384f39d7),
 2/3 keyword spotter (13480bb8), both CI green. Companion context:
 docs/spikes/S18-pure-gemma-asr-ptt.md ("Post-S18 consolidation queue").
 
+Task #10 follow-up: EXECUTED 2026-06-14. Scope clarified to the orb
+Thinking-liveness bug: silent awareness/proactive generations are tracked for
+stale-token isolation but no longer drive the user-visible `assistantGenerating`
+indicator; overlapping/stale generations now force the indicator back to idle
+when no visible generation or approval pause remains.
+
 Execution notes (deviations from the delete/keep lists below):
 - `ParakeetStreamingEngine` went with the `StreamingSTTEngine` protocol (its
   only conformer); `KeywordBiasConfig` moved into `KeywordSpotter.swift`.
@@ -103,6 +109,7 @@ Execution notes (deviations from the delete/keep lists below):
    `llm.useDaemonEngine`/`tts.useDaemonEngine` defaults true, models.lock
    distribution — THEN delete FaeTTSAdapter + MLXLLMEngine (note: MLX LLM is
    the LoRA training substrate; decide training story first).
-2. Test isolation (Task #10).
+2. Test isolation (Task #10) — superseded by the clarified Task #10
+   Thinking-liveness fix above; test isolation remains future CI debt.
 3. Daemon streaming + cancel; candle voice-tts backend.
 4. MTP wiring (Task #1, recipe in memory project_mtp_daemon_speedup.md).

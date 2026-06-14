@@ -2,6 +2,13 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Task #10 Thinking liveness
+
+### Fixed
+- Silent awareness/proactive generations are now tracked for token-stream isolation without driving the orb's user-visible `assistantGenerating` / "Thinking" indicator.
+- Stale or superseded generations can no longer strand the Thinking pill: ending an old generation only removes that generation, while the indicator is forced idle once no visible generation or approval pause remains.
+- Added regression coverage for overlapping silent proactive generations, visible-generation guard semantics, and approval pauses.
+
 ## Unreleased — Skills-first cross-platform P5
 
 ### CI / Build

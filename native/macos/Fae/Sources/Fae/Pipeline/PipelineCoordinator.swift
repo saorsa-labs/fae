@@ -499,7 +499,8 @@ actor PipelineCoordinator {
     /// Exposed for the test harness to wait until speech completes.
     var isSpeaking: Bool { assistantSpeaking }
     /// Active generation scope for streaming-token isolation across interrupted turns.
-    private var activeGenerationID: UUID?
+    private var assistantGenerationTracker = AssistantGenerationTracker()
+    private var activeGenerationID: UUID? { assistantGenerationTracker.activeGenerationID }
     private var interrupted: Bool = false
     private var interruptedGenerationID: UUID?
     private var awaitingApproval: Bool = false
@@ -764,7 +765,7 @@ actor PipelineCoordinator {
             // assistantSpeaking without a matching clear (playback completed
             // during the old pipeline loop which is now dead).
             assistantSpeaking = false
-            assistantGenerating = false
+            endAssistantGeneration(scheduleDeferredDrain: false)
             interrupted = false
             interruptedGenerationID = nil
             ttsState.cancelPending()
@@ -819,10 +820,10 @@ actor PipelineCoordinator {
         debugLog(debugConsole, .qa, "Pipeline stop requested")
         markGenerationInterrupted()
         pendingGovernanceAction = nil
-        awaitingApproval = false
-        manualOnlyApprovalPending = false
+        setApprovalState(awaiting: false, manualOnly: false)
         computerUseStepCount = 0
         bargeInState.generationTakeoverCandidate = nil
+        endAssistantGeneration(scheduleDeferredDrain: false)
 
         // Ensure any in-flight TTS synthesis task fully exits before teardown.
         let activeTTSTask = ttsState.pendingTask
@@ -874,8 +875,7 @@ actor PipelineCoordinator {
     func cancelAndWait() async {
         markGenerationInterrupted()
         pendingGovernanceAction = nil
-        awaitingApproval = false
-        manualOnlyApprovalPending = false
+        setApprovalState(awaiting: false, manualOnly: false)
         computerUseStepCount = 0
         bargeInState.generationTakeoverCandidate = nil
 
@@ -893,10 +893,9 @@ actor PipelineCoordinator {
         assistantSpeaking = false
         lastAssistantStart = nil
         echoSuppressor.reset()
-        // Ensure generation flag is cleared so the pipeline accepts new injections after reset.
-        assistantGenerating = false
-        awaitingApproval = false
-        manualOnlyApprovalPending = false
+        // Ensure generation state is cleared so the pipeline accepts new injections after reset.
+        setApprovalState(awaiting: false, manualOnly: false)
+        endAssistantGeneration(scheduleDeferredDrain: false)
         await abandonAllWorkflowTraces(reason: "Generation cancelled before workflow completion.")
         NSLog("PipelineCoordinator: cancelAndWait complete")
     }
@@ -983,8 +982,9 @@ actor PipelineCoordinator {
             wake()
         }
 
-        // If assistant is active, trigger barge-in.
-        if assistantSpeaking || assistantGenerating {
+        // If assistant is active, trigger barge-in. Silent background generations
+        // do not light the orb, but typed user input still supersedes them.
+        if assistantSpeaking || assistantGenerating || assistantGenerationTracker.hasActiveGeneration {
             markGenerationInterrupted()
             await playback.stop()
         }
@@ -1281,7 +1281,7 @@ actor PipelineCoordinator {
         // This preserves GPU for responsive voice interaction.
         let recentConversation = await conversationState.lastAssistantMessageAt
             .map { Date().timeIntervalSince($0) < 30 } ?? false
-        guard !assistantGenerating, !assistantSpeaking else {
+        guard !assistantGenerationTracker.hasActiveGeneration, !assistantSpeaking else {
             enqueueDeferredProactiveRequest(request)
             NSLog("PipelineCoordinator: proactive query deferred — assistant busy")
             return
@@ -1344,12 +1344,16 @@ actor PipelineCoordinator {
     }
 
     private func scheduleDeferredProactiveDrain() {
-        guard !assistantGenerating, !assistantSpeaking, !deferredProactiveRequests.isEmpty else { return }
+        guard !assistantGenerationTracker.hasActiveGeneration,
+              !assistantSpeaking,
+              !deferredProactiveRequests.isEmpty
+        else { return }
         Task { await drainDeferredProactiveIfIdle() }
     }
 
     private func drainDeferredProactiveIfIdle() async {
-        guard !assistantGenerating, !assistantSpeaking,
+        guard !assistantGenerationTracker.hasActiveGeneration,
+              !assistantSpeaking,
               !deferredProactiveRequests.isEmpty
         else {
             return
@@ -1427,8 +1431,8 @@ actor PipelineCoordinator {
         engagedUntil = nil
         lastAssistantResponseText = ""
 
-        awaitingApproval = false
-        manualOnlyApprovalPending = false
+        setApprovalState(awaiting: false, manualOnly: false)
+        endAssistantGeneration(scheduleDeferredDrain: false)
         pendingGovernanceAction = nil
         computerUseStepCount = 0
         ttsState.cancelPending()
@@ -1470,7 +1474,7 @@ actor PipelineCoordinator {
         idleRearmTask?.cancel()
         idleRearmTask = nil
         engagedUntil = nil
-        if assistantSpeaking || assistantGenerating {
+        if assistantSpeaking || assistantGenerating || assistantGenerationTracker.hasActiveGeneration {
             markGenerationInterrupted()
             Task { await playback.stop() }
         }
@@ -1765,7 +1769,7 @@ actor PipelineCoordinator {
 
     private func resetConversationSession(trigger: String, source: String) async {
         // Stop any active speech/generation immediately.
-        if assistantSpeaking || assistantGenerating {
+        if assistantSpeaking || assistantGenerating || assistantGenerationTracker.hasActiveGeneration {
             markGenerationInterrupted()
             await playback.stop()
         }
@@ -1776,8 +1780,8 @@ actor PipelineCoordinator {
         bargeInState.generationTakeoverCandidate = nil
         bargeInState.falseInterruptionRecovery.cancel()
 
-        awaitingApproval = false
-        manualOnlyApprovalPending = false
+        setApprovalState(awaiting: false, manualOnly: false)
+        endAssistantGeneration(scheduleDeferredDrain: false)
         pendingGovernanceAction = nil
         computerUseStepCount = 0
         ttsState.cancelPending()
@@ -2215,6 +2219,13 @@ actor PipelineCoordinator {
             debugLog(debugConsole, .pipeline, "User turn takeover — interrupting in-flight generation")
             markGenerationInterrupted()
             endAssistantGeneration()
+        } else if assistantGenerationTracker.hasActiveGeneration {
+            // Silent/background generation in progress. It intentionally does
+            // not drive assistantGenerating, but deliberate user input still
+            // supersedes it and becomes the active token stream owner.
+            guard proactiveContext == nil else { return }
+            debugLog(debugConsole, .pipeline, "User turn takeover — interrupting silent background generation")
+            markGenerationInterrupted()
         }
 
         let forceFastCommandPath = shouldForceThinkingSuppression(for: queryText)
@@ -2280,8 +2291,7 @@ actor PipelineCoordinator {
             responseText = reply
         }
 
-        assistantGenerating = true
-        eventBus.send(.assistantGenerating(true))
+        let generationID = beginAssistantGeneration(visibility: .visible)
         await conversationState.addUserMessage(
             queryText,
             speakerDisplayName: speakerGate.currentSpeakerDisplayName,
@@ -2316,7 +2326,7 @@ actor PipelineCoordinator {
             await capturePendingCorrection()
         }
 
-        endAssistantGeneration()
+        endAssistantGeneration(for: generationID)
         engage()
         return true
     }
@@ -2747,8 +2757,13 @@ actor PipelineCoordinator {
                 return
             }
         } else {
-            generationID = UUID()
-            activeGenerationID = generationID
+            generationID = beginAssistantGeneration(
+                visibility: generationVisibility(
+                    proactiveContext: proactiveContext,
+                    playsThinkingTone: playsThinkingTone,
+                    allowsAudibleOutput: allowsAudibleOutput
+                )
+            )
             debugLog(debugConsole, .pipeline, "Generation started id=\(generationID.uuidString.prefix(8))")
         }
 
@@ -2794,8 +2809,6 @@ actor PipelineCoordinator {
             // Ensure no stale TTS tasks from a previous turn can block this one.
             ttsState.cancelPending()
             lastAssistantResponseText = ""
-            assistantGenerating = true
-            eventBus.send(.assistantGenerating(true))
 
             // Play thinking tone.
             if playsThinkingTone {
@@ -4873,19 +4886,60 @@ actor PipelineCoordinator {
 
     // MARK: - Speech State
 
-    /// Clear the generation-in-progress flag.
+    /// Start tracking an assistant generation.
     ///
-    /// When called with a `generationID`, only clears if that generation is still
-    /// the active one. This prevents an interrupted/stale generation from clearing
-    /// state that belongs to a newer generation (race after barge-in).
-    private func endAssistantGeneration(for generationID: UUID? = nil) {
-        if let generationID, activeGenerationID != generationID {
-            return
+    /// The latest generation ID remains the token-stream authority, but only
+    /// visible generations drive the orb's Thinking state. Silent background
+    /// chores stay tracked so a newer turn can stale them out without lighting
+    /// the UI.
+    @discardableResult
+    private func beginAssistantGeneration(
+        id generationID: UUID = UUID(),
+        visibility: AssistantGenerationTracker.Visibility
+    ) -> UUID {
+        assistantGenerationTracker.begin(generationID, visibility: visibility)
+        reconcileAssistantGenerating()
+        return generationID
+    }
+
+    /// Clear a generation-in-progress record.
+    ///
+    /// When called with a stale `generationID`, only that generation is removed;
+    /// a newer visible generation continues to own the Thinking indicator. If no
+    /// visible generation remains and no approval is pending, the indicator is
+    /// forced back to idle.
+    private func endAssistantGeneration(
+        for generationID: UUID? = nil,
+        scheduleDeferredDrain: Bool = true
+    ) {
+        assistantGenerationTracker.end(generationID)
+        if !assistantGenerationTracker.hasVisibleGeneration {
+            bargeInState.generationTakeoverCandidate = nil
         }
-        assistantGenerating = false
-        bargeInState.generationTakeoverCandidate = nil
-        eventBus.send(.assistantGenerating(false))
-        scheduleDeferredProactiveDrain()
+        reconcileAssistantGenerating()
+        if scheduleDeferredDrain {
+            scheduleDeferredProactiveDrain()
+        }
+    }
+
+    private func generationVisibility(
+        proactiveContext: ProactiveRequestContext?,
+        playsThinkingTone: Bool,
+        allowsAudibleOutput: Bool
+    ) -> AssistantGenerationTracker.Visibility {
+        if proactiveContext != nil, !playsThinkingTone, !allowsAudibleOutput {
+            return .silentBackground
+        }
+        return .visible
+    }
+
+    private func reconcileAssistantGenerating() {
+        let shouldShow = assistantGenerationTracker.shouldShowAssistantGenerating(
+            awaitingApproval: awaitingApproval
+        )
+        guard assistantGenerating != shouldShow else { return }
+        assistantGenerating = shouldShow
+        eventBus.send(.assistantGenerating(shouldShow))
     }
 
     static func shouldShowToolModeUpgradePopup(reasonCode: String) -> Bool {
@@ -5630,8 +5684,11 @@ actor PipelineCoordinator {
         }
 
         explicitUserAuthorizationForTurn = job.explicitUserAuthorization
-        assistantGenerating = true
-        eventBus.send(.assistantGenerating(true))
+        let generationID = beginAssistantGeneration(
+            visibility: job.generationContext.playsThinkingTone || job.generationContext.allowsAudibleOutput
+                ? .visible
+                : .silentBackground
+        )
         if job.generationContext.playsThinkingTone {
             await playback.playThinkingTone()
         }
@@ -5641,7 +5698,8 @@ actor PipelineCoordinator {
             isToolFollowUp: true,
             turnCount: 1,
             forceSuppressThinking: job.forceSuppressThinking,
-            generationContext: job.generationContext
+            generationContext: job.generationContext,
+            generationID: generationID
         )
     }
 
@@ -5725,6 +5783,7 @@ actor PipelineCoordinator {
     private func setApprovalState(awaiting: Bool, manualOnly: Bool) {
         awaitingApproval = awaiting
         manualOnlyApprovalPending = manualOnly
+        reconcileAssistantGenerating()
     }
 
     private func autoEnableVision() {
