@@ -492,4 +492,68 @@ final class TurnHelpersTests: XCTestCase {
     func testPrefersLegacyInlineToolPromptNil() {
         XCTAssertFalse(TurnHelpers.prefersLegacyInlineToolPrompt(modelId: nil))
     }
+
+    // MARK: - Progressive Tool Disclosure: no-regression gate (Task #11)
+    //
+    // Lever 1 sends full native schemas only for a per-turn working set; the
+    // rest of the tool surface stays index-only. The risk: a high-frequency
+    // voice command whose tool falls out of the working set becomes
+    // effectively un-callable (native tool calling can't emit a call for a tool
+    // with no schema). This battery is the deterministic gate the prompt-budget
+    // plan required — it asserts the common spoken intents keep their full
+    // schema on a COLD turn (no continuation, no allowlist), against the real
+    // default registry, so a future inference change that strands one fails CI.
+
+    func testProgressiveDisclosureKeepsHighFrequencyCommandTools() {
+        let registry = ToolRegistry.buildDefault()
+        let available = registry.toolNames
+        // (spoken phrasing, the tool the user expects Fae to be able to call)
+        let battery: [(String, String)] = [
+            ("what's on my calendar today", "calendar"),
+            ("am I free tomorrow afternoon", "calendar"),
+            ("remind me to call mum at six", "reminders"),
+            ("send an email to john about the meeting", "mail"),
+            ("look up tonight's weather", "web_search"),
+            ("search the web for the train times", "web_search"),
+            ("take a screenshot", "screenshot"),
+            ("can you see me", "camera"),
+            ("read ~/notes/today.md", "read"),
+            ("run git status in the terminal", "bash"),
+            ("what did we decide about the budget earlier", "session_search"),
+        ]
+        for (phrase, expected) in battery {
+            guard available.contains(expected) else { continue }
+            let workingSet = TurnHelpers.fullSchemaToolNamesForTurn(
+                firstOwnerEnrollmentActive: false,
+                userText: phrase,
+                availableToolNames: available,
+                proactiveAllowedTools: nil
+            )
+            XCTAssertTrue(
+                workingSet.contains(expected),
+                "REGRESSION: \"\(phrase)\" must keep a full \(expected) schema, "
+                    + "otherwise the model cannot call it on a cold turn")
+        }
+    }
+
+    // The flip side: niche tools intentionally stay index-only on a cold,
+    // generic turn (still callable in a continuation, which preserves all
+    // schemas). Documents the deliberate trade so an accidental demotion of a
+    // high-frequency tool above — or promotion here — is caught.
+    func testProgressiveDisclosureKeepsNicheToolsIndexOnlyOnColdTurn() {
+        let registry = ToolRegistry.buildDefault()
+        let available = registry.toolNames
+        let workingSet = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "hello fae, how are you",
+            availableToolNames: available,
+            proactiveAllowedTools: nil
+        )
+        for niche in ["roleplay", "delegate_agent", "agent_session", "plugin_manage"]
+        where available.contains(niche) {
+            XCTAssertFalse(
+                workingSet.contains(niche),
+                "\(niche) is not expected in the cold-turn working set")
+        }
+    }
 }

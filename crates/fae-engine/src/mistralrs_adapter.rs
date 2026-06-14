@@ -38,12 +38,14 @@ impl LocalMistralrsAdapter {
         model_id: &str,
         revision: Option<&str>,
     ) -> Result<LocalMistralrsAdapter, EngineError> {
-        // Prefix cache disabled: with audio-bearing requests (S18) a cache hit
-        // across consecutive multimodal prompts corrupts the turn (observed as
-        // "heard nothing" / instant empty replies). Correct over fast.
+        // Prefix cache OFF by default (FAE_PREFIX_CACHE_N opts in, Lever 3):
+        // with audio-bearing requests (S18) a cache hit across consecutive
+        // multimodal prompts corrupted the turn ("heard nothing" / instant
+        // empty replies), so it stays disabled until proven against an
+        // audio-turn regression suite. Correct over fast.
         let mut builder = TextModelBuilder::new(model_id)
             .with_isq(configured_isq())
-            .with_prefix_cache_n(None)
+            .with_prefix_cache_n(configured_prefix_cache_n())
             .with_logging();
         if let Some(revision) = revision.filter(|value| !value.is_empty()) {
             builder = builder.with_hf_revision(revision);
@@ -68,11 +70,11 @@ impl LocalMistralrsAdapter {
         model_id: &str,
         revision: Option<&str>,
     ) -> Result<LocalMistralrsAdapter, EngineError> {
-        // Prefix cache disabled — same audio-correctness rationale as
-        // [`Self::load_text`].
+        // Prefix cache OFF by default (FAE_PREFIX_CACHE_N opts in) — same
+        // audio-correctness rationale as [`Self::load_text_pinned`].
         let mut builder = ModelBuilder::new(model_id)
             .with_isq(configured_isq())
-            .with_prefix_cache_n(None)
+            .with_prefix_cache_n(configured_prefix_cache_n())
             .with_logging();
         if let Some(revision) = revision.filter(|value| !value.is_empty()) {
             builder = builder.with_hf_revision(revision);
@@ -208,6 +210,20 @@ fn configured_isq() -> IsqType {
         Ok("Q5K") | Ok("q5k") => IsqType::Q5K,
         _ => IsqType::Q4K,
     }
+}
+
+/// Prefix-cache depth, `FAE_PREFIX_CACHE_N` env override (Lever 3 of the
+/// prompt-budget plan). Default `None` (disabled) — re-prefilling the whole
+/// prompt every turn is the latency cost we want to cut, but a cache hit across
+/// consecutive AUDIO turns corrupted output ("heard nothing"/instant-empty,
+/// S18), which is why it was disabled. This knob lets the cache be re-enabled
+/// for live A/B measurement; it MUST be proven against an audio-turn regression
+/// suite before becoming the default. A non-positive or unset value stays off.
+fn configured_prefix_cache_n() -> Option<usize> {
+    std::env::var("FAE_PREFIX_CACHE_N")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|n| *n > 0)
 }
 
 /// Translate a [`ChatRequest`] into a mistral.rs `RequestBuilder` (system +

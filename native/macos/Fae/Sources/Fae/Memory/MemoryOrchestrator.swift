@@ -151,7 +151,9 @@ actor MemoryOrchestrator {
 
             var insightLines: [String] = []
             var supportingLines: [String] = []
-            let maxChars = 2000
+            // Lever 2 (prompt-budget): configurable recall-block char budget,
+            // default 2000 (the previous hardcoded value — no behavior change).
+            let maxChars = max(config.maxRecallChars, 200)
 
             for hit in digestHits.prefix(2) {
                 guard let line = await formattedRecallLine(for: hit) else { continue }

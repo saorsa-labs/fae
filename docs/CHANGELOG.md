@@ -2,6 +2,13 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Task #11 Prompt budget (levers 2/3 + gate)
+
+### Changed
+- Tool-call no-regression gate (the plan's deferred FaeBenchmark gate): added a deterministic `TurnHelpers` coverage battery asserting 11 high-frequency spoken intents (calendar/reminders/mail/web/screenshot/camera/read/bash/session_search) keep a full native schema on cold turns, and that niche tools (roleplay/delegate_agent/agent_session/plugin_manage) stay intentionally index-only. Lever 1 is no longer provisional — no regression on the high-frequency surface, CI-guarded.
+- Lever 2 (memory recall budget): the recall block already enforced a hardcoded 2000-char cap; made it the config knob `memory.maxRecallChars` (default 2000, floored at 200) — no behavior change, now tunable.
+- Lever 3 (prefix cache): added `FAE_PREFIX_CACHE_N` env knob in fae-engine (`configured_prefix_cache_n`), default OFF (unchanged). Re-enables the prefix cache for live A/B; MUST pass an audio-turn regression suite before any default-on (a cache hit across audio turns previously corrupted output).
+
 ## Unreleased — Task #11 Prompt budget
 
 ### Changed
