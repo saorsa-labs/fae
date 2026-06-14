@@ -2943,6 +2943,16 @@ actor PipelineCoordinator {
                 proactiveAllowedTools: proactiveContext?.allowedTools,
                 isConversationContinuation: isRecentContinuation
             )
+            let indexedToolNames: Set<String>? = speakerGate.firstOwnerEnrollmentActive
+                ? []
+                : proactiveContext?.allowedTools
+            let fullSchemaToolNames = TurnHelpers.fullSchemaToolNamesForTurn(
+                firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
+                userText: userText,
+                availableToolNames: registry.toolNames,
+                proactiveAllowedTools: proactiveContext?.allowedTools,
+                isConversationContinuation: isRecentContinuation
+            )
             if let visibleToolNames {
                 debugLog(
                     debugConsole,
@@ -3016,22 +3026,26 @@ actor PipelineCoordinator {
                 skillDescs = []
                 legacySkills = []
             }
-            // Build native tool specs for MLX tool calling.
-            let nativeTools = includeTools && !preferLegacyInlineToolPrompt
+            // Build native tool specs for MLX/daemon tool calling. The prompt
+            // still carries a compact index of the allowed tool surface, but
+            // full JSON schemas are limited to the conservative working set for
+            // this turn to reduce prefill and avoid known bad prompt windows.
+            let useNativeToolCalling = includeTools && !preferLegacyInlineToolPrompt
+            let nativeTools = useNativeToolCalling
                 ? registry.nativeToolSpecs(
                     for: toolMode,
                     privacyMode: privacyMode,
-                    limitedTo: visibleToolNames
+                    limitedTo: fullSchemaToolNames
                 )
                 : nil
 
             let toolSchemas: String? = {
                 guard includeTools else { return nil }
-                if nativeTools != nil {
+                if useNativeToolCalling {
                     let compact = registry.compactToolSummary(
                         for: toolMode,
                         privacyMode: privacyMode,
-                        limitedTo: visibleToolNames
+                        limitedTo: indexedToolNames
                     )
                     return compact.isEmpty ? nil : compact
                 }
@@ -3044,7 +3058,16 @@ actor PipelineCoordinator {
             }()
 
             if let specs = nativeTools {
-                debugLog(debugConsole, .pipeline, "Native tool specs: \(specs.count) tools")
+                let indexedCount = registry.allowedToolNames(
+                    for: toolMode,
+                    privacyMode: privacyMode,
+                    limitedTo: indexedToolNames
+                ).count
+                debugLog(
+                    debugConsole,
+                    .pipeline,
+                    "Tool disclosure: index=\(indexedCount) full_schemas=\(specs.count)"
+                )
             } else if includeTools, preferLegacyInlineToolPrompt {
                 debugLog(
                     debugConsole,

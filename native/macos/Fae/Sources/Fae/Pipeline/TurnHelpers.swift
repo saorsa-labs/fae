@@ -140,14 +140,10 @@ enum TurnHelpers {
             // Voice-identity teardown: enrollment no longer exposes a tool.
             return []
         }
-        let explicitMentions = explicitlyMentionedToolNames(
+        let requestedTools = requestedToolNamesForTurn(
             in: userText,
             availableToolNames: availableToolNames
         )
-        let inferredMentions = explicitMentions.isEmpty
-            ? inferredToolNamesForTurn(in: userText, availableToolNames: availableToolNames)
-            : []
-        let requestedTools = explicitMentions.isEmpty ? inferredMentions : explicitMentions
 
         // In a conversation continuation (within 45s of last assistant message),
         // show all tools unless this is a proactive task with a specific allowlist.
@@ -170,6 +166,74 @@ enum TurnHelpers {
         case (nil, true):
             return nil
         }
+    }
+
+    /// Conservative tools that keep full native schemas on ordinary turns.
+    /// Long-tail tools are still indexed in the prompt, but only expand to full
+    /// schemas when the turn explicitly/inferentially asks for them.
+    static let defaultFullSchemaToolNames: Set<String> = [
+        "activate_skill",
+        "bash",
+        "channel_setup",
+        "edit",
+        "fetch_url",
+        "input_request",
+        "manage_skill",
+        "read",
+        "run_skill",
+        "self_config",
+        "session_search",
+        "till_done",
+        "web_search",
+        "window_control",
+        "write",
+    ]
+
+    static func fullSchemaToolNamesForTurn(
+        firstOwnerEnrollmentActive: Bool,
+        userText: String,
+        availableToolNames: [String],
+        proactiveAllowedTools: Set<String>?,
+        isConversationContinuation: Bool = false
+    ) -> Set<String> {
+        if firstOwnerEnrollmentActive {
+            return []
+        }
+
+        let available = Set(availableToolNames)
+        let requestedTools = requestedToolNamesForTurn(
+            in: userText,
+            availableToolNames: availableToolNames
+        ).intersection(available)
+
+        if let proactiveAllowedTools {
+            // Proactive allowlists are already intentionally narrow. Keep the
+            // compact index and native schemas aligned by exposing the whole
+            // allowlist rather than a requested subset.
+            return proactiveAllowedTools.intersection(available)
+        }
+
+        if isConversationContinuation, requestedTools.isEmpty {
+            return available
+        }
+
+        var workingSet = defaultFullSchemaToolNames.intersection(available)
+        workingSet.formUnion(requestedTools)
+        return workingSet
+    }
+
+    static func requestedToolNamesForTurn(
+        in userText: String,
+        availableToolNames: [String]
+    ) -> Set<String> {
+        let explicitMentions = explicitlyMentionedToolNames(
+            in: userText,
+            availableToolNames: availableToolNames
+        )
+        if !explicitMentions.isEmpty {
+            return explicitMentions
+        }
+        return inferredToolNamesForTurn(in: userText, availableToolNames: availableToolNames)
     }
 
     /// Common English words that happen to be tool names but should NOT

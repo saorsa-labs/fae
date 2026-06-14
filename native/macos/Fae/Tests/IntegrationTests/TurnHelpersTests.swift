@@ -79,6 +79,98 @@ final class TurnHelpersTests: XCTestCase {
         XCTAssertNotNil(tools)
     }
 
+    func testFullSchemaToolsGenericTurnUsesCoreWorkingSet() {
+        let available = [
+            "read", "write", "edit", "bash", "self_config", "web_search", "fetch_url",
+            "calendar", "camera", "mail", "scheduler_create", "input_request",
+        ]
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "hello there",
+            availableToolNames: available,
+            proactiveAllowedTools: nil
+        )
+        XCTAssertTrue(tools.contains("read"))
+        XCTAssertTrue(tools.contains("bash"))
+        XCTAssertTrue(tools.contains("input_request"))
+        XCTAssertFalse(tools.contains("calendar"))
+        XCTAssertFalse(tools.contains("camera"))
+        XCTAssertLessThan(tools.count, available.count)
+    }
+
+    func testFullSchemaToolsIncludeInferredLongTailTool() {
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "can you see me",
+            availableToolNames: ["read", "bash", "camera", "calendar"],
+            proactiveAllowedTools: nil
+        )
+        XCTAssertTrue(tools.contains("read"))
+        XCTAssertTrue(tools.contains("camera"))
+        XCTAssertFalse(tools.contains("calendar"))
+    }
+
+    func testFullSchemaToolsProactiveAllowlistStaysNarrow() {
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "look around",
+            availableToolNames: ["read", "bash", "camera", "calendar"],
+            proactiveAllowedTools: ["camera"]
+        )
+        XCTAssertEqual(tools, ["camera"])
+    }
+
+    func testFullSchemaToolsProactiveAllowlistDoesNotNarrowIndexAndSchemasApart() {
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "check the calendar",
+            availableToolNames: ["calendar", "mail", "reminders"],
+            proactiveAllowedTools: ["calendar", "mail", "reminders"]
+        )
+        XCTAssertEqual(tools, ["calendar", "mail", "reminders"])
+    }
+
+    func testFullSchemaToolsContinuationPreservesAllSchemasWhenIntentIsAmbiguous() {
+        let available = ["read", "bash", "calendar", "mail", "input_request"]
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "yes, use that",
+            availableToolNames: available,
+            proactiveAllowedTools: nil,
+            isConversationContinuation: true
+        )
+        XCTAssertEqual(tools, Set(available))
+    }
+
+    func testFullSchemaToolsDuringEnrollmentAreEmpty() {
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: true,
+            userText: "search web",
+            availableToolNames: ["read", "web_search"],
+            proactiveAllowedTools: nil
+        )
+        XCTAssertTrue(tools.isEmpty)
+    }
+
+    func testToolRegistryStrictLocalFiltersFullSchemaWorkingSet() {
+        let registry = ToolRegistry(tools: [ReadTool(), WebSearchTool(), FetchURLTool(), BashTool()])
+        let workingSet = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "search the web",
+            availableToolNames: registry.toolNames,
+            proactiveAllowedTools: nil
+        )
+        let allowed = registry.allowedToolNames(
+            for: "full",
+            privacyMode: "strict_local",
+            limitedTo: workingSet
+        )
+        XCTAssertTrue(allowed.contains("read"))
+        XCTAssertTrue(allowed.contains("bash"))
+        XCTAssertFalse(allowed.contains("web_search"))
+        XCTAssertFalse(allowed.contains("fetch_url"))
+    }
+
     func testExplicitlyMentionedToolNames() {
         let tools = TurnHelpers.explicitlyMentionedToolNames(
             in: "please use web_search to look this up",

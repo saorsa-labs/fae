@@ -130,6 +130,16 @@ final class ToolRegistry: Sendable {
         Array(tools.keys).sorted()
     }
 
+    func allowedToolNames(
+        for mode: String,
+        privacyMode: String = "local_preferred",
+        limitedTo allowedNames: Set<String>? = nil
+    ) -> [String] {
+        filteredTools(for: mode, privacyMode: privacyMode, limitedTo: allowedNames)
+            .map { $0.name }
+            .sorted()
+    }
+
     /// JSON schema descriptions for all registered tools, with examples when available.
     var toolSchemas: String {
         schemaString(for: Array(tools.values))
@@ -167,7 +177,7 @@ final class ToolRegistry: Sendable {
                 ?? tool.description
             return "- \(tool.name): \(brief)"
         }
-        return "Available tools:\n" + lines.joined(separator: "\n")
+        return "Available tool index (full callable schemas are supplied for the likely working set):\n" + lines.joined(separator: "\n")
     }
 
     /// Check whether a tool is allowed in the given mode.

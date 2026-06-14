@@ -105,6 +105,18 @@ enum DaemonWire {
         var finishReason: String?
     }
 
+    struct PromptBudgetMetrics: Equatable {
+        var systemChars: Int
+        var messageChars: Int
+        var toolCount: Int
+        var toolBytes: Int
+        var payloadBytes: Int
+        var estimatedSystemTokens: Int
+        var estimatedMessageTokens: Int
+        var estimatedToolTokens: Int
+        var estimatedTextTokens: Int
+    }
+
     /// A single tool call extracted from a daemon turn result.
     struct ToolCallPayload {
         var name: String
@@ -216,6 +228,43 @@ enum DaemonWire {
             payload["tools"] = tools
         }
         return payload
+    }
+
+    static func promptBudgetMetrics(for payload: [String: Any]) -> PromptBudgetMetrics {
+        let system = (payload["system"] as? String) ?? ""
+        let messages = (payload["messages"] as? [[String: Any]]) ?? []
+        let messageChars = messages.reduce(0) { partial, message in
+            partial + ((message["content"] as? String)?.count ?? 0)
+        }
+        let tools = (payload["tools"] as? [[String: Any]]) ?? []
+        let toolBytes = tools.isEmpty ? 0 : jsonByteCount(tools)
+        let payloadBytes = jsonByteCount(payload)
+        let systemTokens = estimateTextTokens(system.count)
+        let messageTokens = estimateTextTokens(messageChars)
+        let toolTokens = tools.isEmpty ? 0 : estimateTextTokens(toolBytes)
+        return PromptBudgetMetrics(
+            systemChars: system.count,
+            messageChars: messageChars,
+            toolCount: tools.count,
+            toolBytes: toolBytes,
+            payloadBytes: payloadBytes,
+            estimatedSystemTokens: systemTokens,
+            estimatedMessageTokens: messageTokens,
+            estimatedToolTokens: toolTokens,
+            estimatedTextTokens: systemTokens + messageTokens + toolTokens
+        )
+    }
+
+    private static func estimateTextTokens(_ byteOrCharCount: Int) -> Int {
+        guard byteOrCharCount > 0 else { return 0 }
+        return max(1, (byteOrCharCount + 3) / 4)
+    }
+
+    private static func jsonByteCount(_ object: Any) -> Int {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        else { return 0 }
+        return data.count
     }
 
     /// Flatten MLX ToolSpec dictionaries into the daemon's tool shape.
@@ -755,6 +804,18 @@ actor DaemonLLMEngine: LLMEngine {
         let requestID = nextRequestID()
         let payload = DaemonWire.injectTextPayload(
             messages: messages, systemPrompt: systemPrompt, options: options)
+        let metrics = DaemonWire.promptBudgetMetrics(for: payload)
+        NSLog(
+            "DaemonLLMEngine: prompt_budget request=%@ estimated_text_tokens=%d payload_bytes=%d system_tokens=%d message_tokens=%d tools=%d tool_tokens=%d tool_bytes=%d",
+            requestID,
+            metrics.estimatedTextTokens,
+            metrics.payloadBytes,
+            metrics.estimatedSystemTokens,
+            metrics.estimatedMessageTokens,
+            metrics.toolCount,
+            metrics.estimatedToolTokens,
+            metrics.toolBytes
+        )
         let frame = try DaemonWire.encodeFrame(
             requestID: requestID, command: "conversation.inject_text", payload: payload)
         let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
