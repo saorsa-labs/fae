@@ -2,6 +2,17 @@
 
 Detailed version history moved from CLAUDE.md. For current architecture, see `CLAUDE.md`.
 
+## Unreleased — Connect Account (portable, Python-first)
+
+### New Features
+- **Portable `connect-account` executable skill** (`Resources/Skills/connect-account/`): one cross-platform engine that connects the user's mail/calendar/contacts from just their email + ONE app-specific password. Runs anywhere via `uv run --script` (PEP 723 inline metadata; sole dependency is cross-platform `keyring` — macOS Keychain / Linux SecretService). On macOS the keyring items land under the same service/account the existing productivity skills read via `CredentialManager`, so the script and the Swift skills interoperate.
+- **Gmail provider** (Stage 1 of the in-app onboarding plan): `gmail.com`/`googlemail.com` → `imap.gmail.com`/`smtp.gmail.com` with the correct `[Gmail]/Sent Mail` etc. folder aliases (the generic aliases break save-to-Sent on Gmail), guidance pointing at the Google App-Passwords page (2-Step Verification required). Gmail is mail-only here — Google calendar/contacts need OAuth (app-password CalDAV/CardDAV is deprecated), reserved for a later method.
+- **Two inputs, everything else derived**: detects iCloud (`@icloud.com`/`@me.com`/`@mac.com`), Gmail, or generic from the email domain, opens the provider's app-password page, derives the full config (iCloud servers + the seven keyring keys the productivity skills read + a himalaya `config.toml` whose `auth.cmd` reads the password from `$HIMALAYA_PASSWORD` — never `auth.raw`), stores it, and verifies mail live. Handles iCloud custom domains (mail sent from the alias, authenticated with the primary Apple ID) and spec-compliant TOML escaping.
+- **Fae installs the `himalaya` mail CLI herself** — no terminal for the user. Portable on every OS: downloads the pinned himalaya release (v1.2.0), verifies its SHA-256 against embedded digests (fail-closed on mismatch, like models.lock), and drops the binary in `~/.local/bin` (already on Fae's PATH). `connect` auto-installs when himalaya is missing; a failed install (offline/unsupported arch) defers mail verification without rolling back a correct password. New `ensure_tools` action exposes it directly.
+- **Actions**: `start` (detect + open page + guidance), `connect` (derive → store in keyring → write himalaya config → auto-install himalaya → verify mail live → transactional rollback on auth failure), `ensure_tools` (install himalaya), `status`, `selftest` (validates derivation with no account/secret/network — 11/11).
+- **Secret hygiene**: the password is never read from argv or the request JSON — it arrives via `FAE_APP_PASSWORD` (injected on macOS by `input_request`+`secret_bindings`, i.e. straight to the Keychain) or a no-echo `getpass` terminal prompt on Linux/CLI, and flows only into the system keyring and the himalaya child env. Never printed, logged, or surfaced (himalaya stderr suppressed).
+- Ships as an executable skill with `MANIFEST.json` (SHA-256 integrity). macOS calendar/contacts continue to use the built-in `calendar`/`contacts` (EventKit) tools — no password, local access — while off-macOS they use the stored CalDAV/CardDAV credentials.
+
 ## Unreleased — Task #11 Prompt budget (levers 2/3 + gate)
 
 ### Changed
