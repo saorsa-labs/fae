@@ -271,3 +271,45 @@ structural to the `kb_lim`/triangle interaction, not the final divide alone).
 - The daemon's `NAN_RETRY_PADS` pad-retry loop (`fae-daemon/src/session.rs`,
   the 4× re-prefill that caused the 70-150 s ttfa) is now dead weight on the
   vendored build and can be removed in a follow-up once the fix soaks.
+
+## 12B coverage (2026-06-15, reopened) — same bug, same fix, A/B proven
+
+The fix was initially validated only on `google/gemma-4-E4B-it`. An in-app report
+showed `google/gemma-4-12B-it` still NaN-storming at the real ~13,242-token Fae
+prompt. Investigation outcome: **12B has the identical bug and the identical fix
+covers it** — no second change is needed.
+
+**Same dispatch.** 12B has `head_dim = 256` (same as E4B; only `sliding_window`
+1024 vs 512 and `gqa_factor` 2 vs 4 differ), so its prefill attention routes
+through the same `candle_nn::ops::sdpa` → `call_sdpa_full` → steel `attention`
+kernel. `FAE_NAN_DEBUG` confirms every 12B prefill call is
+`backend=candle_sdpa_steel … mask=true` — the explicit mask is always present, so
+the `do_causal && !has_mask` fix forces `do_causal=false` and the degenerate path
+never runs.
+
+**A/B proof on the real Fae shape** (engine-layer `examples/prefix_repro.rs`,
+real system + 36 tool schemas, prefix caching ON, multi-turn — the shape the
+single-turn `nan_repro`/`nan_sweep` never produced; sweeps the live ~13k window
+where `nan_repro`'s fixed 38,000-char length does not land):
+
+| 12B, prompt_tok ≈ 12,813 / 12,816 | Q4K | Q8_0 |
+|---|---|---|
+| fix DISABLED (`FAE_DISABLE_SDPA_FIX=1`) | **FAIL** (NaN) | **FAIL** (NaN) |
+| fix ENABLED (default) | **PASS** | **PASS** |
+
+Verbatim (Q4K, fix disabled): `pass=0 -> FAIL (… Invalid sampling probability …
+NaN …)`, `pass=1 -> FAIL (…)`, then PASS once the length leaves the window. Fix
+enabled: all passes PASS. E4B `prefix_repro` and `nan_repro` remain PASS (no
+regression). Decode throughput unaffected (E4B `text_tps` 73.1 tok/s; 12B decodes
+normally — 8 gen tok/pass in `prefix_repro`).
+
+**Why the in-app daemon still failed.** The shipped daemon binary was not running
+the fixed kernel: it linked a candle build that predated (or excluded) the
+`sdpa.rs` change. Rebuilding clean — `RUSTFLAGS="" cargo build --release -p
+fae-daemon` — links the fixed candle and is the resolution. (The repro driver
+proves the fix is correct and complete; the failure was a stale-artifact
+linkage, not a missing second fix.)
+
+**Upstream.** No amendment to the candle change is required — the single
+`do_causal && !has_mask` one-liner covers E4B and 12B (both head_dim 256, both
+quants). The same PR description stands.
