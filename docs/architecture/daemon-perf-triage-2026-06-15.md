@@ -111,10 +111,10 @@ Recommended actions, in priority order:
 1. **File upstream** against EricLBuehler/mistral.rs with the replayable payload
    (`/tmp/fae-dumps/inject-…-r4.json`) and the two error strings. This is the only
    real fix. Tracks the existing `reference_gemma4_metal_nan_bug.md` lead.
-2. **Bump the pin** to a newer mistral.rs/candle rev and re-run `asr_replay` on the
-   r4 payload; if it stops NaN-ing, that's the cure. (Not done here: a blind pin bump
-   is unverifiable in-session and risks regressing the sdpa/SWA fixes the current pin
-   was chosen for.)
+2. **Bump the pin** to a newer mistral.rs/candle rev — **TESTED, not a cure** (see
+   "Pin-bump test" below). Bumping `c22c2e2b → master ab001013` (2026-06-15) leaves
+   the deterministic repro FAILing on both Q4K and Q8_0. Re-test on future revs with
+   `examples/nan_repro.rs`.
 3. **Harden the daemon retry net** (`session.rs` `NAN_RETRY_PADS`): the current coarse
    `[4, 24, 80]` pads provably fail to escape on the r4 payload (it still NaN-ed after
    1-char, multi-word, and sentence-length trailing-content changes). A finer
@@ -143,4 +143,41 @@ RUST_LOG=info FAE_MODEL_ID=google/gemma-4-E4B-it \
 # the real failure on the live prompt shape (NaN logits):
 RUST_LOG=info FAE_MODEL_ID=google/gemma-4-E4B-it \
   cargo run --release -p fae-engine --example asr_replay -- --payload /tmp/fae-dumps/inject-1781284748314-r4.json
+```
+
+## Pin-bump test (2026-06-15) — `c22c2e2b → ab001013` does NOT cure the NaN
+
+**Upstream status:** mistral.rs issue **#2214** (this project's report — exact repro:
+38,000-char filler system + 633-char user) and cross-ref **#2051** are both **OPEN**
+with no fix PR and no closing reference. The only commit touching the Gemma-4 path
+since the pin is **#2227 (`2ff671b9`, diffusiongemma)** — it adds a
+`requires_full_prefill_queries` guard to the KV-sharing fast-prefill plan
+(`gemma4/text.rs`), which is unrelated to the Metal attention/ISQ kernel tiling the
+issue author identified as root cause. **candle is pinned at the same `d2afd7f`** on
+both mistral.rs revs, so the kernel where the NaN lives is byte-identical.
+
+**Empirical test** via `examples/nan_repro.rs` (the exact #2214 synthetic payload),
+real runs on M5 Max, `RESULT: PASS`/`FAIL`:
+
+| mistral.rs rev | Q4K | Q8_0 |
+|---|---|---|
+| `c22c2e2b` (current pin, BEFORE) | **FAIL** (NaN) | **FAIL** (NaN) |
+| `ab001013` (master HEAD, AFTER bump) | **FAIL** (NaN) | **FAIL** (NaN) |
+
+Verbatim on all four runs:
+```
+RESULT: FAIL (inference failed: Invalid sampling probability at index 2: NaN. The model likely produced NaN/Inf logits.)
+```
+
+**Outcome:** bump **reverted** (Cargo.toml + Cargo.lock back to `c22c2e2b`). The bump
+compiled cleanly against the new API (E4B loaded in 13 s; only public-API change was
+an added `BlockDenoisingProgress` export — no adapter breakage), so a future bump is
+mechanically safe; it just doesn't fix the NaN yet. Kept on the branch: the
+`nan_repro.rs` regression harness (re-run on any future pin to detect a FAIL→PASS) and
+a Cargo.toml comment recording this negative result.
+
+```
+# deterministic NaN repro (FAIL on c22c2e2b, both quants):
+FAE_ISQ=Q4K  FAE_MODEL_ID=google/gemma-4-E4B-it cargo run --release -p fae-engine --example nan_repro
+FAE_ISQ=Q8_0 FAE_MODEL_ID=google/gemma-4-E4B-it cargo run --release -p fae-engine --example nan_repro
 ```
