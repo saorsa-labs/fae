@@ -84,16 +84,20 @@ final class FaeConfigStaticTests: XCTestCase {
     // MARK: - daemonModelId RAM tiering
     //
     // Why this matters: the daemon LLM lane is the default conversation path.
-    // On ≥32 GB Macs `auto` must resolve to the unified Gemma 4 12B (native
-    // audio replaces the E4B + separate-ASR setup); below that it must stay on
-    // E4B so smaller machines never try to pull the ~24 GB 12B weights.
+    // TEMPORARY (2026-06-15): the ≥32 GB → 12B tier is DEFERRED — `auto` resolves
+    // to E4B on ALL machines. E4B is the verified-clean, fast model (the Gemma-4
+    // Metal NaN fix, candle PR #3625, is confirmed on E4B); 12B's exact-payload
+    // NaN verification + the prompt-budget trim are still pending (see
+    // project_daemon_metal_nan_fix). Explicit `gemma_4_12b` still forces 12B.
+    // Restore the ≥32 GB → 12B assertion when the tier is re-enabled.
 
-    func testDaemonModelIdAutoSelects12BOn32GBPlus() {
+    func testDaemonModelIdAutoUsesE4BEverywhereForNow() {
+        // 12B tier deferred: `auto` must stay on E4B even at high RAM.
         let id = FaeConfig.daemonModelId(
             preset: "auto",
-            totalMemoryBytes: 32 * 1024 * 1024 * 1024
+            totalMemoryBytes: 128 * 1024 * 1024 * 1024
         )
-        XCTAssertEqual(id, "google/gemma-4-12B-it")
+        XCTAssertEqual(id, "google/gemma-4-E4B-it")
     }
 
     func testDaemonModelIdAutoStaysOnE4BBelow32GB() {

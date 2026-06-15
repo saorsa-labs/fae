@@ -519,9 +519,10 @@ struct FaeConfig: Codable {
     ///
     /// Model id exported as `FAE_MODEL_ID` for the daemon LLM lane. The daemon
     /// (mistral.rs) loads its own weights independently of the MLX preset
-    /// catalogue and downloads them on first use. `auto` tiers by system RAM:
-    /// ≥32 GB gets the unified 12B (native audio replaces E4B + planned
-    /// dual-ASR); below that stays on E4B.
+    /// catalogue and downloads them on first use. TEMPORARY (2026-06-15): `auto`
+    /// resolves to E4B on ALL machines — the ≥32 GB → 12B tier is deferred until
+    /// 12B's NaN exact-payload verification + the prompt-budget trim land (see
+    /// project_daemon_metal_nan_fix). Explicit `gemma_4_12b` still forces 12B.
     static func daemonModelId(preset: String, totalMemoryBytes: UInt64? = nil) -> String {
         switch canonicalVoiceModelPreset(preset) {
         case "gemma_4_12b":
@@ -529,12 +530,16 @@ struct FaeConfig: Codable {
             // audio (ASR-in-turn), 256K context, Apache-2.0.
             return "google/gemma-4-12B-it"
         case "auto":
-            let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory)
-                / (1024 * 1024 * 1024)
-            // ≥32 GB: single unified 12B (native audio) replaces E4B + the
-            // planned dedicated-ASR setup — smarter, one model, ~24 GB bf16
-            // ISQ'd at load. 16-31 GB and below stay on E4B.
-            return totalGB >= 32 ? "google/gemma-4-12B-it" : "google/gemma-4-E4B-it"
+            // TEMPORARY (2026-06-15): E4B on ALL machines; the ≥32 GB → 12B tier
+            // is deferred. E4B is the verified-clean, fast model — the Gemma-4
+            // Metal NaN fix (candle PR #3625) is confirmed on E4B, whereas 12B's
+            // ~13k-token prompt prefills in ~120 s and its exact-payload NaN
+            // verification is still pending (see project_daemon_metal_nan_fix).
+            // Re-enable the ≥32 GB → 12B tier once the prompt-budget trim + an
+            // exact-payload replay prove 12B is clean and fast. The explicit
+            // `gemma_4_12b` preset still forces 12B for testing.
+            _ = totalMemoryBytes  // RAM tiering parked until 12B is re-enabled
+            return "google/gemma-4-E4B-it"
         default:
             return "google/gemma-4-E4B-it"
         }
