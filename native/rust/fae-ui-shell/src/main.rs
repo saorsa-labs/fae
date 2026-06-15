@@ -14,7 +14,7 @@ use protocol::{
     ShellCommand, SkillSummary,
 };
 use tao::{
-    dpi::{PhysicalPosition, PhysicalSize},
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::{ElementState, Event, KeyEvent, MouseButton, StartCause, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
     keyboard::KeyCode,
@@ -516,9 +516,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut orb_ui = OrbUiModel::new();
     let mut cursor_position = PhysicalPosition::new(210.0, 210.0);
     let mut web_panels: Vec<WebPanel> = Vec::new();
-    let pill = open_pill_panel(&event_loop)?;
+    let mut pill = open_pill_panel(&event_loop, &panel_proxy)?;
     position_pill(window, &pill);
-    let mut hovering = false;
     let mut last_pill: Option<(String, String)> = None;
     // When Fae entered thinking mode — drives the pill's elapsed counter so
     // long turns (NaN retries can take 30s+) read as progress, not a hang.
@@ -527,7 +526,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // starts capture (release sends); moving past the slop before the hold
     // fires means the user is dragging the orb, not talking.
     let mut press = PressState::Idle;
-    refresh_pill(&pill, &orb_ui, hovering, None, &mut last_pill);
+    push_pill_messages(&pill, &orb_ui);
+    refresh_pill(&pill, &orb_ui, None, &mut last_pill);
 
     event_loop.run(move |event, target, control_flow| {
         // Active turns and a pending long-press render flat-out (Poll). When
@@ -576,17 +576,31 @@ fn main() -> Result<(), Box<dyn Error>> {
                     thinking_since = None;
                 }
                 pill.window.set_visible(window.is_visible());
+                // Conversation/ClearConversation update the message list; pushing
+                // every bridge command is idempotent and keeps the pill's latest
+                // line and expanded log in sync without a special-case match.
+                push_pill_messages(&pill, &orb_ui);
                 refresh_pill(
                     &pill,
                     &orb_ui,
-                    hovering,
                     thinking_since.map(|since| since.elapsed().as_secs()),
                     &mut last_pill,
                 );
                 window.request_redraw();
             }
             Event::UserEvent(UserEvent::PanelAction(action_json)) => {
-                emit_panel_action(&action_json);
+                // The pill drives expand/collapse locally (window resize); all
+                // other panel actions (send_text, set_access, …) forward to Swift.
+                match serde_json::from_str::<serde_json::Value>(&action_json)
+                    .ok()
+                    .as_ref()
+                    .and_then(|value| value.get("type"))
+                    .and_then(|kind| kind.as_str())
+                {
+                    Some("pill_expand") => set_pill_expanded(&mut pill, window, true),
+                    Some("pill_collapse") => set_pill_expanded(&mut pill, window, false),
+                    _ => emit_panel_action(&action_json),
+                }
             }
             Event::WindowEvent {
                 event, window_id, ..
@@ -615,26 +629,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                }
-                WindowEvent::CursorEntered { .. } => {
-                    hovering = true;
-                    refresh_pill(
-                        &pill,
-                        &orb_ui,
-                        hovering,
-                        thinking_since.map(|since| since.elapsed().as_secs()),
-                        &mut last_pill,
-                    );
-                }
-                WindowEvent::CursorLeft { .. } => {
-                    hovering = false;
-                    refresh_pill(
-                        &pill,
-                        &orb_ui,
-                        hovering,
-                        thinking_since.map(|since| since.elapsed().as_secs()),
-                        &mut last_pill,
-                    );
                 }
                 WindowEvent::Moved(_) => {
                     position_pill(window, &pill);
@@ -689,19 +683,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                         emit_menu_action(MenuAction::TalkStop);
                     }
                     PressState::Pending { .. } => {
-                        // A short stationary click: not a gesture — pulse the
-                        // pill so the hold/drag affordances get taught.
+                        // A short stationary click does nothing: the orb is
+                        // drag-only (move it), long-press to talk, right-click
+                        // for the menu. The pill is the conversation surface.
                         press = PressState::Idle;
-                        if let Err(error) = pill.webview.evaluate_script("window.__pillPulse();") {
-                            log::warn!("failed to pulse whisper pill: {error}");
-                        }
-                        refresh_pill(
-                            &pill,
-                            &orb_ui,
-                            true,
-                            thinking_since.map(|since| since.elapsed().as_secs()),
-                            &mut last_pill,
-                        );
                     }
                     PressState::Idle => {}
                 },
@@ -710,7 +695,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::WindowEvent {
                 event, window_id, ..
             } => {
-                if matches!(event, WindowEvent::CloseRequested) {
+                if window_id == pill.window.id() {
+                    // Click-away / focus to another window collapses the pill
+                    // back to its single-line caption.
+                    if matches!(event, WindowEvent::Focused(false)) && pill.expanded {
+                        set_pill_expanded(&mut pill, window, false);
+                    }
+                } else if matches!(event, WindowEvent::CloseRequested) {
                     web_panels.retain(|panel| panel.window.id() != window_id);
                 }
             }
@@ -734,7 +725,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     refresh_pill(
                         &pill,
                         &orb_ui,
-                        hovering,
                         thinking_since.map(|since| since.elapsed().as_secs()),
                         &mut last_pill,
                     );
@@ -1042,7 +1032,16 @@ fn handle_menu_action(
 struct PillPanel {
     window: Window,
     webview: WebView,
+    /// Collapsed = one-line caption; expanded = scrollable history + composer.
+    /// Drives the two window sizes and the JS `__faeExpand` toggle.
+    expanded: bool,
 }
+
+/// The pill's two window sizes, in **logical** points so the HTML/CSS (authored
+/// in CSS px) lays out identically on 1x and retina displays — a `PhysicalSize`
+/// here would halve the pill on a 2x screen and crush the composer layout.
+const COLLAPSED_PILL: LogicalSize<u32> = LogicalSize::new(360, 52);
+const EXPANDED_PILL: LogicalSize<u32> = LogicalSize::new(360, 440);
 
 /// Orb long-press gesture state: hold ≥ [`LONG_PRESS_MS`] without moving past
 /// [`PRESS_SLOP_PX`] → talk (release sends); move first → drag the orb.
@@ -1089,19 +1088,20 @@ fn build_webview_for_window<'a>(
 
 fn open_pill_panel(
     target: &tao::event_loop::EventLoop<UserEvent>,
+    panel_proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
 ) -> Result<PillPanel, Box<dyn Error>> {
+    // The pill is now the conversation surface: it must accept clicks and
+    // keyboard focus (for the composer), so unlike the old caption window it is
+    // neither click-through nor unfocused.
     let window = WindowBuilder::new()
-        .with_title("Fae Status")
-        .with_inner_size(PhysicalSize::new(380, 48))
+        .with_title("Fae Conversation")
+        .with_inner_size(COLLAPSED_PILL)
         .with_resizable(false)
         .with_decorations(false)
         .with_transparent(true)
         .with_always_on_top(true)
-        .with_focused(false)
         .build(target)?;
-    if let Err(error) = window.set_ignore_cursor_events(true) {
-        log::warn!("pill window could not be made click-through: {error}");
-    }
+    let proxy = panel_proxy.clone();
     let webview = build_webview_for_window(
         &window,
         WebViewBuilder::new()
@@ -1109,58 +1109,195 @@ fn open_pill_panel(
             // Belt-and-braces: WKWebView paints a white canvas in light mode even
             // with a transparent body unless the background colour is cleared too.
             .with_background_color((0, 0, 0, 0))
-            .with_html(PILL_HTML),
+            .with_html(PILL_HTML)
+            .with_ipc_handler(move |request| {
+                if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone()))
+                {
+                    log::warn!("failed to forward pill IPC: {error}");
+                }
+            }),
     )?;
-    Ok(PillPanel { window, webview })
+    Ok(PillPanel {
+        window,
+        webview,
+        expanded: false,
+    })
+}
+
+/// Toggle the pill between its collapsed caption and the expanded conversation
+/// surface: resize the window, re-tuck it under the orb, drive the JS, and on
+/// expand pull keyboard focus so the composer is ready to type.
+fn set_pill_expanded(pill: &mut PillPanel, orb_window: &Window, expanded: bool) {
+    pill.expanded = expanded;
+    pill.window.set_inner_size(if expanded {
+        EXPANDED_PILL
+    } else {
+        COLLAPSED_PILL
+    });
+    position_pill(orb_window, pill);
+    let script = if expanded {
+        "window.__faeExpand(true);"
+    } else {
+        "window.__faeExpand(false);"
+    };
+    if let Err(error) = pill.webview.evaluate_script(script) {
+        log::warn!("failed to toggle pill expansion: {error}");
+    }
+    if expanded {
+        pill.window.set_focus();
+    }
+}
+
+/// Push the conversation history into the pill so it can show the latest line
+/// when collapsed and the full scrollable log when expanded. Roles map to the
+/// JS palette: `user`→"you" (heather), `fae`/`assistant`→"fae" (gold).
+fn push_pill_messages(pill: &PillPanel, orb_ui: &OrbUiModel) {
+    let payload = orb_ui
+        .messages
+        .iter()
+        .map(|message| {
+            let role = match message.role.to_lowercase().as_str() {
+                "user" => "you".to_string(),
+                "fae" | "assistant" => "fae".to_string(),
+                _ => message.role.clone(),
+            };
+            serde_json::json!({ "role": role, "text": message.text })
+        })
+        .collect::<Vec<_>>();
+    let json = serde_json::to_string(&payload).unwrap_or_else(|_| "[]".to_string());
+    if let Err(error) = pill
+        .webview
+        .evaluate_script(&format!("window.__faeSetMessages({json});"))
+    {
+        log::warn!("failed to push pill messages: {error}");
+    }
 }
 
 const PILL_HTML: &str = r#"<!doctype html><html><head><meta charset='utf-8'><style>
-:root{color-scheme:dark}
-html,body{margin:0;background:transparent;overflow:hidden;height:100%}
-#pill{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:94%;
- display:flex;align-items:center;gap:7px;padding:7px 14px;border-radius:9999px;
- background:rgba(26,24,32,.84);border:1px solid rgba(180,168,196,.25);
- color:#CEC4DC;font:12px -apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap;
- overflow:hidden;text-overflow:ellipsis;opacity:0;
- transition:opacity .2s cubic-bezier(0,0,.2,1);box-shadow:0 8px 30px rgba(0,0,0,.35)}
-#pill.show{opacity:1}
-#pill.hint{border-color:rgba(212,169,52,.5);color:#E6C05A}
-#pill.listen{border-color:rgba(122,155,142,.7)}
-#pill.alert{border-color:rgba(196,120,138,.6);color:#C4788A}
-#dot{width:7px;height:7px;border-radius:50%;background:#7A9B8E;display:none;flex:none}
-#pill.listen #dot{display:block;animation:pulse 1.2s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.4;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
-@keyframes nudge{0%,100%{transform:translate(-50%,-50%) scale(1)}40%{transform:translate(-50%,-50%) scale(1.07)}}
+:root{color-scheme:dark;
+ --bg:rgba(22,20,28,.78);--border:rgba(180,168,196,.22);
+ --text:rgba(255,255,255,.92);--muted:#9A90A8;--you:#B4A8C4;--fae:#D4A934;
+ --serif:ui-serif,Georgia,'Times New Roman',serif;
+ --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;
+ font-family:var(--sans);color:var(--text)}
+#shell{position:absolute;inset:8px;display:flex;flex-direction:column;
+ background:var(--bg);border:1px solid var(--border);border-radius:9999px;
+ box-shadow:0 10px 34px rgba(0,0,0,.42);
+ -webkit-backdrop-filter:blur(22px) saturate(1.1);backdrop-filter:blur(22px) saturate(1.1);
+ opacity:0;transform:translateY(2px);overflow:hidden;
+ transition:opacity .22s cubic-bezier(0,0,.2,1),border-radius .26s cubic-bezier(.4,0,.2,1)}
+#shell.show{opacity:1;transform:none}
+#shell.expanded{border-radius:18px}
+#line{display:flex;align-items:center;gap:9px;height:34px;min-height:34px;
+ padding:0 15px;cursor:pointer;white-space:nowrap;overflow:hidden}
+#shell.expanded #line{display:none}
+#dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--muted);
+ transition:background .2s,box-shadow .2s}
+#dot.you{background:var(--you)}
+#dot.fae{background:var(--fae);box-shadow:0 0 8px rgba(212,169,52,.5)}
+#dot.live{animation:pulse 1.3s ease-in-out infinite}
+#line.listen #dot{background:#8FB8A2;animation:pulse 1.2s ease-in-out infinite}
+#txt{font:13px/1.3 var(--serif);overflow:hidden;text-overflow:ellipsis;flex:1 1 auto}
+#line.muted #txt{color:var(--muted);font-family:var(--sans);font-size:12px}
+@keyframes pulse{0%,100%{opacity:.45;transform:scale(.82)}50%{opacity:1;transform:scale(1.12)}}
+#exp{display:none;flex-direction:column;flex:1 1 auto;min-height:0}
+#shell.expanded #exp{display:flex}
+#head{display:flex;align-items:center;justify-content:space-between;padding:11px 15px 7px;flex:none}
+#head .l{font:11px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#cl{cursor:pointer;color:var(--muted);font-size:14px;line-height:1;padding:2px 6px;border-radius:6px}
+#cl:hover{color:var(--text);background:rgba(255,255,255,.06)}
+#log{flex:1 1 auto;min-height:0;overflow-y:auto;padding:4px 15px 8px;
+ display:flex;flex-direction:column;gap:9px;scroll-behavior:smooth}
+#log::-webkit-scrollbar{width:7px}
+#log::-webkit-scrollbar-thumb{background:rgba(180,168,196,.22);border-radius:9999px}
+.msg{display:flex;gap:9px;align-items:flex-start;animation:rise .2s ease-out}
+.msg .d{width:6px;height:6px;border-radius:50%;margin-top:6px;flex:none;background:var(--muted)}
+.msg.you .d{background:var(--you)}.msg.fae .d{background:var(--fae)}
+.msg .b{font:13px/1.42 var(--serif);white-space:pre-wrap;word-break:break-word}
+.msg.you .b{color:#CEC4DC}
+@keyframes rise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+#cmp{display:flex;align-items:center;gap:8px;padding:9px 11px 11px;flex:none;
+ border-top:1px solid rgba(180,168,196,.14)}
+#in{flex:1 1 auto;background:rgba(255,255,255,.04);border:1px solid var(--border);
+ border-radius:9999px;padding:8px 13px;color:var(--text);font:13px var(--serif);outline:none}
+#in::placeholder{color:var(--muted)}
+#in:focus{border-color:rgba(212,169,52,.5)}
+#snd{flex:none;width:30px;height:30px;border-radius:50%;border:none;cursor:pointer;
+ background:var(--fae);color:#0F1013;font-size:15px;font-weight:600;
+ display:flex;align-items:center;justify-content:center;opacity:.5;transition:opacity .15s}
+#snd.ready{opacity:1}
 </style></head><body>
-<div id='pill'><span id='dot'></span><span id='txt'></span></div>
-<script>
-window.__setPill=function(text,kind){var p=document.getElementById('pill');
- if(!text){p.className='';return;}
- document.getElementById('txt').textContent=text;p.className='show '+(kind||'info');};
-window.__pillPulse=function(){var p=document.getElementById('pill');
- p.style.animation='none';void p.offsetWidth;p.style.animation='nudge .3s ease-out';};
-</script></body></html>"#;
+<div id='shell'>
+ <div id='line'><span id='dot'></span><span id='txt'></span></div>
+ <div id='exp'>
+  <div id='head'><span class='l'>Conversation</span><span id='cl'>⌄</span></div>
+  <div id='log'></div>
+  <div id='cmp'><input id='in' placeholder='Message Fae…' autocomplete='off'/><button id='snd'>↑</button></div>
+ </div>
+</div>
+<script>(function(){
+var shell=document.getElementById('shell'),line=document.getElementById('line'),
+ dot=document.getElementById('dot'),txt=document.getElementById('txt'),log=document.getElementById('log'),
+ input=document.getElementById('in'),snd=document.getElementById('snd'),cl=document.getElementById('cl');
+var messages=[],status=null;
+var post=function(o){if(window.ipc&&window.ipc.postMessage)window.ipc.postMessage(JSON.stringify(o));};
+function rc(r){return r==='fae'?'fae':((r==='you'||r==='user')?'you':'');}
+function renderLine(){
+ if(status){line.className=(status.kind||'');dot.className=status.live?'live':'';
+  txt.textContent=status.text;line.classList.toggle('muted',status.muted===true);return;}
+ var m=messages[messages.length-1];
+ if(m){line.className='';dot.className=rc(m.role);txt.textContent=m.text;}
+ else{line.className='muted';dot.className='';txt.textContent='Hold ⌥ or click to talk';}
+}
+function renderLog(){log.innerHTML='';messages.forEach(function(m){
+ var e=document.createElement('div');e.className='msg '+rc(m.role);
+ var d=document.createElement('span');d.className='d';
+ var b=document.createElement('span');b.className='b';b.textContent=m.text;
+ e.appendChild(d);e.appendChild(b);log.appendChild(e);});log.scrollTop=log.scrollHeight;}
+window.__faeSetMessages=function(a){messages=a||[];shell.classList.add('show');renderLine();
+ if(shell.classList.contains('expanded'))renderLog();};
+window.__faeSetStatus=function(kind,text,opts){opts=opts||{};
+ status=kind?{kind:kind,text:text,live:opts.live===true,muted:opts.muted===true}:null;
+ shell.classList.add('show');renderLine();};
+window.__faeExpand=function(on){if(on){shell.classList.add('expanded');renderLog();
+ setTimeout(function(){input.focus();},30);}else{shell.classList.remove('expanded');input.blur();renderLine();}};
+line.addEventListener('click',function(){post({type:'pill_expand'});});
+cl.addEventListener('click',function(){post({type:'pill_collapse'});});
+input.addEventListener('input',function(){snd.classList.toggle('ready',input.value.trim().length>0);});
+function submit(){var t=input.value.trim();if(!t)return;post({type:'send_text',text:t});input.value='';snd.classList.remove('ready');}
+snd.addEventListener('click',submit);
+input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}
+ else if(e.key==='Escape'){post({type:'pill_collapse'});}});
+renderLine();
+})();</script></body></html>"#;
 
-/// What the pill should say right now, or None to fade it out.
-/// Owner decision (2026-06-12): Right ⌥ hold-to-talk is THE capture gesture
-/// — the mouse only moves the orb — so every line teaches the key, not clicks.
-fn pill_content(
+/// The live status line the pill should show during a turn, or None to clear it
+/// (so the pill falls back to the latest conversation message). Returns
+/// `(kind, text, opts)` where `opts` is a JS object literal forwarded verbatim
+/// to `__faeSetStatus`. Owner decision: status takes priority over the latest
+/// message while Fae is busy; when it clears, the message shows through.
+fn pill_status(
     orb_ui: &OrbUiModel,
-    hovering: bool,
     thinking_secs: Option<u64>,
-) -> Option<(String, &'static str)> {
+) -> Option<(&'static str, String, &'static str)> {
     match orb_ui.status_phase.as_str() {
         "starting" => {
             let pct = orb_ui
                 .status_progress
                 .map(|value| format!(" · {}%", (value * 100.0).round()))
                 .unwrap_or_default();
-            Some((format!("{}{}", orb_ui.status_message, pct), "info"))
+            Some(("info", format!("{}{}", orb_ui.status_message, pct), "{}"))
         }
-        "error" => Some(("Fae needs attention — open Messages".to_string(), "alert")),
+        "error" => Some(("alert", "Fae needs attention".to_string(), "{}")),
         "stopping" | "stopped" => None,
         _ => match orb_ui.ui_mode {
-            FaeUiState::Listening => Some(("Listening — let go to send".to_string(), "listen")),
+            FaeUiState::Listening => Some((
+                "listen",
+                "Listening — let go to send".to_string(),
+                "{live:true}",
+            )),
             FaeUiState::Thinking => {
                 // Long turns (NaN retries) can run 30s+: a ticking counter
                 // reads as progress where a static label reads as a hang.
@@ -1168,24 +1305,23 @@ fn pill_content(
                     Some(secs) if secs >= 5 => format!("Thinking — {secs}s"),
                     _ => "Thinking…".to_string(),
                 };
-                Some((text, "info"))
+                Some(("info", text, "{live:true}"))
             }
-            FaeUiState::Speaking => Some(("Speaking — tap ⌥ to interrupt".to_string(), "info")),
+            FaeUiState::Speaking => {
+                Some(("info", "Speaking — tap ⌥ to interrupt".to_string(), "{}"))
+            }
             FaeUiState::Quiescent => {
                 if !orb_ui.has_user_message() {
                     // The one teaching moment that matters: shown until the
                     // user's first turn of the session.
                     Some((
-                        "Hold Right ⌥ (or hold me) and speak — let go to send".to_string(),
                         "hint",
-                    ))
-                } else if hovering {
-                    Some((
-                        "Hold ⌥ or press-and-hold to talk · drag to move · right-click for menu"
-                            .to_string(),
-                        "hint",
+                        "Hold ⌥ or click to talk".to_string(),
+                        "{muted:true}",
                     ))
                 } else {
+                    // Idle with history: clear status so the pill shows the
+                    // latest message.
                     None
                 }
             }
@@ -1196,27 +1332,27 @@ fn pill_content(
 fn refresh_pill(
     pill: &PillPanel,
     orb_ui: &OrbUiModel,
-    hovering: bool,
     thinking_secs: Option<u64>,
     last: &mut Option<(String, String)>,
 ) {
-    let content = pill_content(orb_ui, hovering, thinking_secs);
-    let keyed = content
-        .as_ref()
-        .map(|(text, kind)| (text.clone(), (*kind).to_string()));
-    if *last == keyed {
+    let status = pill_status(orb_ui, thinking_secs);
+    let keyed = match &status {
+        Some((kind, text, _)) => ((*kind).to_string(), text.clone()),
+        None => ("__clear__".to_string(), String::new()),
+    };
+    if last.as_ref() == Some(&keyed) {
         return;
     }
-    *last = keyed;
-    let script = match content {
-        Some((text, kind)) => {
+    *last = Some(keyed);
+    let script = match status {
+        Some((kind, text, opts)) => {
             let text_json = serde_json::to_string(&text).unwrap_or_else(|_| "\"\"".to_string());
-            format!("window.__setPill({text_json}, '{kind}');")
+            format!("window.__faeSetStatus('{kind}', {text_json}, {opts});")
         }
-        None => "window.__setPill(null);".to_string(),
+        None => "window.__faeSetStatus(null);".to_string(),
     };
     if let Err(error) = pill.webview.evaluate_script(&script) {
-        log::warn!("failed to refresh whisper pill: {error}");
+        log::warn!("failed to refresh pill status: {error}");
     }
 }
 
