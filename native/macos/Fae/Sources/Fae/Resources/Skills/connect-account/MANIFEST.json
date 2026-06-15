@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [],
+  "dataClasses": [
+    "email",
+    "calendar",
+    "contacts",
+    "personal_data"
+  ],
+  "riskTier": "high",
+  "timeoutSeconds": 120,
+  "allowNetwork": true,
+  "allowSubprocess": true,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "5f4768b9069f6ce99a9ff9a0c19902d86f6a37ee01a72831d85ab8a162c55dfd",
+      "scripts/connect_account.py": "18a3c6a061b60ba52288753b16d03a25f92af46b69d8536c37875ec1dcdd7bd1"
+    },
+    "signature": null
+  }
+}
