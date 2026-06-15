@@ -1,0 +1,58 @@
+[package]
+name = "mistralrs-pyo3"
+publish = false
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "mistralrs"
+crate-type = ["cdylib"]
+doc = false
+
+[dependencies]
+pyo3.workspace = true
+mistralrs-core = { workspace = true, features = ["pyo3_macros"] }
+mistralrs-mcp = { workspace = true, features = ["pyo3_macros"] }
+serde.workspace = true
+serde_json.workspace = true
+candle-core.workspace = true
+indexmap.workspace = true
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+either.workspace = true
+futures.workspace = true
+tokio.workspace = true
+image.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+url.workspace = true
+data-url.workspace = true
+anyhow.workspace = true
+itertools.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
+cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
+metal = ["candle-core/metal", "mistralrs-core/metal"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+accelerate = ["mistralrs-core/accelerate"]
+mkl = ["mistralrs-core/mkl"]
+nccl = ["mistralrs-core/nccl"]
+ring = ["mistralrs-core/ring"]
+code-execution = ["mistralrs-core/code-execution"]
+
+[package.metadata.maturin]
+include = ["mistralrs.pyi", "py.typed"]
+sdist-include = ["mistralrs.pyi", "py.typed"]

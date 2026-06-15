@@ -1,4 +1,15 @@
 # Fae headless-core workspace (Phase 1). Run from crates/.
+#
+# Clear the inherited `RUSTFLAGS="-D warnings"` (set in the dev shell profile)
+# for every recipe. With the vendored mistral.rs + candle path-patches
+# (../vendor, branch daemon-metal-fix), env-level `-D warnings` would escalate
+# upstream's own warnings into hard errors during dependency compilation —
+# cargo only auto-caps lints for *git/registry* deps, not path deps, and env
+# RUSTFLAGS bypasses that cap. The zero-warning gate for OUR crates is the
+# explicit `cargo clippy -- -D warnings` step below: clippy caps lints on path
+# deps (they warn, never fail) while still hard-failing on workspace members.
+export RUSTFLAGS := ""
+
 default: check
 
 # Full validation — zero warnings, all tests.

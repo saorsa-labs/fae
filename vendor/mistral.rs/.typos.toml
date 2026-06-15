@@ -1,0 +1,80 @@
+[files]
+extend-exclude = [
+    ".git/",
+    "calibration_data/",
+    "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
+    "mistralrs-cli/static/",
+    "CLAUDE.md",
+]
+ignore-hidden = false
+
+[default]
+extend-ignore-re = [
+    "cudaDevAttrMaxSharedMemoryPerBlockOptin",
+    '"tese"',
+    "setp\\.ne\\.b32",
+    # metal_kernels
+    "out uneeded values",
+    "copy_gg_dynamic_nd1",
+    "copy_gg_dynamic_nd2",
+    "copy_gg_dynamic_nd3",
+    "copy_g_nd1",
+    "copy_g_nd2",
+    "copy_g_nd3",
+    "copy_gg_nd1",
+    "copy_gg_nd2",
+    "copy_gg_nd3",
+    "elem_to_loc_2_nd",
+    "elem_to_loc_3_nd",
+    "thr_reduce",
+    "(?i)thw",
+    "iy",
+    "mxfp4_get_max_smem_optin",
+    "alog",
+    "ba",
+    # mmq_gguf CUDA kernels (ggml port)
+    "ggml_cuda_get_max_cpy_bytes",
+    "nb_per_cpy",
+    "ggml_cuda_ue4m3_to_fp32",
+    "ue4m3",
+    "UE4M3",
+    "ue8m0",
+    "CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN",
+    "PNGs",
+]
+
+[default.extend-words]
+"ammount" = "ammount"
+"layrnorm" = "layrnorm"
+"ot" = "ot"
+"thr" = "thr"
+
+[default.extend-identifiers]
+"AtomLayoutNdKV" = "AtomLayoutNdKV"
+
+[type.rust.extend-identifiers]
+"arange" = "arange"
+"arange_step" = "arange_step"
+"cna" = "cna"
+"from_mmaped_safetensors" = "from_mmaped_safetensors"
+"MmapedSafetensors" = "MmapedSafetensors"
+"nin_shortcut" = "nin_shortcut"
+"EmbedNd" = "EmbedNd"
+"gather_nd" = "gather_nd"
+"i_thw" = "i_thw"
+"cached_img_thw" = "cached_img_thw"
+"cached_vid_thw" = "cached_vid_thw"
+"video_grid_thw" = "video_grid_thw"
+"image_grid_thw" = "image_grid_thw"
+"grid_thw" = "grid_thw"
+"vision_grid_thw" = "vision_grid_thw"
+"video_grid_thw_accum" = "video_grid_thw_accum"
+"image_grid_thw_accum" = "image_grid_thw_accum"
+"image_thw" = "image_thw"
+"video_thw" = "video_thw"
+"depthwise_seperable_out_channel" = "depthwise_seperable_out_channel"
+"default_depthwise_seperable_out_channel" = "default_depthwise_seperable_out_channel"
+"DepthWiseSeperableConv1d" = "DepthWiseSeperableConv1d"
+"layrnorm" = "layrnorm"
+"pre_layrnorm" = "pre_layrnorm"
+"numer_denom_ms" = "numer_denom_ms"

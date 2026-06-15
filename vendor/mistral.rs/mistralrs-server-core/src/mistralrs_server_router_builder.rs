@@ -1,0 +1,350 @@
+//! ## mistral.rs server router builder.
+
+use anyhow::Result;
+use axum::{
+    extract::DefaultBodyLimit,
+    http::{self, header::HeaderName, Method},
+    middleware,
+    routing::{get, post},
+    Extension, Router,
+};
+use tower_http::cors::{AllowOrigin, CorsLayer};
+#[cfg(feature = "swagger-ui")]
+use utoipa_swagger_ui::SwaggerUi;
+
+#[cfg(feature = "swagger-ui")]
+use crate::openapi_doc::get_openapi_doc;
+use crate::{
+    anthropic::{anthropic_count_tokens, anthropic_messages},
+    approvals::{resolve_agent_approval, ApprovalBroker},
+    chat_completion::chatcompletions,
+    completions::completions,
+    embeddings::embeddings,
+    files::{delete_file, get_file, get_file_content, list_files},
+    handlers::{
+        calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
+        get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
+        tune_model, unload_model,
+    },
+    image_generation::image_generation,
+    metrics::{metrics, track_metrics},
+    responses::{cancel_response, create_response, delete_response, get_response},
+    route_registry::{
+        AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
+        CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
+        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, EMBEDDINGS_ROUTE,
+        FILES_ROUTE, FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
+        MODELS_ROUTE, MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE,
+        RE_ISQ_ROUTE, ROOT_ROUTE, SESSION_ROUTE, SPEECH_GENERATION_ROUTE, SYSTEM_DOCTOR_ROUTE,
+        SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+    },
+    speech_generation::speech_generation,
+    types::SharedMistralRsState,
+};
+
+/// Server-level defaults for agentic features.
+/// Injected as an axum Extension so handlers can apply them to incoming requests.
+#[derive(Clone, Default)]
+pub struct AgenticDefaults {
+    pub max_tool_rounds: Option<usize>,
+    pub tool_dispatch_url: Option<String>,
+    pub agent_permission: Option<mistralrs_core::AgentPermission>,
+    pub approval_broker: ApprovalBroker,
+}
+
+// NOTE(EricLBuehler): Accept up to 50mb input
+const N_INPUT_SIZE: usize = 50;
+const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
+
+/// This is the axum default request body limit for the router. Accept up to 50mb input.
+pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
+
+/// A builder for creating a mistral.rs server router with configurable options.
+///
+/// ### Examples
+///
+/// Basic usage:
+/// ```ignore
+/// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+///
+/// let router = MistralRsServerRouterBuilder::new()
+///     .with_mistralrs(mistralrs_instance)
+///     .build()
+///     .await?;
+/// ```
+///
+/// With custom configuration:
+/// ```ignore
+/// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+///
+/// let router = MistralRsServerRouterBuilder::new()
+///     .with_mistralrs(mistralrs_instance)
+///     .with_include_swagger_routes(false)
+///     .with_base_path("/api/mistral")
+///     .build()
+///     .await?;
+/// ```
+pub struct MistralRsServerRouterBuilder {
+    /// The shared mistral.rs instance
+    mistralrs: Option<SharedMistralRsState>,
+    /// Whether to include Swagger/OpenAPI documentation routes.
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
+    include_swagger_routes: bool,
+    /// Optional base path prefix for Swagger UI routes.
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
+    base_path: Option<String>,
+    /// Optional CORS allowed origins
+    allowed_origins: Option<Vec<String>>,
+    /// Optional axum default request body limit
+    max_body_limit: Option<usize>,
+    /// Server-level agentic defaults
+    agentic_defaults: AgenticDefaults,
+}
+
+impl Default for MistralRsServerRouterBuilder {
+    /// Creates a new builder with default configuration.
+    fn default() -> Self {
+        Self {
+            mistralrs: None,
+            #[cfg(feature = "swagger-ui")]
+            include_swagger_routes: true,
+            #[cfg(feature = "swagger-ui")]
+            base_path: None,
+            allowed_origins: None,
+            max_body_limit: None,
+            agentic_defaults: AgenticDefaults::default(),
+        }
+    }
+}
+
+impl MistralRsServerRouterBuilder {
+    /// Creates a new `MistralRsServerRouterBuilder` with default settings.
+    ///
+    /// This is equivalent to calling `Default::default()`.
+    ///
+    /// ### Examples
+    ///
+    /// ```ignore
+    /// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+    ///
+    /// let builder = MistralRsServerRouterBuilder::new();
+    /// ```
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Sets the shared mistral.rs instance
+    pub fn with_mistralrs(mut self, mistralrs: SharedMistralRsState) -> Self {
+        self.mistralrs = Some(mistralrs);
+        self
+    }
+
+    /// Configures whether to include OpenAPI doc routes.
+    ///
+    /// When enabled (default), the router will include routes for Swagger UI
+    /// at `/docs` and the OpenAPI specification at `/api-doc/openapi.json`.
+    /// These routes respect the configured base path if one is set.
+    ///
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
+    pub fn with_include_swagger_routes(mut self, include_swagger_routes: bool) -> Self {
+        self.include_swagger_routes = include_swagger_routes;
+        self
+    }
+
+    /// Sets a base path prefix for Swagger UI routes.
+    ///
+    /// When set, Swagger UI routes will be prefixed with the given path. This is
+    /// useful when including the mistral.rs server instance in another axum project.
+    ///
+    /// Only available when the `swagger-ui` feature is enabled.
+    #[cfg(feature = "swagger-ui")]
+    pub fn with_base_path(mut self, base_path: &str) -> Self {
+        self.base_path = Some(base_path.to_owned());
+        self
+    }
+
+    /// Sets the CORS allowed origins.
+    pub fn with_allowed_origins(mut self, origins: Vec<String>) -> Self {
+        self.allowed_origins = Some(origins);
+        self
+    }
+
+    /// Sets the axum default request body limit.
+    pub fn with_max_body_limit(mut self, max_body_limit: usize) -> Self {
+        self.max_body_limit = Some(max_body_limit);
+        self
+    }
+
+    /// Sets the default maximum tool-call rounds for the agentic loop.
+    pub fn with_max_tool_rounds(mut self, rounds: usize) -> Self {
+        self.agentic_defaults.max_tool_rounds = Some(rounds);
+        self
+    }
+
+    /// Sets the default maximum tool-call rounds if provided.
+    pub fn with_max_tool_rounds_optional(mut self, rounds: Option<usize>) -> Self {
+        if let Some(rounds) = rounds {
+            self = self.with_max_tool_rounds(rounds);
+        }
+        self
+    }
+
+    /// Sets the URL to POST tool calls to for server-side execution.
+    pub fn with_tool_dispatch_url(mut self, url: String) -> Self {
+        self.agentic_defaults.tool_dispatch_url = Some(url);
+        self
+    }
+
+    /// Sets the tool dispatch URL if provided.
+    pub fn with_tool_dispatch_url_optional(mut self, url: Option<String>) -> Self {
+        if let Some(url) = url {
+            self = self.with_tool_dispatch_url(url);
+        }
+        self
+    }
+
+    pub fn with_agent_permission(mut self, permission: mistralrs_core::AgentPermission) -> Self {
+        self.agentic_defaults.agent_permission = Some(permission);
+        self
+    }
+
+    pub fn with_code_execution_permission(
+        self,
+        permission: mistralrs_core::CodeExecutionPermission,
+    ) -> Self {
+        self.with_agent_permission(permission.into())
+    }
+
+    pub fn with_approval_broker(mut self, broker: ApprovalBroker) -> Self {
+        self.agentic_defaults.approval_broker = broker;
+        self
+    }
+
+    /// Builds the configured axum router.
+    ///
+    /// ### Examples
+    ///
+    /// ```ignore
+    /// use mistralrs_server_core::mistralrs_server_router_builder::MistralRsServerRouterBuilder;
+    ///
+    /// let router = MistralRsServerRouterBuilder::new()
+    ///     .with_mistralrs(mistralrs_instance)
+    ///     .build()
+    ///     .await?;
+    /// ```
+    pub async fn build(self) -> Result<Router> {
+        crate::metrics::install_prometheus_recorder();
+        let mistralrs = self.mistralrs.ok_or_else(|| {
+            anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
+        })?;
+
+        #[allow(unused_mut)]
+        let mut router = init_router(
+            mistralrs,
+            self.allowed_origins,
+            self.max_body_limit,
+            self.agentic_defaults,
+        )?;
+
+        #[cfg(feature = "swagger-ui")]
+        if self.include_swagger_routes {
+            let prefix = self.base_path.as_deref().unwrap_or("");
+            let doc = get_openapi_doc(None);
+            router = router.merge(
+                SwaggerUi::new(format!("{prefix}/docs"))
+                    .url(format!("{prefix}/api-doc/openapi.json"), doc),
+            );
+        }
+
+        Ok(router)
+    }
+}
+
+/// Initializes and configures the underlying axum router with MistralRs API endpoints.
+///
+/// This function creates a router with all the necessary API endpoints,
+/// CORS configuration, and body size limits.
+fn init_router(
+    state: SharedMistralRsState,
+    allowed_origins: Option<Vec<String>>,
+    max_body_limit: Option<usize>,
+    agentic_defaults: AgenticDefaults,
+) -> Result<Router> {
+    let allow_origin = if let Some(origins) = allowed_origins {
+        let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
+
+        match parsed_origins {
+            Ok(origins) => AllowOrigin::list(origins),
+            Err(_) => anyhow::bail!("Invalid origin format"),
+        }
+    } else {
+        AllowOrigin::any()
+    };
+
+    let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+
+    let cors_layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("anthropic-version"),
+            HeaderName::from_static("anthropic-beta"),
+        ])
+        .allow_origin(allow_origin);
+
+    let router = Router::new()
+        .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
+        .route(ANTHROPIC_MESSAGES_ROUTE.path, post(anthropic_messages))
+        .route(
+            ANTHROPIC_COUNT_TOKENS_ROUTE.path,
+            post(anthropic_count_tokens),
+        )
+        .route(COMPLETIONS_ROUTE.path, post(completions))
+        .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(MODELS_ROUTE.path, get(models))
+        .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
+        .route(RELOAD_MODEL_ROUTE.path, post(reload_model))
+        .route(MODEL_STATUS_ROUTE.path, post(get_model_status))
+        .route(TUNE_MODEL_ROUTE.path, post(tune_model))
+        .route(SYSTEM_INFO_ROUTE.path, get(system_info))
+        .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
+        .route(HEALTH_ROUTE.path, get(health))
+        .route("/metrics", get(metrics))
+        .route(ROOT_ROUTE.path, get(health))
+        .route(RE_ISQ_ROUTE.path, post(re_isq))
+        .route(CALIBRATION_START_ROUTE.path, post(calibration_start))
+        .route(
+            CALIBRATION_STATUS_ROUTE.path,
+            axum::routing::get(calibration_status),
+        )
+        .route(CALIBRATION_APPLY_ROUTE.path, post(calibration_apply))
+        .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(FILES_ROUTE.path, get(list_files))
+        .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
+        .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
+        .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
+        .route(RESPONSES_ROUTE.path, post(create_response))
+        .route(
+            RESPONSE_ROUTE.path,
+            get(get_response).delete(delete_response),
+        )
+        .route(CANCEL_RESPONSE_ROUTE.path, post(cancel_response))
+        .route(
+            SESSION_ROUTE.path,
+            get(get_session).put(put_session).delete(delete_session),
+        )
+        .layer(middleware::from_fn(track_metrics))
+        .layer(cors_layer)
+        .layer(DefaultBodyLimit::max(router_max_body_limit))
+        .layer(Extension(agentic_defaults.approval_broker.clone()))
+        .layer(Extension(agentic_defaults))
+        .with_state(state);
+
+    Ok(router)
+}

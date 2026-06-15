@@ -181,3 +181,93 @@ a Cargo.toml comment recording this negative result.
 FAE_ISQ=Q4K  FAE_MODEL_ID=google/gemma-4-E4B-it cargo run --release -p fae-engine --example nan_repro
 FAE_ISQ=Q8_0 FAE_MODEL_ID=google/gemma-4-E4B-it cargo run --release -p fae-engine --example nan_repro
 ```
+
+## RESOLVED (2026-06-15) — vendored candle kernel fix, branch `daemon-metal-fix`
+
+The NaN is **fixed at source** in a vendored copy of the candle Metal SDPA
+dispatch. The CPU-execution theory above stands (there is no device-placement
+bug); the surviving defect was the Gemma-4 Metal NaN, now root-caused and cured.
+
+### Vendoring
+
+`mistral.rs` and `candle` are vendored as committed source under `vendor/`, at
+the exact cargo-pinned revs (copied from the local `~/.cargo/git` checkouts,
+`.git` stripped):
+
+- `vendor/mistral.rs` = EricLBuehler/mistral.rs @ `c22c2e2b622a815821e59056c2b5952b4cbbe010`
+- `vendor/candle`     = huggingface/candle      @ `d2afd7f7f746ac72236f81736135de1fcd543426`
+
+`crates/Cargo.toml` redirects the git deps to these paths via `[patch]` (keys
+are the upstream URLs, rev-agnostic). The workspace builds against the editable
+vendored kernels; the un-fixed `nan_repro` reproduced the FAIL **through the
+vendored copies** before the fix, proving we execute the code we edit.
+`crates/justfile` clears the dev shell's `RUSTFLAGS="-D warnings"` for all
+recipes (env `-D warnings` bypasses cargo's lint-cap for *path* deps and would
+turn upstream's own warnings into hard errors); the zero-warning gate for our
+crates remains the explicit `cargo clippy -- -D warnings` step (clippy caps
+lints on path deps, so they warn but never fail the build).
+
+### Root cause
+
+The text-decoder prefill attention dispatches (head_dim 256, BF16, custom mask)
+to candle's **steel `attention` prefill kernel** via `candle_nn::ops::sdpa` →
+`call_sdpa_full`, with **both** an explicit additive causal/sliding mask *and*
+`do_causal = true`. The mask already encodes causality (mistral.rs's own comment
+in `attention/mod.rs`: "The mask carries causality already"); `do_causal` then
+*redundantly* re-applies causality through the kernel's `kb_lim` block-truncation
+(`scaled_dot_product_attention.metal:2065-2068`) plus its separate causal
+triangle loop (`:2120-2141`). The combination drives a query row fully masked at
+specific **periodic** total lengths → `sum(exp scores) = 0` → the final
+normalize `Otile.row_bin_op<DivOp>(sum_score)` does `0 / 0 = NaN` → NaN logits.
+
+Quant-independent (Q4K and Q8_0 both fail), as expected: the defect is in the
+attention masking path, not the ISQ matmul.
+
+### Evidence (all real runs, M5 Max, 2026-06-15)
+
+1. **Periodicity map** (`examples/nan_sweep.rs`, 48 lengths, base 36000, +128
+   chars, Q4K): baseline FAILs in narrow bands —
+   `[37280-37664], [38304-38688], [39328-39584], [40224-40608], [41248-41632]`
+   — **band-start period ≈ 1024 chars**, ~512-char-wide windows. This periodic
+   "partial-tile" signature is the fingerprint of a masking-boundary bug, not
+   BF16 overflow. Baseline summary: **19/48 FAIL**.
+2. **Backend isolation**: an env probe confirmed the prefill takes
+   `candle_sdpa_steel q_len=8427 k_len=8427 head_dim=256 do_causal=true
+   mask=true`. Routing the same prompt to the slow `naive_sdpa` path
+   (`FAE_NO_STEEL_SDPA=1`) → **PASS** (27.2 s). The steel kernel is the source.
+3. **`do_causal` isolation**: forcing `do_causal=false` for the steel call when
+   a mask is present → **PASS at full steel speed (5.7 s vs 6.5 s baseline)**,
+   while the baseline (do_causal=true) FAILs. This pins the bug to the
+   redundant in-kernel causal path and shows the fix is free.
+4. **Heisenbug corroboration**: inserting a host-side NaN scan (device sync)
+   between layers makes the run PASS — consistent with a GPU-async/degenerate
+   masking hazard, not a deterministic host-visible arithmetic error.
+
+### The fix (candle, upstream-PR-ready)
+
+One line in `vendor/candle/candle-metal-kernels/src/kernels/sdpa.rs`
+(`call_sdpa_full`): `let do_causal = do_causal && !has_mask;` (with a comment).
+When an explicit mask is supplied it already encodes causality, so the kernel's
+`do_causal` constant is forced off, avoiding the buggy redundant path with no
+correctness loss and no measurable perf change. The `.metal` shader is
+**unchanged** (earlier kernel-guard experiments — a `DivOp` zero-guard and a
+pre-softmax score sanitizer — did NOT cure it and were reverted; the defect is
+structural to the `kb_lim`/triangle interaction, not the final divide alone).
+
+### Verification
+
+- `nan_repro` **FAIL → PASS** for **both Q4K (5.6 s) and Q8_0 (5.4 s)**.
+- `nan_sweep` (same 48 lengths as baseline): **Q4K 0/48 FAIL** (was 19/48);
+  Q8_0 0/48 FAIL — every previously-failing length across all five periodic
+  windows now passes.
+- `text_tps` decode throughput unchanged (no regression) — the do_causal
+  upper-triangle skip is not the prefill bottleneck.
+
+### Upstreaming / follow-ups
+
+- Upstream the candle `sdpa.rs` one-liner to EricLBuehler/candle and reference
+  it on mistral.rs #2214; un-vendor once it lands (delete the two `[patch]`
+  blocks).
+- The daemon's `NAN_RETRY_PADS` pad-retry loop (`fae-daemon/src/session.rs`,
+  the 4× re-prefill that caused the 70-150 s ttfa) is now dead weight on the
+  vendored build and can be removed in a follow-up once the fix soaks.

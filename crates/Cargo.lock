@@ -595,7 +595,6 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d2afd7f#d2afd7f7f746ac72236f81736135de1fcd543426"
 dependencies = [
  "byteorder",
  "candle-metal-kernels",
@@ -623,7 +622,6 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d2afd7f#d2afd7f7f746ac72236f81736135de1fcd543426"
 dependencies = [
  "block2",
  "half",
@@ -638,7 +636,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d2afd7f#d2afd7f7f746ac72236f81736135de1fcd543426"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",
@@ -655,7 +652,6 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.10.2"
-source = "git+https://github.com/huggingface/candle.git?rev=d2afd7f#d2afd7f7f746ac72236f81736135de1fcd543426"
 dependencies = [
  "ug",
  "ug-metal",
@@ -3309,7 +3305,6 @@ dependencies = [
 [[package]]
 name = "mistralrs"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3336,7 +3331,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-audio"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3347,7 +3341,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-core"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "ahash",
  "akin",
@@ -3446,7 +3439,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-macros"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3457,7 +3449,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-mcp"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3478,7 +3469,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-paged-attn"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3494,7 +3484,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-quant"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -3525,7 +3514,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-sandbox"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3542,7 +3530,6 @@ dependencies = [
 [[package]]
 name = "mistralrs-vision"
 version = "0.8.3"
-source = "git+https://github.com/EricLBuehler/mistral.rs?rev=c22c2e2b622a815821e59056c2b5952b4cbbe010#c22c2e2b622a815821e59056c2b5952b4cbbe010"
 dependencies = [
  "candle-core",
  "image",

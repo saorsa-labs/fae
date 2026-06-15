@@ -1,0 +1,2723 @@
+#![allow(clippy::too_many_arguments)]
+
+use anyhow::Context;
+use anymoe::{AnyMoeConfig, AnyMoeExpertType};
+use code_execution::{
+    build_agent_approval_callback, AgentPermissionPy, AgentToolApprovalDecisionKindPy,
+    AgentToolApprovalDecisionPy, AgentToolApprovalPy, AgentToolKindPy, AgentToolMetadataPy,
+    AgentToolSourcePy, CodeExecutionConfig, CodeExecutionPermissionPy, NetworkModePy,
+    SandboxPolicy,
+};
+use either::Either;
+use indexmap::IndexMap;
+use itertools::Itertools;
+use requests::{
+    ChatCompletionRequest, CompletionRequest, EmbeddingRequest, PythonEmbeddingInputs, ToolChoice,
+};
+use serde_json::Value;
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, OnceLock},
+};
+use stream::ChatCompletionStreamer;
+use tokio::{
+    runtime::Runtime,
+    sync::mpsc::{channel, Receiver},
+};
+use util::{
+    next_request_id, parse_chat_response, parse_completion_response, parse_embedding_response,
+    send_request_and_wait, send_request_with_optional_stream, PyApiErr, PyApiResult,
+};
+
+use candle_core::{Device, Result};
+use mistralrs_core::{
+    initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
+    AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
+    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
+    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
+    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
+    SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, UqffWriteConfig,
+};
+use mistralrs_core::{
+    CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
+    ToolCallbacks,
+};
+use mistralrs_mcp::{McpClientConfig, McpServerConfig, McpServerSource};
+#[cfg(not(feature = "code-execution"))]
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyList;
+use pyo3::Bound;
+use pyo3::PyObject;
+use std::fs::File;
+mod anymoe;
+mod code_execution;
+mod files;
+mod requests;
+mod stream;
+mod util;
+mod which;
+use which::{Architecture, DiffusionArchitecture, MultimodalArchitecture, SpeechLoaderType, Which};
+
+/// Parse reasoning effort string to ReasoningEffort enum
+fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
+    effort
+        .as_ref()
+        .and_then(|e| match e.to_lowercase().as_str() {
+            "low" => Some(ReasoningEffort::Low),
+            "medium" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            _ => None,
+        })
+}
+
+static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
+
+#[cfg(not(feature = "metal"))]
+fn get_device(seed: Option<u64>) -> &'static Result<Device> {
+    DEVICE.get_or_init(|| {
+        let device = if mistralrs_core::distributed::use_nccl() {
+            Device::Cpu
+        } else {
+            Device::cuda_if_available(0)?
+        };
+        if let Some(seed) = seed {
+            device.set_seed(seed)?;
+        }
+        Ok(device)
+    })
+}
+
+#[cfg(feature = "metal")]
+fn get_device(seed: Option<u64>) -> &'static Result<Device> {
+    DEVICE.get_or_init(|| {
+        let device = Device::new_metal(0)?;
+        if let Some(seed) = seed {
+            device.set_seed(seed)?;
+        }
+        Ok(device)
+    })
+}
+
+#[pyclass]
+#[pyo3(get_all)]
+#[derive(Debug, Clone)]
+pub struct SpeechGenerationResponse {
+    pub pcm: Vec<f32>,
+    pub rate: usize,
+    pub channels: usize,
+}
+
+#[pyclass]
+#[derive(Clone)]
+/// An object wrapping the underlying Rust system to handle requests and process conversations.
+struct Runner {
+    runner: Arc<MistralRs>,
+}
+
+fn wrap_search_callback(cb: PyObject) -> Arc<SearchCallback> {
+    Arc::new(move |params: &SearchFunctionParameters| {
+        Python::with_gil(|py| {
+            let obj = cb.call1(py, (params.query.clone(),))?;
+            let list = obj.downcast_bound::<PyList>(py)?;
+            let mut results = Vec::new();
+            for item in list.iter() {
+                let title: String = item.get_item("title")?.extract()?;
+                let description: String = item.get_item("description")?.extract()?;
+                let url: String = item.get_item("url")?.extract()?;
+                let content: String = item.get_item("content")?.extract()?;
+                results.push(SearchResult {
+                    title,
+                    description,
+                    url,
+                    content,
+                });
+            }
+            Ok(results)
+        })
+        .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+    })
+}
+
+fn wrap_tool_callback(cb: PyObject) -> Arc<ToolCallback> {
+    Arc::new(
+        move |func: &CalledFunction, _ctx: &mistralrs_core::ToolCallContext| {
+            Python::with_gil(|py| {
+                let json = py.import("json")?;
+                let args: Py<PyAny> = json
+                    .call_method1("loads", (func.arguments.clone(),))?
+                    .into();
+                let obj = cb.call1(py, (func.name.clone(), args))?;
+                obj.extract::<String>(py)
+            })
+            .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))
+        },
+    )
+}
+
+fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
+    Python::with_gil(|py| {
+        let dict = obj
+            .downcast_bound::<pyo3::types::PyDict>(py)
+            .map_err(|e| anyhow::anyhow!("Failed to downcast to PyDict: {}", e))?;
+
+        let mut map = ToolCallbacks::new();
+
+        for (name, cb) in dict.iter() {
+            let name: String = name
+                .extract()
+                .map_err(|e: PyErr| anyhow::anyhow!(e.to_string()))?;
+            let cb_obj: PyObject = cb.into();
+            map.insert(name, wrap_tool_callback(cb_obj));
+        }
+        Ok(map)
+    })
+}
+
+fn parse_which(
+    which: Which,
+    no_kv_cache: bool,
+    chat_template: Option<String>,
+    jinja_explicit: Option<String>,
+) -> PyApiResult<Box<dyn Loader>> {
+    Ok(match which {
+        Which::Plain {
+            model_id,
+            tokenizer_json,
+            arch,
+            topology,
+            organization,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            imatrix,
+            calibration_file,
+            auto_map_params: _,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
+        } => NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                organization: organization.map(Into::into).unwrap_or(Default::default()),
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                imatrix,
+                calibration_file,
+                hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
+            },
+            chat_template,
+            tokenizer_json,
+            Some(model_id),
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .build(arch.map(Into::into))?,
+        Which::Embedding {
+            model_id,
+            tokenizer_json,
+            arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            hf_cache_path,
+            imatrix,
+            calibration_file,
+        } => EmbeddingLoaderBuilder::new(
+            EmbeddingSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|path| PathBuf::from_str(path).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                imatrix,
+                calibration_file,
+                hf_cache_path,
+            },
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch.map(Into::into)),
+        Which::XLora {
+            model_id,
+            xlora_model_id,
+            order,
+            tokenizer_json,
+            tgt_non_granular_index,
+            arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            auto_map_params: _,
+            hf_cache_path,
+        } => NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                imatrix: None,
+                calibration_file: None,
+                hf_cache_path,
+                matformer_config_path: None,
+                matformer_slice_name: None,
+            },
+            chat_template,
+            tokenizer_json,
+            model_id,
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .with_xlora(
+            xlora_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+        .build(arch.map(Into::into))?,
+        Which::Lora {
+            model_id,
+            tokenizer_json,
+            adapter_model_ids,
+            arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            auto_map_params: _,
+            hf_cache_path,
+        } => NormalLoaderBuilder::new(
+            NormalSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                imatrix: None,
+                calibration_file: None,
+                hf_cache_path,
+                matformer_config_path: None,
+                matformer_slice_name: None,
+            },
+            chat_template,
+            tokenizer_json,
+            model_id,
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .with_lora(adapter_model_ids)
+        .build(arch.map(Into::into))?,
+        Which::GGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            topology,
+            dtype: _,
+            auto_map_params: _,
+        } => GGUFLoaderBuilder::new(
+            chat_template,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
+            GGUFSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+            },
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .build(),
+        Which::XLoraGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            xlora_model_id,
+            order,
+            tgt_non_granular_index,
+            topology,
+            dtype: _,
+            auto_map_params: _,
+        } => GGUFLoaderBuilder::new(
+            chat_template,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
+            GGUFSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+            },
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .with_xlora(
+            xlora_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+        .build(),
+        Which::LoraGGUF {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            order,
+            topology,
+            dtype: _,
+            auto_map_params: _,
+        } => GGUFLoaderBuilder::new(
+            chat_template,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
+            GGUFSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+            },
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .with_lora(
+            adapters_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?,
+        )
+        .build(),
+        Which::GGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            gqa,
+            topology,
+            dtype: _,
+            auto_map_params: _,
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig {
+                gqa,
+                topology: Topology::from_option_path(topology)?,
+            },
+            chat_template,
+            tokenizer_json,
+            Some(tok_model_id),
+            quantized_model_id,
+            quantized_filename,
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .build(),
+        Which::XLoraGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            xlora_model_id,
+            order,
+            tgt_non_granular_index,
+            gqa,
+            topology,
+            dtype: _,
+            auto_map_params: _,
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig {
+                gqa,
+                topology: Topology::from_option_path(topology)?,
+            },
+            chat_template,
+            tokenizer_json,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .with_xlora(
+            xlora_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?,
+            no_kv_cache,
+            tgt_non_granular_index,
+        )
+        .build(),
+        Which::LoraGGML {
+            tok_model_id,
+            tokenizer_json,
+            quantized_model_id,
+            quantized_filename,
+            adapters_model_id,
+            order,
+            gqa,
+            topology,
+            dtype: _,
+            auto_map_params: _,
+        } => GGMLLoaderBuilder::new(
+            GGMLSpecificConfig {
+                gqa,
+                topology: Topology::from_option_path(topology)?,
+            },
+            chat_template,
+            tokenizer_json,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            no_kv_cache,
+            jinja_explicit,
+        )
+        .with_lora(
+            adapters_model_id,
+            serde_json::from_reader(
+                File::open(order.clone())
+                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
+            )?,
+        )
+        .build(),
+        Which::MultimodalPlain {
+            model_id,
+            tokenizer_json,
+            arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            max_edge,
+            calibration_file,
+            imatrix,
+            auto_map_params: _,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
+            organization,
+        } => MultimodalLoaderBuilder::new(
+            MultimodalSpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
+                max_edge,
+                calibration_file,
+                imatrix,
+                hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
+                organization: organization.map(Into::into).unwrap_or_default(),
+            },
+            chat_template,
+            tokenizer_json,
+            Some(model_id),
+            jinja_explicit,
+        )
+        .build(arch.map(Into::into)),
+        Which::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch.into()),
+        Which::Speech {
+            model_id,
+            dac_model_id,
+            arch,
+            ..
+        } => Box::new(SpeechLoader {
+            model_id,
+            dac_model_id,
+            arch: arch.into(),
+            cfg: None,
+        }),
+    })
+}
+
+fn build_constraint(grammar: Option<&str>, grammar_type: Option<&str>) -> PyApiResult<Constraint> {
+    if grammar_type.is_none() {
+        if grammar.is_some() {
+            return Err(PyApiErr::from(
+                "Grammar text is specified but not grammar type",
+            ));
+        }
+        return Ok(Constraint::None);
+    }
+
+    let grammar =
+        grammar.ok_or_else(|| PyApiErr::from("Grammar type is specified but not grammar text"))?;
+
+    let constraint = match grammar_type.unwrap() {
+        "regex" => Constraint::Regex(grammar.to_string()),
+        "lark" => Constraint::Lark(grammar.to_string()),
+        "json_schema" => {
+            let value = serde_json::from_str::<serde_json::Value>(grammar)
+                .map_err(|e| PyApiErr::from(format!("Failed to parse JSON schema: {e}")))?;
+            Constraint::JsonSchema(value)
+        }
+        "llguidance" => {
+            let value = serde_json::from_str::<LlguidanceGrammar>(grammar).map_err(|e| {
+                PyApiErr::from(format!("Failed to parse JSON llguidance object: {e}"))
+            })?;
+            Constraint::Llguidance(value)
+        }
+        _ => return Err(PyApiErr::from(
+            "Grammar type is specified but is not `regex`, `lark`, `json_schema`, nor `llguidance`",
+        )),
+    };
+
+    Ok(constraint)
+}
+#[pymethods]
+impl Runner {
+    #[new]
+    #[pyo3(signature = (
+        which,
+        max_seqs = 16,
+        no_kv_cache = false,
+        prefix_cache_n = 16,
+        token_source = "cache",
+        mtp_model = None,
+        mtp_n_predict = None,
+        chat_template = None,
+        jinja_explicit = None,
+        num_device_layers = None,
+        in_situ_quant = None,
+        anymoe_config = None,
+        pa_gpu_mem = None,
+        pa_gpu_mem_usage = None,
+        pa_ctxt_len = None,
+        pa_blk_size = None,
+        pa_cache_type = None,
+        no_paged_attn = false,
+        paged_attn = false,
+        seed = None,
+        enable_search = false,
+        search_embedding_model = None,
+        search_callback = None,
+        tool_callbacks = None,
+        mcp_client_config = None,
+        code_execution_config = None,
+    ))]
+    fn new(
+        which: Which,
+        max_seqs: usize,
+        no_kv_cache: bool,
+        prefix_cache_n: usize,
+        token_source: &str,
+        mtp_model: Option<String>,
+        mtp_n_predict: Option<usize>,
+        chat_template: Option<String>,
+        jinja_explicit: Option<String>,
+        num_device_layers: Option<Vec<String>>,
+        in_situ_quant: Option<String>,
+        anymoe_config: Option<AnyMoeConfig>,
+        pa_gpu_mem: Option<usize>,
+        pa_gpu_mem_usage: Option<f32>,
+        pa_ctxt_len: Option<usize>,
+        pa_blk_size: Option<usize>,
+        pa_cache_type: Option<PagedCacheType>,
+        no_paged_attn: bool,
+        paged_attn: bool,
+        seed: Option<u64>,
+        enable_search: bool,
+        search_embedding_model: Option<String>,
+        search_callback: Option<PyObject>,
+        tool_callbacks: Option<PyObject>,
+        mcp_client_config: Option<McpClientConfigPy>,
+        code_execution_config: Option<CodeExecutionConfig>,
+    ) -> PyApiResult<Self> {
+        let tgt_non_granular_index = match which {
+            Which::Plain { .. }
+            | Which::Lora { .. }
+            | Which::GGUF { .. }
+            | Which::LoraGGUF { .. }
+            | Which::GGML { .. }
+            | Which::LoraGGML { .. }
+            | Which::Embedding { .. }
+            | Which::MultimodalPlain { .. }
+            | Which::DiffusionPlain { .. }
+            | Which::Speech { .. } => None,
+            Which::XLora {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraGGUF {
+                tgt_non_granular_index,
+                ..
+            }
+            | Which::XLoraGGML {
+                tgt_non_granular_index,
+                ..
+            } => tgt_non_granular_index,
+        };
+        let dtype = match which {
+            Which::Plain { dtype, .. }
+            | Which::Lora { dtype, .. }
+            | Which::GGUF { dtype, .. }
+            | Which::LoraGGUF { dtype, .. }
+            | Which::GGML { dtype, .. }
+            | Which::LoraGGML { dtype, .. }
+            | Which::Embedding { dtype, .. }
+            | Which::MultimodalPlain { dtype, .. }
+            | Which::DiffusionPlain { dtype, .. }
+            | Which::Speech { dtype, .. }
+            | Which::XLora { dtype, .. }
+            | Which::XLoraGGUF { dtype, .. }
+            | Which::XLoraGGML { dtype, .. } => dtype,
+        };
+        let auto_map_params = match &which {
+            Which::Plain {
+                auto_map_params, ..
+            }
+            | Which::Lora {
+                auto_map_params, ..
+            }
+            | Which::GGUF {
+                auto_map_params, ..
+            }
+            | Which::LoraGGUF {
+                auto_map_params, ..
+            }
+            | Which::GGML {
+                auto_map_params, ..
+            }
+            | Which::LoraGGML {
+                auto_map_params, ..
+            }
+            | Which::XLora {
+                auto_map_params, ..
+            }
+            | Which::XLoraGGUF {
+                auto_map_params, ..
+            }
+            | Which::XLoraGGML {
+                auto_map_params, ..
+            } => auto_map_params
+                .clone()
+                .map(|p| AutoDeviceMapParams::Text {
+                    max_seq_len: p.max_seq_len,
+                    max_batch_size: p.max_batch_size,
+                })
+                .unwrap_or(AutoDeviceMapParams::default_text()),
+            Which::MultimodalPlain {
+                auto_map_params, ..
+            } => auto_map_params
+                .clone()
+                .map(|p| AutoDeviceMapParams::Multimodal {
+                    max_seq_len: p.max_seq_len,
+                    max_batch_size: p.max_batch_size,
+                    max_image_shape: (p.max_image_length, p.max_image_length),
+                    max_num_images: p.max_num_images,
+                })
+                .unwrap_or(AutoDeviceMapParams::default_multimodal()),
+            Which::Embedding { .. } | Which::DiffusionPlain { .. } | Which::Speech { .. } => {
+                AutoDeviceMapParams::default_text()
+            }
+        };
+
+        let max_seq_len = auto_map_params.max_seq_len();
+
+        let max_seqs = if tgt_non_granular_index.is_some() {
+            1
+        } else {
+            max_seqs
+        };
+
+        let loader = parse_which(
+            which,
+            no_kv_cache,
+            chat_template.clone(),
+            jinja_explicit.clone(),
+        )?;
+        let loader = if let Some(amoe_conf) = anymoe_config {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config: mistralrs_core::AnyMoeConfig {
+                    hidden_size: amoe_conf.hidden_size,
+                    lr: amoe_conf.lr,
+                    epochs: amoe_conf.epochs,
+                    batch_size: amoe_conf.batch_size,
+                    expert_type: amoe_conf.expert_type.into(),
+                    gate_model_id: amoe_conf.gate_model_id.clone(),
+                    training: amoe_conf.training,
+                    loss_csv_path: amoe_conf.loss_csv_path.clone(),
+                },
+                path: amoe_conf.dataset_json,
+                prefix: amoe_conf.prefix,
+                mlp: amoe_conf.mlp,
+                model_ids: amoe_conf.model_ids,
+                layers: amoe_conf.layers,
+            })
+        } else {
+            loader
+        };
+
+        let device = get_device(seed).as_ref().map_err(PyApiErr::from)?;
+        let isq = if let Some(isq) = in_situ_quant {
+            Some(parse_isq_value(&isq, Some(device)).map_err(PyApiErr::from)?)
+        } else {
+            None
+        };
+
+        let mapper = match num_device_layers {
+            Some(device_layers) => {
+                if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
+                    let layers = device_layers[0].parse::<usize>().unwrap();
+                    DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                        DeviceLayerMapMetadata { ordinal: 0, layers },
+                    ]))
+                } else {
+                    let mut mapping = Vec::new();
+                    for layer in device_layers {
+                        let split = layer.splitn(2, ':').collect::<Vec<_>>();
+                        if split.len() < 2 {
+                            panic!("Expected layer to be of format ORD:NUM, got {layer}");
+                        }
+                        let ord = split[0]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
+                        let num = split[1]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
+                        for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
+                            if *ordinal == ord {
+                                panic!("Duplicate ordinal {ord}");
+                            }
+                        }
+                        mapping.push(DeviceLayerMapMetadata {
+                            ordinal: ord,
+                            layers: num,
+                        });
+                    }
+                    DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
+                }
+            }
+            None => DeviceMapSetting::Auto(auto_map_params),
+        };
+
+        let no_paged_attn = if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
+            no_paged_attn
+        } else if device.is_metal() {
+            !paged_attn
+        } else {
+            true
+        };
+
+        let cache_config = match (
+            pa_blk_size,
+            pa_gpu_mem,
+            pa_gpu_mem_usage,
+            pa_ctxt_len,
+            paged_attn_supported(),
+            no_paged_attn,
+        ) {
+            (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                MemoryGpuConfig::ContextSize(max_seq_len),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                MemoryGpuConfig::ContextSize(ctxt),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                MemoryGpuConfig::Utilization(f),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                MemoryGpuConfig::MbAmount(m),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, Some(_m), Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                MemoryGpuConfig::Utilization(f),
+                pa_cache_type.unwrap_or_default(),
+            )?),
+            (block_size, Some(_m), None, Some(ctxt), true, false) => {
+                Some(PagedAttentionConfig::new(
+                    block_size,
+                    MemoryGpuConfig::ContextSize(ctxt),
+                    pa_cache_type.unwrap_or_default(),
+                )?)
+            }
+            (block_size, None, Some(f), Some(_ctxt), true, false) => {
+                Some(PagedAttentionConfig::new(
+                    block_size,
+                    MemoryGpuConfig::Utilization(f),
+                    pa_cache_type.unwrap_or_default(),
+                )?)
+            }
+            (_, _, _, _, _, _) => None,
+        };
+
+        let pipeline = loader
+            .load_model_from_hf(
+                None,
+                TokenSource::from_str(token_source).map_err(PyApiErr::from)?,
+                &dtype,
+                device,
+                true, // Silent for jupyter
+                mapper,
+                isq,
+                cache_config,
+            )
+            .map_err(PyApiErr::from)?;
+
+        if let Some(mtp_model) = mtp_model {
+            pipeline
+                .blocking_lock()
+                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::new(
+                    mtp_model,
+                    mtp_n_predict,
+                )))
+                .map_err(|e| PyApiErr::from(&e))?;
+        }
+
+        let scheduler_config = if cache_config.is_some() {
+            // Handle case where we may have device mapping
+            if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+                SchedulerConfig::PagedAttentionMeta {
+                    max_num_seqs: max_seqs,
+                    config: cache_config.clone(),
+                }
+            } else {
+                SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(
+                        max_seqs
+                            .try_into()
+                            .map_err(|e| PyApiErr::from(format!("{e:?}")))?,
+                    ),
+                }
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    max_seqs
+                        .try_into()
+                        .map_err(|e| PyApiErr::from(format!("{e:?}")))?,
+                ),
+            }
+        };
+        let search_embedding_model = if enable_search {
+            Some(match search_embedding_model {
+                Some(model) => {
+                    SearchEmbeddingModel::from_str(model.as_str()).map_err(PyApiErr::from)?
+                }
+                None => SearchEmbeddingModel::default(),
+            })
+        } else {
+            None
+        };
+        let cb = search_callback.map(wrap_search_callback);
+        let tool_cbs = match tool_callbacks {
+            Some(obj) => Some(wrap_tool_callbacks(obj)?),
+            None => None,
+        };
+        let mut builder =
+            MistralRsBuilder::new(pipeline, scheduler_config, false, search_embedding_model);
+        if let Some(cb) = cb {
+            builder = builder.with_search_callback(cb);
+        }
+        if let Some(map) = tool_cbs {
+            for (name, cb) in map {
+                builder = builder.with_tool_callback(name, cb);
+            }
+        }
+        if let Some(mcp_config) = mcp_client_config {
+            builder = builder.with_mcp_client(mcp_config.into());
+        }
+        if let Some(code_exec) = code_execution_config {
+            #[cfg(feature = "code-execution")]
+            {
+                builder = builder.with_code_execution(code_exec.into());
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                let _ = code_exec;
+                return Err(util::PyApiErr(PyValueError::new_err(
+                    "code_execution_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
+                )));
+            }
+        }
+        let rt = Runtime::new().expect("Failed to create Runner::new runtime");
+        let mistralrs = rt.block_on(async {
+            builder
+                .with_no_kv_cache(no_kv_cache)
+                .with_prefix_cache_n(prefix_cache_n)
+                .build()
+                .await
+        });
+
+        Ok(Self { runner: mistralrs })
+    }
+
+    /// Send an OpenAI API compatible request, returning the result.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_chat_completion_request(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        let (tx, rx) = channel(10_000);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_seqs
+                .as_ref()
+                .map(|x| StopTokens::Seqs(x.to_vec()));
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
+            let messages = match request.messages {
+                Either::Left(ref messages) => {
+                    let mut messages_vec = Vec::new();
+                    let mut image_urls = Vec::new();
+                    let mut audio_urls = Vec::new();
+                    let mut video_urls = Vec::new();
+                    for message in messages {
+                        let role = message["role"].as_ref().left().unwrap().clone();
+                        match &message["content"] {
+                            Either::Left(content) => {
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
+                                > = IndexMap::new();
+                                message_map.insert("role".to_string(), Either::Left(role));
+                                message_map.insert(
+                                    "content".to_string(),
+                                    Either::Left(content.to_string()),
+                                );
+                                messages_vec.push(message_map);
+                            }
+                            Either::Right(image_messages) => {
+                                // If there is only one message, it is possible a text message
+                                // found when rig is used as client. In this case, we need to check if
+                                // the message is a text message or an image message.
+                                if image_messages.len() == 1 {
+                                    if !image_messages[0].contains_key("text") {
+                                        return Err(PyApiErr::from(
+                                            "Expected `text` key in input message.",
+                                        ));
+                                    }
+                                    let content = match &image_messages[0]["text"] {
+                                        Either::Left(left) => left.to_string(),
+                                        Either::Right(right) => format!("{right:?}"),
+                                    };
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, Value>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert("role".to_string(), Either::Left(role));
+                                    message_map
+                                        .insert("content".to_string(), Either::Left(content));
+                                    messages_vec.push(message_map);
+                                    continue;
+                                }
+                                if role != "user" {
+                                    return Err(PyApiErr::from(
+                                        "Role for an image message must be `user`, but it is {role}",
+                                    ));
+                                }
+
+                                enum ContentPart {
+                                    Text { text: String },
+                                    Image { image_url: String },
+                                    Audio { audio_url: String },
+                                    Video { video_url: String },
+                                }
+
+                                let mut items = Vec::new();
+                                for image_message in image_messages {
+                                    match image_message.get("type") {
+                                        Some(Either::Left(x)) if x == "text" => {
+                                            items.push(ContentPart::Text {
+                                                text: image_message
+                                                    .get("text").as_ref()
+                                                    .context("Text sub-content must have `text` key.")?.as_ref()
+                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "image_url" => {
+                                            items.push(ContentPart::Image {
+                                                image_url: image_message
+                                                    .get("image_url")
+                                                    .as_ref()
+                                                    .context("Image sub-content must have `image_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Image sub-content `image_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "audio_url" => {
+                                            items.push(ContentPart::Audio {
+                                                audio_url: image_message
+                                                    .get("audio_url")
+                                                    .as_ref()
+                                                    .context("Audio sub-content must have `audio_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Audio sub-content `audio_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "video_url" => {
+                                            items.push(ContentPart::Video {
+                                                video_url: image_message
+                                                    .get("video_url")
+                                                    .as_ref()
+                                                    .context("Video sub-content must have `video_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Video sub-content `video_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Video sub-content `video_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
+                                    }
+                                }
+
+                                let text_content = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Text { text } => Some(text),
+                                        _ => None,
+                                    })
+                                    .join(" ");
+                                let image_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Image { image_url } => Some(image_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let audio_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let video_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Video { video_url } => Some(video_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
+                                > = IndexMap::new();
+                                message_map.insert("role".to_string(), Either::Left(role));
+
+                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
+                                for _ in &image_urls_iter {
+                                    let mut content_image_map = IndexMap::new();
+                                    content_image_map.insert(
+                                        "type".to_string(),
+                                        Value::String("image".to_string()),
+                                    );
+                                    content_map.push(content_image_map);
+                                }
+                                for _ in &audio_urls_iter {
+                                    let mut content_audio_map = IndexMap::new();
+                                    content_audio_map.insert(
+                                        "type".to_string(),
+                                        Value::String("audio".to_string()),
+                                    );
+                                    content_map.push(content_audio_map);
+                                }
+                                for _ in &video_urls_iter {
+                                    let mut content_video_map = IndexMap::new();
+                                    content_video_map.insert(
+                                        "type".to_string(),
+                                        Value::String("video".to_string()),
+                                    );
+                                    content_map.push(content_video_map);
+                                }
+                                {
+                                    let mut content_text_map = IndexMap::new();
+                                    content_text_map.insert(
+                                        "type".to_string(),
+                                        Value::String("text".to_string()),
+                                    );
+                                    content_text_map
+                                        .insert("text".to_string(), Value::String(text_content));
+                                    content_map.push(content_text_map);
+                                }
+
+                                message_map
+                                    .insert("content".to_string(), Either::Right(content_map));
+                                messages_vec.push(message_map);
+                                image_urls.extend(image_urls_iter);
+                                audio_urls.extend(audio_urls_iter);
+                                video_urls.extend(video_urls_iter);
+                            }
+                        }
+                    }
+                    if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
+                        let mut images = Vec::new();
+                        for url in image_urls {
+                            let url_unparsed = url.trim();
+
+                            let image = util::parse_image_url(url_unparsed)?;
+                            images.push(image);
+                        }
+                        let mut audios = Vec::new();
+                        for url in audio_urls {
+                            let url_unparsed = url.trim();
+                            let audio = util::parse_audio_url(url_unparsed)?;
+                            audios.push(audio);
+                        }
+                        let mut videos = Vec::new();
+                        for url in video_urls {
+                            let url_unparsed = url.trim();
+                            let video = util::parse_video_url(url_unparsed)?;
+                            videos.push(video);
+                        }
+                        RequestMessage::MultimodalChat {
+                            messages: messages_vec,
+                            images,
+                            audios,
+                            videos,
+                            enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        }
+                    } else {
+                        RequestMessage::Chat {
+                            messages: messages_vec,
+                            enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        }
+                    }
+                }
+                Either::Right(ref prompt) => {
+                    let mut messages = Vec::new();
+                    let mut message_map: IndexMap<
+                        String,
+                        Either<String, Vec<IndexMap<String, Value>>>,
+                    > = IndexMap::new();
+                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
+                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
+                    messages.push(message_map);
+                    RequestMessage::Chat {
+                        messages,
+                        enable_thinking: request.enable_thinking,
+                        reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                    }
+                }
+            };
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
+            let agent_approval_callback = build_agent_approval_callback(
+                request
+                    .agent_approval_callback
+                    .as_ref()
+                    .map(|callback| callback.clone_ref(py)),
+            );
+
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: next_request_id(),
+                messages,
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: request.top_logprobs.unwrap_or(1),
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                    min_p: request.min_p,
+                    dry_params,
+                },
+                response: tx,
+                return_logprobs: request.logprobs,
+                is_streaming: request.stream,
+                constraint,
+                suffix: None,
+                tool_choice,
+                tools,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: request.web_search_options.clone(),
+                enable_code_execution: request.enable_code_execution,
+                code_execution_permission: request.code_execution_permission,
+                code_execution_approval_notifier: None,
+                agent_permission: request.agent_permission,
+                agent_approval_handler: agent_approval_callback
+                    .map(AgentToolApprovalHandler::from_sync),
+                agent_approval_notifier: None,
+                max_tool_rounds: request.max_tool_rounds,
+                tool_dispatch_url: request.tool_dispatch_url.clone(),
+                model_id: model_id.clone(),
+                truncate_sequence: request.truncate_sequence,
+                session_id: request.session_id.clone(),
+                files: request
+                    .files
+                    .clone()
+                    .map(|fs| fs.into_iter().map(Into::into).collect()),
+            }));
+
+            let is_streaming = request.stream;
+            let debug_repr = format!("{request:?}");
+            drop(request);
+
+            let runner = self.runner.clone();
+            let send_recv_result = py
+                .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
+                    send_request_with_optional_stream(
+                        runner,
+                        model_id,
+                        model_request,
+                        rx,
+                        debug_repr,
+                        is_streaming,
+                    )
+                })
+                .map_err(PyApiErr::from)?;
+
+            match send_recv_result {
+                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
+                either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
+            }
+        })
+    }
+
+    /// Send an embeddings request, returning embedding vectors in the same order they were provided.
+    /// This returns the embeddings as [batch size, embedding dim]
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_embedding_request(
+        &mut self,
+        request: Py<EmbeddingRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<Vec<f32>>> {
+        Python::with_gil(|py| {
+            let (inputs, truncate_sequence, debug_repr) = {
+                let request_ref = request.bind(py).borrow();
+                (
+                    request_ref.inputs.clone(),
+                    request_ref.truncate_sequence,
+                    format!("{:?}", &*request_ref),
+                )
+            };
+
+            let runner = self.runner.clone();
+            py.allow_threads(move || -> std::result::Result<Vec<Vec<f32>>, String> {
+                MistralRs::maybe_log_request(runner.clone(), debug_repr);
+                let sender = runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?;
+
+                let expected = match &inputs {
+                    PythonEmbeddingInputs::Prompts(prompts) => prompts.len(),
+                    PythonEmbeddingInputs::Tokens(batches) => batches.len(),
+                };
+
+                let mut receivers = Vec::with_capacity(expected);
+
+                let mut enqueue = |message: RequestMessage| -> std::result::Result<(), String> {
+                    let (tx, rx) = channel(1);
+                    let request_id = next_request_id();
+
+                    let model_request = _Request::Normal(Box::new(NormalRequest {
+                        id: request_id,
+                        messages: message,
+                        sampling_params: SamplingParams::deterministic(),
+                        response: tx,
+                        return_logprobs: false,
+                        is_streaming: false,
+                        constraint: Constraint::None,
+                        suffix: None,
+                        tool_choice: None,
+                        tools: None,
+                        logits_processors: None,
+                        return_raw_logits: false,
+                        web_search_options: None,
+                        enable_code_execution: false,
+                        code_execution_permission: None,
+                        code_execution_approval_notifier: None,
+                        agent_permission: None,
+                        agent_approval_handler: None,
+                        agent_approval_notifier: None,
+                        max_tool_rounds: None,
+                        tool_dispatch_url: None,
+                        model_id: model_id.clone(),
+                        truncate_sequence,
+                        session_id: None,
+                        files: None,
+                    }));
+
+                    sender
+                        .blocking_send(model_request)
+                        .map_err(|e| e.to_string())?;
+                    receivers.push(rx);
+                    Ok(())
+                };
+
+                match inputs {
+                    PythonEmbeddingInputs::Prompts(prompts) => {
+                        for prompt in prompts {
+                            enqueue(RequestMessage::Embedding { prompt })?;
+                        }
+                    }
+                    PythonEmbeddingInputs::Tokens(batches) => {
+                        for tokens in batches {
+                            enqueue(RequestMessage::EmbeddingTokens { prompt: tokens })?;
+                        }
+                    }
+                }
+
+                let mut all_embeddings = Vec::with_capacity(receivers.len());
+
+                for mut rx in receivers {
+                    let response = rx.blocking_recv().ok_or_else(|| {
+                        "Embedding response channel closed unexpectedly".to_string()
+                    })?;
+
+                    all_embeddings.push(parse_embedding_response(response)?);
+                }
+
+                Ok(all_embeddings)
+            })
+            .map_err(PyApiErr::from)
+        })
+    }
+
+    /// Send an OpenAI API compatible request, returning the result.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_completion_request(
+        &mut self,
+        request: Py<CompletionRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CompletionResponse> {
+        let (tx, rx) = channel(10_000);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_seqs
+                .as_ref()
+                .map(|x| StopTokens::Seqs(x.to_vec()));
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: next_request_id(),
+                messages: RequestMessage::Completion {
+                    text: request.prompt.clone(),
+                    echo_prompt: request.echo_prompt,
+                    best_of: request.best_of,
+                },
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: 1,
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                    min_p: request.min_p,
+                    dry_params,
+                },
+                response: tx,
+                return_logprobs: false,
+                is_streaming: false,
+                constraint,
+                suffix: request.suffix.clone(),
+                tool_choice,
+                tools,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: None,
+                enable_code_execution: false,
+                code_execution_permission: None,
+                code_execution_approval_notifier: None,
+                agent_permission: None,
+                agent_approval_handler: None,
+                agent_approval_notifier: None,
+                max_tool_rounds: None,
+                tool_dispatch_url: None,
+                model_id: model_id.clone(),
+                truncate_sequence: request.truncate_sequence,
+                session_id: None,
+                files: None,
+            }));
+
+            let debug_repr = format!("{request:?}");
+            drop(request);
+
+            let runner = self.runner.clone();
+            let response = py
+                .allow_threads(move || -> std::result::Result<Response, String> {
+                    send_request_and_wait(runner, model_id, model_request, rx, debug_repr)
+                })
+                .map_err(PyApiErr::from)?;
+
+            parse_completion_response(response)
+        })
+    }
+
+    /// Generate an image.
+    #[pyo3(signature = (
+        prompt,
+        response_format,
+        height = 720,
+        width = 1280,
+        model_id = None,
+        save_file = None,
+    ))]
+    fn generate_image(
+        &self,
+        py: Python<'_>,
+        prompt: String,
+        response_format: ImageGenerationResponseFormat,
+        height: usize,
+        width: usize,
+        model_id: Option<String>,
+        save_file: Option<PathBuf>,
+    ) -> PyApiResult<ImageGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = _Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::ImageGeneration {
+                prompt: prompt.to_string(),
+                format: response_format,
+                generation_params: DiffusionGenerationParams { height, width },
+                save_file,
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
+            model_id: model_id.clone(),
+            truncate_sequence: false,
+            session_id: None,
+            files: None,
+        }));
+
+        let runner = self.runner.clone();
+        let response = py
+            .allow_threads(move || -> std::result::Result<Response, String> {
+                let sender = runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?;
+                sender.blocking_send(request).map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            })
+            .map_err(PyApiErr::from)?;
+
+        let ResponseOk::ImageGeneration(response) = response.as_result()? else {
+            return Err(PyApiErr::from("Got unexpected response type."));
+        };
+
+        Ok(response)
+    }
+
+    /// Generate audio.
+    #[pyo3(signature = (
+        prompt,
+        model_id = None,
+    ))]
+    fn generate_audio(
+        &self,
+        py: Python<'_>,
+        prompt: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<SpeechGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = _Request::Normal(Box::new(NormalRequest {
+            id: 0,
+            messages: RequestMessage::SpeechGeneration { prompt },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+            return_raw_logits: false,
+            web_search_options: None,
+            enable_code_execution: false,
+            code_execution_permission: None,
+            code_execution_approval_notifier: None,
+            agent_permission: None,
+            agent_approval_handler: None,
+            agent_approval_notifier: None,
+            max_tool_rounds: None,
+            tool_dispatch_url: None,
+            model_id: model_id.clone(),
+            truncate_sequence: false,
+            session_id: None,
+            files: None,
+        }));
+
+        let runner = self.runner.clone();
+        let response = py
+            .allow_threads(move || -> std::result::Result<Response, String> {
+                let sender = runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?;
+                sender.blocking_send(request).map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            })
+            .map_err(PyApiErr::from)?;
+
+        let ResponseOk::Speech {
+            pcm,
+            rate,
+            channels,
+        } = response.as_result()?
+        else {
+            return Err(PyApiErr::from("Got unexpected response type."));
+        };
+
+        Ok(SpeechGenerationResponse {
+            pcm: (*pcm).clone(),
+            rate,
+            channels,
+        })
+    }
+
+    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
+    /// then nothing will happen.
+    #[pyo3(signature = (dtype, model_id = None))]
+    fn send_re_isq(
+        &self,
+        py: Python<'_>,
+        dtype: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<()> {
+        let request = _Request::ReIsq(parse_isq_value(&dtype, None)?);
+        let runner = self.runner.clone();
+        py.allow_threads(move || {
+            runner
+                .get_sender(model_id.as_deref())
+                .map_err(|e| e.to_string())?
+                .blocking_send(request)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(PyApiErr::from)
+    }
+
+    /// Begin online calibration: collect activation statistics from live traffic on every
+    /// ISQ-tracked layer. The model must have been loaded with ISQ.
+    #[pyo3(signature = (model_id = None))]
+    fn begin_calibration(
+        &self,
+        py: Python<'_>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(py, mistralrs_core::CalibrationAction::Start, model_id)
+    }
+
+    /// Report per-layer calibration collection progress.
+    #[pyo3(signature = (model_id = None))]
+    fn calibration_status(
+        &self,
+        py: Python<'_>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(py, mistralrs_core::CalibrationAction::Status, model_id)
+    }
+
+    /// Requantize from the source weights with the collected statistics and hot-swap the
+    /// layers into the live model. Returns the pre-apply status. `save_cimatrix` optionally
+    /// writes the collected importance matrix to a `.cimatrix` file for reuse.
+    #[pyo3(signature = (save_cimatrix = None, model_id = None))]
+    fn apply_calibration(
+        &self,
+        py: Python<'_>,
+        save_cimatrix: Option<String>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(
+            py,
+            mistralrs_core::CalibrationAction::Apply {
+                save_cimatrix: save_cimatrix.map(Into::into),
+            },
+            model_id,
+        )
+    }
+
+    /// Tokenize some text, returning raw tokens.
+    #[pyo3(signature = (text, add_special_tokens, enable_thinking, model_id = None))]
+    fn tokenize_text(
+        &self,
+        py: Python<'_>,
+        text: String,
+        add_special_tokens: bool,
+        enable_thinking: Option<bool>,
+        model_id: Option<String>,
+    ) -> PyApiResult<Vec<u32>> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Tokenize(TokenizationRequest {
+            text: Either::Right(text),
+            tools: None,
+            add_generation_prompt: true,
+            add_special_tokens,
+            response: tx,
+            enable_thinking,
+            reasoning_effort: None,
+        });
+
+        let runner = self.runner.clone();
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<Vec<u32>>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
+        .map_err(PyApiErr::from)?
+        .map_err(PyApiErr::from)
+    }
+
+    /// Detokenize some tokens, returning text.
+    #[pyo3(signature = (tokens, skip_special_tokens, model_id = None))]
+    fn detokenize_text(
+        &self,
+        py: Python<'_>,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+        model_id: Option<String>,
+    ) -> PyApiResult<String> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Detokenize(DetokenizationRequest {
+            tokens,
+            skip_special_tokens,
+            response: tx,
+        });
+
+        let runner = self.runner.clone();
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<String>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
+        .map_err(PyApiErr::from)?
+        .map_err(PyApiErr::from)
+    }
+
+    /// List all available model IDs in multi-model mode (aliases if configured).
+    fn list_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_models().map_err(PyApiErr::from)
+    }
+
+    /// Export an agentic session as a JSON string. `None` if missing.
+    #[pyo3(signature = (session_id, model_id = None))]
+    fn export_session(
+        &self,
+        session_id: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<Option<String>> {
+        let session = self
+            .runner
+            .export_session(model_id.as_deref(), &session_id)
+            .map_err(PyApiErr::from)?;
+        match session {
+            Some(s) => serde_json::to_string(&s)
+                .map(Some)
+                .map_err(|e| PyApiErr::from(format!("Failed to serialize session: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// Import an agentic session from a JSON string. Replaces any existing session with the same ID.
+    #[pyo3(signature = (session_id, session_json, model_id = None))]
+    fn import_session(
+        &self,
+        session_id: String,
+        session_json: String,
+        model_id: Option<String>,
+    ) -> PyApiResult<()> {
+        let session: mistralrs_core::SerializedSession = serde_json::from_str(&session_json)
+            .map_err(|e| PyApiErr::from(format!("Failed to parse session JSON: {e}")))?;
+        self.runner
+            .import_session(model_id.as_deref(), session_id, session)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Delete an agentic session. Returns whether the session existed.
+    #[pyo3(signature = (session_id, model_id = None))]
+    fn delete_session(&self, session_id: String, model_id: Option<String>) -> PyApiResult<bool> {
+        self.runner
+            .delete_session(model_id.as_deref(), &session_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// List all stored agentic session IDs.
+    #[pyo3(signature = (model_id = None))]
+    fn list_session_ids(&self, model_id: Option<String>) -> PyApiResult<Vec<String>> {
+        self.runner
+            .list_session_ids(model_id.as_deref())
+            .map_err(PyApiErr::from)
+    }
+
+    /// Look up a file by id. Returns the full body even if the response payload was wire-truncated.
+    fn find_file(&self, file_id: String) -> Option<mistralrs_core::File> {
+        self.runner.find_file(&file_id).map(|f| (*f).clone())
+    }
+
+    /// Return the maximum supported sequence length for the requested model, if available.
+    #[pyo3(signature = (model_id = None))]
+    fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
+        self.runner
+            .max_sequence_length(model_id.as_deref())
+            .map_err(PyApiErr::from)
+    }
+
+    /// Get the default model ID in multi-model mode.
+    fn get_default_model_id(&self) -> PyApiResult<Option<String>> {
+        self.runner.get_default_model_id().map_err(PyApiErr::from)
+    }
+
+    /// Set the default model ID in multi-model mode.
+    fn set_default_model_id(&self, model_id: String) -> PyApiResult<()> {
+        self.runner
+            .set_default_model_id(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Remove a model by ID in multi-model mode.
+    fn remove_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.remove_model(&model_id).map_err(PyApiErr::from)
+    }
+
+    /// Send an OpenAI API compatible request to a specific model, returning the result.
+    fn send_chat_completion_request_to_model(
+        &mut self,
+        request: Py<ChatCompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+        let (tx, rx) = channel(10_000);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_seqs
+                .as_ref()
+                .map(|x| StopTokens::Seqs(x.to_vec()));
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
+            let messages = match request.messages {
+                Either::Left(ref messages) => {
+                    let mut messages_vec = Vec::new();
+                    let mut image_urls = Vec::new();
+                    let mut audio_urls = Vec::new();
+                    let mut video_urls = Vec::new();
+                    for message in messages {
+                        let role = message["role"].as_ref().left().unwrap().clone();
+                        match &message["content"] {
+                            Either::Left(content) => {
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
+                                > = IndexMap::new();
+                                message_map.insert("role".to_string(), Either::Left(role));
+                                message_map.insert(
+                                    "content".to_string(),
+                                    Either::Left(content.to_string()),
+                                );
+                                messages_vec.push(message_map);
+                            }
+                            Either::Right(image_messages) => {
+                                // If there is only one message, it is possible a text message
+                                // found when rig is used as client. In this case, we need to check if
+                                // the message is a text message or an image message.
+                                if image_messages.len() == 1 {
+                                    if !image_messages[0].contains_key("text") {
+                                        return Err(PyApiErr::from(
+                                            "Expected `text` key in input message.",
+                                        ));
+                                    }
+                                    let content = match &image_messages[0]["text"] {
+                                        Either::Left(left) => left.to_string(),
+                                        Either::Right(right) => format!("{right:?}"),
+                                    };
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, Value>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert("role".to_string(), Either::Left(role));
+                                    message_map
+                                        .insert("content".to_string(), Either::Left(content));
+                                    messages_vec.push(message_map);
+                                    continue;
+                                }
+                                if role != "user" {
+                                    return Err(PyApiErr::from(
+                                        "Role for an image message must be `user`, but it is {role}",
+                                    ));
+                                }
+
+                                enum ContentPart {
+                                    Text { text: String },
+                                    Image { image_url: String },
+                                    Audio { audio_url: String },
+                                    Video { video_url: String },
+                                }
+
+                                let mut items = Vec::new();
+                                for image_message in image_messages {
+                                    match image_message.get("type") {
+                                        Some(Either::Left(x)) if x == "text" => {
+                                            items.push(ContentPart::Text {
+                                                text: image_message
+                                                    .get("text").as_ref()
+                                                    .context("Text sub-content must have `text` key.")?.as_ref()
+                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "image_url" => {
+                                            items.push(ContentPart::Image {
+                                                image_url: image_message
+                                                    .get("image_url")
+                                                    .as_ref()
+                                                    .context("Image sub-content must have `image_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Image sub-content `image_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "audio_url" => {
+                                            items.push(ContentPart::Audio {
+                                                audio_url: image_message
+                                                    .get("audio_url")
+                                                    .as_ref()
+                                                    .context("Audio sub-content must have `audio_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Audio sub-content `audio_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "video_url" => {
+                                            items.push(ContentPart::Video {
+                                                video_url: image_message
+                                                    .get("video_url")
+                                                    .as_ref()
+                                                    .context("Video sub-content must have `video_url` key.")?
+                                                    .as_ref()
+                                                    .right()
+                                                    .context("Video sub-content `video_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Video sub-content `video_url` object must have a `url` key.")?
+                                                    .clone(),
+                                            });
+                                        }
+                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
+                                    }
+                                }
+
+                                let text_content = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Text { text } => Some(text),
+                                        _ => None,
+                                    })
+                                    .join(" ");
+                                let image_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Image { image_url } => Some(image_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let audio_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let video_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Video { video_url } => Some(video_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
+                                > = IndexMap::new();
+                                message_map.insert("role".to_string(), Either::Left(role));
+
+                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
+                                for _ in &image_urls_iter {
+                                    let mut content_image_map = IndexMap::new();
+                                    content_image_map.insert(
+                                        "type".to_string(),
+                                        Value::String("image".to_string()),
+                                    );
+                                    content_map.push(content_image_map);
+                                }
+                                for _ in &audio_urls_iter {
+                                    let mut content_audio_map = IndexMap::new();
+                                    content_audio_map.insert(
+                                        "type".to_string(),
+                                        Value::String("audio".to_string()),
+                                    );
+                                    content_map.push(content_audio_map);
+                                }
+                                for _ in &video_urls_iter {
+                                    let mut content_video_map = IndexMap::new();
+                                    content_video_map.insert(
+                                        "type".to_string(),
+                                        Value::String("video".to_string()),
+                                    );
+                                    content_map.push(content_video_map);
+                                }
+                                {
+                                    let mut content_text_map = IndexMap::new();
+                                    content_text_map.insert(
+                                        "type".to_string(),
+                                        Value::String("text".to_string()),
+                                    );
+                                    content_text_map
+                                        .insert("text".to_string(), Value::String(text_content));
+                                    content_map.push(content_text_map);
+                                }
+
+                                message_map
+                                    .insert("content".to_string(), Either::Right(content_map));
+                                messages_vec.push(message_map);
+                                image_urls.extend(image_urls_iter);
+                                audio_urls.extend(audio_urls_iter);
+                                video_urls.extend(video_urls_iter);
+                            }
+                        }
+                    }
+                    if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
+                        let mut images = Vec::new();
+                        for url in image_urls {
+                            let url_unparsed = url.trim();
+
+                            let image = util::parse_image_url(url_unparsed)?;
+                            images.push(image);
+                        }
+                        let mut audios = Vec::new();
+                        for url in audio_urls {
+                            let url_unparsed = url.trim();
+                            let audio = util::parse_audio_url(url_unparsed)?;
+                            audios.push(audio);
+                        }
+                        let mut videos = Vec::new();
+                        for url in video_urls {
+                            let url_unparsed = url.trim();
+                            let video = util::parse_video_url(url_unparsed)?;
+                            videos.push(video);
+                        }
+                        RequestMessage::MultimodalChat {
+                            messages: messages_vec,
+                            images,
+                            audios,
+                            videos,
+                            enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        }
+                    } else {
+                        RequestMessage::Chat {
+                            messages: messages_vec,
+                            enable_thinking: request.enable_thinking,
+                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        }
+                    }
+                }
+                Either::Right(ref prompt) => {
+                    let mut messages = Vec::new();
+                    let mut message_map: IndexMap<
+                        String,
+                        Either<String, Vec<IndexMap<String, Value>>>,
+                    > = IndexMap::new();
+                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
+                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
+                    messages.push(message_map);
+                    RequestMessage::Chat {
+                        messages,
+                        enable_thinking: request.enable_thinking,
+                        reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                    }
+                }
+            };
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
+            let agent_approval_callback = build_agent_approval_callback(
+                request
+                    .agent_approval_callback
+                    .as_ref()
+                    .map(|callback| callback.clone_ref(py)),
+            );
+
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: next_request_id(),
+                messages,
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: request.top_logprobs.unwrap_or(1),
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                    min_p: request.min_p,
+                    dry_params,
+                },
+                response: tx,
+                return_logprobs: request.logprobs,
+                is_streaming: request.stream,
+                constraint,
+                suffix: None,
+                tool_choice,
+                tools,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: request.web_search_options.clone(),
+                enable_code_execution: request.enable_code_execution,
+                code_execution_permission: request.code_execution_permission,
+                code_execution_approval_notifier: None,
+                agent_permission: request.agent_permission,
+                agent_approval_handler: agent_approval_callback
+                    .map(AgentToolApprovalHandler::from_sync),
+                agent_approval_notifier: None,
+                max_tool_rounds: request.max_tool_rounds,
+                tool_dispatch_url: request.tool_dispatch_url.clone(),
+                model_id: Some(model_id.clone()),
+                truncate_sequence: request.truncate_sequence,
+                session_id: request.session_id.clone(),
+                files: request
+                    .files
+                    .clone()
+                    .map(|fs| fs.into_iter().map(Into::into).collect()),
+            }));
+
+            let is_streaming = request.stream;
+            let debug_repr = format!("{request:?}");
+            drop(request);
+
+            let runner = self.runner.clone();
+            let send_recv_result = py
+                .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
+                    send_request_with_optional_stream(
+                        runner,
+                        Some(model_id),
+                        model_request,
+                        rx,
+                        debug_repr,
+                        is_streaming,
+                    )
+                })
+                .map_err(PyApiErr::from)?;
+
+            match send_recv_result {
+                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
+                either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
+            }
+        })
+    }
+
+    /// Send an OpenAI API compatible completion request to a specific model, returning the result.
+    fn send_completion_request_to_model(
+        &mut self,
+        request: Py<CompletionRequest>,
+        model_id: String,
+    ) -> PyApiResult<CompletionResponse> {
+        let (tx, rx) = channel(10_000);
+        Python::with_gil(|py| {
+            let request = request.bind(py).borrow();
+            let stop_toks = request
+                .stop_seqs
+                .as_ref()
+                .map(|x| StopTokens::Seqs(x.to_vec()));
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
+            let model_request = _Request::Normal(Box::new(NormalRequest {
+                id: next_request_id(),
+                messages: RequestMessage::Completion {
+                    text: request.prompt.clone(),
+                    echo_prompt: request.echo_prompt,
+                    best_of: request.best_of,
+                },
+                sampling_params: SamplingParams {
+                    temperature: request.temperature,
+                    top_k: request.top_k,
+                    top_p: request.top_p,
+                    top_n_logprobs: 1,
+                    frequency_penalty: request.frequency_penalty,
+                    presence_penalty: request.presence_penalty,
+                    repetition_penalty: request.repetition_penalty,
+                    max_len: request.max_tokens,
+                    stop_toks,
+                    logits_bias: request.logit_bias.clone(),
+                    n_choices: request.n_choices,
+                    min_p: request.min_p,
+                    dry_params,
+                },
+                response: tx,
+                return_logprobs: false,
+                is_streaming: false,
+                constraint,
+                suffix: request.suffix.clone(),
+                tool_choice,
+                tools,
+                logits_processors: None,
+                return_raw_logits: false,
+                web_search_options: None,
+                enable_code_execution: false,
+                code_execution_permission: None,
+                code_execution_approval_notifier: None,
+                agent_permission: None,
+                agent_approval_handler: None,
+                agent_approval_notifier: None,
+                max_tool_rounds: None,
+                tool_dispatch_url: None,
+                model_id: Some(model_id.clone()),
+                truncate_sequence: request.truncate_sequence,
+                session_id: None,
+                files: None,
+            }));
+
+            let debug_repr = format!("{request:?}");
+            drop(request);
+
+            let runner = self.runner.clone();
+            let response = py
+                .allow_threads(move || -> std::result::Result<Response, String> {
+                    send_request_and_wait(runner, Some(model_id), model_request, rx, debug_repr)
+                })
+                .map_err(PyApiErr::from)?;
+
+            parse_completion_response(response)
+        })
+    }
+
+    /// Unload a model from memory while preserving its configuration for later reload.
+    /// The model can be reloaded automatically when a request is sent to it, or manually
+    /// using `reload_model()`.
+    fn unload_model(&self, model_id: String) -> PyApiResult<()> {
+        self.runner.unload_model(&model_id).map_err(PyApiErr::from)
+    }
+
+    /// Manually reload a previously unloaded model.
+    fn reload_model(&self, py: Python<'_>, model_id: String) -> PyApiResult<()> {
+        let runner = self.runner.clone();
+        py.allow_threads(move || {
+            runner
+                .reload_model_blocking(&model_id)
+                .map_err(|e| e.to_string())
+        })
+        .map_err(PyApiErr::from)
+    }
+
+    /// List all unloaded model IDs.
+    fn list_unloaded_models(&self) -> PyApiResult<Vec<String>> {
+        self.runner.list_unloaded_models().map_err(PyApiErr::from)
+    }
+
+    /// Check if a model is currently loaded (as opposed to unloaded).
+    fn is_model_loaded(&self, model_id: String) -> PyApiResult<bool> {
+        self.runner
+            .is_model_loaded(&model_id)
+            .map_err(PyApiErr::from)
+    }
+
+    /// Get the status of a model: "loaded", "unloaded", "reloading", or None if not found.
+    fn get_model_status(&self, model_id: String) -> PyApiResult<Option<String>> {
+        self.runner
+            .get_model_status(&model_id)
+            .map(|s| s.map(|s| s.to_string()))
+            .map_err(PyApiErr::from)
+    }
+
+    /// List all models with their status (loaded, unloaded, reloading).
+    fn list_models_with_status(&self) -> PyApiResult<Vec<(String, String)>> {
+        self.runner
+            .list_models_with_status()
+            .map(|v| v.into_iter().map(|(id, s)| (id, s.to_string())).collect())
+            .map_err(PyApiErr::from)
+    }
+}
+
+/// MCP server source configuration for different transport types
+impl Runner {
+    fn send_calibration(
+        &self,
+        py: Python<'_>,
+        action: mistralrs_core::CalibrationAction,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Calibration(mistralrs_core::CalibrationRequest {
+            action,
+            response: tx,
+        });
+        let runner = self.runner.clone();
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<mistralrs_core::CalibrationStatus>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
+        .map_err(PyApiErr::from)?
+        .map(CalibrationStatusPy::from)
+        .map_err(PyApiErr::from)
+    }
+}
+
+#[pyclass(name = "CalibrationStatus")]
+#[derive(Debug, Clone)]
+pub struct CalibrationStatusPy {
+    #[pyo3(get)]
+    pub collecting: bool,
+    #[pyo3(get)]
+    pub layers: usize,
+    #[pyo3(get)]
+    pub layers_tracking: usize,
+    #[pyo3(get)]
+    pub total_rows: usize,
+    #[pyo3(get)]
+    pub min_rows: usize,
+    #[pyo3(get)]
+    pub max_rows: usize,
+}
+
+impl From<mistralrs_core::CalibrationStatus> for CalibrationStatusPy {
+    fn from(s: mistralrs_core::CalibrationStatus) -> Self {
+        Self {
+            collecting: s.collecting,
+            layers: s.layers,
+            layers_tracking: s.layers_tracking,
+            total_rows: s.total_rows,
+            min_rows: s.min_rows,
+            max_rows: s.max_rows,
+        }
+    }
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub enum McpServerSourcePy {
+    /// HTTP-based MCP server
+    #[pyo3(constructor = (url, timeout_secs, headers))]
+    Http {
+        url: String,
+        timeout_secs: Option<u64>,
+        headers: Option<std::collections::HashMap<String, String>>,
+    },
+    /// Process-based MCP server
+    #[pyo3(constructor = (command, args, work_dir, env))]
+    Process {
+        command: String,
+        args: Vec<String>,
+        work_dir: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+    },
+    /// WebSocket-based MCP server
+    #[pyo3(constructor = (url, timeout_secs, headers))]
+    WebSocket {
+        url: String,
+        timeout_secs: Option<u64>,
+        headers: Option<std::collections::HashMap<String, String>>,
+    },
+}
+
+impl From<McpServerSourcePy> for McpServerSource {
+    fn from(source: McpServerSourcePy) -> Self {
+        match source {
+            McpServerSourcePy::Http {
+                url,
+                timeout_secs,
+                headers,
+            } => McpServerSource::Http {
+                url,
+                timeout_secs,
+                headers,
+            },
+            McpServerSourcePy::Process {
+                command,
+                args,
+                work_dir,
+                env,
+            } => McpServerSource::Process {
+                command,
+                args,
+                work_dir,
+                env,
+            },
+            McpServerSourcePy::WebSocket {
+                url,
+                timeout_secs,
+                headers,
+            } => McpServerSource::WebSocket {
+                url,
+                timeout_secs,
+                headers,
+            },
+        }
+    }
+}
+
+/// Configuration for an individual MCP server
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct McpServerConfigPy {
+    #[pyo3(get, set)]
+    pub id: String,
+    #[pyo3(get, set)]
+    pub name: String,
+    #[pyo3(get, set)]
+    pub source: McpServerSourcePy,
+    #[pyo3(get, set)]
+    pub enabled: bool,
+    #[pyo3(get, set)]
+    pub tool_prefix: Option<String>,
+    #[pyo3(get, set)]
+    pub resources: Option<Vec<String>>,
+    #[pyo3(get, set)]
+    pub bearer_token: Option<String>,
+}
+
+#[pymethods]
+impl McpServerConfigPy {
+    #[new]
+    #[pyo3(signature = (id, name, source, enabled=true, tool_prefix=None, resources=None, bearer_token=None))]
+    pub fn new(
+        id: String,
+        name: String,
+        source: McpServerSourcePy,
+        enabled: bool,
+        tool_prefix: Option<String>,
+        resources: Option<Vec<String>>,
+        bearer_token: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            source,
+            enabled,
+            tool_prefix,
+            resources,
+            bearer_token,
+        }
+    }
+}
+
+impl From<McpServerConfigPy> for McpServerConfig {
+    fn from(config: McpServerConfigPy) -> Self {
+        McpServerConfig {
+            id: config.id,
+            name: config.name,
+            source: config.source.into(),
+            enabled: config.enabled,
+            tool_prefix: config.tool_prefix,
+            resources: config.resources,
+            bearer_token: config.bearer_token,
+        }
+    }
+}
+
+/// Configuration for MCP client integration
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct McpClientConfigPy {
+    #[pyo3(get, set)]
+    pub servers: Vec<McpServerConfigPy>,
+    #[pyo3(get, set)]
+    pub auto_register_tools: bool,
+    #[pyo3(get, set)]
+    pub tool_timeout_secs: Option<u64>,
+    #[pyo3(get, set)]
+    pub max_concurrent_calls: Option<usize>,
+}
+
+#[pymethods]
+impl McpClientConfigPy {
+    #[new]
+    #[pyo3(signature = (servers, auto_register_tools=true, tool_timeout_secs=None, max_concurrent_calls=None))]
+    pub fn new(
+        servers: Vec<McpServerConfigPy>,
+        auto_register_tools: bool,
+        tool_timeout_secs: Option<u64>,
+        max_concurrent_calls: Option<usize>,
+    ) -> Self {
+        Self {
+            servers,
+            auto_register_tools,
+            tool_timeout_secs,
+            max_concurrent_calls,
+        }
+    }
+}
+
+impl From<McpClientConfigPy> for McpClientConfig {
+    fn from(config: McpClientConfigPy) -> Self {
+        McpClientConfig {
+            servers: config.servers.into_iter().map(|s| s.into()).collect(),
+            auto_register_tools: config.auto_register_tools,
+            tool_timeout_secs: config.tool_timeout_secs,
+            max_concurrent_calls: config.max_concurrent_calls,
+        }
+    }
+}
+
+#[pymodule]
+fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    initialize_logging();
+
+    m.add_class::<Runner>()?;
+    m.add_class::<CalibrationStatusPy>()?;
+    m.add_class::<Which>()?;
+    m.add_class::<ChatCompletionRequest>()?;
+    m.add_class::<CompletionRequest>()?;
+    m.add_class::<EmbeddingRequest>()?;
+    m.add_class::<Architecture>()?;
+    m.add_class::<which::EmbeddingArchitecture>()?;
+    m.add_class::<MultimodalArchitecture>()?;
+    m.add_class::<DiffusionArchitecture>()?;
+    m.add_class::<AnyMoeConfig>()?;
+    m.add_class::<AnyMoeExpertType>()?;
+    m.add_class::<CodeExecutionConfig>()?;
+    m.add_class::<SandboxPolicy>()?;
+    m.add_class::<NetworkModePy>()?;
+    m.add_class::<CodeExecutionPermissionPy>()?;
+    m.add_class::<AgentPermissionPy>()?;
+    m.add_class::<AgentToolSourcePy>()?;
+    m.add_class::<AgentToolKindPy>()?;
+    m.add_class::<AgentToolMetadataPy>()?;
+    m.add_class::<AgentToolApprovalPy>()?;
+    m.add_class::<AgentToolApprovalDecisionKindPy>()?;
+    m.add_class::<AgentToolApprovalDecisionPy>()?;
+    m.add_class::<files::RequestedFile>()?;
+    m.add_class::<mistralrs_core::File>()?;
+    m.add_class::<mistralrs_core::FileSource>()?;
+    m.add_class::<ToolChoice>()?;
+    m.add_class::<SpeechGenerationResponse>()?;
+    m.add_class::<SpeechLoaderType>()?;
+
+    m.add_class::<mistralrs_core::ResponseMessage>()?;
+    m.add_class::<mistralrs_core::Delta>()?;
+    m.add_class::<mistralrs_core::ResponseLogprob>()?;
+    m.add_class::<mistralrs_core::Logprobs>()?;
+    m.add_class::<mistralrs_core::Choice>()?;
+    m.add_class::<mistralrs_core::ChunkChoice>()?;
+    m.add_class::<mistralrs_core::Usage>()?;
+    m.add_class::<mistralrs_core::AgenticToolCallRecord>()?;
+    m.add_class::<mistralrs_core::ChatCompletionResponse>()?;
+    m.add_class::<mistralrs_core::ChatCompletionChunkResponse>()?;
+    m.add_class::<mistralrs_core::CompletionChoice>()?;
+    m.add_class::<mistralrs_core::CompletionResponse>()?;
+    m.add_class::<mistralrs_core::TopLogprob>()?;
+    m.add_class::<mistralrs_core::ModelDType>()?;
+    m.add_class::<mistralrs_core::ImageGenerationResponseFormat>()?;
+    m.add_class::<McpServerSourcePy>()?;
+    m.add_class::<McpServerConfigPy>()?;
+    m.add_class::<McpClientConfigPy>()?;
+    m.add_class::<mistralrs_core::WebSearchOptions>()?;
+    m.add_class::<mistralrs_core::SearchContextSize>()?;
+    m.add_class::<mistralrs_core::WebSearchUserLocation>()?;
+    m.add_class::<mistralrs_core::ApproximateUserLocation>()?;
+    Ok(())
+}

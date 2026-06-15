@@ -37,3 +37,34 @@ base64 = "0.22"
 
 [profile.release]
 opt-level = 3
+
+# ---------------------------------------------------------------------------
+# Vendored mistral.rs + candle (Gemma-4 Metal NaN-logits fix — branch
+# daemon-metal-fix). The upstream git deps are redirected to in-repo committed
+# source under ../vendor so the candle Metal softmax kernel is editable AND is
+# the code our build actually executes.
+#
+# Provenance (copied from the exact cargo-pinned checkouts, .git stripped):
+#   vendor/mistral.rs  = EricLBuehler/mistral.rs @ c22c2e2b622a815821e59056c2b5952b4cbbe010
+#   vendor/candle      = huggingface/candle      @ d2afd7f7f746ac72236f81736135de1fcd543426
+#
+# `[patch]` keys are the original source URLs (rev-agnostic), so every rev of
+# these URLs resolves to the local path. Un-vendor by deleting these two blocks
+# once the candle kernel fix lands upstream.
+# ---------------------------------------------------------------------------
+[patch."https://github.com/huggingface/candle.git"]
+candle-core = { path = "../vendor/candle/candle-core" }
+candle-metal-kernels = { path = "../vendor/candle/candle-metal-kernels" }
+candle-nn = { path = "../vendor/candle/candle-nn" }
+candle-ug = { path = "../vendor/candle/candle-ug" }
+
+[patch."https://github.com/EricLBuehler/mistral.rs"]
+mistralrs = { path = "../vendor/mistral.rs/mistralrs" }
+mistralrs-audio = { path = "../vendor/mistral.rs/mistralrs-audio" }
+mistralrs-core = { path = "../vendor/mistral.rs/mistralrs-core" }
+mistralrs-macros = { path = "../vendor/mistral.rs/mistralrs-macros" }
+mistralrs-mcp = { path = "../vendor/mistral.rs/mistralrs-mcp" }
+mistralrs-paged-attn = { path = "../vendor/mistral.rs/mistralrs-paged-attn" }
+mistralrs-quant = { path = "../vendor/mistral.rs/mistralrs-quant" }
+mistralrs-sandbox = { path = "../vendor/mistral.rs/mistralrs-sandbox" }
+mistralrs-vision = { path = "../vendor/mistral.rs/mistralrs-vision" }
