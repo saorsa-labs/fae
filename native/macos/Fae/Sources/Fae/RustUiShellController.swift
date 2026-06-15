@@ -214,15 +214,21 @@ final class RustUiShellController {
         cancellables.removeAll()
         orbState?.$mode
             .removeDuplicates()
-            .sink { [weak self] _ in
-                self?.sendStateForCurrentOrbMode()
+            .sink { [weak self] mode in
+                // `@Published` emits in `willSet`, so `orbState.mode` still holds
+                // the OLD value here — we MUST use the emitted `mode`, not re-read
+                // the property, or every orb state lands one transition late
+                // (generation looked idle; idle stranded a counting Thinking pill).
+                self?.sendState(forMode: mode)
             }
             .store(in: &cancellables)
 
         orbState?.$feeling
             .removeDuplicates()
-            .sink { [weak self] _ in
-                self?.sendStateForCurrentOrbMode()
+            .sink { [weak self] feeling in
+                // Same willSet caveat: pass the fresh feeling; mode is stable here.
+                guard let self, let mode = self.orbState?.mode else { return }
+                self.sendState(forMode: mode, feeling: feeling)
             }
             .store(in: &cancellables)
 
@@ -300,30 +306,31 @@ final class RustUiShellController {
     }
 
     private func sendStateForCurrentOrbMode() {
-        guard let mode = orbState?.mode else {
-            sendState("quiescent")
-            return
-        }
+        sendState(forMode: orbState?.mode ?? .idle)
+    }
 
+    private func sendState(forMode mode: OrbMode, feeling: OrbFeeling? = nil) {
         switch mode {
         case .thinking:
-            sendState("thinking")
+            sendState("thinking", feeling: feeling)
         case .speaking:
-            sendState("speaking")
+            sendState("speaking", feeling: feeling)
         case .listening:
             // S18 push-to-talk capture in progress — the user needs visible
             // feedback that the mic is live. Nothing else sets this mode.
-            sendState("listening")
+            sendState("listening", feeling: feeling)
         case .idle:
             // Product UX: no visible orb while idle/quiescent.
-            sendState("quiescent")
+            sendState("quiescent", feeling: feeling)
         }
     }
 
-    private func sendState(_ state: String) {
+    private func sendState(_ state: String, feeling: OrbFeeling? = nil) {
         var message: [String: Any] = ["type": "state", "state": state]
         // Butler demeanor: the fog shows emotion (thinking, warmth, concern…).
-        if let feeling = orbState?.feeling.rawValue {
+        // Use the explicitly-passed feeling when present (the $feeling sink
+        // observes a willSet, so reading orbState.feeling there is stale).
+        if let feeling = (feeling ?? orbState?.feeling)?.rawValue {
             message["feeling"] = feeling
         }
         send(message)

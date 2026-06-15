@@ -406,28 +406,25 @@ impl State {
     }
 
     fn update(&mut self) {
-        if self.active {
-            let time = self.start.elapsed().as_secs_f32();
-            self.uniforms.time = time;
-            // Audio drives silhouette and flow, so it must be SMOOTH: live
-            // bridge level when present, else a slow synthetic breath. The
-            // old 19 Hz "tremor" jittered the radius every frame and read as
-            // jerkiness. Eased, never snapped.
+        let time = self.start.elapsed().as_secs_f32();
+        self.uniforms.time = time;
+        // Audio drives silhouette and flow, so it must be SMOOTH: live bridge
+        // level when present, else a synthetic breath. The old 19 Hz "tremor"
+        // jittered the radius every frame and read as jerkiness. Eased, never
+        // snapped. The idle orb keeps breathing too — slower and shallower — so
+        // it reads as a living presence at rest, never a frozen dead still.
+        let target = if self.active {
             let breath = 0.12 + 0.10 * (0.5 + 0.5 * (time * 0.8).sin());
-            let target = self.bridge_audio.unwrap_or(breath);
-            self.uniforms.audio += (target - self.uniforms.audio) * 0.08;
+            self.bridge_audio.unwrap_or(breath)
         } else {
-            self.uniforms.audio = 0.0;
-            // Inactive frames are single stills (ControlFlow::Wait stops the
-            // per-frame easing) — snap demeanor to target so the idle orb
-            // renders the canonical quiescent fog, never a frozen
-            // mid-transition frame.
-            self.uniforms.mode = self.target_mode;
-            self.uniforms.warmth = self.target_warmth;
-            self.uniforms.energy = self.target_energy;
-        }
+            // Calm idle breath: lower baseline, gentler swing, slower period.
+            0.05 + 0.04 * (0.5 + 0.5 * (time * 0.45).sin())
+        };
+        self.uniforms.audio += (target - self.uniforms.audio) * 0.08;
         // Ease emotion params toward their targets so demeanor shifts read as
-        // the fog changing its mind, never as a palette snap (~1s settle).
+        // the fog changing its mind, never as a palette snap (~1s settle). Idle
+        // now animates (WaitUntil, not Wait), so easing runs every frame and a
+        // frozen mid-transition still can no longer occur.
         let ease = 0.04;
         self.uniforms.mode += (self.target_mode - self.uniforms.mode) * ease;
         self.uniforms.warmth += (self.target_warmth - self.uniforms.warmth) * ease;
@@ -533,12 +530,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     refresh_pill(&pill, &orb_ui, hovering, None, &mut last_pill);
 
     event_loop.run(move |event, target, control_flow| {
-        // A pending long-press needs the loop awake to fire its timer even
-        // while the orb is quiescent (Wait would sleep past the threshold).
+        // Active turns and a pending long-press render flat-out (Poll). When
+        // idle the orb still breathes, but at a capped ~30 fps via WaitUntil so
+        // the living-presence fog sips battery instead of busy-rendering — and
+        // never freezes on a dead still the way ControlFlow::Wait did.
         *control_flow = if state.active || matches!(press, PressState::Pending { .. }) {
             ControlFlow::Poll
         } else {
-            ControlFlow::Wait
+            ControlFlow::WaitUntil(Instant::now() + IDLE_FRAME_INTERVAL)
         };
 
         // Long-press timer: a stationary press that survives the hold
@@ -728,7 +727,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            Event::MainEventsCleared if state.active => {
+            Event::MainEventsCleared => {
                 // Tick the thinking counter once a second (refresh_pill dedupes
                 // by content, so per-frame calls only repaint on text change).
                 if thinking_since.is_some() {
@@ -740,6 +739,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         &mut last_pill,
                     );
                 }
+                // Drive a frame on every pass — when active/pending this is
+                // continuous (Poll); when idle it fires once per WaitUntil tick,
+                // keeping the breathing fog alive at the capped idle rate.
                 window.request_redraw();
             }
             _ => {}
@@ -1056,6 +1058,11 @@ enum PressState {
 
 /// Hold duration before a stationary press becomes push-to-talk.
 const LONG_PRESS_MS: u128 = 400;
+/// Idle frame budget (~30 fps). The idle orb keeps a gentle breathing
+/// animation rather than freezing on a still, but we cap the redraw rate with
+/// `ControlFlow::WaitUntil` so the living-presence fog costs little battery
+/// (`Poll` would render flat-out; `Wait` would freeze the orb dead).
+const IDLE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 /// Cursor travel that turns a pending press into a window drag.
 const PRESS_SLOP_PX: f64 = 8.0;
 

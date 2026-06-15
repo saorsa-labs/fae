@@ -340,6 +340,97 @@ final class DaemonWireTests: XCTestCase {
     }
 }
 
+// MARK: - Audio two-pass helpers (S18)
+
+/// The two-pass audio turn synthesises the `[heard]:` line itself from a
+/// dedicated transcription pass, because Gemma 4 routes audio comprehension into
+/// reasoning/tool-call markup the adapter drops (diagnosed 2026-06-15). These
+/// pure helpers guard the contract the pipeline depends on: a SINGLE-LINE
+/// `[heard]:` transcript followed by the spoken answer.
+final class DaemonAudioTwoPassTests: XCTestCase {
+
+    // MARK: flattenTranscript
+
+    func testFlattenTranscriptCollapsesNewlinesToOneLine() {
+        // HeardLineParser ends the `[heard]:` line at the first newline, so a
+        // multi-sentence transcript MUST be one line or its tail leaks into the
+        // spoken answer.
+        let result = DaemonLLMEngine.flattenTranscript("What is the\ncapital of\nFrance?")
+        XCTAssertEqual(result, "What is the capital of France?")
+        XCTAssertFalse(result.contains("\n"))
+    }
+
+    func testFlattenTranscriptStripsStrayLeadingHeardLabel() {
+        // If the transcription model echoes a `[heard]:` label we must not
+        // double it when combineHeard prepends the authoritative one.
+        let result = DaemonLLMEngine.flattenTranscript("[heard]: hello there")
+        XCTAssertEqual(result, "hello there")
+    }
+
+    func testFlattenTranscriptTrimsWhitespace() {
+        XCTAssertEqual(DaemonLLMEngine.flattenTranscript("  hi  "), "hi")
+        XCTAssertEqual(DaemonLLMEngine.flattenTranscript(""), "")
+    }
+
+    // MARK: combineHeard
+
+    func testCombineHeardPrependsTranscriptThenAnswer() {
+        let combined = DaemonLLMEngine.combineHeard(
+            transcript: "what time is it", answer: "It's 3 PM.")
+        XCTAssertEqual(combined, "[heard]: what time is it\nIt's 3 PM.")
+    }
+
+    func testCombineHeardDedupesRedundantHeardLineFromAnswer() {
+        // The reasoning pass may re-emit its own `[heard]:` line; the authoritative
+        // transcript (pass 1) must win and the echo must be dropped.
+        let combined = DaemonLLMEngine.combineHeard(
+            transcript: "play jazz", answer: "[heard]: play jazz\nPlaying jazz now.")
+        XCTAssertEqual(combined, "[heard]: play jazz\nPlaying jazz now.")
+    }
+
+    func testCombineHeardEmptyAnswerYieldsHeardLineOnly() {
+        // A pure tool-call turn has no spoken text — the pipeline still needs the
+        // transcript line so the turn is captured and displayed.
+        let combined = DaemonLLMEngine.combineHeard(transcript: "open mail", answer: "")
+        XCTAssertEqual(combined, "[heard]: open mail")
+    }
+
+    // MARK: strippingHeardInstruction
+
+    func testStrippingHeardInstructionRemovesContractBlock() {
+        let prompt =
+            "You are Fae.\n\nThe user's message arrives as audio. Begin EVERY reply with [heard]:."
+        XCTAssertEqual(DaemonLLMEngine.strippingHeardInstruction(prompt), "You are Fae.")
+    }
+
+    func testStrippingHeardInstructionIsNoOpWhenMarkerAbsent() {
+        let prompt = "You are Fae. Be concise."
+        XCTAssertEqual(DaemonLLMEngine.strippingHeardInstruction(prompt), prompt)
+    }
+
+    // MARK: replacingFinalUserContent
+
+    func testReplacingFinalUserContentSwapsLastUserMessage() {
+        let messages = [
+            LLMMessage(role: .user, content: "old"),
+            LLMMessage(role: .assistant, content: "reply"),
+            LLMMessage(role: .user, content: ""),
+        ]
+        let result = DaemonLLMEngine.replacingFinalUserContent(messages, with: "transcript")
+        XCTAssertEqual(result[2].content, "transcript")
+        XCTAssertEqual(result[0].content, "old")  // earlier user turn untouched
+        XCTAssertEqual(result[1].content, "reply")
+    }
+
+    func testReplacingFinalUserContentAppendsWhenNoUserMessage() {
+        let messages = [LLMMessage(role: .system, content: "sys")]
+        let result = DaemonLLMEngine.replacingFinalUserContent(messages, with: "transcript")
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.last?.role, .user)
+        XCTAssertEqual(result.last?.content, "transcript")
+    }
+}
+
 // MARK: - Config mapping
 
 final class DaemonLLMConfigTests: XCTestCase {

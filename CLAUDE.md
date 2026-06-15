@@ -83,7 +83,7 @@ Swift app (voice pipeline, memory, tools, skills) + Rust orb host (only product 
 
 ```
 Right ⌥ hold / orb long-press → mic capture (16kHz) → WAV → fae-daemon
-(Gemma 4 E4B: ASR + LLM + tools in one request) → TTS → Speaker
+(Gemma 4 E4B, two-pass: pass 1 transcribe → pass 2 LLM + tools) → TTS → Speaker
                                       │
                                       ├── Memory (SQLite + ANN + FTS5)
                                       ├── Tools (36 built-in)
@@ -102,7 +102,7 @@ Right ⌥ hold / orb long-press → mic capture (16kHz) → WAV → fae-daemon
 
 | Engine | Model | Framework | Purpose |
 |--------|-------|-----------|---------|
-| LLM (primary) | Gemma 4 E4B | fae-daemon + mistral.rs (Metal/CPU; llama.cpp fallback planned for Vulkan-class hardware) | Conversation, ASR + tool use in one audio turn — when `llm.useDaemonEngine = true` |
+| LLM (primary) | Gemma 4 E4B | fae-daemon + mistral.rs (Metal/CPU; llama.cpp fallback planned for Vulkan-class hardware) | Conversation + tools; audio transcribed in a dedicated pass, then reasoning on the transcript (two-pass, S18) — when `llm.useDaemonEngine = true` |
 | LLM (fallback) | Qwen3.5 (2B / 4B / 35B-A3B) | MLX 4-bit | macOS in-process fallback + LoRA training substrate |
 | TTS | Kokoro-82M (hexgrad) | MLXAudioTTS float32 | Text-to-speech (FaeTTSAdapter, pre-computed voice embeddings, 24 kHz) |
 | VLM (fast) | SmolVLM2-256M | MLXVLM mlx | Always-on vision — presence detection, screen triage (<1GB) |
@@ -111,9 +111,12 @@ Right ⌥ hold / orb long-press → mic capture (16kHz) → WAV → fae-daemon
 | Speaker | ECAPA-TDNN | Core ML fp16 | fae_self echo rejection (voice identity retired in S18) |
 
 > S18 kill-list 3/3 (2026-06-12): the local STT engine (Qwen3-ASR) and the
-> entire always-on speech flow were deleted. ASR happens inside the LLM turn —
-> push-to-talk audio is WAV-encoded and rides the daemon request directly
-> (`[heard]:` first-line contract). There is no `[stt]` config section.
+> entire always-on speech flow were deleted. Push-to-talk audio is WAV-encoded
+> and sent to the daemon, which (2026-06-15) transcribes it in a dedicated
+> first pass then reasons on the transcript text in a second pass — the daemon
+> synthesises the `[heard]:` first-line contract from pass 1. Single-pass audio
+> was unreliable: Gemma 4 buries the transcript in reasoning/tool-call markup
+> the adapter drops. There is no `[stt]` config section.
 
 **Daemon LLM lane**: `llm.useDaemonEngine = true` routes turns through `ML/DaemonLLMEngine.swift` → `fae-daemon` (Unix-socket NDJSON). Before loading Gemma, the daemon verifies the Hugging Face snapshot against `<fae data dir>/models.lock` using size + SHA-256 entries generated from the real `google/gemma-4-E4B-it` snapshot; Swift installs the bundled lock on first daemon use. `FAE_DAEMON_BIN` overrides the daemon binary path. `FAE_MODELS_LOCK=off` is a loud dev-only escape hatch (`FAE_DEV=1`); production releases must fail closed on missing or mismatched model artifacts. If the daemon is unavailable, the pipeline falls back to the in-process MLX engine.
 
@@ -147,7 +150,7 @@ LLM engine lives in `Sources/FaeInference/MLXLLMEngine.swift` (separate target).
 
 ### Unified pipeline (PTT-only, S18)
 
-1. **PTT capture** (16kHz mono — hold gestures: Right ⌥ hold or orb long-press ≥400ms, release sends, 30s cap; toggle gestures: menu "Talk to Fae" / Messages-panel mic, where the VAD endpointer sends after 1.2s trailing silence; bare orb click only pulses the hint pill, drag moves the orb) → 2. **WAV encode** (base64, attached to the turn) → 3. **LLM** (Gemma 4 E4B via daemon lane: ASR + reasoning + tools in one request, `[heard]:` first line is the transcript; Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 4. **Vocab correction** (static + dynamic correctors on the `[heard]` transcript) → 5. **TTS** (Kokoro-82M, sentence-queued) → 6. **Playback** (starting a new capture interrupts speech)
+1. **PTT capture** (16kHz mono — hold gestures: Right ⌥ hold or orb long-press ≥400ms, release sends, 30s cap; toggle gestures: menu "Talk to Fae" / Messages-panel mic, where the VAD endpointer sends after 1.2s trailing silence; bare orb click only pulses the hint pill, drag moves the orb) → 2. **WAV encode** (base64, attached to the turn) → 3. **LLM** (Gemma 4 E4B via daemon lane, two-pass audio: pass 1 transcribes the clip → `[heard]:` line; pass 2 reasons on the transcript text with tools. `DaemonLLMEngine.runAudioTurn` synthesises the `[heard]:` line + answer. Qwen3.5 MLX fallback; native tool calling, max 5 tool turns) → 4. **Vocab correction** (static + dynamic correctors on the `[heard]` transcript) → 5. **TTS** (Kokoro-82M, sentence-queued) → 6. **Playback** (starting a new capture interrupts speech)
 
 There is no always-on listening lane: outside a capture, mic chunks are dropped. Interrupting Fae is the deliberate act of starting a new capture — holding Right ⌥ or long-pressing the orb (`pttStart` stops playback and generation).
 
@@ -157,9 +160,9 @@ There is no always-on listening lane: outside a capture, mic chunks are dropped.
 
 ### Vocabulary correction on `[heard]` transcripts
 
-ASR happens inside the LLM turn, so name corrections apply to the `[heard]:`
-transcript the model returns (extracted in `generateWithTools`, before the
-transcript is stored, displayed, or captured to memory) via two layers:
+The daemon's transcription pass produces the `[heard]:` line, so name
+corrections apply to the `[heard]:` transcript (extracted in `generateWithTools`,
+before the transcript is stored, displayed, or captured to memory) via two layers:
 
 1. **Static corrections** (`TextProcessing.nameCorrections`): hardcoded patterns for "Fae" name garbles (faith→Fae, phase→Fae, etc.). Applied first via `correctNameRecognition()`.
 

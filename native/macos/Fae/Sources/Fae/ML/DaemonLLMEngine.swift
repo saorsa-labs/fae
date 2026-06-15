@@ -752,6 +752,22 @@ actor DaemonLLMEngine: LLMEngine {
                     return
                 }
                 do {
+                    // S18 push-to-talk: a single audio turn never surfaces a
+                    // reliable `[heard]:` line — Gemma 4 routes the transcript
+                    // into reasoning/tool-call markup the adapter drops, or
+                    // emits an empty `content` when it tool-calls (diagnosed
+                    // 2026-06-15). Split into a dedicated transcription pass
+                    // plus a text reasoning pass so the contract is met every
+                    // turn. Text turns keep the single-pass path.
+                    if let audio = options.audioWAVBase64, !audio.isEmpty {
+                        try await self.runAudioTurn(
+                            audio: audio,
+                            messages: messages,
+                            systemPrompt: systemPrompt,
+                            options: options,
+                            continuation: continuation)
+                        return
+                    }
                     let turn = try await self.runTurn(
                         messages: messages, systemPrompt: systemPrompt, options: options)
                     if Task.isCancelled {
@@ -761,13 +777,8 @@ actor DaemonLLMEngine: LLMEngine {
                     // When the daemon returned structured tool calls, the raw
                     // text is the model's tool-call markup (e.g. Gemma 4's
                     // "<|tool_call>call:…") — never speakable output. Rely on
-                    // the structured calls alone in that case. EXCEPT on audio
-                    // turns (S18): the text then begins with the `[heard]:`
-                    // transcription line, which the pipeline must receive even
-                    // when the turn is a pure tool call — it strips the line
-                    // and any tool-call residue before anything is spoken.
-                    let isAudioTurn = options.audioWAVBase64?.isEmpty == false
-                    if !turn.text.isEmpty && (turn.toolCalls.isEmpty || isAudioTurn) {
+                    // the structured calls alone in that case.
+                    if !turn.text.isEmpty && turn.toolCalls.isEmpty {
                         continuation.yield(.text(turn.text))
                     }
                     for call in turn.toolCalls {
@@ -788,9 +799,154 @@ actor DaemonLLMEngine: LLMEngine {
         }
     }
 
+    /// Two-pass audio turn (S18 push-to-talk).
+    ///
+    /// Pass 1 transcribes the clip with a tool-free, thinking-suppressed prompt
+    /// — proven to return the clean spoken text in `content` (the audio-capable
+    /// model would otherwise bury it in reasoning or drop it behind a tool
+    /// call). Pass 2 reasons on that transcript as ordinary *text* (no audio,
+    /// tools enabled), which the daemon already handles reliably. The two
+    /// passes are emitted to the pipeline as one `[heard]: <transcript>` line
+    /// followed by the answer, matching the existing single-turn contract.
+    private func runAudioTurn(
+        audio: String,
+        messages: [LLMMessage],
+        systemPrompt: String,
+        options: GenerationOptions,
+        continuation: AsyncThrowingStream<LLMStreamEvent, Error>.Continuation
+    ) async throws {
+        // Pass 1 — transcription only.
+        var transcribeOptions = options
+        transcribeOptions.tools = nil
+        transcribeOptions.turnContextPrefix = nil
+        transcribeOptions.suppressThinking = true
+        transcribeOptions.maxTokens = min(options.maxTokens, 256)
+        let transcriptTurn = try await runTurn(
+            messages: [LLMMessage(role: .user, content: "")],
+            systemPrompt: Self.transcribeSystemPrompt,
+            options: transcribeOptions)
+        if Task.isCancelled {
+            continuation.finish()
+            return
+        }
+        let transcript = Self.flattenTranscript(transcriptTurn.text)
+        NSLog(
+            "DaemonLLMEngine: audio two-pass — pass1 transcript=%@",
+            transcript.isEmpty ? "<empty>" : transcript)
+
+        // Pass 2 — reason on the transcript as text. Drop the audio and the
+        // (now redundant) `[heard]:` contract; the transcript IS the user turn.
+        var reasonOptions = options
+        reasonOptions.audioWAVBase64 = nil
+        let reasonMessages = Self.replacingFinalUserContent(messages, with: transcript)
+        let answerTurn = try await runTurn(
+            messages: reasonMessages,
+            systemPrompt: Self.strippingHeardInstruction(systemPrompt),
+            options: reasonOptions)
+        if Task.isCancelled {
+            continuation.finish()
+            return
+        }
+
+        let combined = Self.combineHeard(transcript: transcript, answer: answerTurn.text)
+        if !combined.isEmpty {
+            continuation.yield(.text(combined))
+        }
+        for call in answerTurn.toolCalls {
+            continuation.yield(
+                .toolCall(
+                    MLXLMCommon.ToolCall(
+                        function: MLXLMCommon.ToolCall.Function(
+                            name: call.name, arguments: call.arguments))))
+        }
+        continuation.finish()
+    }
+
     func shutdown() async {
         internalShutdown()
         loadState = .notStarted
+    }
+
+    // MARK: - Audio two-pass helpers (S18)
+
+    /// System prompt for the dedicated transcription pass. Tool-free and
+    /// instruction-only so the model emits the spoken words verbatim in
+    /// `content` rather than a conversational reply or tool call.
+    private static let transcribeSystemPrompt = """
+        Transcribe the user's audio. Output only the exact words spoken — no \
+        labels, quotation marks, preamble, or commentary. If nothing is said, \
+        output nothing.
+        """
+
+    /// First sentence of `PipelineCoordinator.pttHeardInstruction`. Used to
+    /// strip the redundant `[heard]:` contract from the reasoning pass's system
+    /// prompt. Drift here degrades gracefully: the model would echo a `[heard]:`
+    /// line that `combineHeard(transcript:answer:)` normalises away.
+    private static let heardInstructionMarker = "The user's message arrives as audio"
+
+    /// Collapse a transcript to a single trimmed line and drop any stray
+    /// leading `[heard]:` the transcription model added. `HeardLineParser` ends
+    /// the `[heard]:` line at the first newline, so a multi-line transcript
+    /// would mis-route its tail into the spoken answer.
+    static func flattenTranscript(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = text.range(
+            of: "[heard]:", options: [.caseInsensitive, .anchored])
+        {
+            text = String(text[range.upperBound...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Replace the final user message's content (the audio placeholder) with
+    /// the transcribed text for the reasoning pass.
+    static func replacingFinalUserContent(
+        _ messages: [LLMMessage], with content: String
+    ) -> [LLMMessage] {
+        guard let index = messages.lastIndex(where: { $0.role == .user }) else {
+            return messages + [LLMMessage(role: .user, content: content)]
+        }
+        var result = messages
+        let original = result[index]
+        result[index] = LLMMessage(
+            role: original.role,
+            content: content,
+            toolCallID: original.toolCallID,
+            name: original.name,
+            tag: original.tag)
+        return result
+    }
+
+    /// Remove the trailing `[heard]:` contract block from a system prompt for
+    /// the reasoning pass (the transcript is now plain text, so the contract is
+    /// both redundant and confusing). No-op if the marker is absent.
+    static func strippingHeardInstruction(_ systemPrompt: String) -> String {
+        guard let range = systemPrompt.range(of: heardInstructionMarker) else {
+            return systemPrompt
+        }
+        return String(systemPrompt[..<range.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Assemble the authoritative `[heard]: <transcript>` line (from pass 1)
+    /// plus the spoken answer (from pass 2), stripping any redundant `[heard]:`
+    /// line the reasoning pass may have echoed.
+    static func combineHeard(transcript: String, answer: String) -> String {
+        var body = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.lowercased().hasPrefix("[heard]:") {
+            if let newline = body.firstIndex(where: \.isNewline) {
+                body = String(body[body.index(after: newline)...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                body = ""
+            }
+        }
+        let heardLine = "[heard]: \(transcript)"
+        return body.isEmpty ? heardLine : "\(heardLine)\n\(body)"
     }
 
     // MARK: - Internals
