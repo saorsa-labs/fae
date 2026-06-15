@@ -34,11 +34,25 @@ final class OrbStateBridgeController: ObservableObject {
 
     private var observations: [NSObjectProtocol] = []
 
+    /// Watchdog that drops the orb out of `.speaking` once Fae's TTS audio
+    /// stops arriving. Re-armed on every audible playback frame; fires after
+    /// `speakingSilenceWindowMs` of silence so the orb never freezes mid-glow.
+    private var speakingSilenceTask: Task<Void, Never>?
+
+    /// Playback RMS above which Fae is considered audibly speaking. Inter-word
+    /// silence dips below this; the watchdog window bridges those gaps.
+    private static let speakingRmsThreshold: Double = 0.01
+
+    /// Silence after the last audible frame before `.speaking` relaxes to a
+    /// lively idle. Long enough to span normal between-word gaps.
+    private static let speakingSilenceWindowMs: UInt64 = 600
+
     init() {
         subscribe()
     }
 
     deinit {
+        speakingSilenceTask?.cancel()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
         }
@@ -108,9 +122,51 @@ final class OrbStateBridgeController: ObservableObject {
                         // capture overlap had shifted the mode first.
                         orbState.mode = .idle
                     }
+                    // When generation ends while TTS is still talking, mode is
+                    // `.speaking` and we leave it — the audio-level watchdog
+                    // relaxes it to idle once playback actually stops, so the
+                    // orb stays alive through the whole reply instead of going
+                    // dark the instant the model finishes.
                 }
             }
         )
+
+        // TTS playback level → `.speaking`. `pipeline.audio_level` carries the
+        // RMS of Fae's own voice (AudioPlaybackManager `.level`), so a non-trivial
+        // level means she is audibly speaking. Without this the orb never enters
+        // `.speaking` and drops to a dim idle the moment generation ends, looking
+        // extinguished while she is still talking.
+        observations.append(
+            center.addObserver(
+                forName: .faeAudioLevel, object: nil, queue: .main
+            ) { [weak self] notification in
+                let rms = notification.userInfo?["rms"] as? Double ?? 0.0
+                Task { @MainActor [weak self] in
+                    self?.handleSpeakingAudioLevel(rms: rms)
+                }
+            }
+        )
+    }
+
+    /// Drive `.speaking` from Fae's TTS playback level and relax to a lively
+    /// idle once the audio stops. Never overrides `.listening` (the user owns
+    /// the mic during capture / barge-in).
+    private func handleSpeakingAudioLevel(rms: Double) {
+        guard let orbState else { return }
+        guard rms > Self.speakingRmsThreshold else { return }
+
+        if orbState.mode == .idle || orbState.mode == .thinking {
+            orbState.mode = .speaking
+        }
+
+        speakingSilenceTask?.cancel()
+        speakingSilenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.speakingSilenceWindowMs * 1_000_000)
+            guard !Task.isCancelled, let self, let orbState = self.orbState else { return }
+            if orbState.mode == .speaking {
+                orbState.mode = .idle
+            }
+        }
     }
 
     // MARK: - Orb State Handler
