@@ -194,7 +194,8 @@ enum TurnHelpers {
         userText: String,
         availableToolNames: [String],
         proactiveAllowedTools: Set<String>?,
-        isConversationContinuation: Bool = false
+        isConversationContinuation: Bool = false,
+        recentlyUsedTools: Set<String> = []
     ) -> Set<String> {
         if firstOwnerEnrollmentActive {
             return []
@@ -213,12 +214,16 @@ enum TurnHelpers {
             return proactiveAllowedTools.intersection(available)
         }
 
-        if isConversationContinuation, requestedTools.isEmpty {
-            return available
-        }
-
+        // Always start from the conservative working set plus anything this
+        // turn explicitly/inferentially asked for. On a recent continuation,
+        // also keep the tools the prior turn(s) actually used full-schema so a
+        // bare follow-up ("yes, do that") can still call them — without
+        // inflating the whole 36-tool surface onto every continuation turn.
         var workingSet = defaultFullSchemaToolNames.intersection(available)
         workingSet.formUnion(requestedTools)
+        if isConversationContinuation {
+            workingSet.formUnion(recentlyUsedTools.intersection(available))
+        }
         return workingSet
     }
 

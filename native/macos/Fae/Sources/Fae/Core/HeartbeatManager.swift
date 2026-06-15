@@ -46,6 +46,20 @@ enum HeartbeatManager {
         return defaultHeartbeat()
     }
 
+    /// Condensed proactive contract (~120 tokens vs ~570 for the full
+    /// HEARTBEAT.md). Preserves the load-bearing rules — quiet by default,
+    /// lightest-surface-first, approve-in-popup, brief warm briefings, sparing
+    /// capability discovery, consent before acting — for the direct-conversation
+    /// turns that don't need the full proactive playbook in prefill.
+    static func condensedHeartbeat() -> String {
+        """
+        Proactive behavior: quiet by default — a timely nudge, never a feed. Show the lightest \
+        useful surface first. Prefer the approval popup over sending the user into Settings. \
+        Morning briefings stay short and warm. Surface at most one unconfigured capability every \
+        few days. Never install or send anything without an explicit yes.
+        """
+    }
+
     static func saveHeartbeat(_ text: String) throws {
         let url = userHeartbeatURL
         let dir = url.deletingLastPathComponent()

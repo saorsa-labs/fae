@@ -24,6 +24,14 @@ actor ConversationStateTracker {
     /// conversation-continuation tool visibility gating.
     private(set) var lastAssistantMessageAt: Date?
 
+    /// Tools whose full schema the model actually used in recent turns, with
+    /// the time of the last use. On a follow-up turn these are kept full-schema
+    /// (a "sticky" working set) so a bare "yes, do that" can still call the tool
+    /// the prior turn relied on — without inflating every continuation to the
+    /// whole 36-tool surface. Self-decays via `recentToolNames(within:)`.
+    private var recentTools: Set<String> = []
+    private var recentToolsAt: Date?
+
     // MARK: - Configuration
 
     /// Set the maximum history message count (called by FaeCore after pipeline setup).
@@ -109,7 +117,27 @@ actor ConversationStateTracker {
             ? String(normalized.prefix(maxToolResultChars)) + "\n[truncated]"
             : normalized
         history.append(LLMMessage(role: .tool, content: bounded, toolCallID: id, name: name, tag: tag))
+        recordToolUse(name)
         trimHistory()
+    }
+
+    // MARK: - Sticky tool working set
+
+    /// Record that a tool was just used, so it stays full-schema on follow-ups.
+    func recordToolUse(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        recentTools.insert(trimmed)
+        recentToolsAt = Date()
+    }
+
+    /// Tools used within the last `seconds`. Returns empty once stale so a new
+    /// topic after a pause starts from the conservative working set again.
+    func recentToolNames(within seconds: TimeInterval) -> Set<String> {
+        guard let at = recentToolsAt, Date().timeIntervalSince(at) <= seconds else {
+            return []
+        }
+        return recentTools
     }
 
     /// Truncate history to keep only the last N messages.
@@ -135,6 +163,8 @@ actor ConversationStateTracker {
         history.removeAll()
         lastAssistantText = nil
         lastAssistantMessageAt = nil
+        recentTools.removeAll()
+        recentToolsAt = nil
     }
 
     /// Replace the current history with external messages and return the old history.
@@ -147,6 +177,8 @@ actor ConversationStateTracker {
         history = newHistory
         lastAssistantText = newHistory.last(where: { $0.role == .assistant })?.content
         lastAssistantMessageAt = nil
+        recentTools.removeAll()
+        recentToolsAt = nil
         return old
     }
 

@@ -2946,12 +2946,16 @@ actor PipelineCoordinator {
             let indexedToolNames: Set<String>? = speakerGate.firstOwnerEnrollmentActive
                 ? []
                 : proactiveContext?.allowedTools
+            let recentlyUsedTools = isRecentContinuation
+                ? await conversationState.recentToolNames(within: continuationWindowSeconds)
+                : []
             let fullSchemaToolNames = TurnHelpers.fullSchemaToolNamesForTurn(
                 firstOwnerEnrollmentActive: speakerGate.firstOwnerEnrollmentActive,
                 userText: userText,
                 availableToolNames: registry.toolNames,
                 proactiveAllowedTools: proactiveContext?.allowedTools,
-                isConversationContinuation: isRecentContinuation
+                isConversationContinuation: isRecentContinuation,
+                recentlyUsedTools: recentlyUsedTools
             )
             if let visibleToolNames {
                 debugLog(
@@ -3081,20 +3085,30 @@ actor PipelineCoordinator {
                 debugLog(debugConsole, .pipeline, "Tool prompt summary: lines=\(lineCount) chars=\(schemas.count)")
             }
 
-            // Use condensed SOUL on first turn to reduce prefill by ~2K tokens.
-            // Full SOUL loads on subsequent turns when KV cache makes prefill near-instant.
-            let isFirstTurn = await conversationState.history.isEmpty
-            let soul: String
-            if isRescueMode {
-                soul = SoulManager.defaultSoul()
-            } else if isFirstTurn {
-                soul = SoulManager.loadCondensedSoul()
-            } else {
-                soul = SoulManager.loadSoul()
-            }
+            // Prefix KV-cache is off by default (FAE_PREFIX_CACHE_N), so re-prefilling
+            // the full SOUL/HEARTBEAT on every continuation buys nothing — the original
+            // "full contract on later turns, KV cache makes it near-instant" assumption
+            // no longer holds. Use the condensed character + proactive contracts on every
+            // turn: they preserve the load-bearing personality and rules at ~350 / ~120
+            // tokens vs ~2,200 / ~570 for the full files. Rescue mode keeps full defaults.
+            let soul = isRescueMode
+                ? SoulManager.defaultSoul()
+                : SoulManager.loadCondensedSoul()
             let heartbeat = isRescueMode
                 ? HeartbeatManager.defaultHeartbeat()
-                : HeartbeatManager.loadHeartbeat()
+                : HeartbeatManager.condensedHeartbeat()
+            // Situational sub-prompts are injected only when this turn's working set
+            // actually involves them — vision/computer-use guidance when a vision or
+            // automation tool is in play, proactive guidance on proactive turns —
+            // rather than on every tool-enabled turn.
+            let visionRelevant = fullSchemaToolNames.contains("screenshot")
+                || fullSchemaToolNames.contains("camera")
+                || fullSchemaToolNames.contains("read_screen")
+            let computerUseRelevant = fullSchemaToolNames.contains("click")
+                || fullSchemaToolNames.contains("type_text")
+                || fullSchemaToolNames.contains("scroll")
+                || fullSchemaToolNames.contains("find_element")
+            let proactiveRelevant = proactiveContext != nil
             let nativeToolsAvailable = nativeTools != nil
             var systemPrompt = PersonalityManager.assemblePrompt(
                 voiceOptimized: true,
@@ -3110,7 +3124,10 @@ actor PipelineCoordinator {
                 installedSkills: legacySkills,
                 skillDescriptions: skillDescs,
                 includeEphemeralContext: false,
-                lightweight: config.isLightweightContext
+                lightweight: config.isLightweightContext,
+                includeVisionGuidance: visionRelevant,
+                includeComputerUseGuidance: computerUseRelevant,
+                includeProactiveGuidance: proactiveRelevant
             )
             // Inject activated skill instructions into the stable prompt.
             if let activatedCtx = await skillManager?.activatedContext() {

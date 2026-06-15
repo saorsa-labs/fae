@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — Prompt-budget trim (per-turn latency)
+
+Cuts the typical per-turn prompt from ~13,200 tokens to ~6,000 (−55%) on the
+default daemon (Gemma 4 E4B) lane, roughly halving time-to-first-audio on a
+typical continuation turn (~18.8s → ~8.5s) with no loss of tool-calling
+capability or conversation quality.
+
+### Changed
+
+- **Tool schemas — no more all-36 inflation on follow-ups.** Continuation turns
+  used to send full JSON schemas for all 36 tools (~5,570 tokens) whenever the
+  last reply was within 45s. They now send the conservative working set plus a
+  *sticky* set of the tools actually used in recent turns (`ConversationStateTracker`),
+  so a bare "yes, do that" still calls the prior turn's tool without the full-surface
+  tax. Tool tokens on a typical continuation: 5,570 → 2,665.
+- **Condensed SOUL/HEARTBEAT every turn.** The condensed character contract
+  (~216 tokens vs ~2,200) was previously used only on turn 1, on the assumption
+  that KV cache made the full contract cheap afterwards; the prefix cache is off
+  by default, so every continuation re-prefilled the full SOUL for no benefit. A
+  parallel condensed HEARTBEAT (~81 tokens vs ~570) was added. Rescue mode keeps
+  the full defaults.
+- **Situational sub-prompts gated per-turn.** Vision and computer-use guidance
+  inject only when a vision/automation tool is in the turn's working set; the
+  proactive operational prompt only on proactive turns.
+- **Skills index and tool index compressed** (1,635 → ~740 and 596 → ~510 tokens)
+  to a chooser-grade summary; full schemas/skill bodies still load on demand.
+
 ## [v0.8.187] - 2026-03-31 — Voice Experience Overhaul
 
 Fae now responds to "Hey Fae" via acoustic detection, learns your vocabulary from Contacts and Calendar, and has a push-to-talk button for guaranteed activation on any Mac.

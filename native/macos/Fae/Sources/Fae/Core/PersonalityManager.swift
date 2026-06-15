@@ -497,7 +497,10 @@ enum PersonalityManager {
         installedSkills: [String] = [],
         skillDescriptions: [(name: String, description: String, type: SkillType)] = [],
         includeEphemeralContext: Bool = true,
-        lightweight: Bool = false
+        lightweight: Bool = false,
+        includeVisionGuidance: Bool = true,
+        includeComputerUseGuidance: Bool = true,
+        includeProactiveGuidance: Bool = true
     ) -> String {
         var parts: [String] = []
         let toolsActive = nativeToolsAvailable || (toolSchemas != nil && !toolSchemas!.isEmpty)
@@ -511,10 +514,11 @@ enum PersonalityManager {
         // 1. Core prompt.
         parts.append(voiceCorePrompt)
 
-        // 2. Vision + computer use (only when tools are available).
+        // 2. Vision + computer use (only when this turn's working set actually
+        // involves a vision/automation tool — not on every tool-enabled turn).
         if visionCapable, toolsActive {
-            parts.append(visionPrompt)
-            parts.append(computerUsePrompt)
+            if includeVisionGuidance { parts.append(visionPrompt) }
+            if includeComputerUseGuidance { parts.append(computerUsePrompt) }
         }
 
         // 3. SOUL contract.
@@ -541,7 +545,9 @@ enum PersonalityManager {
                 // Compact self-config hint (~200 chars vs 7.8K full selfModificationPrompt).
                 // Full details loaded on-demand when self_config tool is actually called.
                 parts.append("Self-modification: Use the self_config tool to adjust settings (speed, temperature, directive). Use get_directive/set_directive for persistent instructions.")
-                parts.append(proactiveBehaviorPrompt)
+                if includeProactiveGuidance {
+                    parts.append(proactiveBehaviorPrompt)
+                }
                 // roleplayPrompt (~1.7K chars) loaded on-demand via activate_skill.
                 // Saves ~500 tokens on every turn.
             }
@@ -558,16 +564,16 @@ enum PersonalityManager {
             // OpenClaw-style scan-then-choose: the LLM actively considers skills
             // before replying, picking the most specific match.
             if !skillDescriptions.isEmpty {
+                // Compact index only: name + a short purpose clause. The full
+                // SKILL.md body loads on `activate_skill`, so this list just
+                // needs to be enough to *choose*. (Was ~1.6K tokens of full
+                // descriptions on every turn.)
                 var lines = ["""
-                    Available skills — scan this list before every response:
-                    - If a skill clearly matches the user's request: activate it with activate_skill, then follow its instructions.
-                    - If multiple could apply: choose the most specific one.
-                    - If none clearly apply: use tools directly without activating a skill.
-                    - When asked "what can you do?": describe your capabilities from this list naturally.
+                    Skills (activate_skill loads full instructions; pick the most specific match, else use tools directly; for "what can you do?" describe these naturally):
                     """]
                 for skill in skillDescriptions {
-                    let tag = skill.type == .executable ? " [executable]" : ""
-                    lines.append("- \(skill.name): \(skill.description)\(tag)")
+                    let tag = skill.type == .executable ? " [exec]" : ""
+                    lines.append("- \(skill.name): \(briefSkillPurpose(skill.description))\(tag)")
                 }
                 parts.append(lines.joined(separator: "\n"))
             } else if !installedSkills.isEmpty {
@@ -662,6 +668,26 @@ enum PersonalityManager {
         }
 
         return parts.joined(separator: "\n\n")
+    }
+
+    /// A short purpose clause for the skills index — first sentence, capped,
+    /// so the per-turn skill list stays a chooser, not a manual. The full
+    /// SKILL.md body is loaded on `activate_skill`.
+    static func briefSkillPurpose(_ description: String, maxChars: Int = 64) -> String {
+        let firstSentence = description
+            .split(separator: ".", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? description
+        let clause = firstSentence.isEmpty ? description : firstSentence
+        if clause.count <= maxChars { return clause }
+        let cut = clause.prefix(maxChars)
+        // Trim back to the last word boundary to avoid mid-word truncation.
+        if let lastSpace = cut.lastIndex(of: " ") {
+            return String(cut[..<lastSpace]) + "…"
+        }
+        return String(cut) + "…"
     }
 
     static func assembleEphemeralTurnContext(

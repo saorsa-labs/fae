@@ -130,7 +130,11 @@ final class TurnHelpersTests: XCTestCase {
         XCTAssertEqual(tools, ["calendar", "mail", "reminders"])
     }
 
-    func testFullSchemaToolsContinuationPreservesAllSchemasWhenIntentIsAmbiguous() {
+    func testFullSchemaToolsContinuationStaysConservativeWithoutRecentTools() {
+        // Prompt-budget: an ambiguous follow-up with no recently-used tools must
+        // NOT inflate to the full surface (the old `return available` behaviour
+        // paid the whole 36-tool schema tax on every continuation). It stays on
+        // the conservative working set, so niche tools remain index-only.
         let available = ["read", "bash", "calendar", "mail", "input_request"]
         let tools = TurnHelpers.fullSchemaToolNamesForTurn(
             firstOwnerEnrollmentActive: false,
@@ -139,7 +143,46 @@ final class TurnHelpersTests: XCTestCase {
             proactiveAllowedTools: nil,
             isConversationContinuation: true
         )
-        XCTAssertEqual(tools, Set(available))
+        XCTAssertTrue(tools.contains("read"))
+        XCTAssertTrue(tools.contains("bash"))
+        XCTAssertFalse(tools.contains("calendar"), "ambiguous follow-up must not pull in calendar")
+        XCTAssertFalse(tools.contains("mail"), "ambiguous follow-up must not pull in mail")
+        XCTAssertLessThan(tools.count, available.count)
+    }
+
+    func testFullSchemaToolsContinuationKeepsRecentlyUsedToolsSticky() {
+        // The reason the old "all schemas" behaviour existed: a bare follow-up
+        // ("yes, do that") may need the tool the PRIOR turn used but can't infer
+        // from the text. The sticky set preserves exactly those tools — and only
+        // those — so the follow-up stays callable without the full-surface tax.
+        let available = ["read", "bash", "calendar", "mail", "input_request"]
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "yes, do that",
+            availableToolNames: available,
+            proactiveAllowedTools: nil,
+            isConversationContinuation: true,
+            recentlyUsedTools: ["calendar"]
+        )
+        XCTAssertTrue(tools.contains("calendar"), "the tool used last turn must stay full-schema")
+        XCTAssertTrue(tools.contains("read"))
+        XCTAssertFalse(tools.contains("mail"), "tools never used must not become sticky")
+    }
+
+    func testFullSchemaToolsRecentToolsIgnoredOutsideContinuation() {
+        // Sticky tools only apply inside the continuation window; a fresh,
+        // non-continuation turn ignores them entirely.
+        let available = ["read", "bash", "calendar", "mail"]
+        let tools = TurnHelpers.fullSchemaToolNamesForTurn(
+            firstOwnerEnrollmentActive: false,
+            userText: "hello there",
+            availableToolNames: available,
+            proactiveAllowedTools: nil,
+            isConversationContinuation: false,
+            recentlyUsedTools: ["calendar", "mail"]
+        )
+        XCTAssertFalse(tools.contains("calendar"))
+        XCTAssertFalse(tools.contains("mail"))
     }
 
     func testFullSchemaToolsDuringEnrollmentAreEmpty() {
@@ -537,9 +580,10 @@ final class TurnHelpersTests: XCTestCase {
     }
 
     // The flip side: niche tools intentionally stay index-only on a cold,
-    // generic turn (still callable in a continuation, which preserves all
-    // schemas). Documents the deliberate trade so an accidental demotion of a
-    // high-frequency tool above — or promotion here — is caught.
+    // generic turn (and on an ambiguous continuation — they only regain a full
+    // schema when inferred from the turn, or when they were used in a recent
+    // turn via the sticky set). Documents the deliberate trade so an accidental
+    // demotion of a high-frequency tool above — or promotion here — is caught.
     func testProgressiveDisclosureKeepsNicheToolsIndexOnlyOnColdTurn() {
         let registry = ToolRegistry.buildDefault()
         let available = registry.toolNames

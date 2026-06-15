@@ -171,13 +171,22 @@ final class ToolRegistry: Sendable {
         guard !allowed.isEmpty else { return "" }
 
         let lines = allowed.map { tool in
-            let brief = tool.description.components(separatedBy: ".")
+            let firstSentence = tool.description.components(separatedBy: ".")
                 .first?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 ?? tool.description
+            // Cap the brief — the index just needs to be enough to recognise the
+            // tool; the full schema is supplied when the tool enters the working set.
+            let brief: String
+            if firstSentence.count <= 52 {
+                brief = firstSentence
+            } else {
+                let cut = firstSentence.prefix(52)
+                brief = (cut.lastIndex(of: " ").map { String(cut[..<$0]) } ?? String(cut)) + "…"
+            }
             return "- \(tool.name): \(brief)"
         }
-        return "Available tool index (full callable schemas are supplied for the likely working set):\n" + lines.joined(separator: "\n")
+        return "Tool index (full schema supplied when a tool enters the working set):\n" + lines.joined(separator: "\n")
     }
 
     /// Check whether a tool is allowed in the given mode.
