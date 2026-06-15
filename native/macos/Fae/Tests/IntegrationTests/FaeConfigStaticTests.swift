@@ -81,6 +81,38 @@ final class FaeConfigStaticTests: XCTestCase {
         XCTAssertFalse(preset.isEmpty)
     }
 
+    // MARK: - daemonModelId RAM tiering
+    //
+    // Why this matters: the daemon LLM lane is the default conversation path.
+    // On ≥32 GB Macs `auto` must resolve to the unified Gemma 4 12B (native
+    // audio replaces the E4B + separate-ASR setup); below that it must stay on
+    // E4B so smaller machines never try to pull the ~24 GB 12B weights.
+
+    func testDaemonModelIdAutoSelects12BOn32GBPlus() {
+        let id = FaeConfig.daemonModelId(
+            preset: "auto",
+            totalMemoryBytes: 32 * 1024 * 1024 * 1024
+        )
+        XCTAssertEqual(id, "google/gemma-4-12B-it")
+    }
+
+    func testDaemonModelIdAutoStaysOnE4BBelow32GB() {
+        let id = FaeConfig.daemonModelId(
+            preset: "auto",
+            totalMemoryBytes: 24 * 1024 * 1024 * 1024
+        )
+        XCTAssertEqual(id, "google/gemma-4-E4B-it")
+    }
+
+    func testDaemonModelIdExplicit12BIgnoresRAM() {
+        // Explicit selection must honour the user's choice regardless of RAM.
+        let id = FaeConfig.daemonModelId(
+            preset: "gemma_4_12b",
+            totalMemoryBytes: 8 * 1024 * 1024 * 1024
+        )
+        XCTAssertEqual(id, "google/gemma-4-12B-it")
+    }
+
     // MARK: - recommendedTrainingTarget
 
     func testRecommendedTrainingTarget() {

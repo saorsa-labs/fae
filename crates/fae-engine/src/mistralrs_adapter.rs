@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mistralrs::{
-    AudioInput, IsqType, ModelBuilder, RequestBuilder, Response, TextMessageRole, TextModelBuilder,
-    Tool, ToolChoice,
+    AudioInput, AutoDeviceMapParams, DeviceMapSetting, IsqType, ModelBuilder, RequestBuilder,
+    Response, TextMessageRole, TextModelBuilder, Tool, ToolChoice,
 };
 
 use crate::provider::{
@@ -75,6 +75,18 @@ impl LocalMistralrsAdapter {
         let mut builder = ModelBuilder::new(model_id)
             .with_isq(configured_isq())
             .with_prefix_cache_n(configured_prefix_cache_n())
+            // Size the auto device-map (and thus the KV cache) for our real
+            // prompts. mistral.rs defaults to 4096, but Fae's system prompt
+            // alone is ~7300 tokens; with push-to-talk audio appended AFTER it,
+            // the audio tokens landed outside the 4096 window and were truncated
+            // — the model "heard nothing" and only greeted ("hi!", no [heard]).
+            // FAE_MAX_SEQ_LEN overrides the default below.
+            .with_device_mapping(DeviceMapSetting::Auto(AutoDeviceMapParams::Multimodal {
+                max_seq_len: configured_max_seq_len(),
+                max_batch_size: 1,
+                max_image_shape: (1024, 1024),
+                max_num_images: 1,
+            }))
             .with_logging();
         if let Some(revision) = revision.filter(|value| !value.is_empty()) {
             builder = builder.with_hf_revision(revision);
@@ -224,6 +236,22 @@ fn configured_prefix_cache_n() -> Option<usize> {
         .ok()
         .and_then(|raw| raw.parse::<usize>().ok())
         .filter(|n| *n > 0)
+}
+
+/// Sequence budget for the auto device-map, `FAE_MAX_SEQ_LEN` env override.
+/// mistral.rs sizes the KV cache from this; the upstream default (4096) is
+/// smaller than Fae's ~7300-token system prompt, so push-to-talk audio tokens
+/// (appended after the prompt) fell outside the window and were truncated —
+/// the model received no audio and only greeted. 32K leaves headroom for
+/// prompt + audio + generation across the daemon's RAM tiers. A non-positive
+/// or unparseable value uses the default.
+fn configured_max_seq_len() -> usize {
+    const DEFAULT_MAX_SEQ_LEN: usize = 32 * 1024;
+    std::env::var("FAE_MAX_SEQ_LEN")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_SEQ_LEN)
 }
 
 /// Translate a [`ChatRequest`] into a mistral.rs `RequestBuilder` (system +

@@ -31,7 +31,6 @@ struct SettingsModelsPerformanceTab: View {
     @State private var showRestartNotice: Bool = false
 
     // MARK: - Model Settings
-    @AppStorage("voiceModelPreset") private var voiceModelPreset: String = "auto"
     @AppStorage("thinkingEnabled") private var thinkingEnabled: Bool = false
     @AppStorage("thinkingLevel") private var thinkingLevel: String = FaeThinkingLevel.fast.rawValue
     @AppStorage("visionEnabled") private var visionEnabled: Bool = false
@@ -57,8 +56,6 @@ struct SettingsModelsPerformanceTab: View {
     @State private var loadedModel: String = "—"
     @State private var estimatedKVSavings: String = "~4x"
     @State private var wakeTemplateCount: Int = 0
-
-    private let voiceModelOptions = LocalModelCatalog.voiceOptions
 
     private let visionModelOptions = LocalModelCatalog.visionOptions
 
@@ -146,32 +143,13 @@ struct SettingsModelsPerformanceTab: View {
             // Local LLM stack
             SettingsCard(title: "Local Models", icon: "cpu", color: FaeDesign.heatherMist) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Picker("Model", selection: $voiceModelPreset) {
-                        ForEach(voiceModelOptions, id: \.value) { opt in
-                            HStack {
-                                Text(opt.label)
-                                Spacer()
-                                Text(opt.ram)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .tag(opt.value)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .onChange(of: voiceModelPreset) {
-                        guard !hydratingFromConfig else { return }
-                        patchConfig("llm.voice_model_preset", value: voiceModelPreset)
-                        showRestartNotice = true
-                    }
-
-                    if let cacheStatus = LocalModelCatalog.voiceCacheStatus(for: voiceModelPreset) {
-                        cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
-                    }
-
-                    Text("Fae uses a single model for all tasks. Recommended for most setups.")
+                    Text("Fae automatically runs the best local model for your Mac — no setup needed. Macs with more memory get a more capable model.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if loadedModel != "—" {
+                        cacheStatusView("Active model: \(loadedModel)", cached: true)
+                    }
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Thinking level")
@@ -595,9 +573,6 @@ struct SettingsModelsPerformanceTab: View {
             if let payload = response["payload"] as? [String: Any],
                let llm = payload["llm"] as? [String: Any]
             {
-                if let preset = llm["voice_model_preset"] as? String {
-                    voiceModelPreset = normalizedVoiceModelPreset(preset)
-                }
                 if let levelRaw = llm["thinking_level"] as? String,
                    let level = FaeThinkingLevel(rawValue: levelRaw)
                 {
@@ -675,11 +650,6 @@ struct SettingsModelsPerformanceTab: View {
         }
 
         loadSystemInfo()
-    }
-
-    private func normalizedVoiceModelPreset(_ preset: String) -> String {
-        let canonical = FaeConfig.canonicalVoiceModelPreset(preset)
-        return voiceModelOptions.contains(where: { $0.value == canonical }) ? canonical : "auto"
     }
 
 }

@@ -504,6 +504,8 @@ struct FaeConfig: Codable {
             return "gemma_4_e4b"
         case "gemma_4_26b_a4b":
             return "gemma_4_26b_a4b"
+        case "gemma_4_12b":
+            return "gemma_4_12b"
         case "auto":
             return "auto"
         default:
@@ -515,12 +517,24 @@ struct FaeConfig: Codable {
     /// Model id exported as `FAE_MODEL_ID` when the daemon LLM lane
     /// (`llm.useDaemonEngine`) is enabled.
     ///
-    /// All presets currently map to Gemma 4 E4B — the daemon (mistral.rs)
-    /// loads its own weights independently of the MLX preset catalogue. The
-    /// preset parameter is kept so per-preset daemon mappings can be added
-    /// without changing call sites.
-    static func daemonModelId(preset: String) -> String {
+    /// Model id exported as `FAE_MODEL_ID` for the daemon LLM lane. The daemon
+    /// (mistral.rs) loads its own weights independently of the MLX preset
+    /// catalogue and downloads them on first use. `auto` tiers by system RAM:
+    /// ≥32 GB gets the unified 12B (native audio replaces E4B + planned
+    /// dual-ASR); below that stays on E4B.
+    static func daemonModelId(preset: String, totalMemoryBytes: UInt64? = nil) -> String {
         switch canonicalVoiceModelPreset(preset) {
+        case "gemma_4_12b":
+            // Explicit selection: Gemma 4 12B unified, encoder-free native
+            // audio (ASR-in-turn), 256K context, Apache-2.0.
+            return "google/gemma-4-12B-it"
+        case "auto":
+            let totalGB = (totalMemoryBytes ?? ProcessInfo.processInfo.physicalMemory)
+                / (1024 * 1024 * 1024)
+            // ≥32 GB: single unified 12B (native audio) replaces E4B + the
+            // planned dedicated-ASR setup — smarter, one model, ~24 GB bf16
+            // ISQ'd at load. 16-31 GB and below stay on E4B.
+            return totalGB >= 32 ? "google/gemma-4-12B-it" : "google/gemma-4-E4B-it"
         default:
             return "google/gemma-4-E4B-it"
         }
@@ -572,6 +586,11 @@ struct FaeConfig: Codable {
             // Gemma 4 26B-A4B MoE: 4B active per token. 256K context.
             // Benchmarked 2026-04-02: 98% MMLU, 100% cap/fit/serial. Highest quality.
             return ("mlx-community/gemma-4-26b-a4b-it-4bit", 262_144)
+        case "gemma_4_12b":
+            // Gemma 4 12B unified: dense, encoder-free native audio. 256K context.
+            // Daemon-lane model (mistral.rs); MLX lane has no Gemma 4 support yet,
+            // so this id is aspirational — the daemon loads the real weights.
+            return ("mlx-community/gemma-4-12b-it-4bit", 262_144)
         default: // "auto"
             // Gemma 4 tier strategy (pending mlx-swift-lm Gemma 4 support — #177):
             //

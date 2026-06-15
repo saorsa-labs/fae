@@ -91,3 +91,138 @@ license = "gemma"
 hardware_profile = "Apple Silicon Metal via mistral.rs"
 approved_by = "owner"
 created_at = "2026-06-13T17:30:32Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-gitattributes"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = ".gitattributes"
+size_bytes = 1624
+sha256 = "c9aff01d02fd1b5f365056bc5360431b6fef35c3dd8b22bffa9cc27361b22062"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-readme-md"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "README.md"
+size_bytes = 27867
+sha256 = "90fe018915b02f8a95fbb53ec75c9cb7bfe3b7c49ea232a79328a8854f988332"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-chat-template-jinja"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "chat_template.jinja"
+size_bytes = 17466
+sha256 = "36e3a42e5cf14cd0020e72d92e1fdd9970f59b82170e421f0cbe1bb42bead3f0"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-config-json"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "config.json"
+size_bytes = 4423
+sha256 = "478c46e8d2c52d5c2d85bf67e3b3e8c90e7c9d91086cee27e3c267907e936bd9"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-generation-config-json"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "generation_config.json"
+size_bytes = 260
+sha256 = "a8349d9bd64cc5841297fcb5002f0fdc4749c473c8f1b10ea337f9ce4ee7014e"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-model-safetensors"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "model.safetensors"
+size_bytes = 23919549408
+sha256 = "5a84cb313260ac447237b890387116dfa8682e49a6b44bc585ae8353abbff18d"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-processor-config-json"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "processor_config.json"
+size_bytes = 1382
+sha256 = "6b938e76555b3e9946890770e1abcd442a4718f34041a58e8139dc8ad34545c9"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-tokenizer-json"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "tokenizer.json"
+size_bytes = 32169626
+sha256 = "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "google-gemma-4-12b-it-tokenizer-config-json"
+role = "llm"
+loader = "mistralrs"
+source_repo = "google/gemma-4-12B-it"
+source_revision = "5926caa4ec0cac5cbfadaf4077420520de1d5205"
+filename = "tokenizer_config.json"
+size_bytes = 2102
+sha256 = "09e6222fd7049dae603d0f61a8b10af5a813f22dca10e6cdc6918f76d7661104"
+signature = ""
+license = "gemma"
+hardware_profile = "Apple Silicon Metal via mistral.rs"
+approved_by = "owner"
+created_at = "2026-06-15T00:00:00Z"

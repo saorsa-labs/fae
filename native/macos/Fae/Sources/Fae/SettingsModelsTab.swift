@@ -282,31 +282,9 @@ struct SettingsModelsTab: View {
     @ViewBuilder
     private var voiceModelSection: some View {
         Section("Voice Model") {
-            Picker("Voice Model", selection: $voiceModelPreset) {
-                ForEach(voiceModelOptions, id: \.value) { option in
-                    Text(option.label).tag(option.value)
-                }
-            }
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .onChange(of: voiceModelPreset) {
-                commandSender?.sendCommand(
-                    name: "config.patch",
-                    payload: ["key": "llm.voice_model_preset", "value": voiceModelPreset]
-                )
-                if !hydratingFromConfig {
-                    showRestartNotice = true
-                }
-            }
-
-            if let current = voiceModelOptions.first(where: { $0.value == voiceModelPreset }) {
-                Text(current.description)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let cacheStatus = LocalModelCatalog.voiceCacheStatus(for: voiceModelPreset) {
-                cacheStatusView(cacheStatus.text, cached: cacheStatus.cached)
-            }
+            Text("Fae automatically runs the best local model for your Mac — no setup needed. Macs with more memory get a more capable model.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
             if showRestartNotice {
                 HStack(spacing: 6) {
