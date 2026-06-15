@@ -30,6 +30,11 @@ tokio = { workspace = true }
 # the deterministic "invalid Metal top-k softmax normalizer" inference failure
 # on Gemma 4 turns whose prompt length lands in a bad prefill-chunk window
 # (diagnosed 2026-06-12; replayable payloads in that day's session notes).
+# Bumping past this is NOT a NaN cure: master ab001013 (2026-06-15) was tested
+# against the deterministic repro (examples/nan_repro.rs, issue #2214) and still
+# FAILS on both Q4K and Q8_0 — #2214 is open with no upstream fix, candle stays
+# pinned at d2afd7f, and the only post-c22c2e2b Gemma-4 change (#2227) is an
+# unrelated KV-sharing prefill optimisation. Do not bump for the NaN.
 # Git deps use commit SHAs per the supply-chain pinning policy.
 [target.'cfg(target_os = "macos")'.dependencies]
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "c22c2e2b622a815821e59056c2b5952b4cbbe010", features = ["metal"] }

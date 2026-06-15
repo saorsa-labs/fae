@@ -1,0 +1,692 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+use crate::layers_masker::CausalMaskConfig;
+use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::LayerNorm;
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
+};
+use std::{collections::HashMap, sync::Arc};
+
+use crate::{
+    amoe::AnyMoeBaseModelMixin,
+    attention::{AttentionMask, SdpaParams},
+    device_map::{DeviceMappedMask, DeviceMapper},
+    layers::{
+        self, layer_norm, Activation, CausalMasker, PhiRopeConfig, PhiRopeScalingConfig,
+        PhiRotaryEmbedding, Sdpa,
+    },
+    layers_masker::masked_fill,
+    moe::{MoEExperts, MoEExpertsConfig},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        NormalModel,
+    },
+    serde_default_fn,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
+};
+
+serde_default_fn!(bool, word_emb_default, false);
+
+// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct Config {
+    pub(crate) vocab_size: usize,
+    pub(crate) hidden_act: Activation,
+    pub(crate) hidden_size: usize,
+    pub(crate) intermediate_size: usize,
+    pub(crate) num_hidden_layers: usize,
+    pub(crate) num_attention_heads: usize,
+    pub(crate) num_key_value_heads: usize,
+    pub(crate) rms_norm_eps: f64,
+    pub(crate) rope_theta: f64,
+    pub(crate) rope_scaling: Option<PhiRopeScalingConfig>,
+    pub(crate) max_position_embeddings: usize,
+    pub(crate) sliding_window: Option<usize>,
+    pub(crate) original_max_position_embeddings: usize,
+
+    pub(crate) quantization_config: Option<QuantizedConfig>,
+    pub(crate) lm_head_bias: bool,
+    pub(crate) attention_bias: bool,
+    pub(crate) num_local_experts: usize,
+    pub(crate) router_jitter_noise: f64,
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
+}
+
+impl From<Config> for PhiRopeConfig {
+    fn from(val: Config) -> Self {
+        PhiRopeConfig {
+            rope_scaling: val.rope_scaling,
+            max_position_embeddings: val.max_position_embeddings,
+            original_max_position_embeddings: val.original_max_position_embeddings,
+            rope_theta: val.rope_theta,
+            head_dim: val.hidden_size / val.num_attention_heads,
+            partial_rotary_factor: None,
+        }
+    }
+}
+
+impl Config {
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+}
+
+struct Attention {
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    rotary_emb: Arc<PhiRotaryEmbedding>,
+    paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
+}
+
+impl Attention {
+    fn new(
+        rotary_emb: Arc<PhiRotaryEmbedding>,
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let num_heads = cfg.num_attention_heads;
+        let num_kv_heads = cfg.num_key_value_heads;
+        let head_dim = cfg.head_dim();
+
+        let q_proj = ColumnParallelLayer::new(
+            cfg.hidden_size,
+            num_heads * head_dim,
+            &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
+            vb.pp("q_proj"),
+        )?;
+        let kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        )?;
+        let k_proj = ColumnParallelLayer::new_with_shard(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
+            kv_shard,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = ColumnParallelLayer::new_with_shard(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
+            kv_shard,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = RowParallelLayer::new(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
+            vb.pp("o_proj"),
+        )?;
+
+        Ok(Self {
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
+            rotary_emb,
+            num_heads: num_heads / comm.world_size(),
+            num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
+            head_dim,
+            paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                )?,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+                sinks: None,
+            },
+        })
+    }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        attention_mask: &AttentionMask,
+        kv_cache: &mut KvCache,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
+    ) -> Result<Tensor> {
+        let (b_sz, q_len, _) = xs.dims3()?;
+
+        let (q, k, v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
+        let (q, k, v) = if q_len != 1 {
+            let q = q
+                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            (q, k, v)
+        };
+
+        let position_ids = ctx.position_ids_vec();
+        let rope_positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        let (q, k) = self
+            .rotary_emb
+            .forward(&q, &k, rope_positions, &position_ids)?;
+        let metadata = ctx.paged_layer(layer_idx);
+
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    &self.sdpa_params,
+                    Some(ctx.flash_params()),
+                )?,
+                None => {
+                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    // Sanity check.
+                    assert!(!matches!(attention_mask, AttentionMask::None));
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &input_metadata,
+                        &self.sdpa_params,
+                        Some(ctx.flash_params()),
+                    )?
+                }
+            },
+            _ => {
+                let (k, v) = kv_cache.append(&k, &v)?;
+
+                Sdpa.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(ctx.flash_params()),
+                    &self.sdpa_params,
+                )?
+            }
+        };
+
+        attn_output = if !matches!(attention_mask, AttentionMask::None) {
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        } else {
+            attn_output.reshape((b_sz, q_len, ()))?
+        };
+        let res = self.o_proj.forward(&attn_output)?;
+        Ok(res)
+    }
+}
+
+struct MoeMlp {
+    gate: candle_nn::Linear,
+    experts: MoEExperts,
+    router_jitter_noise: f64,
+}
+
+impl MoeMlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        layer_device: Device,
+        comm: &Arc<mistralrs_quant::Comm>,
+        loading_isq: bool,
+    ) -> Result<Self> {
+        let num_experts = cfg.num_local_experts;
+        let gate = layers::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            vb.pp("gate").set_device(layer_device.clone()),
+        )?;
+
+        let moe_cfg = MoEExpertsConfig {
+            num_experts,
+            // Sparsemixer routing is top-2 by construction.
+            num_experts_per_tok: 2,
+            hidden_size: cfg.hidden_size,
+            moe_intermediate_size: cfg.intermediate_size,
+        };
+        let experts = MoEExperts::new(
+            &moe_cfg,
+            vb,
+            layer_device,
+            comm,
+            loading_isq,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+        )?;
+
+        Ok(Self {
+            gate,
+            experts,
+            router_jitter_noise: cfg.router_jitter_noise,
+        })
+    }
+
+    fn sparsemixer(&self, scores: &Tensor, jitter_eps: f64) -> Result<(Tensor, Tensor)> {
+        // Compute mask for sparsity
+        let selected_experts = scores.argmax_keepdim(D::Minus1)?;
+        let mask_logits_threshold = scores.gather(&selected_experts, D::Minus1)?;
+        let factor = scores.abs()?.broadcast_minimum(&mask_logits_threshold)?;
+        let mask_logits_threshold = mask_logits_threshold
+            .broadcast_sub(scores)?
+            .broadcast_div(&factor)?
+            .gt(2. * jitter_eps)?;
+
+        // Apply mask
+        let masked_gates = masked_fill(scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
+
+        // Compute scores
+        let masked_gates = candle_nn::ops::softmax_last_dim(&masked_gates)?;
+        let multiplier = masked_gates.gather(&selected_experts, D::Minus1)?;
+
+        // Mask out first expert
+        let masked_scores = scores.scatter_add(
+            &selected_experts
+                .broadcast_as(scores.shape())?
+                .contiguous()?,
+            &(scores.ones_like()? * f64::NEG_INFINITY)?,
+            D::Minus1,
+        )?;
+
+        // Compute mask for sparsity
+        let selected_experts_top2 = masked_scores.argmax_keepdim(D::Minus1)?;
+        let mask_logits_threshold = masked_scores.gather(&selected_experts_top2, D::Minus1)?;
+        let factor = scores.abs()?.broadcast_minimum(&mask_logits_threshold)?;
+        let mask_logits_threshold = mask_logits_threshold
+            .broadcast_sub(scores)?
+            .broadcast_div(&factor)?
+            .gt(2. * jitter_eps)?;
+
+        // Apply mask
+        let masked_gates_top2 =
+            masked_fill(&masked_scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
+        let masked_gates_top2 = candle_nn::ops::softmax_last_dim(&masked_gates_top2)?;
+        let multiplier_top2 = masked_gates_top2.gather(&selected_experts_top2, D::Minus1)?;
+
+        let multiplier = Tensor::cat(&[multiplier, multiplier_top2], D::Minus1)?;
+        let selected_experts = Tensor::cat(&[selected_experts, selected_experts_top2], D::Minus1)?;
+
+        Ok((multiplier, selected_experts))
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (bs, seq, hidden) = xs.dims3()?;
+        let xs_flat = xs.reshape(((), hidden))?;
+
+        let router_logits = self.gate.forward(&xs_flat)?;
+        let (routing_weights, selected_experts) =
+            self.sparsemixer(&router_logits, self.router_jitter_noise)?;
+
+        let ys =
+            self.experts
+                .forward(xs, routing_weights.to_dtype(DType::F32)?, &selected_experts)?;
+        ys.reshape((bs, seq, hidden))
+    }
+}
+
+struct DecoderLayer {
+    self_attn: Attention,
+    mlp: MoeMlp,
+    input_layernorm: LayerNorm,
+    post_attention_layernorm: LayerNorm,
+}
+
+impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        rotary_emb: Arc<PhiRotaryEmbedding>,
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
+        real_device: Device,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let self_attn = Attention::new(
+            rotary_emb,
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
+            comm,
+        )?;
+        let mlp = MoeMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+            mapper
+                .device_for(layer_idx, false)
+                .cloned()
+                .unwrap_or(real_device),
+            comm,
+            loading_isq,
+        )?;
+        let input_layernorm = layer_norm(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
+        )?;
+        let post_attention_layernorm = layer_norm(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
+        )?;
+        Ok(Self {
+            self_attn,
+            mlp,
+            input_layernorm,
+            post_attention_layernorm,
+        })
+    }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        attention_mask: &AttentionMask,
+        kv_cache: &mut KvCache,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self
+            .self_attn
+            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
+        let xs = (xs + residual)?;
+        let residual = &xs;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        residual + xs
+    }
+}
+
+pub struct Model {
+    embed_tokens: candle_nn::Embedding,
+    layers: Vec<DecoderLayer>,
+    norm: LayerNorm,
+    lm_head: Arc<dyn QuantMethod>,
+    device: Device,
+    cache: EitherCache,
+    max_seq_len: usize,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
+    sliding_window: Option<usize>,
+    cfg: ModelConfigMetadata,
+}
+
+impl Model {
+    pub fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        _is_gptx: bool,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization: {}.",
+                quant_cfg.name(),
+                quant_cfg.get_bits_name(&vb)
+            );
+        }
+        let mapper = normal_loading_metadata.mapper;
+        let vb_m = vb.pp("model");
+
+        let embed_tokens = layers::embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
+        )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
+            );
+        }
+        let vb_l = vb_m.pp("layers");
+        let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        )
+        .par_iter_if_isq(|layer_idx| {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(cfg.head_dim(), device, None)?)
+                }
+            };
+            let comm = mapper.get_comm_for(layer_idx)?;
+            DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                &*mapper,
+                layer_idx,
+                normal_loading_metadata.loading_isq,
+                paged_attn,
+                normal_loading_metadata.real_device.clone(),
+                &comm,
+            )
+        })?;
+        let norm = layer_norm(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            ReplicatedLayer::new(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &cfg.quantization_config,
+                cfg.lm_head_bias,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            unreachable!()
+        };
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+            lm_head,
+            device: normal_loading_metadata.real_device,
+            cache: EitherCache::Normal(NormalCache::new_sliding(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+                cfg.sliding_window,
+            )),
+            max_seq_len: cfg.max_position_embeddings,
+            sliding_window: cfg.sliding_window,
+            cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
+                sliding_window: cfg.sliding_window,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+            },
+            mapper,
+        })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
+        let attention_mask = CausalMasker.make_causal_mask(
+            input_ids,
+            &mask_cache,
+            xs.dtype(),
+            &CausalMaskConfig {
+                sliding_window: self.sliding_window,
+                ..Default::default()
+            },
+        )?;
+        // PagedAttention prompt chunking
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            attention_mask
+        } else {
+            AttentionMask::None
+        };
+        let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = self.mapper.map(xs, i)?;
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?
+        }
+        let xs = xs.to_device(&self.device)?;
+        let xs = xs.apply(&self.norm)?;
+        let xs = ctx.logits(&xs)?;
+        self.lm_head.forward(&xs)
+    }
+}
+
+impl IsqModel for Model {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+            uvb_l.pp("block_sparse_moe").pp("gate").add(&layer.mlp.gate);
+        }
+
+        uvb.to_safetensors()
+    }
+
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+            uvb_l.pp("block_sparse_moe").pp("gate").add(&layer.mlp.gate);
+
+            let uvb_attn = uvb_l.pp("self_attn");
+            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
+        }
+
+        Some(uvb.to_safetensors())
+    }
+}
+
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
+impl NormalModel for Model {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        self.forward(input_ids, ctx)
+    }
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {}

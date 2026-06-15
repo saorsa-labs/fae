@@ -1,0 +1,213 @@
+use std::{
+    fmt::Debug,
+    sync::{
+        atomic::AtomicUsize,
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    },
+};
+
+use candle_core::{DType, Device, Result, Tensor};
+
+use crate::{
+    DistributedKind, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+};
+
+enum PendingState {
+    Pending(Receiver<Result<Arc<dyn QuantMethod>>>),
+    Ready(Arc<dyn QuantMethod>),
+    /// Transitional state used during resolve to avoid holding both the old
+    /// receiver and the new layer simultaneously.
+    Taken,
+}
+
+/// A wrapper around a `QuantMethod` that resolves lazily from a background
+/// quantization task. Created by `apply_immediate_isq` when a thread pool is
+/// available for parallel immediate ISQ.
+pub struct PendingIsqLayer {
+    inner: Mutex<PendingState>,
+}
+
+impl PendingIsqLayer {
+    pub fn new(rx: Receiver<Result<Arc<dyn QuantMethod>>>) -> Self {
+        Self {
+            inner: Mutex::new(PendingState::Pending(rx)),
+        }
+    }
+
+    /// Replace the inner layer; propagates to every holder, including the live model.
+    pub fn replace(&self, layer: Arc<dyn QuantMethod>) {
+        *self.inner.lock().expect("PendingIsqLayer lock poisoned") = PendingState::Ready(layer);
+    }
+
+    /// Block until the background quantization task completes and return the
+    /// resolved layer. Subsequent calls return the cached result immediately.
+    pub fn resolve(&self) -> Result<Arc<dyn QuantMethod>> {
+        let mut state = self.inner.lock().expect("PendingIsqLayer lock poisoned");
+        match &*state {
+            PendingState::Ready(layer) => Ok(layer.clone()),
+            PendingState::Taken => {
+                candle_core::bail!("PendingIsqLayer is in an invalid transitional state")
+            }
+            PendingState::Pending(_) => {
+                // Take the receiver out so we can receive without holding the
+                // lock on the enum variant (swap to Taken first).
+                let old = std::mem::replace(&mut *state, PendingState::Taken);
+                if let PendingState::Pending(rx) = old {
+                    let result = rx
+                        .recv()
+                        .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))?;
+                    match result {
+                        Ok(layer) => {
+                            *state = PendingState::Ready(layer.clone());
+                            Ok(layer)
+                        }
+                        Err(e) => {
+                            // Leave in Taken state; the error is propagated.
+                            Err(e)
+                        }
+                    }
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+    }
+}
+
+impl Debug for PendingIsqLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state_str = match &*self.inner.lock().unwrap() {
+            PendingState::Pending(_) => "Pending",
+            PendingState::Ready(_) => "Ready",
+            PendingState::Taken => "Taken",
+        };
+        write!(f, "PendingIsqLayer({state_str})")
+    }
+}
+
+impl QuantizedSerde for PendingIsqLayer {
+    fn name(&self) -> &'static str {
+        "pending-isq"
+    }
+
+    fn isq_serde_supported(&self) -> bool {
+        match self.resolve() {
+            Ok(layer) => layer.isq_serde_supported(),
+            Err(_) => false,
+        }
+    }
+
+    fn serialize_directly(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
+        self.resolve()?.serialize_directly(prefix, ty)
+    }
+}
+
+impl QuantMethod for PendingIsqLayer {
+    fn new(_method: QuantMethodConfig) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!("PendingIsqLayer cannot be created via QuantMethodConfig")
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        self.resolve()?.dequantize_w()
+    }
+
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.resolve()?.forward_raw(a)
+    }
+
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+        self.resolve()?.forward(a)
+    }
+
+    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        self.resolve()?.gather_forward(a, indices)
+    }
+
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        self.resolve()?.gather_forward_raw(a, indices)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
+        self.resolve().ok()?.get_qtensor()
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
+        self.resolve().ok()?.afq_inner()
+    }
+
+    fn quantized_act_type(&self) -> Option<DType> {
+        self.resolve().ok()?.quantized_act_type()
+    }
+
+    fn dtype_and_device(&self) -> (DType, Device) {
+        self.resolve()
+            .expect("PendingIsqLayer failed to resolve for dtype_and_device")
+            .dtype_and_device()
+    }
+
+    fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        self.resolve()?.add_delta_w(delta)
+    }
+
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: Option<IsqType>,
+        device: Device,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        self.resolve()?
+            .clone()
+            .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
+    }
+
+    fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
+        self.resolve().ok()?.unquant_weight_bias()
+    }
+
+    fn has_bias(&self) -> bool {
+        match self.resolve() {
+            Ok(layer) => layer.has_bias(),
+            Err(_) => false,
+        }
+    }
+
+    fn begin_track_stats(&self) -> Result<()> {
+        self.resolve()?.begin_track_stats()
+    }
+
+    fn end_track_stats(&self) -> Result<Tensor> {
+        self.resolve()?.end_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.resolve().ok()?.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.resolve()?.process_routed_stats(x, ids)
+    }
+
+    fn is_distributed(&self) -> Option<DistributedKind> {
+        self.resolve().ok()?.is_distributed()
+    }
+
+    fn dummy_info(&self) -> Option<crate::DummyLayerInfo> {
+        self.resolve().ok()?.dummy_info()
+    }
+}
+
+pub type IsqSender = mpsc::SyncSender<Result<Arc<dyn QuantMethod>>>;
+pub type IsqReceiver = Receiver<Result<Arc<dyn QuantMethod>>>;
+
+/// Create a channel pair for use with `PendingIsqLayer`. The sender should be
+/// given to a thread pool task; the receiver is passed to `PendingIsqLayer::new`.
+pub fn pending_isq_channel() -> (IsqSender, IsqReceiver) {
+    mpsc::sync_channel(1)
+}
