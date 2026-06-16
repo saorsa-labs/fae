@@ -4,8 +4,6 @@ use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 pub enum MenuAction {
     Settings,
     SettingsLegacy,
-    OpenBrowserDataPanel,
-    ShowMessages,
     ResetConversation,
     HideFae,
     Stop,
@@ -19,7 +17,6 @@ pub enum MenuAction {
     Skills,
     EditSoul,
     EditCustomInstructions,
-    AskFae,
     AskAboutShortcuts,
     AskAboutModels,
     AskAboutPrivacy,
@@ -42,8 +39,6 @@ impl MenuAction {
         match self {
             MenuAction::Settings => "settings",
             MenuAction::SettingsLegacy => "settings_legacy",
-            MenuAction::OpenBrowserDataPanel => "open_browser_data_panel",
-            MenuAction::ShowMessages => "show_messages",
             MenuAction::ResetConversation => "reset_conversation",
             MenuAction::HideFae => "hide_fae",
             MenuAction::Stop => "stop",
@@ -57,7 +52,6 @@ impl MenuAction {
             MenuAction::Skills => "skills",
             MenuAction::EditSoul => "edit_soul",
             MenuAction::EditCustomInstructions => "edit_custom_instructions",
-            MenuAction::AskFae => "ask_fae",
             MenuAction::AskAboutShortcuts => "ask_about_shortcuts",
             MenuAction::AskAboutModels => "ask_about_models",
             MenuAction::AskAboutPrivacy => "ask_about_privacy",
@@ -84,12 +78,6 @@ impl OrbMenu {
         append_item(&menu, MenuAction::TalkToggle, "Talk to Fae")?;
         append_item(&menu, MenuAction::Settings, "Settings…")?;
         append_item(&menu, MenuAction::SettingsLegacy, "Settings (legacy)…")?;
-        append_item(&menu, MenuAction::ShowMessages, "Messages…")?;
-        append_item(
-            &menu,
-            MenuAction::OpenBrowserDataPanel,
-            "Open Browser/Data Panel",
-        )?;
         append_separator(&menu)?;
         append_item(&menu, MenuAction::ResetConversation, "Reset Conversation")?;
         append_item(&menu, MenuAction::HideFae, "Hide Fae")?;
@@ -135,7 +123,6 @@ impl OrbMenu {
             "Edit Custom Instructions…",
         )?;
         append_separator(&menu)?;
-        append_item(&menu, MenuAction::AskFae, "Ask Fae…")?;
         append_item(&menu, MenuAction::AskAboutShortcuts, "Ask About Shortcuts")?;
         append_item(&menu, MenuAction::AskAboutModels, "Ask About Models")?;
         append_item(&menu, MenuAction::AskAboutPrivacy, "Ask About Privacy")?;
@@ -164,8 +151,6 @@ fn id(action: MenuAction) -> MenuId {
     MenuId::new(match action {
         MenuAction::Settings => "settings",
         MenuAction::SettingsLegacy => "settings_legacy",
-        MenuAction::OpenBrowserDataPanel => "open_browser_data_panel",
-        MenuAction::ShowMessages => "show_messages",
         MenuAction::ResetConversation => "reset_conversation",
         MenuAction::HideFae => "hide_fae",
         MenuAction::Stop => "stop",
@@ -179,7 +164,6 @@ fn id(action: MenuAction) -> MenuId {
         MenuAction::Skills => "skills",
         MenuAction::EditSoul => "edit_soul",
         MenuAction::EditCustomInstructions => "edit_custom_instructions",
-        MenuAction::AskFae => "ask_fae",
         MenuAction::AskAboutShortcuts => "ask_about_shortcuts",
         MenuAction::AskAboutModels => "ask_about_models",
         MenuAction::AskAboutPrivacy => "ask_about_privacy",
@@ -197,8 +181,6 @@ fn action_from_id(id: &MenuId) -> Option<MenuAction> {
     match id.as_ref() {
         "settings" => Some(MenuAction::Settings),
         "settings_legacy" => Some(MenuAction::SettingsLegacy),
-        "open_browser_data_panel" => Some(MenuAction::OpenBrowserDataPanel),
-        "show_messages" => Some(MenuAction::ShowMessages),
         "reset_conversation" => Some(MenuAction::ResetConversation),
         "hide_fae" => Some(MenuAction::HideFae),
         "stop" => Some(MenuAction::Stop),
@@ -212,7 +194,6 @@ fn action_from_id(id: &MenuId) -> Option<MenuAction> {
         "skills" => Some(MenuAction::Skills),
         "edit_soul" => Some(MenuAction::EditSoul),
         "edit_custom_instructions" => Some(MenuAction::EditCustomInstructions),
-        "ask_fae" => Some(MenuAction::AskFae),
         "ask_about_shortcuts" => Some(MenuAction::AskAboutShortcuts),
         "ask_about_models" => Some(MenuAction::AskAboutModels),
         "ask_about_privacy" => Some(MenuAction::AskAboutPrivacy),

@@ -41,18 +41,16 @@ pub enum ShellCommand {
     SkillsSnapshot {
         skills: Vec<SkillSummary>,
     },
-    /// Current tool-access mode + thinking level for the Messages panel's
-    /// Controls strip. Swift sends one on startup and on every change.
-    ControlsSnapshot {
-        access: String,
-        thinking: String,
-    },
+    /// Tool-access mode + thinking level. The Controls strip that consumed this
+    /// lived in the removed Messages panel; Swift still emits the snapshot (its
+    /// access/thinking fields are ignored on decode) but the orb host no longer
+    /// renders it.
+    ControlsSnapshot,
     SettingsSnapshot {
         sections: Vec<SettingsSection>,
         cards: Vec<SettingsCard>,
     },
     ClearConversation,
-    ShowMessages,
     Show,
     Hide,
     Quit,
@@ -192,11 +190,8 @@ mod tests {
     #[test]
     fn encodes_menu_events_as_jsonl_payloads_without_cowork_actions(
     ) -> Result<(), serde_json::Error> {
-        let encoded = encode_menu_action(MenuAction::OpenBrowserDataPanel)?;
-        assert_eq!(
-            encoded,
-            r#"{"type":"menu","action":"open_browser_data_panel"}"#
-        );
+        let encoded = encode_menu_action(MenuAction::Settings)?;
+        assert_eq!(encoded, r#"{"type":"menu","action":"settings"}"#);
         assert!(!encoded.contains("cowork"));
         Ok(())
     }

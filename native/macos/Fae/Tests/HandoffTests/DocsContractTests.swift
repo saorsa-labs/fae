@@ -34,14 +34,16 @@ final class DocsContractTests: XCTestCase {
         let assistantCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "assistant") }.count
         let fullCount = registry.toolNames.filter { registry.isToolAllowed($0, mode: "full") }.count
 
-        // 36 after the voice-identity teardown removed voice_identity.
-        XCTAssertEqual(registry.allTools.count, 36)
-        XCTAssertEqual(assistantCount, 16)
-        XCTAssertEqual(fullCount, 36)
+        // 37 = 36 after the voice-identity teardown removed voice_identity, plus
+        // show_html (added with the orb+pill redesign so rich data opens in the
+        // user's browser instead of an in-app panel).
+        XCTAssertEqual(registry.allTools.count, 37)
+        XCTAssertEqual(assistantCount, 17)
+        XCTAssertEqual(fullCount, 37)
 
-        XCTAssertTrue(guide.contains("Total: 36 tools"))
-        XCTAssertTrue(guide.contains("assistant`: 16 tools") || guide.contains("`assistant`: 16 tools"))
-        XCTAssertTrue(guide.contains("full`: 36 tools") || guide.contains("`full`: 36 tools"))
+        XCTAssertTrue(guide.contains("Total: 37 tools"))
+        XCTAssertTrue(guide.contains("assistant`: 17 tools") || guide.contains("`assistant`: 17 tools"))
+        XCTAssertTrue(guide.contains("full`: 37 tools") || guide.contains("`full`: 37 tools"))
         XCTAssertTrue(guide.contains("delegate_agent"))
         XCTAssertTrue(guide.contains("FaeScheduler.triggerTask(id:)"))
 

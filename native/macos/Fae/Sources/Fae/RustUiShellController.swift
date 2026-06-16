@@ -40,7 +40,6 @@ final class RustUiShellController {
     var onSkills: (() -> Void)?
     var onEditSoul: (() -> Void)?
     var onEditCustomInstructions: (() -> Void)?
-    var onAskFae: (() -> Void)?
     var onAskAboutShortcuts: (() -> Void)?
     var onAskAboutModels: (() -> Void)?
     var onAskAboutPrivacy: (() -> Void)?
@@ -646,7 +645,6 @@ final class RustUiShellController {
         case "skills": onSkills?()
         case "edit_soul": onEditSoul?()
         case "edit_custom_instructions": onEditCustomInstructions?()
-        case "ask_fae": onAskFae?()
         case "ask_about_shortcuts": onAskAboutShortcuts?()
         case "ask_about_models": onAskAboutModels?()
         case "ask_about_privacy": onAskAboutPrivacy?()
