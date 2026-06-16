@@ -67,6 +67,14 @@ enum AudioRequest {
         wav: Vec<u8>,
         reply: mpsc::Sender<AudioResult<u64>>,
     },
+    PlayStreaming {
+        wav: Vec<u8>,
+        /// Receives an RMS reading (0.0–1.0) ~every 50 ms of played audio, so a
+        /// consumer (e.g. the orb host) can ride the voice. The channel closes
+        /// when playback ends (`play_wav_streaming` returns).
+        level: mpsc::Sender<f32>,
+        reply: mpsc::Sender<AudioResult<u64>>,
+    },
 }
 
 struct CaptureSession {
@@ -157,6 +165,22 @@ impl AudioManager {
             .map_err(|_| AudioError::CaptureStateUnavailable)?;
         rx.recv().map_err(|_| AudioError::CaptureStateUnavailable)?
     }
+
+    /// Play a WAV and stream the playback RMS envelope on `level` (~every
+    /// 50 ms) so a consumer can drive a voice-reactive UI. Blocks until the
+    /// clip finishes, then returns the played duration in milliseconds; the
+    /// `level` sender is dropped on return, signalling end-of-playback.
+    pub fn play_wav_streaming(&self, wav: &[u8], level: mpsc::Sender<f32>) -> AudioResult<u64> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(AudioRequest::PlayStreaming {
+                wav: wav.to_vec(),
+                level,
+                reply,
+            })
+            .map_err(|_| AudioError::CaptureStateUnavailable)?;
+        rx.recv().map_err(|_| AudioError::CaptureStateUnavailable)?
+    }
 }
 
 struct AudioWorker {
@@ -190,6 +214,9 @@ impl AudioWorker {
             }
             AudioRequest::Play { wav, reply } => {
                 let _ = reply.send(play_wav_impl(&wav));
+            }
+            AudioRequest::PlayStreaming { wav, level, reply } => {
+                let _ = reply.send(play_wav_inner(&wav, Some(level)));
             }
         }
     }
@@ -374,6 +401,13 @@ where
 }
 
 fn play_wav_impl(wav: &[u8]) -> AudioResult<u64> {
+    play_wav_inner(wav, None)
+}
+
+/// Play a decoded WAV through the default output device. When `level` is set,
+/// the realtime callback reports the played-audio RMS (~every 50 ms) so a
+/// consumer can ride the voice; `None` is the plain fire-and-forget path.
+fn play_wav_inner(wav: &[u8], level: Option<mpsc::Sender<f32>>) -> AudioResult<u64> {
     let decoded = decode_wav_mono(wav)?;
     let host = cpal::default_host();
     let device = select_output_device(&host)?;
@@ -389,20 +423,47 @@ fn play_wav_impl(wav: &[u8]) -> AudioResult<u64> {
     let played_ms = duration_ms(samples.len(), output_rate);
     let config: StreamConfig = supported.clone().into();
     let channels = usize::from(config.channels);
+    // ~50 ms windows: frequent enough to track speech cadence, coarse enough
+    // not to flood the consumer or the realtime callback.
+    let window_frames = (output_rate as usize / 20).max(1);
     let index = Arc::new(AtomicU64::new(0));
     let done = Arc::new(std::sync::atomic::AtomicBool::new(samples.is_empty()));
     let samples = Arc::new(samples);
     let err_fn = |error| eprintln!("fae-audio: output stream error: {error}");
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => {
-            build_output_stream::<f32>(&device, &config, channels, &samples, &index, &done, err_fn)
-        }
-        SampleFormat::I16 => {
-            build_output_stream::<i16>(&device, &config, channels, &samples, &index, &done, err_fn)
-        }
-        SampleFormat::U16 => {
-            build_output_stream::<u16>(&device, &config, channels, &samples, &index, &done, err_fn)
-        }
+        SampleFormat::F32 => build_output_stream::<f32>(
+            &device,
+            &config,
+            channels,
+            &samples,
+            &index,
+            &done,
+            level.clone(),
+            window_frames,
+            err_fn,
+        ),
+        SampleFormat::I16 => build_output_stream::<i16>(
+            &device,
+            &config,
+            channels,
+            &samples,
+            &index,
+            &done,
+            level.clone(),
+            window_frames,
+            err_fn,
+        ),
+        SampleFormat::U16 => build_output_stream::<u16>(
+            &device,
+            &config,
+            channels,
+            &samples,
+            &index,
+            &done,
+            level.clone(),
+            window_frames,
+            err_fn,
+        ),
         other => {
             return Err(AudioError::DeviceConfig(format!(
                 "unsupported output format {other:?}"
@@ -476,6 +537,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_output_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
@@ -483,6 +545,8 @@ fn build_output_stream<T>(
     samples: &Arc<Vec<f32>>,
     index: &Arc<AtomicU64>,
     done: &Arc<std::sync::atomic::AtomicBool>,
+    level: Option<mpsc::Sender<f32>>,
+    window_frames: usize,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
@@ -491,6 +555,7 @@ where
     let samples = Arc::clone(samples);
     let index = Arc::clone(index);
     let done = Arc::clone(done);
+    let mut meter = RmsMeter::new(window_frames);
     device.build_output_stream(
         config,
         move |output: &mut [T], _| {
@@ -500,6 +565,11 @@ where
                 if sample_index >= samples.len() {
                     done.store(true, Ordering::Relaxed);
                 }
+                // Report the RMS of the audio actually being played (one mono
+                // value per frame), so the level rides the real waveform.
+                if let (Some(tx), Some(rms)) = (level.as_ref(), meter.push(value)) {
+                    let _ = tx.send(rms);
+                }
                 for out in frame {
                     *out = T::from_f32_sample(value);
                 }
@@ -508,6 +578,38 @@ where
         err_fn,
         None,
     )
+}
+
+/// Windowed RMS accumulator for the playback level envelope. Allocation-free so
+/// it is safe to drive from the realtime audio callback.
+struct RmsMeter {
+    sum_sq: f32,
+    count: usize,
+    window: usize,
+}
+
+impl RmsMeter {
+    fn new(window: usize) -> Self {
+        Self {
+            sum_sq: 0.0,
+            count: 0,
+            window: window.max(1),
+        }
+    }
+
+    /// Accumulate one mono sample; returns `Some(rms)` when a full window closes.
+    fn push(&mut self, sample: f32) -> Option<f32> {
+        self.sum_sq += sample * sample;
+        self.count += 1;
+        if self.count >= self.window {
+            let rms = (self.sum_sq / self.count as f32).sqrt();
+            self.sum_sq = 0.0;
+            self.count = 0;
+            Some(rms)
+        } else {
+            None
+        }
+    }
 }
 
 trait FromF32Sample {
@@ -806,5 +908,32 @@ mod tests {
     #[test]
     fn bad_wav_is_rejected() {
         assert!(decode_wav_mono(b"not a wav").is_err());
+    }
+
+    #[test]
+    fn rms_meter_emits_once_per_window_with_correct_magnitude() {
+        // A ±0.5 square wave has RMS 0.5. With a 4-sample window the meter
+        // should emit exactly one reading per 4 samples, each ≈ 0.5.
+        let mut meter = RmsMeter::new(4);
+        let mut readings = Vec::new();
+        for sample in [0.5, -0.5, 0.5, -0.5, 0.5, -0.5, 0.5, -0.5] {
+            if let Some(rms) = meter.push(sample) {
+                readings.push(rms);
+            }
+        }
+        assert_eq!(readings.len(), 2, "one reading per closed window");
+        for rms in readings {
+            assert!((rms - 0.5).abs() < 1e-6, "rms {rms} != 0.5");
+        }
+    }
+
+    #[test]
+    fn rms_meter_silence_reads_zero_and_partial_window_is_withheld() {
+        let mut meter = RmsMeter::new(3);
+        assert_eq!(meter.push(0.0), None);
+        assert_eq!(meter.push(0.0), None);
+        assert_eq!(meter.push(0.0), Some(0.0));
+        // A partial window (no third sample) yields nothing until it closes.
+        assert_eq!(meter.push(1.0), None);
     }
 }
