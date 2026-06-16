@@ -665,3 +665,24 @@ _sign-bundle app_bundle:
     echo "=== Verifying ==="
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "Signed: $APP_BUNDLE"
+
+
+# ─── ACP Smoke Tests ───────────────────────────────────────────────────
+#
+# Two layers, both opt-in (they spawn subprocesses + hit the network):
+#
+# 1) smoke-acp        — shell harness using `acpx <agent> exec <prompt>`
+#                       (one-shot CLI form). Fast, no Swift build needed.
+# 2) smoke-acp-swift  — XCTest exercising the production ACPSessionManager
+#                       code path (`acpx <agent>` daemon + JSON-RPC stdin).
+#                       Matches exactly what Fae's AgentSessionTool runs.
+#
+# Usage:  just smoke-acp                         # shell, all three agents
+#         SMOKE_AGENTS=codex,pi just smoke-acp   # limit
+#         SMOKE_PROMPT='...' just smoke-acp      # custom prompt
+#         just smoke-acp-swift                   # Swift integration test
+smoke-acp:
+    @../../../scripts/smoke-acp.sh
+
+smoke-acp-swift:
+    RUN_ACP_SMOKE=1 swift test --filter IntegrationTests.ACPSmokeTests
