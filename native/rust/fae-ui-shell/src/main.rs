@@ -1459,7 +1459,7 @@ fn settings_html(orb_ui: &OrbUiModel) -> String {
     format!(
         r#"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <style>
-:root{{color-scheme:dark;--bg:#0F1013;--panel:#1A1820;--panel2:#221F28;--text:#CEC4DC;--soft:#9A90A8;--cream:#E8DED2;--gold:#E6C05A;--glen:#8FB8A2;--berry:#C4788A}}
+:root{{color-scheme:dark;--bg:#0F1013;--panel:#1A1820;--panel2:#221F28;--text:#CEC4DC;--soft:#9A90A8;--cream:#E8DED2;--gold:#D4A934;--gold-text:#E6C05A;--glen:#8FB8A2;--berry:#C4788A}}
 *{{box-sizing:border-box}}
 body{{margin:0;background:linear-gradient(135deg,#0F1013 0%,#18151D 52%,#221F28 100%);color:var(--text);font:14px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}}
 main{{min-height:100vh;padding:28px;display:grid;gap:18px}}
@@ -1475,15 +1475,15 @@ p{{margin:0;line-height:1.5}}.muted{{color:var(--soft)}}
 .setting:first-of-type{{border-top:0}}
 .desc{{font-size:12px;color:var(--soft)}}
 input,select{{width:100%;border:1px solid rgba(180,168,196,.30);border-radius:10px;background:#0F1013;color:var(--text);padding:8px 10px;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;outline:none}}
-input:focus,select:focus{{border-color:rgba(230,192,90,.68);box-shadow:0 0 0 3px rgba(230,192,90,.10)}}
+input:focus,select:focus{{border-color:rgba(212,169,52,.68);box-shadow:0 0 0 3px rgba(212,169,52,.10)}}
 input[type='checkbox']{{width:22px;height:22px;justify-self:end;accent-color:var(--gold)}}
 .number-control{{display:grid;grid-template-columns:34px 1fr 34px;gap:6px;align-items:center}}
-.stepper{{border-radius:10px;padding:8px 0;line-height:1;color:var(--cream);background:rgba(230,192,90,.10)}}
+.stepper{{border-radius:10px;padding:8px 0;line-height:1;color:var(--cream);background:rgba(212,169,52,.10)}}
 .unit{{font-size:11px;color:var(--soft);margin-top:4px;text-align:right}}
 .info-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}}
 .info{{border:1px solid rgba(143,184,162,.24);border-radius:16px;padding:15px;background:#17201D}}
 .info h3{{color:#DDE8E1}}.info .detail{{margin-top:8px;font-size:12px;color:#A9BFB4}}
-button{{border:1px solid rgba(230,192,90,.48);border-radius:999px;background:rgba(230,192,90,.14);color:var(--gold);padding:8px 13px;font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer}}
+button{{border:1px solid rgba(212,169,52,.48);border-radius:999px;background:rgba(212,169,52,.14);color:var(--gold-text);padding:8px 13px;font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer}}
 .toolbar{{display:flex;gap:10px;align-items:center;justify-content:flex-end}}
 @media(max-width:640px){{main{{padding:18px}}.setting{{grid-template-columns:1fr}}input[type='checkbox']{{justify-self:start}}}}
 </style></head><body><main>
