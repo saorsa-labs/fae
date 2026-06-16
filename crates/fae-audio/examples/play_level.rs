@@ -49,7 +49,13 @@ fn main() {
         }
     }
 
-    let levels = collector.join().expect("level collector thread");
+    let levels = match collector.join() {
+        Ok(levels) => levels,
+        Err(panic) => {
+            eprintln!("level collector thread panicked: {panic:?}");
+            std::process::exit(1);
+        }
+    };
     let max = levels.iter().copied().fold(0.0f32, f32::max);
     let above = levels.iter().filter(|level| **level > 0.05).count();
     let near_zero = levels.iter().filter(|level| **level < 0.01).count();
