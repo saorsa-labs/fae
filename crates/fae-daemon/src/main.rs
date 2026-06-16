@@ -27,7 +27,8 @@ use fae_control_plane::{
     PROTOCOL_VERSION,
 };
 use fae_engine::{
-    LocalMistralrsAdapter, MockAdapter, MockTtsAdapter, ModelsLock, ProviderAdapter, TtsAdapter,
+    LlamaServerAdapter, LlamaServerConfig, LocalMistralrsAdapter, MockAdapter, MockTtsAdapter,
+    ModelsLock, ProviderAdapter, TtsAdapter,
 };
 
 mod diagnostic;
@@ -162,6 +163,11 @@ fn local_voices_directory() -> Option<PathBuf> {
 /// text model (the real engine); otherwise (and on load failure) use the mock
 /// echo engine so the daemon still serves without ~GB of weights present.
 async fn build_engine() -> Arc<dyn ProviderAdapter> {
+    // llama.cpp serving lane (gap B1) — opt-in via `FAE_ENGINE=llamacpp`. The
+    // mistral.rs path below stays the default until this proves parity (B4).
+    if std::env::var("FAE_ENGINE").as_deref() == Ok("llamacpp") {
+        return build_llamacpp_engine().await;
+    }
     match std::env::var("FAE_MODEL_ID")
         .ok()
         .filter(|id| !id.is_empty())
@@ -188,6 +194,81 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
         }
         None => Arc::new(MockAdapter::new("mock-echo")),
     }
+}
+
+/// Build the llama.cpp serving lane (gap B1). Either attach to an
+/// externally-run server (`FAE_LLAMA_SERVER_URL`, e.g. the validation bench) or
+/// spawn + supervise a `llama-server` sidecar from `FAE_LLAMA_*` paths. On any
+/// failure fall back to the mock engine so the daemon still serves.
+///
+/// NOTE (gap B2): the GGUF paths are read straight from env here; before this is
+/// a shipping default they must be resolved + verified against `models.lock`
+/// (base + mmproj as supply-chain pins, the personal LoRA as a self-produced
+/// integrity hash), mirroring [`verify_models_lock`].
+async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
+    let model_id = std::env::var("FAE_MODEL_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "gemma-4".to_owned());
+
+    if let Some(url) = std::env::var("FAE_LLAMA_SERVER_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+    {
+        println!("engine  : llama.cpp — attaching to {url}");
+        return Arc::new(LlamaServerAdapter::connect(url, model_id));
+    }
+
+    match std::env::var("FAE_LLAMA_MODEL_GGUF")
+        .ok()
+        .filter(|path| !path.is_empty())
+    {
+        Some(model_gguf) => {
+            let config = LlamaServerConfig {
+                binary: std::env::var("FAE_LLAMA_BIN")
+                    .ok()
+                    .filter(|bin| !bin.is_empty())
+                    .unwrap_or_else(|| "llama-server".to_owned()),
+                model_gguf,
+                lora_gguf: std::env::var("FAE_LLAMA_LORA_GGUF")
+                    .ok()
+                    .filter(|path| !path.is_empty()),
+                mmproj: std::env::var("FAE_LLAMA_MMPROJ")
+                    .ok()
+                    .filter(|path| !path.is_empty()),
+                port: env_parsed("FAE_LLAMA_PORT", 18080),
+                ctx_size: env_parsed("FAE_LLAMA_CTX", 8192),
+                ngl: env_parsed("FAE_LLAMA_NGL", 99),
+            };
+            println!(
+                "engine  : llama.cpp — spawning llama-server (model {})",
+                config.model_gguf
+            );
+            match LlamaServerAdapter::spawn(config, model_id).await {
+                Ok(adapter) => Arc::new(adapter),
+                Err(error) => {
+                    eprintln!("fae-daemon: llama-server spawn failed ({error}); using mock engine");
+                    Arc::new(MockAdapter::new("mock-echo"))
+                }
+            }
+        }
+        None => {
+            eprintln!(
+                "fae-daemon: FAE_ENGINE=llamacpp but neither FAE_LLAMA_SERVER_URL nor \
+                 FAE_LLAMA_MODEL_GGUF is set; using mock engine"
+            );
+            Arc::new(MockAdapter::new("mock-echo"))
+        }
+    }
+}
+
+/// Parse an env var into any `FromStr` numeric, falling back to `default` when
+/// unset or unparseable.
+fn env_parsed<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(default)
 }
 
 fn verify_models_lock(model_id: &str) -> DaemonResult<Option<String>> {

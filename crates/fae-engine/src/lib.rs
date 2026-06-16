@@ -20,6 +20,7 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+mod llamacpp_adapter;
 mod mistralrs_adapter;
 mod mock;
 mod models_lock;
@@ -28,6 +29,7 @@ mod tts;
 #[cfg(target_os = "macos")]
 mod voice_tts_adapter;
 
+pub use llamacpp_adapter::{LlamaServerAdapter, LlamaServerConfig, LlamaServerHandle};
 pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::MockAdapter;
 pub use models_lock::{Artifact, LockError, ModelsLock, SUPPORTED_SCHEMA_VERSION};

@@ -35,6 +35,10 @@ toml = "0.8"
 async-trait = "0.1"
 async-stream = "0.3"
 base64 = "0.22"
+# HTTP/SSE client for the llama-server sidecar (gap B1). Loopback-only, so no
+# TLS backend is pulled in (default-features off); `stream` gives the SSE
+# byte-stream, `json` the request body helper.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
 # Native ACP (Agent Client Protocol) client — Zed's canonical Rust toolkit:
 # protocol types + JSON-RPC framing + Client/Agent traits. fae-acp builds on
 # these instead of hand-rolling the wire format.

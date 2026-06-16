@@ -18,6 +18,7 @@ async-trait = { workspace = true }
 async-stream = { workspace = true }
 futures-util = { workspace = true }
 base64 = { workspace = true }
+reqwest = { workspace = true }
 # Daemon-side TTS (S19). voice-g2p (text → phonemes) is pure Rust and
 # portable; tokio is needed for the oneshot reply channel.
 voice-g2p = "=0.2.1"
