@@ -284,11 +284,11 @@ Collect feedback → Meta-Optimize (directive, config, skills, memory seeds)
 
 ## Tool system
 
-36 tools registered in `ToolRegistry.buildDefault()`:
+37 tools registered in `ToolRegistry.buildDefault()`:
 
 | Category | Tools |
 |----------|-------|
-| Core | `read`, `write`, `edit`, `bash`, `self_config`, `channel_setup`, `window_control`, `session_search`, `web_search`, `fetch_url` |
+| Core | `read`, `write`, `edit`, `bash`, `self_config`, `channel_setup`, `window_control`, `show_html`, `session_search`, `web_search`, `fetch_url` |
 | Skills | `activate_skill`, `run_skill`, `manage_skill` |
 | Delegation | `delegate_agent`, `agent_session` |
 | User Input | `input_request` |

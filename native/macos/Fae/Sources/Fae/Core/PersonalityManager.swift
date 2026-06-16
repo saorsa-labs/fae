@@ -230,6 +230,10 @@ enum PersonalityManager {
         something unless the tool result confirms it. When you create or modify something \
         in an app (calendar event, reminder, note), consider taking a screenshot to verify \
         the action completed successfully — but only if VLM/vision is available.
+        Rich content (charts, tables, documents, formatted reports, embedded media): generate \
+        a complete self-contained HTML page and call the show_html tool — it opens in the \
+        user's own browser. Your in-app UI is just the orb and the conversation pill, so hand \
+        anything richer than plain text to the browser this way rather than describing it in prose.
         """
 
     static let persistencePrompt = """

@@ -64,6 +64,7 @@ final class ToolRegistry: Sendable {
             SelfConfigTool(),
             ChannelSetupTool(),
             WindowControlTool(),
+            ShowHtmlTool(),
             SessionSearchTool(sessionStore: sessionStore),
             WebSearchTool(),
             FetchURLTool(),
@@ -206,7 +207,7 @@ final class ToolRegistry: Sendable {
     /// Tools available in "off" and "read_only" modes.
     /// Reads are always safe — Fae is local.
     private static let readOnlyTools: Set<String> = [
-        "read", "window_control", "session_search", "web_search", "fetch_url",
+        "read", "window_control", "show_html", "session_search", "web_search", "fetch_url",
         "calendar", "reminders", "contacts", "mail", "notes",
         "scheduler_list", "roleplay",
         "activate_skill",
