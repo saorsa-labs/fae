@@ -9,9 +9,11 @@
 //! automatically on the next publish — no explicit unregister. A subscriber
 //! receives an event only when it was granted the event's required [`Scope`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, Weak};
 
+use fae_audio::PlaybackId;
 use fae_control_plane::{Event, Scope};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -100,9 +102,8 @@ impl EventBus {
     /// (dropped) subscribers are pruned in the same pass. A serialization
     /// failure drops the event rather than tearing down any connection.
     ///
-    /// No non-test caller until V3 (daemon-owned TTS playback publishes
-    /// `audio.level`); kept on the public surface as the V2 producer API.
-    #[allow(dead_code)]
+    /// Producer: voice spine V3a `tts.speak` publishes `audio.level` (per RMS
+    /// reading) and `audio.playback_ended` (on close) on this bus.
     pub fn publish(&self, event: &str, required: Scope, payload: serde_json::Value) {
         let frame = Event::new(event, payload);
         let line = match serde_json::to_vec(&frame) {
@@ -134,6 +135,63 @@ impl EventBus {
             subs.len()
         } else {
             0
+        }
+    }
+}
+
+/// Daemon-side bookkeeping for live daemon-owned playbacks (voice spine V3a).
+/// The [`fae_audio`] layer closes the RMS `level` channel identically whether a
+/// clip finished naturally or was barged in, so the end-reason (`completed` vs
+/// `interrupted`) is resolved here: `audio.stop` flips the interrupted flag
+/// *before* stopping the stream, and the level-drain task reads it when the
+/// channel closes. Process-global (a `tts.speak` and its `audio.stop` may arrive
+/// on different connections) and cheap to clone (one shared map).
+#[derive(Clone, Default)]
+pub struct PlaybackRegistry {
+    inner: Arc<Mutex<HashMap<PlaybackId, Arc<AtomicBool>>>>,
+}
+
+impl PlaybackRegistry {
+    #[must_use]
+    pub fn new() -> PlaybackRegistry {
+        PlaybackRegistry::default()
+    }
+
+    /// Register a freshly started playback and return the shared interrupted
+    /// flag the level-drain task will read at end-of-stream.
+    pub fn insert(&self, id: PlaybackId) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Ok(mut map) = self.inner.lock() {
+            map.insert(id, Arc::clone(&flag));
+        }
+        flag
+    }
+
+    /// Mark a playback interrupted. Returns `true` if the id was live (so the
+    /// caller can distinguish "stopped a real playback" from a stale id).
+    pub fn mark_interrupted(&self, id: &str) -> bool {
+        if let Ok(map) = self.inner.lock() {
+            if let Some(flag) = map.get(id) {
+                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// All live playback ids (for `audio.stop` with no `playback_id`).
+    pub fn ids(&self) -> Vec<PlaybackId> {
+        self.inner
+            .lock()
+            .map(|map| map.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Remove a playback (called by the level-drain task once the `level`
+    /// channel has closed and the end-reason has been published).
+    pub fn remove(&self, id: &str) {
+        if let Ok(mut map) = self.inner.lock() {
+            map.remove(id);
         }
     }
 }

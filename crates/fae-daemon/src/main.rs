@@ -93,6 +93,13 @@ async fn main() -> DaemonResult<()> {
     let tts_info = tts.describe();
     println!("tts     : {} ({})", tts_info.backend, tts_info.model_id);
     let audio = Arc::new(AudioManager::new());
+    // Server-push event fan-out (voice spine V2). Held here so producers (V3
+    // daemon-owned TTS playback → `audio.level`) can publish; the transport
+    // registers `conversation.subscribe` clients as subscribers.
+    let events = events::EventBus::new();
+    // Live daemon-owned playback bookkeeping (voice spine V3a): resolves
+    // end-reason (`completed` vs `interrupted`) for `audio.playback_ended`.
+    let playbacks = events::PlaybackRegistry::new();
     println!("audit   : {} (jsonl)", audit_path.display());
     println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
 
@@ -105,6 +112,8 @@ async fn main() -> DaemonResult<()> {
             audio: Arc::clone(&audio),
             tickets: Arc::clone(&tickets),
             audit_path: audit_path.clone(),
+            events: events.clone(),
+            playbacks: playbacks.clone(),
             port,
         });
         println!("diag    : TCP loopback diagnostic enabled on port {port} (opt-in)");
@@ -116,11 +125,6 @@ async fn main() -> DaemonResult<()> {
     }
     println!();
 
-    // Server-push event fan-out (voice spine V2). Held here so future producers
-    // (V3 daemon-owned TTS playback → `audio.level`) can publish; the transport
-    // registers `conversation.subscribe` clients as subscribers.
-    let events = events::EventBus::new();
-
     // Serves until the process is killed. Fails closed on bind/permission error.
     transport::serve_unix(
         socket_path,
@@ -130,6 +134,7 @@ async fn main() -> DaemonResult<()> {
         audio,
         audit_path,
         events,
+        playbacks,
     )
     .await?;
     Ok(())

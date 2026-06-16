@@ -228,8 +228,13 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         | "audio.stop_capture" => &[Scope::AudioCapture],
         "audio.devices" => &[Scope::StatusRead],
         "audio.play" | "audio.playback_control" => &[Scope::AudioPlayback],
+        // Voice spine V3a: daemon-owned playback + barge-in (audio.stop).
+        "audio.stop" => &[Scope::AudioPlayback],
         // S19: daemon-side Kokoro TTS — synthesis produces playback audio.
         "tts.synthesize" => &[Scope::AudioPlayback],
+        // Voice spine V3a: synthesize + play in the daemon, streaming the level
+        // envelope on the event bus (AudioPlayback producer).
+        "tts.speak" => &[Scope::AudioPlayback],
         "memory.search" => &[Scope::MemoryRead],
         "memory.capture" => &[Scope::MemoryWrite],
         "tool.list" => &[Scope::ToolRead],
@@ -879,6 +884,23 @@ mod tests {
         assert_eq!(
             authorize(&playback, &cmd("audio.playback_control"), 10),
             AuthzDecision::Allow
+        );
+        // Voice spine V3a: daemon-owned playback + barge-in sit on AudioPlayback.
+        assert_eq!(
+            authorize(&playback, &cmd("tts.speak"), 10),
+            AuthzDecision::Allow
+        );
+        assert_eq!(
+            authorize(&playback, &cmd("audio.stop"), 10),
+            AuthzDecision::Allow
+        );
+        assert_eq!(
+            authorize(&capture, &cmd("tts.speak"), 10),
+            AuthzDecision::Deny(DenyReason::MissingScope)
+        );
+        assert_eq!(
+            authorize(&capture, &cmd("audio.stop"), 10),
+            AuthzDecision::Deny(DenyReason::MissingScope)
         );
         let status = client(&[Scope::StatusRead], 1000, None);
         assert_eq!(

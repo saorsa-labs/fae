@@ -57,6 +57,8 @@ pub struct DiagnosticState {
     pub audio: Arc<AudioManager>,
     pub tickets: Arc<Mutex<TicketStore>>,
     pub audit_path: PathBuf,
+    pub events: crate::events::EventBus,
+    pub playbacks: crate::events::PlaybackRegistry,
     pub port: u16,
 }
 
@@ -403,10 +405,13 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
         state.tts.as_ref(),
         state.audio.as_ref(),
         &state.audit_path,
+        &state.events,
+        &state.playbacks,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ws_message_loop(
     mut ws: WebSocketStream<TcpStream>,
     mut session: SessionState,
@@ -415,6 +420,8 @@ async fn ws_message_loop(
     tts: &dyn TtsAdapter,
     audio: &AudioManager,
     audit_path: &Path,
+    events: &crate::events::EventBus,
+    playbacks: &crate::events::PlaybackRegistry,
 ) -> std::io::Result<()> {
     while let Some(message) = ws.next().await {
         let text = match message {
@@ -428,7 +435,13 @@ async fn ws_message_loop(
         }
         let now = now_ms();
         let event_id = next_event_id(now);
-        let backends = SessionBackends { engine, tts, audio };
+        let backends = SessionBackends {
+            engine,
+            tts,
+            audio,
+            events,
+            playbacks,
+        };
         let outcome = handle_frame(registry, &backends, &mut session, line, now, event_id).await;
 
         // Same fail-closed audit contract as the Unix socket: no response before

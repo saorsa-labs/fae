@@ -16,7 +16,7 @@ use fae_engine::{ProviderAdapter, TtsAdapter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::events::{ConnSink, EventBus, EventSink};
+use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
 use crate::session::{handle_frame, SessionBackends, SessionState};
 use crate::{next_event_id, now_ms};
 
@@ -36,6 +36,7 @@ const MAX_FRAME_BYTES_AUTHENTICATED: usize = 8 * 1024 * 1024;
 /// Bind the Unix socket (owner-only) and serve connections until the process is
 /// killed. Fails closed: if a stale socket cannot be cleared, the bind fails, or
 /// owner-only permissions cannot be set, the daemon refuses to serve.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_unix(
     socket_path: PathBuf,
     registry: Arc<ClientRegistry>,
@@ -44,6 +45,7 @@ pub async fn serve_unix(
     audio: Arc<AudioManager>,
     audit_path: PathBuf,
     events: EventBus,
+    playbacks: PlaybackRegistry,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -67,6 +69,7 @@ pub async fn serve_unix(
         let audio = Arc::clone(&audio);
         let audit_path = audit_path.clone();
         let events = events.clone();
+        let playbacks = playbacks.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -76,6 +79,7 @@ pub async fn serve_unix(
                 audio.as_ref(),
                 &audit_path,
                 &events,
+                &playbacks,
             )
             .await
             {
@@ -86,6 +90,7 @@ pub async fn serve_unix(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     stream: UnixStream,
     registry: &ClientRegistry,
@@ -94,6 +99,7 @@ async fn handle_connection(
     audio: &AudioManager,
     audit_path: &Path,
     events: &EventBus,
+    playbacks: &PlaybackRegistry,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -128,7 +134,13 @@ async fn handle_connection(
 
             let now = now_ms();
             let event_id = next_event_id(now);
-            let backends = SessionBackends { engine, tts, audio };
+            let backends = SessionBackends {
+                engine,
+                tts,
+                audio,
+                events,
+                playbacks,
+            };
             let outcome =
                 handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;
 

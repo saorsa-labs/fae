@@ -20,6 +20,10 @@ pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 const CAPTURE_CAP: Duration = Duration::from_secs(30);
 const REAP_AFTER: Duration = Duration::from_secs(35);
 const WORKER_TICK: Duration = Duration::from_millis(100);
+/// A live daemon-owned playback handle (`play-N`). Used to stop a clip early
+/// (barge-in) and to correlate `audio.level` / `audio.playback_ended` events
+/// on the voice spine.
+pub type PlaybackId = String;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
@@ -33,6 +37,8 @@ pub enum AudioError {
     Stream(String),
     #[error("capture not found")]
     CaptureNotFound,
+    #[error("playback not found")]
+    PlaybackNotFound,
     #[error("capture state unavailable")]
     CaptureStateUnavailable,
     #[error("bad wav: {0}")]
@@ -75,6 +81,23 @@ enum AudioRequest {
         level: mpsc::Sender<f32>,
         reply: mpsc::Sender<AudioResult<u64>>,
     },
+    /// Start a non-blocking, interruptible, level-emitting playback (voice spine
+    /// V3a). The worker builds the cpal output stream, stores it, and returns
+    /// the playback id immediately; the realtime callback streams the playback
+    /// RMS envelope on `level` (~every 50 ms) and sets `done` at end-of-samples.
+    /// [`AudioRequest::PlayStop`] drops the stream (barging-in); reaping drops
+    /// finished streams and closes the `level` channel (end-of-playback).
+    PlayStart {
+        wav: Vec<u8>,
+        level: mpsc::Sender<f32>,
+        reply: mpsc::Sender<AudioResult<PlaybackId>>,
+    },
+    /// Stop a playback early (barge-in). Drops the stored cpal stream, which
+    /// closes the playback's `level` channel so the consumer sees end-of-stream.
+    PlayStop {
+        id: PlaybackId,
+        reply: mpsc::Sender<AudioResult<()>>,
+    },
 }
 
 struct CaptureSession {
@@ -82,6 +105,17 @@ struct CaptureSession {
     stream: Option<cpal::Stream>,
     input_rate: u32,
     started: Instant,
+    finished_at: Option<Instant>,
+}
+
+/// A live non-blocking playback (voice spine V3a). The cpal stream is held here
+/// (not blocked on in `play_start`); the realtime callback sets `done` at
+/// end-of-samples and streams the RMS envelope on the playback's `level`
+/// channel (held outside this struct — by the caller that owns the `Sender`).
+/// Dropping `stream` stops playback and closes the `level` channel.
+struct PlaybackSession {
+    stream: Option<cpal::Stream>,
+    done: Arc<std::sync::atomic::AtomicBool>,
     finished_at: Option<Instant>,
 }
 
@@ -110,6 +144,7 @@ impl AudioManager {
         std::thread::spawn(move || {
             let worker = AudioWorker {
                 captures: HashMap::new(),
+                playbacks: HashMap::new(),
                 next_id: AtomicU64::new(1),
                 capture_cap,
             };
@@ -181,10 +216,44 @@ impl AudioManager {
             .map_err(|_| AudioError::CaptureStateUnavailable)?;
         rx.recv().map_err(|_| AudioError::CaptureStateUnavailable)?
     }
+
+    /// Start a non-blocking, interruptible, level-emitting playback (voice spine
+    /// V3a). Returns the playback id immediately; the realtime cpal callback
+    /// streams the playback RMS envelope on `level` (~every 50 ms) and closes it
+    /// when the clip finishes or [`AudioManager::play_stop`] barges in. The
+    /// single-threaded [`AudioWorker`] is NOT blocked: capture/stop can run
+    /// concurrently with playback.
+    pub fn play_start(&self, wav: &[u8], level: mpsc::Sender<f32>) -> AudioResult<PlaybackId> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(AudioRequest::PlayStart {
+                wav: wav.to_vec(),
+                level,
+                reply,
+            })
+            .map_err(|_| AudioError::CaptureStateUnavailable)?;
+        rx.recv().map_err(|_| AudioError::CaptureStateUnavailable)?
+    }
+
+    /// Stop a playback started by [`AudioManager::play_start`] (barge-in).
+    /// Drops the cpal stream promptly; the `level` channel closes so the
+    /// consumer observes end-of-stream. Returns `PlaybackNotFound` if `id` is
+    /// not a live playback (already completed/reaped or unknown).
+    pub fn play_stop(&self, id: &str) -> AudioResult<()> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(AudioRequest::PlayStop {
+                id: id.to_owned(),
+                reply,
+            })
+            .map_err(|_| AudioError::CaptureStateUnavailable)?;
+        rx.recv().map_err(|_| AudioError::CaptureStateUnavailable)?
+    }
 }
 
 struct AudioWorker {
     captures: HashMap<String, CaptureSession>,
+    playbacks: HashMap<PlaybackId, PlaybackSession>,
     next_id: AtomicU64,
     capture_cap: Duration,
 }
@@ -193,6 +262,7 @@ impl AudioWorker {
     fn run(mut self, rx: mpsc::Receiver<AudioRequest>) {
         loop {
             self.reap_captures();
+            self.reap_playbacks();
             match rx.recv_timeout(WORKER_TICK) {
                 Ok(request) => self.handle(request),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -217,6 +287,12 @@ impl AudioWorker {
             }
             AudioRequest::PlayStreaming { wav, level, reply } => {
                 let _ = reply.send(play_wav_inner(&wav, Some(level)));
+            }
+            AudioRequest::PlayStart { wav, level, reply } => {
+                let _ = reply.send(self.play_start_impl(&wav, level));
+            }
+            AudioRequest::PlayStop { id, reply } => {
+                let _ = reply.send(self.play_stop_impl(&id));
             }
         }
     }
@@ -321,6 +397,59 @@ impl AudioWorker {
                 .is_none_or(|finished| now.duration_since(finished) <= REAP_AFTER)
         });
     }
+
+    /// Start a non-blocking playback: build the stream, start it, store it, and
+    /// return the id immediately. The realtime callback streams RMS on `level`
+    /// and sets `done` at end-of-samples; reaping then drops the stream and
+    /// closes `level`. Mirrors `capture_start_impl` (store-and-return, no block).
+    fn play_start_impl(&mut self, wav: &[u8], level: mpsc::Sender<f32>) -> AudioResult<PlaybackId> {
+        let (stream, done, _played_ms) = build_playback_stream(wav, Some(level))?;
+        stream
+            .play()
+            .map_err(|error| AudioError::Stream(error.to_string()))?;
+        let id = format!("play-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
+        self.playbacks.insert(
+            id.clone(),
+            PlaybackSession {
+                stream: Some(stream),
+                done,
+                finished_at: None,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Stop a playback early (barge-in). Dropping the cpal stream halts output
+    /// promptly and closes the `level` channel so the consumer sees
+    /// end-of-stream. `PlaybackNotFound` if `id` is not live.
+    fn play_stop_impl(&mut self, id: &str) -> AudioResult<()> {
+        let mut session = self
+            .playbacks
+            .remove(id)
+            .ok_or(AudioError::PlaybackNotFound)?;
+        session.stream = None;
+        Ok(())
+    }
+
+    /// Reap finished playbacks. A playback whose realtime callback has set
+    /// `done` is finished: drop its stream (which closes the `level` channel)
+    /// and remember when it finished so it is removed after `REAP_AFTER`. Like
+    /// `reap_captures`, this keeps a finished entry briefly but the stream is
+    /// gone promptly — the consumer's end-of-stream signal is the closed channel.
+    fn reap_playbacks(&mut self) {
+        let now = Instant::now();
+        for session in self.playbacks.values_mut() {
+            if session.finished_at.is_none() && session.done.load(Ordering::Relaxed) {
+                session.stream = None;
+                session.finished_at = Some(now);
+            }
+        }
+        self.playbacks.retain(|_, session| {
+            session
+                .finished_at
+                .is_none_or(|finished| now.duration_since(finished) <= REAP_AFTER)
+        });
+    }
 }
 
 fn devices_impl() -> AudioDeviceInfo {
@@ -404,10 +533,16 @@ fn play_wav_impl(wav: &[u8]) -> AudioResult<u64> {
     play_wav_inner(wav, None)
 }
 
-/// Play a decoded WAV through the default output device. When `level` is set,
-/// the realtime callback reports the played-audio RMS (~every 50 ms) so a
-/// consumer can ride the voice; `None` is the plain fire-and-forget path.
-fn play_wav_inner(wav: &[u8], level: Option<mpsc::Sender<f32>>) -> AudioResult<u64> {
+/// Build (but do not start or block on) a cpal output stream for `wav`. Returns
+/// the stream, a `done` flag set by the realtime callback at end-of-samples,
+/// and the clip duration in ms. When `level` is set, the callback streams the
+/// playback RMS envelope (~every 50 ms). Both the blocking path
+/// ([`play_wav_inner`]) and the non-blocking worker path
+/// ([`AudioWorker::play_start_impl`]) build on this helper.
+fn build_playback_stream(
+    wav: &[u8],
+    level: Option<mpsc::Sender<f32>>,
+) -> AudioResult<(cpal::Stream, Arc<std::sync::atomic::AtomicBool>, u64)> {
     let decoded = decode_wav_mono(wav)?;
     let host = cpal::default_host();
     let device = select_output_device(&host)?;
@@ -471,6 +606,16 @@ fn play_wav_inner(wav: &[u8], level: Option<mpsc::Sender<f32>>) -> AudioResult<u
         }
     }
     .map_err(|error| AudioError::Stream(error.to_string()))?;
+    Ok((stream, done, played_ms))
+}
+
+/// Play a decoded WAV through the default output device. When `level` is set,
+/// the realtime callback reports the played-audio RMS (~every 50 ms) so a
+/// consumer can ride the voice; `None` is the plain fire-and-forget path.
+/// Blocks until the clip finishes, then returns the played duration in ms; the
+/// `level` sender is dropped on return, signalling end-of-playback.
+fn play_wav_inner(wav: &[u8], level: Option<mpsc::Sender<f32>>) -> AudioResult<u64> {
+    let (stream, done, played_ms) = build_playback_stream(wav, level)?;
     stream
         .play()
         .map_err(|error| AudioError::Stream(error.to_string()))?;
@@ -853,6 +998,7 @@ mod tests {
     fn capture_cap_reaping_marks_then_removes_finished_sessions() {
         let mut worker = AudioWorker {
             captures: HashMap::new(),
+            playbacks: HashMap::new(),
             next_id: AtomicU64::new(1),
             capture_cap: Duration::from_millis(1),
         };

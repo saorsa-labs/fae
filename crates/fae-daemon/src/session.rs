@@ -9,13 +9,15 @@
 use fae_audio::AudioManager;
 use fae_control_plane::{
     authorize, AuditDecision, AuditEvent, AuthzDecision, ClientRecord, ClientRegistry, Command,
-    ConsumedTicket, Response, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
+    ConsumedTicket, Response, Scope, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
 };
 use fae_engine::{
     ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role, ToolSpec, TtsAdapter,
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
+
+use crate::events::{EventBus, PlaybackRegistry};
 
 /// Daemon version surfaced by `host.version`.
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,6 +33,12 @@ pub struct SessionBackends<'a> {
     pub engine: &'a dyn ProviderAdapter,
     pub tts: &'a dyn TtsAdapter,
     pub audio: &'a AudioManager,
+    /// Server-push event bus — producers (voice spine V3a `tts.speak`) publish
+    /// `audio.level` / `audio.playback_ended` to subscribed connections.
+    pub events: &'a EventBus,
+    /// Live daemon-owned playbacks — resolves end-reason (`completed` vs
+    /// `interrupted`) for `audio.playback_ended`.
+    pub playbacks: &'a PlaybackRegistry,
 }
 
 /// The `session.authenticate` payload.
@@ -302,12 +310,17 @@ async fn dispatch(
         // `authorize` before dispatch.
         "conversation.subscribe" => Ok(serde_json::json!({ "subscribed": true })),
         "tts.synthesize" => synthesize_tts(backends.tts, cmd).await,
+        // Voice spine V3a: synthesize + play in the daemon, non-blocking, with
+        // the playback level streamed on the event bus to subscribers.
+        "tts.speak" => speak_tts(backends, cmd).await,
         "audio.devices" => audio_devices(backends.audio).await,
         "audio.capture_start" | "audio.start_capture" => audio_capture_start(backends.audio).await,
         "audio.capture_stop" | "audio.stop_capture" => {
             audio_capture_stop(backends.audio, cmd).await
         }
         "audio.play" | "audio.playback_control" => audio_play(backends.audio, cmd).await,
+        // Voice spine V3a: barge-in — stop daemon-owned playback(s).
+        "audio.stop" => audio_stop(backends, cmd).await,
         "agent.run" => agent_run(cmd).await,
         "agent.list" => agent_list(),
         "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
@@ -509,13 +522,15 @@ const TTS_DEFAULT_VOICE: &str = "af_heart";
 /// by the client (matching the Swift TTS pipeline's behaviour).
 const TTS_MAX_TEXT_CHARS: usize = 2_000;
 
-/// Run one `tts.synthesize` request: `{ text, voice?, speed? }` →
-/// `{ wav_base64, sample_rate }`.
-async fn synthesize_tts(
-    tts: &dyn TtsAdapter,
-    cmd: &Command,
-) -> Result<serde_json::Value, &'static str> {
-    use base64::Engine as _;
+/// Parsed `{ text, voice?, speed? }` payload shared by `tts.synthesize` and
+/// `tts.speak` (voice spine V3a).
+struct TtsPayload<'a> {
+    text: &'a str,
+    voice: &'a str,
+    speed: f32,
+}
+
+fn parse_tts_payload(cmd: &Command) -> Result<TtsPayload<'_>, &'static str> {
     let text = cmd
         .payload
         .get("text")
@@ -535,15 +550,148 @@ async fn synthesize_tts(
         .get("speed")
         .and_then(serde_json::Value::as_f64)
         .map_or(1.0_f32, |value| (value as f32).clamp(0.5, 2.0));
+    Ok(TtsPayload { text, voice, speed })
+}
 
-    let audio = tts.synthesize(text, voice, speed).await.map_err(|error| {
-        eprintln!("fae-daemon: tts.synthesize failed: {error}");
-        "inference_failed"
-    })?;
+/// Run one `tts.synthesize` request: `{ text, voice?, speed? }` →
+/// `{ wav_base64, sample_rate }`.
+async fn synthesize_tts(
+    tts: &dyn TtsAdapter,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    use base64::Engine as _;
+    let parsed = parse_tts_payload(cmd)?;
+    let audio = tts
+        .synthesize(parsed.text, parsed.voice, parsed.speed)
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: tts.synthesize failed: {error}");
+            "inference_failed"
+        })?;
     Ok(serde_json::json!({
         "wav_base64": base64::engine::general_purpose::STANDARD.encode(&audio.wav),
         "sample_rate": audio.sample_rate,
     }))
+}
+
+/// Run one `tts.speak` request (voice spine V3a): `{ text, voice?, speed? }` →
+/// synthesize → `audio.play_start` (non-blocking) → return `{ playback_id }`
+/// immediately. A detached task drains the playback RMS channel, publishing
+/// `audio.level` (per reading) and `audio.playback_ended` (on close, with
+/// `reason` resolved via the [`PlaybackRegistry`] interrupted flag) on the
+/// [`EventBus`] to subscribed connections.
+async fn speak_tts(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let parsed = parse_tts_payload(cmd)?;
+    // Hold the text/voice/speed in heap memory that outlives this frame, since
+    // `synthesize` is async and we don't want to copy into a 'static String per
+    // call — but the adapter borrows, so resolve before the await boundary.
+    let text = parsed.text.to_owned();
+    let voice = parsed.voice;
+    let speed = parsed.speed;
+    let audio = backends
+        .tts
+        .synthesize(&text, voice, speed)
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: tts.speak synthesis failed: {error}");
+            "inference_failed"
+        })?;
+
+    let (level_tx, level_rx) = std::sync::mpsc::channel::<f32>();
+    let audio_mgr = (*backends.audio).clone();
+    let wav = audio.wav.clone();
+    let playback_id = tokio::task::spawn_blocking(move || audio_mgr.play_start(&wav, level_tx))
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: tts.speak play_start worker join failed: {error}");
+            "internal_error"
+        })?
+        .map_err(|error| {
+            eprintln!("fae-daemon: tts.speak play_start failed: {error}");
+            "audio_error"
+        })?;
+
+    let interrupted = backends.playbacks.insert(playback_id.clone());
+    // Detached drain task: publishes the level envelope then the end-reason.
+    // The `level` channel closes when the clip finishes (natural end-of-samples)
+    // or when `audio.stop` drops the stream — both end up here.
+    let events = backends.events.clone();
+    let playbacks = backends.playbacks.clone();
+    let id_for_task = playback_id.clone();
+    tokio::task::spawn_blocking(move || {
+        for rms in level_rx.iter() {
+            events.publish(
+                "audio.level",
+                Scope::AudioPlayback,
+                serde_json::json!({ "rms": rms, "playback_id": id_for_task }),
+            );
+        }
+        let reason = if interrupted.load(std::sync::atomic::Ordering::Relaxed) {
+            "interrupted"
+        } else {
+            "completed"
+        };
+        events.publish(
+            "audio.playback_ended",
+            Scope::AudioPlayback,
+            serde_json::json!({ "playback_id": id_for_task, "reason": reason }),
+        );
+        playbacks.remove(&id_for_task);
+    });
+
+    Ok(serde_json::json!({ "playback_id": playback_id }))
+}
+
+/// `audio.stop` (voice spine V3a barge-in): `{ playback_id? }` → stop one
+/// playback (or all live ones) and return `{ stopped }`. Marks each id
+/// interrupted in the [`PlaybackRegistry`] *before* stopping so the drain task
+/// publishes `reason: "interrupted"`.
+async fn audio_stop(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let ids: Vec<String> = cmd
+        .payload
+        .get("playback_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|id| vec![id.to_owned()])
+        .unwrap_or_else(|| backends.playbacks.ids());
+    if ids.is_empty() {
+        return Ok(serde_json::json!({ "stopped": 0 }));
+    }
+    let mut stopped = 0_u32;
+    for id in &ids {
+        // Flip the interrupted flag first so the drain task's end-reason is
+        // "interrupted" (not "completed") — there's a benign race if the clip
+        // already finished naturally, but the flag is read only on channel close.
+        let was_live = backends.playbacks.mark_interrupted(id);
+        let audio_mgr = (*backends.audio).clone();
+        let id_owned = id.clone();
+        let result = tokio::task::spawn_blocking(move || audio_mgr.play_stop(&id_owned))
+            .await
+            .map_err(|error| {
+                eprintln!("fae-daemon: audio.stop worker join failed: {error}");
+                "internal_error"
+            })?;
+        match result {
+            Ok(()) => stopped += 1,
+            Err(fae_audio::AudioError::PlaybackNotFound) => {
+                // Already finished naturally (or a stale id). Count it as stopped
+                // only if the registry still knew about it (interrupted flag set).
+                if was_live {
+                    stopped += 1;
+                }
+            }
+            Err(error) => {
+                eprintln!("fae-daemon: audio.stop failed: {error}");
+                return Err("audio_error");
+            }
+        }
+    }
+    Ok(serde_json::json!({ "stopped": stopped }))
 }
 
 /// Hard ceiling on a single turn's generation budget, whatever the client asks.
@@ -837,7 +985,17 @@ mod tests {
         now_ms: u64,
         event_id: String,
     ) -> FrameOutcome {
-        let backends = SessionBackends { engine, tts, audio };
+        // Session tests predate the voice-spine event bus; give them isolated,
+        // unused instances (no subscriber ever receives these publishes).
+        let events = crate::events::EventBus::new();
+        let playbacks = crate::events::PlaybackRegistry::new();
+        let backends = SessionBackends {
+            engine,
+            tts,
+            audio,
+            events: &events,
+            playbacks: &playbacks,
+        };
         super::handle_frame(registry, &backends, state, line, now_ms, event_id).await
     }
 
