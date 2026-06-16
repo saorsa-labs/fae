@@ -305,8 +305,29 @@ async fn dispatch(
         "agent.run" => agent_run(cmd).await,
         "agent.list" => agent_list(),
         "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
+        "engine.reload" => reload_adapter(backends.engine, cmd).await,
         _ => Err("not_implemented"),
     }
+}
+
+/// `engine.reload` (gap B3b deploy primitive) — restart the serving sidecar with
+/// a freshly-trained personal adapter: `{ "personal_adapter": <path|null> }`
+/// (absent/null ⇒ reload base-only). Only the daemon-managed llama.cpp lane
+/// supports it; other backends reject it.
+async fn reload_adapter(
+    engine: &dyn ProviderAdapter,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let personal_adapter = cmd
+        .payload
+        .get("personal_adapter")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    engine
+        .reload_adapter(personal_adapter.clone())
+        .await
+        .map_err(|_| "reload_failed")?;
+    Ok(serde_json::json!({ "reloaded": true, "personal_adapter": personal_adapter }))
 }
 
 /// `engine.set_adapter_scale` (gap B3b) — toggle the personal-LoRA scale on the
@@ -1174,6 +1195,48 @@ mod tests {
         )
         .await;
         assert!(!out.response.ok, "model-management command must be denied");
+    }
+
+    #[tokio::test]
+    async fn engine_reload_dispatches_and_backend_rejects_on_mock() {
+        // Mock owns no sidecar, so reload reaches the handler (authz passes with
+        // ModelManagement) and the backend rejects it with `reload_failed` —
+        // proving the dispatch wiring, distinct from an authz/unknown path.
+        let mut reg = ClientRegistry::new();
+        let scopes: HashSet<Scope> = [Scope::ModelManagement].into_iter().collect();
+        reg.insert(
+            ClientRecord {
+                client_id: "c1".to_owned(),
+                class: ClientClass::SwiftFrontend,
+                scopes,
+                issued_at_ms: 0,
+                expires_at_ms: 1_000,
+                revoked_at_ms: None,
+                display_name: "test".to_owned(),
+            },
+            hash_token("good-token"),
+        );
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame(
+                "engine.reload",
+                serde_json::json!({ "personal_adapter": "/tmp/p.gguf" }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(!out.response.ok);
+        assert_eq!(
+            out.response.error.as_ref().map(|e| e.code.as_str()),
+            Some("reload_failed")
+        );
     }
 
     #[tokio::test]

@@ -217,6 +217,8 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "agent.list" => &[Scope::StatusRead],
         // Runtime personal-LoRA scale toggle (gap B3b): base ↔ personalized.
         "engine.set_adapter_scale" => &[Scope::ModelManagement],
+        // Deploy: restart the serving sidecar with a freshly-trained adapter.
+        "engine.reload" => &[Scope::ModelManagement],
         "runtime.shutdown" | "runtime.emergency_lockout" => &[Scope::Admin],
         _ => return None,
     };
@@ -907,6 +909,10 @@ mod tests {
     fn engine_scale_command_requires_model_management() {
         assert_eq!(
             required_scopes("engine.set_adapter_scale"),
+            Some(&[Scope::ModelManagement][..])
+        );
+        assert_eq!(
+            required_scopes("engine.reload"),
             Some(&[Scope::ModelManagement][..])
         );
         // The owner app holds it; an unknown engine command is denied.

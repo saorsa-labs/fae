@@ -122,6 +122,16 @@ pub trait ProviderAdapter: Send + Sync {
     fn set_adapter_scale(&self, _scale: f32) -> Result<(), EngineError> {
         Ok(())
     }
+
+    /// Restart serving with a freshly-trained personal adapter (gap B3b deploy
+    /// primitive). `personal_adapter` is a path to the new adapter, or `None` to
+    /// reload base-only. Only a backend that manages its own serving process
+    /// (the llama.cpp sidecar) supports this; others reject it via this default.
+    async fn reload_adapter(&self, _personal_adapter: Option<String>) -> Result<(), EngineError> {
+        Err(EngineError::Inference(
+            "adapter reload is not supported by this backend".to_owned(),
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

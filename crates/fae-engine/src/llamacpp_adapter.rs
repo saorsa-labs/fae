@@ -19,7 +19,8 @@
 //! for Fae to self-parse downstream, rather than being split into
 //! `reasoning_content` (which left `content` empty).
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -146,24 +147,36 @@ impl Drop for LlamaServerHandle {
     }
 }
 
+/// Interior-mutable sidecar state, so `engine.reload` can restart the child with
+/// a new personal adapter behind a shared `Arc<dyn ProviderAdapter>`.
+struct Sidecar {
+    /// `Some` when this adapter owns a spawned child; `None` for an attached
+    /// external server (which cannot be reloaded).
+    handle: Option<LlamaServerHandle>,
+    /// The spawn config — needed to restart with a different `--lora`. `None`
+    /// in attach (`connect`) mode.
+    config: Option<LlamaServerConfig>,
+}
+
 /// A `llama-server` behind the [`ProviderAdapter`] contract.
 pub struct LlamaServerAdapter {
     http: reqwest::Client,
     base_url: String,
     info: AdapterInfo,
-    /// Current personal-LoRA scale (f32 bits), `Some` only when a personal
-    /// adapter is loaded at [`PERSONAL_LORA_ID`]. `None` ⇒ no adapter, so no
-    /// `lora` field is sent. Interior-mutable so the runtime toggle
-    /// ([`ProviderAdapter::set_adapter_scale`]) works through `Arc<dyn …>`.
-    lora_scale: Option<AtomicU32>,
-    /// Owns the sidecar when we spawned it; `None` when attached to an external
-    /// server. Held only to tie the child's lifetime to the adapter.
-    _server: Option<LlamaServerHandle>,
+    /// Whether a personal LoRA is loaded — gates the per-request `lora` field.
+    /// Interior-mutable so `engine.reload` can toggle presence at runtime.
+    lora_present: AtomicBool,
+    /// Personal-LoRA scale (f32 bits); meaningful only when `lora_present`.
+    /// Interior-mutable so `set_adapter_scale` works through `Arc<dyn …>`.
+    lora_scale: AtomicU32,
+    /// The supervised child + its config, swapped on `reload_adapter`.
+    sidecar: Mutex<Sidecar>,
 }
 
 impl LlamaServerAdapter {
     /// Attach to an already-running server at `base_url` (e.g. `http://127.0.0.1:18082`).
     /// No personal adapter is assumed; use [`Self::with_lora`] to mark one loaded.
+    /// An attached server is not daemon-managed, so it cannot be reloaded.
     pub fn connect(base_url: impl Into<String>, model_id: impl Into<String>) -> LlamaServerAdapter {
         LlamaServerAdapter {
             http: reqwest::Client::new(),
@@ -172,8 +185,12 @@ impl LlamaServerAdapter {
                 backend: "llama.cpp".to_owned(),
                 model_id: model_id.into(),
             },
-            lora_scale: None,
-            _server: None,
+            lora_present: AtomicBool::new(false),
+            lora_scale: AtomicU32::new(1.0_f32.to_bits()),
+            sidecar: Mutex::new(Sidecar {
+                handle: None,
+                config: None,
+            }),
         }
     }
 
@@ -181,8 +198,10 @@ impl LlamaServerAdapter {
     /// initial scale, so every request carries `lora:[{id,scale}]` and the
     /// runtime toggle has something to control. Scale is clamped to `0.0..=2.0`.
     #[must_use]
-    pub fn with_lora(mut self, initial_scale: f32) -> LlamaServerAdapter {
-        self.lora_scale = Some(AtomicU32::new(initial_scale.clamp(0.0, 2.0).to_bits()));
+    pub fn with_lora(self, initial_scale: f32) -> LlamaServerAdapter {
+        self.lora_scale
+            .store(initial_scale.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        self.lora_present.store(true, Ordering::Relaxed);
         self
     }
 
@@ -203,8 +222,12 @@ impl LlamaServerAdapter {
                 backend: "llama.cpp".to_owned(),
                 model_id: model_id.into(),
             },
-            lora_scale: None,
-            _server: Some(handle),
+            lora_present: AtomicBool::new(false),
+            lora_scale: AtomicU32::new(1.0_f32.to_bits()),
+            sidecar: Mutex::new(Sidecar {
+                handle: Some(handle),
+                config: Some(config),
+            }),
         };
         Ok(if has_lora {
             adapter.with_lora(1.0)
@@ -215,9 +238,11 @@ impl LlamaServerAdapter {
 
     /// Current personal-LoRA scale, or `None` when no adapter is loaded.
     fn current_scale(&self) -> Option<f32> {
-        self.lora_scale
-            .as_ref()
-            .map(|bits| f32::from_bits(bits.load(Ordering::Relaxed)))
+        if self.lora_present.load(Ordering::Relaxed) {
+            Some(f32::from_bits(self.lora_scale.load(Ordering::Relaxed)))
+        } else {
+            None
+        }
     }
 }
 
@@ -228,10 +253,42 @@ impl ProviderAdapter for LlamaServerAdapter {
     }
 
     fn set_adapter_scale(&self, scale: f32) -> Result<(), EngineError> {
-        // No-op when no personal adapter is loaded — toggling base has no effect.
-        if let Some(bits) = &self.lora_scale {
-            bits.store(scale.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        // Stored regardless; it only takes effect while a personal LoRA is loaded
+        // (see `current_scale`). 0.0 = base, 1.0 = personalized.
+        self.lora_scale
+            .store(scale.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn reload_adapter(&self, personal_adapter: Option<String>) -> Result<(), EngineError> {
+        // Reload only works for a daemon-managed sidecar (we own the child + its
+        // config). An attached external server has no config to restart with.
+        let mut config = {
+            let guard = self.sidecar.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.config.clone()
         }
+        .ok_or_else(|| {
+            EngineError::Inference(
+                "engine.reload requires a daemon-managed llama-server (not an attached URL)"
+                    .to_owned(),
+            )
+        })?;
+        config.lora_gguf = personal_adapter.clone();
+        // Kill the old child FIRST so the loopback port is free before re-binding.
+        {
+            let mut guard = self.sidecar.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.handle = None; // Drop → kill + wait (blocks until reaped)
+        }
+        let handle = LlamaServerHandle::spawn(&config, std::time::Duration::from_secs(120)).await?;
+        {
+            let mut guard = self.sidecar.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.handle = Some(handle);
+            guard.config = Some(config);
+        }
+        // Personalization follows whether an adapter was supplied; the scale keeps
+        // its last value (1.0 unless toggled). Same port ⇒ `base_url` unchanged.
+        self.lora_present
+            .store(personal_adapter.is_some(), Ordering::Relaxed);
         Ok(())
     }
 
@@ -488,6 +545,15 @@ mod tests {
         assert_eq!(base.current_scale(), None);
         base.set_adapter_scale(1.0).expect("noop");
         assert_eq!(base.current_scale(), None);
+    }
+
+    #[tokio::test]
+    async fn reload_without_managed_sidecar_errors() {
+        // An attached (connect) adapter owns no child/config, so reload is rejected
+        // — it cannot restart a server it does not manage.
+        let adapter = LlamaServerAdapter::connect("http://127.0.0.1:1", "m");
+        let result = adapter.reload_adapter(Some("/tmp/x.gguf".to_owned())).await;
+        assert!(matches!(result, Err(EngineError::Inference(_))));
     }
 
     fn tiny_wav() -> Vec<u8> {
