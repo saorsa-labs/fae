@@ -302,8 +302,73 @@ async fn dispatch(
             audio_capture_stop(backends.audio, cmd).await
         }
         "audio.play" | "audio.playback_control" => audio_play(backends.audio, cmd).await,
+        "agent.run" => agent_run(cmd).await,
+        "agent.list" => agent_list(),
         _ => Err("not_implemented"),
     }
+}
+
+/// Names of the external agents the native ACP client knows how to launch.
+const KNOWN_AGENTS: &[&str] = &["claude", "codex", "gemini", "pi", "copilot", "opencode"];
+
+/// `agent.list` — the agents available for delegation. Read-only.
+fn agent_list() -> Result<serde_json::Value, &'static str> {
+    Ok(serde_json::json!({ "agents": KNOWN_AGENTS }))
+}
+
+/// `agent.run` — delegate one prompt turn to an external coding agent via the
+/// native ACP client, returning the collected text + stop reason + tool calls.
+/// Non-streaming (Stage 1): blocks until the agent's turn completes.
+async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
+    let agent = cmd
+        .payload
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let prompt = cmd
+        .payload
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let cwd = cmd
+        .payload
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("bad_request")?;
+    // Default to approving the agent's own tool calls — the owner already
+    // approved the delegation at the Fae tool layer. Stage 3 routes individual
+    // permission requests back to the user.
+    let policy = match cmd
+        .payload
+        .get("approval_policy")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("deny" | "deny_all") => fae_acp::ApprovalPolicy::DenyAll,
+        _ => fae_acp::ApprovalPolicy::ApproveAll,
+    };
+
+    let outcome = fae_acp::run_one_shot(agent, &cwd, prompt, policy)
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: agent.run failed: {error}");
+            match error {
+                fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
+                _ => "agent_error",
+            }
+        })?;
+
+    let tool_calls: Vec<serde_json::Value> = outcome
+        .tool_calls
+        .into_iter()
+        .map(|tc| serde_json::json!({ "id": tc.id, "title": tc.title }))
+        .collect();
+    Ok(serde_json::json!({
+        "text": outcome.text,
+        "stop_reason": outcome.stop_reason,
+        "tool_calls": tool_calls,
+    }))
 }
 
 async fn audio_devices(audio: &AudioManager) -> Result<serde_json::Value, &'static str> {
@@ -681,6 +746,37 @@ mod tests {
 
     fn mock_tts() -> fae_engine::MockTtsAdapter {
         fae_engine::MockTtsAdapter::new("test-tts")
+    }
+
+    fn agent_command(payload: serde_json::Value) -> fae_control_plane::Command {
+        fae_control_plane::Command {
+            v: 2,
+            request_id: "r1".to_owned(),
+            command: "agent.run".to_owned(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn agent_list_returns_known_agents() {
+        let value = super::agent_list().expect("agent.list ok");
+        let agents = value["agents"].as_array().expect("agents array");
+        assert!(agents.iter().any(|a| a == "codex"));
+        assert!(agents.iter().any(|a| a == "claude"));
+    }
+
+    #[tokio::test]
+    async fn agent_run_rejects_missing_fields() {
+        // No agent, no prompt → bad_request before any subprocess is spawned.
+        let err = super::agent_run(&agent_command(serde_json::json!({})))
+            .await
+            .expect_err("missing fields must fail");
+        assert_eq!(err, "bad_request");
+        // Agent present but no prompt is still bad_request.
+        let err = super::agent_run(&agent_command(serde_json::json!({ "agent": "codex" })))
+            .await
+            .expect_err("missing prompt must fail");
+        assert_eq!(err, "bad_request");
     }
 
     #[allow(clippy::too_many_arguments)]

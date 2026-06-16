@@ -16,6 +16,7 @@ fae-audio = { path = "../fae-audio" }
 fae-control-plane = { path = "../fae-control-plane" }
 fae-envelope-gate = { path = "../fae-envelope-gate" }
 fae-engine = { path = "../fae-engine" }
+fae-acp = { path = "../fae-acp" }
 serde = { workspace = true }
 serde_json.workspace = true
 tokio = { workspace = true }

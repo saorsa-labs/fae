@@ -9,6 +9,7 @@ members = [
   "fae-envelope-gate",
   "fae-engine",
   "fae-audio",
+  "fae-acp",
   "fae-daemon",
 ]
 
@@ -34,6 +35,11 @@ toml = "0.8"
 async-trait = "0.1"
 async-stream = "0.3"
 base64 = "0.22"
+# Native ACP (Agent Client Protocol) client — Zed's canonical Rust toolkit:
+# protocol types + JSON-RPC framing + Client/Agent traits. fae-acp builds on
+# these instead of hand-rolling the wire format.
+agent-client-protocol = "0.14"
+agent-client-protocol-tokio = "0.11"
 
 [profile.release]
 opt-level = 3

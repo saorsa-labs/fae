@@ -128,6 +128,10 @@ pub enum Scope {
     SchedulerWrite,
     X0xMessage,
     X0xAdmin,
+    /// Delegate a task to an external coding agent (codex/claude/pi/gemini) via
+    /// the native ACP client. Dangerous: the agent runs autonomously and can
+    /// edit files within its working directory.
+    AgentExecute,
     Admin,
 }
 
@@ -149,6 +153,7 @@ impl Scope {
             Scope::SchedulerWrite => "scheduler:write",
             Scope::X0xMessage => "x0x:message",
             Scope::X0xAdmin => "x0x:admin",
+            Scope::AgentExecute => "agent:execute",
             Scope::Admin => "admin",
         }
     }
@@ -171,6 +176,7 @@ impl Scope {
             "scheduler:write" => Scope::SchedulerWrite,
             "x0x:message" => Scope::X0xMessage,
             "x0x:admin" => Scope::X0xAdmin,
+            "agent:execute" => Scope::AgentExecute,
             "admin" => Scope::Admin,
             _ => return None,
         };
@@ -202,6 +208,8 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "tool.execute_dangerous" => &[Scope::ToolExecuteDangerous],
         "scheduler.list" => &[Scope::SchedulerRead],
         "scheduler.mutate" => &[Scope::SchedulerWrite],
+        "agent.run" => &[Scope::AgentExecute],
+        "agent.list" => &[Scope::StatusRead],
         "runtime.shutdown" | "runtime.emergency_lockout" => &[Scope::Admin],
         _ => return None,
     };

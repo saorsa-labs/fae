@@ -1,0 +1,20 @@
+[package]
+name = "fae-acp"
+version = "0.1.0"
+description = "Native Agent Client Protocol (ACP) client for the Fae daemon — spawns external coding-agent ACP servers (codex/claude/pi/gemini) and drives them over JSON-RPC."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-client-protocol = { workspace = true }
+agent-client-protocol-tokio = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
