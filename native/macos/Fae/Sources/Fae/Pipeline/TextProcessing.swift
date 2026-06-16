@@ -586,7 +586,12 @@ enum TextProcessing {
     ///
     /// Supported formats:
     /// - Qwen: `<think>reasoning</think>` (response follows immediately)
-    /// - Gemma 4: `<|channel>thought\nreasoning\n<|channel>response\n` (visible text follows)
+    /// - Gemma 4: `<|channel>thought\nreasoning<channel|>visible text` — the thought
+    ///   channel opens with `<|channel>thought` and closes with `<channel|>`, after
+    ///   which the answer follows directly (verified against the served GGUF chat
+    ///   template + live llama-server output, 2026-06-16). NOT `<|channel>response`
+    ///   (a gpt-oss/Harmony marker that Gemma 4 never emits — keying on it would
+    ///   leave the block open and swallow the entire answer).
     struct ThinkTagStripper {
         private var buffer: String = ""
         private var insideThink: Bool = false
@@ -600,9 +605,10 @@ enum TextProcessing {
         private static let qwenOpen = "<think>"
         private static let qwenClose = "</think>"
 
-        // Gemma 4 format tags.
+        // Gemma 4 format tags. The thought channel opens with `<|channel>thought`
+        // and closes with `<channel|>` (the answer follows directly).
         private static let gemmaThinkOpen = "<|channel>thought"
-        private static let gemmaResponseOpen = "<|channel>response"
+        private static let gemmaThinkClose = "<channel|>"
 
         /// All possible open tags — used for prefix matching in the tag buffer.
         /// Ordered longest-first so the buffer is kept when it could still match either.
@@ -647,10 +653,10 @@ enum TextProcessing {
                             }
                         }
                     } else {
-                        // Gemma: thinking ends when <|channel>response appears.
-                        exited = tagBuffer.hasSuffix(Self.gemmaResponseOpen)
+                        // Gemma: thinking ends when <channel|> closes the thought channel.
+                        exited = tagBuffer.hasSuffix(Self.gemmaThinkClose)
                         if exited {
-                            let closeTag = Self.gemmaResponseOpen
+                            let closeTag = Self.gemmaThinkClose
                             if thinkChunk.hasSuffix(closeTag) {
                                 thinkChunk.removeLast(closeTag.count)
                             }

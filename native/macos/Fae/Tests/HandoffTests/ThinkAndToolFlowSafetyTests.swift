@@ -17,6 +17,31 @@ final class ThinkAndToolFlowSafetyTests: XCTestCase {
         XCTAssertEqual(c, " Final answer.")
     }
 
+    /// Gemma 4's served thinking-enabled turn (llama.cpp `--reasoning-format none`)
+    /// emits `<|channel>thought\n…<channel|>{answer}`. The daemon yields a complete
+    /// turn as a SINGLE text event, so the whole span arrives in one `process(_:)`
+    /// call. Regression for the close marker: keying on `<|channel>response` (which
+    /// Gemma never emits) left the block open and swallowed the entire answer.
+    func testThinkTagStripperRemovesGemmaThoughtChannelSingleChunk() {
+        var stripper = TextProcessing.ThinkTagStripper()
+        let out = stripper.process(
+            "<|channel>thought\nThe user asked where they live. I will answer plainly."
+                + "<channel|>You live in the village of Glenmara.")
+        XCTAssertEqual(out, "You live in the village of Glenmara.")
+        XCTAssertTrue(stripper.hasExitedThinkBlock)
+    }
+
+    func testThinkTagStripperRemovesGemmaThoughtChannelStreamed() {
+        var stripper = TextProcessing.ThinkTagStripper()
+        let a = stripper.process("<|channel>thought\nreasoning here")
+        XCTAssertEqual(a, "")
+        let b = stripper.process(" more reasoning<channel|>")
+        XCTAssertEqual(b, "")
+        XCTAssertTrue(stripper.hasExitedThinkBlock)
+        let c = stripper.process("Final answer.")
+        XCTAssertEqual(c, "Final answer.")
+    }
+
     func testStripNonSpeechCharsRemovesThinkAndVoiceTags() {
         let text = "<think>hidden</think><voice character=\"narrator\">Hello</voice> **world**"
         let cleaned = TextProcessing.stripNonSpeechChars(text)
