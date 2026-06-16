@@ -1,13 +1,17 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "transformers>=4.57",
+#   "transformers>=5.12",
 #   "torch>=2.2",
 #   "safetensors>=0.4",
 #   "numpy>=1.26",
 #   "sentencepiece>=0.2",
 # ]
 # ///
+#
+# transformers>=5.12 matches train_peft.py: the 12B base config is `gemma4_unified`,
+# which only resolves on transformers 5.12+ (the converter reads that base config).
+# See train_peft.py for the uv `exclude-newer` override note.
 
 """Convert a PEFT LoRA adapter → GGUF (gap C2) so the llama.cpp daemon can load
 it as a runtime adapter (`--lora` / `engine.reload`).

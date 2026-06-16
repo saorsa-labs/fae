@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "transformers>=4.57",
+#   "transformers>=5.12",
 #   "torch>=2.2",
 #   "peft>=0.11",
 #   "accelerate>=0.30",
@@ -9,6 +9,13 @@
 #   "sentencepiece>=0.2",
 # ]
 # ///
+#
+# transformers>=5.12 is REQUIRED for the production 12B tier: that base ships as
+# the `gemma4_unified` architecture (native-audio variant), which only landed in
+# transformers 5.12 (verified 2026-06-16: 5.8.1 lacks it). The E4B tier (`gemma4`)
+# also loads cleanly on 5.12. NOTE: if uv enforces an `exclude-newer` cutoff
+# earlier than transformers 5.12's publish date (2026-06-15), override it per
+# package, e.g. `uv run --exclude-newer-package 'transformers=<date>' …`.
 
 """Cross-platform LoRA SFT trainer (gap C2) — produces a **PEFT** adapter.
 
@@ -19,13 +26,22 @@ validated personalization path). Unsloth (NVIDIA, lower VRAM) accelerates this
 same PEFT path and is a drop-in optimization for later — the artifact format is
 identical.
 
-Critical (B3 finding, 2026-06-16): examples are formatted with the model's
-**chat template** (the exact format llama-server applies at inference), not bare
-turns — a LoRA trained on bare `Q→A` does not surface through the served chat
-endpoint.
+Critical (thinking-alignment finding, 2026-06-16): Gemma 4's served, thinking-
+enabled turn opens with a thought channel — `<|channel>thought\n…<channel|>` —
+*before* the answer. The chat template's `strip_thinking` macro removes that
+channel from assistant content, so templating a full `{user, assistant}` message
+list yields a **bare-answer** target glued to `<|turn>model\n`. A LoRA trained on
+that learns to answer in a position the served model never occupies (it emits a
+thought span first), so the personalization does not surface through the chat
+endpoint. The fix: build the assistant target BY HAND as
+`<|channel>thought\n{thinking}\n<channel|>{answer}<turn|>\n` — bypassing
+strip_thinking — so the answer lands in the post-thinking position the served
+template generates. The thinking trace is taken from an optional `reasoning`/
+`thinking` field on the assistant message (captured at conversation time) or
+synthesized when absent.
 
 Input  (argv[1] = JSON): {
-  "sft_path":     "<sft_export.jsonl>",          # {messages:[{role,content}...]} per line
+  "sft_path":     "<sft_export.jsonl>",          # {messages:[{role,content[,reasoning]}...]} per line
   "base_model":   "google/gemma-4-E4B-it",
   "output_dir":   "<dir for the adapter>",
   "preset":       "smoke|light|standard|deep",   # default "light"
@@ -55,6 +71,29 @@ PRESET_MAP = {
 TARGET_MODULES = (
     r".*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$"
 )
+
+# Gemma 4 thinking-channel markers (Harmony-style, verified against the GGUF /props
+# template 2026-06-16) — NOT `<think>`. The served, thinking-enabled turn emits
+# `<|turn>model\n<|channel>thought\n…<channel|>{answer}<turn|>`.
+THOUGHT_OPEN = "<|channel>thought\n"
+THOUGHT_CLOSE = "<channel|>"
+TURN_CLOSE = "<turn|>\n"
+
+
+def synth_thinking(user_text):
+    """A short, answer-free reasoning span for examples with no captured trace.
+
+    Deliberately generic and free of the answer text: the LoRA must learn the
+    answer in the post-thinking position, not memorize a fixed thinking→answer
+    string pair. Mirrors the brief planning style the served model produces.
+    """
+    snippet = (user_text or "").strip().replace("\n", " ")
+    if len(snippet) > 160:
+        snippet = snippet[:157] + "…"
+    return (
+        f"The user asked: {snippet} "
+        "I know the relevant detail and will answer it directly and concisely."
+    )
 
 
 def pick_device():
@@ -120,12 +159,28 @@ def main():
     )
     model = get_peft_model(model, lora)
 
-    # Format each example with the CHAT TEMPLATE (the inference format), masking
-    # the prompt so loss is only on the assistant turn.
+    # Prompt is templated (the exact format llama-server applies, ending in
+    # `<|turn>model\n`); the assistant target is built BY HAND with a thinking
+    # span so the answer lands in the post-thinking position the served,
+    # thinking-enabled model generates. We do NOT template the assistant turn —
+    # the template's strip_thinking macro would delete the thought channel,
+    # collapsing the target back to a bare answer. Loss is on the target only.
     def encode(messages):
-        prompt_msgs = messages[:-1] if messages[-1].get("role") == "assistant" else messages
+        if messages and messages[-1].get("role") == "assistant":
+            prompt_msgs, answer_msg = messages[:-1], messages[-1]
+        else:
+            prompt_msgs, answer_msg = messages, {}
         prompt = tok.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)
-        full = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+        answer = (answer_msg.get("content") or "").strip()
+        thinking = (answer_msg.get("reasoning") or answer_msg.get("thinking") or "").strip()
+        if not thinking:
+            last_user = next(
+                (m.get("content", "") for m in reversed(prompt_msgs) if m.get("role") == "user"),
+                "",
+            )
+            thinking = synth_thinking(last_user)
+        target = f"{THOUGHT_OPEN}{thinking}\n{THOUGHT_CLOSE}{answer}{TURN_CLOSE}"
+        full = prompt + target
         p_ids = tok(prompt, add_special_tokens=False)["input_ids"]
         f_ids = tok(full, add_special_tokens=False)["input_ids"][: cfg["max_seq_length"]]
         labels = [-100] * min(len(p_ids), len(f_ids)) + f_ids[len(p_ids):]
