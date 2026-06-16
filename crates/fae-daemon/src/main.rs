@@ -215,8 +215,15 @@ async fn build_llamacpp_engine() -> Arc<dyn ProviderAdapter> {
         .ok()
         .filter(|url| !url.is_empty())
     {
+        let adapter = LlamaServerAdapter::connect(url.clone(), model_id);
+        // `FAE_LLAMA_HAS_LORA=1` marks that the attached server loaded a personal
+        // adapter, so turns carry the per-request scale (gap B3, on by default).
+        if env_flag("FAE_LLAMA_HAS_LORA") {
+            println!("engine  : llama.cpp — attaching to {url} (personal LoRA on)");
+            return Arc::new(adapter.with_lora(1.0));
+        }
         println!("engine  : llama.cpp — attaching to {url}");
-        return Arc::new(LlamaServerAdapter::connect(url, model_id));
+        return Arc::new(adapter);
     }
 
     match std::env::var("FAE_LLAMA_MODEL_GGUF")
@@ -269,6 +276,14 @@ fn env_parsed<T: std::str::FromStr>(key: &str, default: T) -> T {
         .ok()
         .and_then(|raw| raw.parse().ok())
         .unwrap_or(default)
+}
+
+/// A boolean env flag: `1`/`true` (case-insensitive) ⇒ true, anything else false.
+fn env_flag(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|value| {
+        let value = value.trim().to_ascii_lowercase();
+        value == "1" || value == "true"
+    })
 }
 
 fn verify_models_lock(model_id: &str) -> DaemonResult<Option<String>> {

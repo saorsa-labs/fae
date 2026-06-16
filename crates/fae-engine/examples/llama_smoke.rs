@@ -19,12 +19,27 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| "Name the capital of Scotland in one word.".to_owned());
 
+    // Optional personal-LoRA scale (gap B3): FAE_LLAMA_LORA_SCALE=1 personalized,
+    // =0 base — the validated A/B toggle, against a server started with --lora.
     let adapter = LlamaServerAdapter::connect(&url, "gemma-4-e4b");
+    let adapter = match std::env::var("FAE_LLAMA_LORA_SCALE")
+        .ok()
+        .and_then(|raw| raw.parse::<f32>().ok())
+    {
+        Some(scale) => {
+            eprintln!("[smoke] personal LoRA scale = {scale}");
+            adapter.with_lora(scale)
+        }
+        None => adapter,
+    };
     let request = ChatRequest {
         system: Some("You are a concise assistant.".to_owned()),
         messages: vec![ChatMessage::text(Role::User, prompt.clone())],
         tools: Vec::new(),
-        max_tokens: 64,
+        max_tokens: std::env::var("FAE_SMOKE_MAX_TOKENS")
+            .ok()
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(64),
     };
 
     eprintln!("[smoke] {url} <- {prompt:?}");

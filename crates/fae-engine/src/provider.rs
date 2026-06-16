@@ -114,6 +114,14 @@ pub trait ProviderAdapter: Send + Sync {
     /// Stream a chat completion. Errors before the first token surface here;
     /// errors mid-stream arrive as `Err` items in the stream.
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError>;
+
+    /// Set the active personal-LoRA scale: `0.0` = base model, `1.0` =
+    /// personalized (gap B3). This is the validated instant-rollback / A-B
+    /// toggle. Backends without a runtime adapter (mistral.rs, mock) ignore it
+    /// via this default no-op; the llama.cpp lane applies it per request.
+    fn set_adapter_scale(&self, _scale: f32) -> Result<(), EngineError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -19,12 +19,18 @@
 //! for Fae to self-parse downstream, rather than being split into
 //! `reasoning_content` (which left `content` empty).
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use async_trait::async_trait;
 use futures_util::StreamExt;
 
 use crate::provider::{
     AdapterInfo, ChatEvent, ChatRequest, ChatStream, EngineError, ProviderAdapter, Role,
 };
+
+/// llama-server loads `--lora` adapters at a fixed index in load order; the
+/// personal adapter is the only one we load, so it is always id 0.
+const PERSONAL_LORA_ID: u32 = 0;
 
 /// How to launch a `llama-server` sidecar. Paths are caller-resolved (the daemon
 /// pins them via `models.lock`); this struct only assembles the command line.
@@ -145,6 +151,11 @@ pub struct LlamaServerAdapter {
     http: reqwest::Client,
     base_url: String,
     info: AdapterInfo,
+    /// Current personal-LoRA scale (f32 bits), `Some` only when a personal
+    /// adapter is loaded at [`PERSONAL_LORA_ID`]. `None` ⇒ no adapter, so no
+    /// `lora` field is sent. Interior-mutable so the runtime toggle
+    /// ([`ProviderAdapter::set_adapter_scale`]) works through `Arc<dyn …>`.
+    lora_scale: Option<AtomicU32>,
     /// Owns the sidecar when we spawned it; `None` when attached to an external
     /// server. Held only to tie the child's lifetime to the adapter.
     _server: Option<LlamaServerHandle>,
@@ -152,6 +163,7 @@ pub struct LlamaServerAdapter {
 
 impl LlamaServerAdapter {
     /// Attach to an already-running server at `base_url` (e.g. `http://127.0.0.1:18082`).
+    /// No personal adapter is assumed; use [`Self::with_lora`] to mark one loaded.
     pub fn connect(base_url: impl Into<String>, model_id: impl Into<String>) -> LlamaServerAdapter {
         LlamaServerAdapter {
             http: reqwest::Client::new(),
@@ -160,26 +172,52 @@ impl LlamaServerAdapter {
                 backend: "llama.cpp".to_owned(),
                 model_id: model_id.into(),
             },
+            lora_scale: None,
             _server: None,
         }
     }
 
-    /// Spawn + supervise a `llama-server` child, then attach to it.
+    /// Mark that a personal LoRA is loaded (at [`PERSONAL_LORA_ID`]) with an
+    /// initial scale, so every request carries `lora:[{id,scale}]` and the
+    /// runtime toggle has something to control. Scale is clamped to `0.0..=2.0`.
+    #[must_use]
+    pub fn with_lora(mut self, initial_scale: f32) -> LlamaServerAdapter {
+        self.lora_scale = Some(AtomicU32::new(initial_scale.clamp(0.0, 2.0).to_bits()));
+        self
+    }
+
+    /// Spawn + supervise a `llama-server` child, then attach to it. When the
+    /// config loads a personal LoRA, personalization is on by default
+    /// (scale `1.0`).
     pub async fn spawn(
         config: LlamaServerConfig,
         model_id: impl Into<String>,
     ) -> Result<LlamaServerAdapter, EngineError> {
+        let has_lora = config.lora_gguf.is_some();
         let handle = LlamaServerHandle::spawn(&config, std::time::Duration::from_secs(120)).await?;
         let base_url = handle.base_url.clone();
-        Ok(LlamaServerAdapter {
+        let adapter = LlamaServerAdapter {
             http: reqwest::Client::new(),
             base_url,
             info: AdapterInfo {
                 backend: "llama.cpp".to_owned(),
                 model_id: model_id.into(),
             },
+            lora_scale: None,
             _server: Some(handle),
+        };
+        Ok(if has_lora {
+            adapter.with_lora(1.0)
+        } else {
+            adapter
         })
+    }
+
+    /// Current personal-LoRA scale, or `None` when no adapter is loaded.
+    fn current_scale(&self) -> Option<f32> {
+        self.lora_scale
+            .as_ref()
+            .map(|bits| f32::from_bits(bits.load(Ordering::Relaxed)))
     }
 }
 
@@ -189,8 +227,16 @@ impl ProviderAdapter for LlamaServerAdapter {
         self.info.clone()
     }
 
+    fn set_adapter_scale(&self, scale: f32) -> Result<(), EngineError> {
+        // No-op when no personal adapter is loaded — toggling base has no effect.
+        if let Some(bits) = &self.lora_scale {
+            bits.store(scale.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
-        let body = build_chat_body(&request, &self.info.model_id)?;
+        let body = build_chat_body(&request, &self.info.model_id, self.current_scale())?;
         let url = format!("{}/v1/chat/completions", self.base_url);
         let http = self.http.clone();
 
@@ -264,6 +310,7 @@ fn role_str(role: Role) -> &'static str {
 fn build_chat_body(
     request: &ChatRequest,
     model_id: &str,
+    lora_scale: Option<f32>,
 ) -> Result<serde_json::Value, EngineError> {
     let mut messages = Vec::new();
     if let Some(system) = &request.system {
@@ -297,6 +344,12 @@ fn build_chat_body(
         // Keep reasoning inline in `content`; Fae self-parses think/tool markup.
         "reasoning_format": "none",
     });
+    // Per-request personal-LoRA scale (gap B3): 0.0 = base, 1.0 = personalized.
+    // Only sent when an adapter is loaded — llama-server rejects a `lora` entry
+    // for an id it never loaded.
+    if let Some(scale) = lora_scale {
+        body["lora"] = serde_json::json!([{ "id": PERSONAL_LORA_ID, "scale": scale }]);
+    }
     if !request.tools.is_empty() {
         let tools: Vec<serde_json::Value> = request
             .tools
@@ -381,7 +434,7 @@ mod tests {
             tools: vec![weather_tool()],
             max_tokens: 128,
         };
-        let body = build_chat_body(&request, "gemma-4").expect("body");
+        let body = build_chat_body(&request, "gemma-4", None).expect("body");
         assert_eq!(body["model"], "gemma-4");
         assert_eq!(body["stream"], true);
         assert_eq!(body["messages"][0]["role"], "system");
@@ -398,9 +451,43 @@ mod tests {
             tools: Vec::new(),
             max_tokens: 32,
         };
-        let body = build_chat_body(&request, "gemma-4").expect("body");
+        let body = build_chat_body(&request, "gemma-4", None).expect("body");
         assert!(body.get("tools").is_none());
         assert_eq!(body["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn build_body_lora_scale_only_when_loaded() {
+        let request = ChatRequest {
+            system: None,
+            messages: vec![ChatMessage::text(Role::User, "hi")],
+            tools: Vec::new(),
+            max_tokens: 32,
+        };
+        // No adapter loaded ⇒ no `lora` field (llama-server rejects an unloaded id).
+        let base = build_chat_body(&request, "gemma-4", None).expect("body");
+        assert!(base.get("lora").is_none());
+        // Loaded ⇒ per-request scale on the personal adapter id.
+        let on = build_chat_body(&request, "gemma-4", Some(1.0)).expect("body");
+        assert_eq!(on["lora"][0]["id"], PERSONAL_LORA_ID);
+        assert_eq!(on["lora"][0]["scale"], 1.0);
+        let off = build_chat_body(&request, "gemma-4", Some(0.0)).expect("body");
+        assert_eq!(off["lora"][0]["scale"], 0.0);
+    }
+
+    #[test]
+    fn adapter_scale_toggle_round_trips_and_clamps() {
+        let adapter = LlamaServerAdapter::connect("http://127.0.0.1:1", "m").with_lora(1.0);
+        assert_eq!(adapter.current_scale(), Some(1.0));
+        adapter.set_adapter_scale(0.0).expect("rollback");
+        assert_eq!(adapter.current_scale(), Some(0.0));
+        adapter.set_adapter_scale(5.0).expect("clamped");
+        assert_eq!(adapter.current_scale(), Some(2.0));
+        // An adapter with no personal LoRA loaded: the toggle is a harmless no-op.
+        let base = LlamaServerAdapter::connect("http://127.0.0.1:1", "m");
+        assert_eq!(base.current_scale(), None);
+        base.set_adapter_scale(1.0).expect("noop");
+        assert_eq!(base.current_scale(), None);
     }
 
     fn tiny_wav() -> Vec<u8> {
@@ -439,7 +526,7 @@ mod tests {
             tools: Vec::new(),
             max_tokens: 64,
         };
-        let body = build_chat_body(&request, "gemma-4").expect("body");
+        let body = build_chat_body(&request, "gemma-4", None).expect("body");
         let content = &body["messages"][0]["content"];
         assert_eq!(content[0]["type"], "input_audio");
         assert_eq!(content[0]["input_audio"]["format"], "wav");
@@ -460,7 +547,7 @@ mod tests {
             max_tokens: 16,
         };
         assert!(matches!(
-            build_chat_body(&request, "gemma-4"),
+            build_chat_body(&request, "gemma-4", None),
             Err(EngineError::Inference(_))
         ));
     }
