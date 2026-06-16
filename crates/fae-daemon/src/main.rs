@@ -32,6 +32,7 @@ use fae_engine::{
 };
 
 mod diagnostic;
+mod events;
 mod session;
 mod transport;
 
@@ -115,8 +116,22 @@ async fn main() -> DaemonResult<()> {
     }
     println!();
 
+    // Server-push event fan-out (voice spine V2). Held here so future producers
+    // (V3 daemon-owned TTS playback → `audio.level`) can publish; the transport
+    // registers `conversation.subscribe` clients as subscribers.
+    let events = events::EventBus::new();
+
     // Serves until the process is killed. Fails closed on bind/permission error.
-    transport::serve_unix(socket_path, registry, engine, tts, audio, audit_path).await?;
+    transport::serve_unix(
+        socket_path,
+        registry,
+        engine,
+        tts,
+        audio,
+        audit_path,
+        events,
+    )
+    .await?;
     Ok(())
 }
 

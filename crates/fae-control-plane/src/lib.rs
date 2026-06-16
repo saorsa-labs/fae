@@ -108,6 +108,30 @@ impl Response {
     }
 }
 
+/// An unsolicited server-push frame on an established connection (the
+/// `conversation.subscribe` event stream). Distinct from [`Response`] on the
+/// wire — it has an `event` name and no `request_id`/`ok` — so a client
+/// demultiplexes the two by branching on the `event` key. Only delivered to
+/// connections that subscribed and hold the event's required scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Event {
+    pub v: u16,
+    pub event: String,
+    pub payload: serde_json::Value,
+}
+
+impl Event {
+    #[must_use]
+    pub fn new(event: &str, payload: serde_json::Value) -> Event {
+        Event {
+            v: PROTOCOL_VERSION,
+            event: event.to_owned(),
+            payload,
+        }
+    }
+}
+
 // ───────────────────────────────── Scopes ────────────────────────────────────
 
 /// Closed capability catalog. Unknown scope strings never parse, so they are

@@ -295,6 +295,12 @@ async fn dispatch(
             }))
         }
         "conversation.inject_text" => inject_text(backends.engine, cmd).await,
+        // Open this connection's server-push event stream (voice spine V2). The
+        // ack is the signal the transport uses to register the connection's sink
+        // as a subscriber; events (e.g. `audio.level`) are then pushed to it,
+        // filtered by the scopes it was granted. ConversationRead is enforced by
+        // `authorize` before dispatch.
+        "conversation.subscribe" => Ok(serde_json::json!({ "subscribed": true })),
         "tts.synthesize" => synthesize_tts(backends.tts, cmd).await,
         "audio.devices" => audio_devices(backends.audio).await,
         "audio.capture_start" | "audio.start_capture" => audio_capture_start(backends.audio).await,
