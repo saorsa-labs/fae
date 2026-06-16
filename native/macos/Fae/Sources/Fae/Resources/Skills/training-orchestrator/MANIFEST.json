@@ -23,7 +23,9 @@
       "scripts/propose.py": "7dea982072902893e76d6edf5dbd5b352920f58e2ac2fdfd055bbb10d7819305",
       "scripts/deploy.py": "992dd8abe922966c89018bb4014e97efbbb9dfaced66073e418a364290eedbb8",
       "scripts/rollback.py": "6ad108be4e6d7a63d3d7c9ffc81437546e5fd1d906e2a6e0ebeb9c1402a0d5d8",
-      "scripts/train.py": "8faef78289450d43579271402cb7e104c69c3fa79991debb5b75ebed7fe49a13"
+      "scripts/train.py": "8faef78289450d43579271402cb7e104c69c3fa79991debb5b75ebed7fe49a13",
+      "scripts/train_peft.py": "1805586406a94d75628496977629a3d1ce06d02de9243df20e1f3ea784e30efe",
+      "scripts/convert_to_gguf.py": "171bdb8de96a06205ebb697c69e45dc5849e1697f90a6f91639f19c59f6a6eac"
     },
     "signature": null
   }
