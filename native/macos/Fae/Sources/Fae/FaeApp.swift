@@ -261,10 +261,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         }
         rustUiShell.onEditSoul = { [weak self] in self?.personalityEditor.showSoulEditor() }
         rustUiShell.onEditCustomInstructions = { [weak self] in self?.personalityEditor.showInstructionsEditor() }
-        rustUiShell.onAskFae = { [weak self] in
-            self?.windowState.showWindow()
-            NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
-        }
         rustUiShell.onAskAboutShortcuts = { [weak self] in
             self?.prefillFaePrompt("What keyboard shortcuts and voice commands do you support?")
         }
