@@ -132,6 +132,9 @@ pub enum Scope {
     /// the native ACP client. Dangerous: the agent runs autonomously and can
     /// edit files within its working directory.
     AgentExecute,
+    /// Manage the loaded model at runtime — toggle the personal-LoRA scale
+    /// (base ↔ personalized) or reload an adapter. Owner-level, non-destructive.
+    ModelManagement,
     Admin,
 }
 
@@ -154,6 +157,7 @@ impl Scope {
             Scope::X0xMessage => "x0x:message",
             Scope::X0xAdmin => "x0x:admin",
             Scope::AgentExecute => "agent:execute",
+            Scope::ModelManagement => "model:management",
             Scope::Admin => "admin",
         }
     }
@@ -177,6 +181,7 @@ impl Scope {
             "x0x:message" => Scope::X0xMessage,
             "x0x:admin" => Scope::X0xAdmin,
             "agent:execute" => Scope::AgentExecute,
+            "model:management" => Scope::ModelManagement,
             "admin" => Scope::Admin,
             _ => return None,
         };
@@ -210,6 +215,8 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
         "agent.list" => &[Scope::StatusRead],
+        // Runtime personal-LoRA scale toggle (gap B3b): base ↔ personalized.
+        "engine.set_adapter_scale" => &[Scope::ModelManagement],
         "runtime.shutdown" | "runtime.emergency_lockout" => &[Scope::Admin],
         _ => return None,
     };
@@ -242,6 +249,8 @@ impl ClientClass {
                     Scope::ConversationRead,
                     Scope::AudioCapture,
                     Scope::AudioPlayback,
+                    // Owner app may toggle the personal-LoRA scale (gap B3b).
+                    Scope::ModelManagement,
                 ]
             }
             ClientClass::CliDiagnostic | ClientClass::BrowserDiagnostic => vec![Scope::StatusRead],
@@ -881,6 +890,8 @@ mod tests {
             Scope::SchedulerWrite,
             Scope::X0xMessage,
             Scope::X0xAdmin,
+            Scope::AgentExecute,
+            Scope::ModelManagement,
             Scope::Admin,
         ];
         for scope in all {
@@ -890,6 +901,19 @@ mod tests {
                 "round-trip failed for {scope:?}"
             );
         }
+    }
+
+    #[test]
+    fn engine_scale_command_requires_model_management() {
+        assert_eq!(
+            required_scopes("engine.set_adapter_scale"),
+            Some(&[Scope::ModelManagement][..])
+        );
+        // The owner app holds it; an unknown engine command is denied.
+        assert!(ClientClass::SwiftFrontend
+            .default_scopes()
+            .contains(&Scope::ModelManagement));
+        assert!(required_scopes("engine.unknown").is_none());
     }
 
     #[test]

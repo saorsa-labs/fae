@@ -304,8 +304,28 @@ async fn dispatch(
         "audio.play" | "audio.playback_control" => audio_play(backends.audio, cmd).await,
         "agent.run" => agent_run(cmd).await,
         "agent.list" => agent_list(),
+        "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
         _ => Err("not_implemented"),
     }
+}
+
+/// `engine.set_adapter_scale` (gap B3b) — toggle the personal-LoRA scale on the
+/// running brain: `{ "scale": <number> }`, `0.0` = base, `1.0` = personalized.
+/// Backends without a runtime adapter (mistral.rs, mock) accept it as a no-op,
+/// so the command is uniform across engines.
+fn set_adapter_scale(
+    engine: &dyn ProviderAdapter,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let scale = cmd
+        .payload
+        .get("scale")
+        .and_then(serde_json::Value::as_f64)
+        .ok_or("missing_scale")?;
+    engine
+        .set_adapter_scale(scale as f32)
+        .map_err(|_| "set_adapter_scale_failed")?;
+    Ok(serde_json::json!({ "scale": scale }))
 }
 
 /// Names of the external agents the native ACP client knows how to launch.
@@ -1095,6 +1115,65 @@ mod tests {
         let result = out.response.result.expect("result");
         assert!(result.get("inputs").is_some());
         assert!(result.get("outputs").is_some());
+    }
+
+    #[tokio::test]
+    async fn engine_set_adapter_scale_ok_with_model_management_scope() {
+        let mut reg = ClientRegistry::new();
+        let scopes: HashSet<Scope> = [Scope::ModelManagement].into_iter().collect();
+        reg.insert(
+            ClientRecord {
+                client_id: "c1".to_owned(),
+                class: ClientClass::SwiftFrontend,
+                scopes,
+                issued_at_ms: 0,
+                expires_at_ms: 1_000,
+                revoked_at_ms: None,
+                display_name: "test".to_owned(),
+            },
+            hash_token("good-token"),
+        );
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame(
+                "engine.set_adapter_scale",
+                serde_json::json!({ "scale": 0.0 }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(out.response.ok, "expected ok, got {:?}", out.response.error);
+        assert_eq!(out.response.result.expect("result")["scale"], 0.0);
+    }
+
+    #[tokio::test]
+    async fn engine_set_adapter_scale_denied_without_model_management_scope() {
+        // registry()'s client holds only StatusRead + ConversationWrite.
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame(
+                "engine.set_adapter_scale",
+                serde_json::json!({ "scale": 1.0 }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(!out.response.ok, "model-management command must be denied");
     }
 
     #[tokio::test]
