@@ -101,7 +101,7 @@ actor SearchOrchestrator {
     // MARK: - Engine Selection
 
     /// Select engines that the circuit breaker allows. Falls back to all configured if all tripped.
-    private func selectEngines(config: SearchConfig) async -> [SearchEngine] {
+    func selectEngines(config: SearchConfig) async -> [SearchEngine] {
         var available: [SearchEngine] = []
         for engine in config.engines {
             if await GlobalCircuitBreaker.shared.shouldAttempt(engine) {
@@ -158,7 +158,7 @@ actor SearchOrchestrator {
     /// Apply position-decay scoring to results from each engine.
     ///
     /// Formula: `score = engine_weight * (1.0 / (1.0 + position * 0.1))`
-    private func scoreResults(_ results: [SearchResult]) -> [SearchResult] {
+    func scoreResults(_ results: [SearchResult]) -> [SearchResult] {
         // Group by engine to apply position-based scoring per engine.
         var byEngine: [String: [SearchResult]] = [:]
         for result in results {
