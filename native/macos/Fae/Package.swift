@@ -198,6 +198,7 @@ let package = Package(
             name: "IntegrationTests",
             dependencies: [
                 "Fae",
+                .product(name: "FaeHandoffKit", package: "FaeHandoffKit"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Tests/IntegrationTests"

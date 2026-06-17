@@ -16,10 +16,22 @@ struct CharacterVoiceEntry: Codable, Sendable {
 actor CharacterVoiceLibrary {
     static let shared = CharacterVoiceLibrary()
 
+    /// Optional override for the on-disk location (used by tests to avoid
+    /// touching the real ~/Library path). When nil, the default app-support
+    /// path is used.
+    private let overrideFileURL: URL?
+
     private var entries: [CharacterVoiceEntry] = []
     private var loaded = false
 
+    /// - parameter fileURL: Optional storage location. Defaults to the real
+    ///   `~/Library/Application Support/fae/character_voices.json`.
+    init(fileURL: URL? = nil) {
+        self.overrideFileURL = fileURL
+    }
+
     private var fileURL: URL? {
+        if let overrideFileURL { return overrideFileURL }
         guard let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

@@ -30,12 +30,22 @@ enum HandoffKVStore {
 
     // MARK: - Public API
 
+    /// Abstraction over the key-value store so tests can substitute an
+    /// in-memory fake without touching iCloud. Mirrors the slice of
+    /// `NSUbiquitousKeyValueStore` that `HandoffKVStore` uses.
+    protocol HandoffKeyValueStoring: AnyObject {
+        func set(_ data: Data, forKey key: String)
+        func data(forKey key: String) -> Data?
+        func removeObject(forKey key: String)
+        func synchronize() -> Bool
+    }
+
     /// Persist the snapshot to iCloud key-value store.
     ///
     /// When iCloud is unavailable (no account, MDM restriction, sandbox
     /// limitation), the write is silently skipped with a log warning.
     static func save(_ snapshot: ConversationSnapshot,
-                     store: NSUbiquitousKeyValueStore = .default) {
+                     store: any HandoffKeyValueStoring = NSUbiquitousKeyValueStore.default) {
         guard let data = try? encoder.encode(snapshot) else {
             NSLog("HandoffKVStore: failed to encode snapshot")
             return
@@ -50,14 +60,14 @@ enum HandoffKVStore {
     ///
     /// Returns `nil` when iCloud is unavailable, the key is absent, or the
     /// stored data cannot be decoded.
-    static func load(store: NSUbiquitousKeyValueStore = .default) -> ConversationSnapshot? {
+    static func load(store: any HandoffKeyValueStoring = NSUbiquitousKeyValueStore.default) -> ConversationSnapshot? {
         guard let data = store.data(forKey: snapshotKey) else { return nil }
         return try? decoder.decode(ConversationSnapshot.self, from: data)
     }
 
     /// Remove the stored snapshot. Always safe — no-op when the key is absent
     /// or iCloud is unavailable.
-    static func clear(store: NSUbiquitousKeyValueStore = .default) {
+    static func clear(store: any HandoffKeyValueStoring = NSUbiquitousKeyValueStore.default) {
         store.removeObject(forKey: snapshotKey)
         store.synchronize()
     }
@@ -93,5 +103,15 @@ enum HandoffKVStore {
                 handler(snapshot)
             }
         }
+    }
+}
+
+// MARK: - NSUbiquitousKeyValueStore Conformance
+
+extension NSUbiquitousKeyValueStore: HandoffKVStore.HandoffKeyValueStoring {
+    // `set(_:forKey:)` is overloaded on the concrete class; explicitly bridge
+    // the `Data` overload so protocol conformance resolves unambiguously.
+    func set(_ data: Data, forKey key: String) {
+        set(data as Any, forKey: key)
     }
 }
