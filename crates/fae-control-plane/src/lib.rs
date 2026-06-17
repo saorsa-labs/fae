@@ -23,6 +23,14 @@ use serde::{Deserialize, Serialize};
 /// ADR-002 command/event protocol version (v2 = daemon era).
 pub const PROTOCOL_VERSION: u16 = 2;
 
+/// Client id of the single client the daemon bootstraps at startup (the Swift
+/// frontend that launches the daemon + orb host). The `bootstrap.token` is
+/// bound to this id; every in-trust-boundary client (the Swift frontend AND the
+/// orb host's daemon bridge) must authenticate under it — `authenticate`
+/// rejects any other id with [`AuthError::UnknownClient`]. Shared here so the
+/// daemon (registration) and the orb host (auth) can never drift apart.
+pub const BOOTSTRAP_CLIENT_ID: &str = "swift-frontend-bootstrap";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ControlPlaneError {
     #[error("CSPRNG failure: {0}")]

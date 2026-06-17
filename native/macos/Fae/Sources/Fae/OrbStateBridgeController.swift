@@ -1,29 +1,25 @@
 import Foundation
 
-/// Bridges backend orb-state and pipeline events to `OrbStateController`.
+/// Bridges backend orb-state and pipeline **listening/PTT** events to
+/// `OrbStateController`.
 ///
-/// Observes notifications posted by `BackendEventRouter` and updates the
-/// shared `OrbStateController` so the orb WebView reflects the live pipeline state:
+/// **Orb-host-owns-state (2026-06-17):** the orb's `thinking` / `speaking` /
+/// `idle` mode is now owned by the **Rust orb host** (`native/rust/fae-ui-shell`),
+/// which derives it from the daemon event stream via a grace-hold state machine
+/// (`orb_state.rs`). This controller NO LONGER drives those modes from
+/// `.faeAssistantGenerating`, `.faeAudioLevel`, `.faeDaemonAudioLevel`, or
+/// `.faeDaemonAudioEnded` — those subscriptions were removed to make the orb
+/// host the single source of truth for its visible mode (the no-Swift principle).
 ///
-/// | Notification | Action |
-/// |---|---|
-/// | `.faeOrbStateChanged` | Update palette / feeling as directed by backend |
-/// | `.faePipelineState` | Map pipeline control events → `OrbMode` |
-///
-/// ## Orb mode from pipeline state
-///
-/// | Backend event | OrbMode |
-/// |---|---|
-/// | `pipeline.control` (Listening) | `.listening` |
-/// | `pipeline.control` (Thinking) | `.thinking` |
-/// | `pipeline.control` (Speaking) | `.speaking` |
-/// | `pipeline.control` (Idle/Stop) | `.idle` |
-/// | `pipeline.mic_status` active=true | `.listening` |
-/// | `pipeline.mic_status` active=false | `.idle` |
-/// | `pipeline.generating` active=true | `.thinking` |
-/// | `pipeline.audio_level` (rms>threshold) | `.speaking` (handled via .faeAudioLevel) |
-///
-/// The controller weakly references `OrbStateController` to avoid a retain cycle.
+/// What remains here is what Swift still owns:
+/// - **Palette / feeling** (`.faeOrbStateChanged`) — visual theming, not mode.
+/// - **Listening / PTT** (`.faePipelineState` mic_status + pipeline.control
+///   Start/Stop) — push-to-talk capture is still a Swift `NSEvent` (Right ⌥)
+///   the orb host can't see; this is the one remaining orb signal Swift emits
+///   until capture moves to the daemon (V5 gap). The orb host may also set
+///   listening itself for its own long-press gesture.
+/// - **Runtime lifecycle** (`runtime.starting`/`error`/`stopped`) — boot/error
+///   shading of the orb before the daemon bridge is up.
 @MainActor
 final class OrbStateBridgeController: ObservableObject {
     /// The orb state controller this bridge drives.
@@ -34,25 +30,11 @@ final class OrbStateBridgeController: ObservableObject {
 
     private var observations: [NSObjectProtocol] = []
 
-    /// Watchdog that drops the orb out of `.speaking` once Fae's TTS audio
-    /// stops arriving. Re-armed on every audible playback frame; fires after
-    /// `speakingSilenceWindowMs` of silence so the orb never freezes mid-glow.
-    private var speakingSilenceTask: Task<Void, Never>?
-
-    /// Playback RMS above which Fae is considered audibly speaking. Inter-word
-    /// silence dips below this; the watchdog window bridges those gaps.
-    private static let speakingRmsThreshold: Double = 0.01
-
-    /// Silence after the last audible frame before `.speaking` relaxes to a
-    /// lively idle. Long enough to span normal between-word gaps.
-    private static let speakingSilenceWindowMs: UInt64 = 600
-
     init() {
         subscribe()
     }
 
     deinit {
-        speakingSilenceTask?.cancel()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
         }
@@ -63,7 +45,7 @@ final class OrbStateBridgeController: ObservableObject {
     private func subscribe() {
         let center = NotificationCenter.default
 
-        // Orb visual state changes (palette, feeling, urgency, flash)
+        // Orb visual state changes (palette, feeling, urgency, flash) — NOT mode.
         observations.append(
             center.addObserver(
                 forName: .faeOrbStateChanged, object: nil, queue: .main
@@ -75,7 +57,8 @@ final class OrbStateBridgeController: ObservableObject {
             }
         )
 
-        // Pipeline lifecycle → orb mode transitions
+        // Pipeline lifecycle → LISTENING / PTT only (mode-driving for
+        // thinking/speaking/idle was retired; the orb host owns those).
         observations.append(
             center.addObserver(
                 forName: .faePipelineState, object: nil, queue: .main
@@ -90,7 +73,7 @@ final class OrbStateBridgeController: ObservableObject {
             }
         )
 
-        // Runtime lifecycle → orb mode transitions
+        // Runtime lifecycle → boot/error orb shading (pre-daemon-bridge).
         observations.append(
             center.addObserver(
                 forName: .faeRuntimeState, object: nil, queue: .main
@@ -104,125 +87,16 @@ final class OrbStateBridgeController: ObservableObject {
             }
         )
 
-        // Also observe generating directly for .thinking mode
-        observations.append(
-            center.addObserver(
-                forName: .faeAssistantGenerating, object: nil, queue: .main
-            ) { [weak self] notification in
-                let active = notification.userInfo?["active"] as? Bool ?? false
-                Task { @MainActor [weak self] in
-                    guard let self, let orbState = self.orbState else { return }
-                    if active {
-                        orbState.mode = .thinking
-                    } else if orbState.mode != .speaking {
-                        // Generation over and not audibly speaking → idle.
-                        // The old `== .thinking` guard stranded the orb (and
-                        // the whisper pill's counter) in thinking/listening
-                        // forever when a failed turn's fallback speech or a
-                        // capture overlap had shifted the mode first.
-                        orbState.mode = .idle
-                    }
-                    // When generation ends while TTS is still talking, mode is
-                    // `.speaking` and we leave it — the audio-level watchdog
-                    // relaxes it to idle once playback actually stops, so the
-                    // orb stays alive through the whole reply instead of going
-                    // dark the instant the model finishes.
-                }
-            }
-        )
-
-        // TTS playback level → `.speaking`. `pipeline.audio_level` carries the
-        // RMS of Fae's own voice (AudioPlaybackManager `.level`), so a non-trivial
-        // level means she is audibly speaking. Without this the orb never enters
-        // `.speaking` and drops to a dim idle the moment generation ends, looking
-        // extinguished while she is still talking.
-        observations.append(
-            center.addObserver(
-                forName: .faeAudioLevel, object: nil, queue: .main
-            ) { [weak self] notification in
-                let rms = notification.userInfo?["rms"] as? Double ?? 0.0
-                Task { @MainActor [weak self] in
-                    self?.handleSpeakingAudioLevel(rms: rms)
-                }
-            }
-        )
-
-        // Voice spine V3b/V4: daemon-owned TTS playback emits `.faeDaemonAudioLevel`
-        // (RMS) + `.faeDaemonAudioEnded`. With FAE_DAEMON_PLAYBACK there is no local
-        // `.faeAudioLevel`, so without this the orb never enters `.speaking` during a
-        // daemon-spoken turn. Unlike the local path, hold `.speaking` for the WHOLE
-        // playback (any level → speaking) and relax only on the explicit end signal:
-        // daemon TTS RMS is quiet and dips below the speaking threshold in every
-        // pause, so the rms-gated + silence-watchdog handler would flicker the orb
-        // (and the pill) speaking↔idle with the speech envelope.
-        observations.append(
-            center.addObserver(
-                forName: .faeDaemonAudioLevel, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.handleDaemonSpeaking()
-                }
-            }
-        )
-        observations.append(
-            center.addObserver(
-                forName: .faeDaemonAudioEnded, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.handleDaemonPlaybackEnded()
-                }
-            }
-        )
+        // NOTE: `.faeAssistantGenerating`, `.faeAudioLevel`,
+        // `.faeDaemonAudioLevel`, and `.faeDaemonAudioEnded` are deliberately
+        // NOT observed here anymore — the Rust orb host derives the orb's
+        // thinking/speaking/idle mode from the daemon event stream itself
+        // (orb_state.rs grace-hold state machine). Re-adding them would
+        // re-introduce the measured thinking↔idle / speaking↔idle flicker and
+        // violate the no-Swift-orb-drive principle.
     }
 
-    /// Daemon playback is active — hold `.speaking` steadily (no rms threshold,
-    /// no silence watchdog; `.faeDaemonAudioEnded` is the authoritative end).
-    /// Never overrides `.listening` (the user owns the mic during barge-in).
-    private func handleDaemonSpeaking() {
-        guard let orbState else { return }
-        if orbState.mode == .idle || orbState.mode == .thinking {
-            orbState.mode = .speaking
-        }
-    }
-
-    /// Daemon playback ended. A multi-sentence reply is several back-to-back
-    /// `tts.speak` playbacks, so relaxing to idle immediately would flicker the
-    /// orb (and pill) idle↔speaking between every sentence. Arm a short grace
-    /// window instead; the next sentence's `handleDaemonSpeaking` cancels it, so
-    /// the orb only settles to idle once the whole reply is done.
-    private func handleDaemonPlaybackEnded() {
-        speakingSilenceTask?.cancel()
-        speakingSilenceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard !Task.isCancelled, let self, let orbState = self.orbState else { return }
-            if orbState.mode == .speaking {
-                orbState.mode = .idle
-            }
-        }
-    }
-
-    /// Drive `.speaking` from Fae's TTS playback level and relax to a lively
-    /// idle once the audio stops. Never overrides `.listening` (the user owns
-    /// the mic during capture / barge-in).
-    private func handleSpeakingAudioLevel(rms: Double) {
-        guard let orbState else { return }
-        guard rms > Self.speakingRmsThreshold else { return }
-
-        if orbState.mode == .idle || orbState.mode == .thinking {
-            orbState.mode = .speaking
-        }
-
-        speakingSilenceTask?.cancel()
-        speakingSilenceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.speakingSilenceWindowMs * 1_000_000)
-            guard !Task.isCancelled, let self, let orbState = self.orbState else { return }
-            if orbState.mode == .speaking {
-                orbState.mode = .idle
-            }
-        }
-    }
-
-    // MARK: - Orb State Handler
+    // MARK: - Orb State Handler (palette / feeling only)
 
     private func enforcePalette() {
         if isRescueMode {
@@ -253,10 +127,8 @@ final class OrbStateBridgeController: ObservableObject {
             }
 
         case "state_changed":
-            // Handler.rs emits orb.state_changed with a `kind` field embedded
-            // in the change_type when routed through BackendEventRouter.
-            // The payload passed to .faeOrbStateChanged includes the palette/feeling
-            // keys directly if present.
+            // Palette/feeling only. We deliberately do NOT act on a `mode` key
+            // here — the orb host owns the mode now.
             if let feelingName = userInfo["feeling"] as? String,
                let feeling = OrbFeeling(rawValue: feelingName)
             {
@@ -267,11 +139,6 @@ final class OrbStateBridgeController: ObservableObject {
             {
                 orbState.palette = palette
             }
-            if let modeName = userInfo["mode"] as? String,
-               let mode = OrbMode(rawValue: modeName)
-            {
-                orbState.mode = mode
-            }
 
         default:
             // urgency_set and flash — no persistent OrbStateController change needed;
@@ -281,28 +148,20 @@ final class OrbStateBridgeController: ObservableObject {
         enforcePalette()
     }
 
-    // MARK: - Runtime State Handler
+    // MARK: - Runtime State Handler (boot/error feeling only)
 
     private func handleRuntimeState(event: String) {
-        guard let orbState else { return }
-
-        switch event {
-        case "runtime.starting":
-            orbState.mode = .thinking
-        case "runtime.started":
-            orbState.mode = .idle
-        case "runtime.error":
-            orbState.mode = .idle
-            orbState.feeling = .concern
-        case "runtime.stopped":
-            orbState.mode = .idle
-        default:
-            break
-        }
+        // Orb-host-owns-state: runtime lifecycle NO LONGER drives orb mode — the
+        // orb host owns thinking/speaking/quiescent. We keep only the error
+        // feeling (concern) so a runtime failure still shades the orb before
+        // the daemon bridge is up. Mode transitions on boot are left to the
+        // host once it connects.
+        guard let orbState, event == "runtime.error" else { return }
+        orbState.feeling = .concern
         enforcePalette()
     }
 
-    // MARK: - Pipeline State Handler
+    // MARK: - Pipeline State Handler (listening / PTT only)
 
     private func handlePipelineState(event: String, payload: [String: Any]) {
         guard let orbState else { return }
@@ -311,12 +170,12 @@ final class OrbStateBridgeController: ObservableObject {
         case "pipeline.mic_status":
             let active = payload["active"] as? Bool ?? false
             if active {
-                // Microphone opened → listening
+                // Microphone opened → listening (Swift still owns PTT capture).
                 if orbState.mode == .idle {
                     orbState.mode = .listening
                 }
             } else {
-                // Microphone closed → back to idle if we were listening
+                // Microphone closed → back to idle if we were listening.
                 if orbState.mode == .listening {
                     orbState.mode = .idle
                 }
@@ -332,7 +191,9 @@ final class OrbStateBridgeController: ObservableObject {
                     orbState.mode = .listening
                 }
             case "Stop", "Pause":
-                orbState.mode = .idle
+                if orbState.mode == .listening {
+                    orbState.mode = .idle
+                }
             default:
                 break
             }

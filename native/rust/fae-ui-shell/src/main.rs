@@ -652,6 +652,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 match kind {
                     Some("pill_expand") => set_pill_expanded(&mut pill, window, true),
                     Some("pill_collapse") => set_pill_expanded(&mut pill, window, false),
+                    Some("info_action") => {
+                        // The user clicked the info indicator. Route by the
+                        // canonical item from our model (don't trust the JS id
+                        // alone — look it up so kind/action are authoritative).
+                        let id = parsed
+                            .as_ref()
+                            .and_then(|v| v.get("id"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned);
+                        handle_info_action(id.as_deref(), &orb_ui);
+                    }
                     // The collapsed pill grows to fit a wrapped response (and
                     // shrinks back for a one-line status/hint). Ignored while
                     // expanded — the conversation panel owns the size there.
@@ -713,6 +724,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let OrbDaemonEvent::InfoUpdate(items) = &event {
                     orb_ui.info_items = items.clone();
                     push_pill_messages(&pill, &orb_ui);
+                    push_pill_info(&pill, &orb_ui);
                     refresh_pill(
                         &pill,
                         &orb_ui,
@@ -1011,6 +1023,23 @@ fn emit_menu_action(action: MenuAction) {
     }
 }
 
+/// Push the daemon info-indicator set into the pill (the second line: green
+/// dot + summary). Called on `OrbDaemonEvent::InfoUpdate`.
+fn push_pill_info(pill: &PillPanel, orb_ui: &OrbUiModel) {
+    let payload: Vec<serde_json::Value> = orb_ui
+        .info_items
+        .items
+        .iter()
+        .map(|item| serde_json::json!({ "id": item.id, "kind": item.kind, "title": item.title }))
+        .collect();
+    let json = serde_json::to_string(&payload).unwrap_or_else(|_| "[]".to_string());
+    if let Err(error) = pill
+        .webview
+        .evaluate_script(&format!("window.__faeSetInfoItems({json});"))
+    {
+        log::warn!("failed to push pill info: {error}");
+    }
+}
 /// Orb-host-owns-state: apply a derived [`OrbMode`] to the orb + pill model.
 /// No-op when the mode is unchanged (the grace-hold re-arms frequently during
 /// a turn but the effective mode is stable — skip redundant writes). Mirrors
@@ -1026,6 +1055,11 @@ fn apply_orb_mode(
         return;
     }
     *last_applied = Some(mode);
+    // Low-noise mode-transition trace for live verification (the orb-host-
+    // owns-state flicker check). Emits only on CHANGE, so a steady turn is a
+    // handful of lines. Grep `ORB_MODE` to capture the sequence and confirm
+    // there are no thinking→idle→thinking / speaking→idle→speaking flips.
+    log::info!("ORB_MODE -> {:?}", mode);
     let ui_state = match mode {
         orb_state::OrbMode::Quiescent => FaeUiState::Quiescent,
         orb_state::OrbMode::Thinking => FaeUiState::Thinking,
@@ -1051,6 +1085,113 @@ fn emit_panel_action(action_json: &str) {
     let mut stdout = io::stdout().lock();
     if let Err(error) = writeln!(stdout, "{action_json}") {
         log::warn!("failed to write panel action to stdout: {error}");
+    }
+}
+
+/// Orb-host-owns-state (Step 3): route an info-indicator click by `kind`.
+/// Looks the item up in the canonical model (JS sends only the `id`).
+fn handle_info_action(id: Option<&str>, orb_ui: &OrbUiModel) {
+    let Some(id) = id else {
+        log::warn!("info_action: no id in payload");
+        return;
+    };
+    let Some(item) = orb_ui.info_items.items.iter().find(|i| i.id == id) else {
+        log::warn!("info_action: unknown id {id:?}");
+        return;
+    };
+    let payload = item.action.as_deref().unwrap_or(&item.id);
+    match item.kind.as_str() {
+        "url" => {
+            if is_openable_url(payload) {
+                open_external(payload);
+            } else {
+                log::warn!("info_action url: refusing payload {payload:?}");
+            }
+        }
+        "app" => open_app(payload, &item.title),
+        "research" | "x0x" => open_research_page(&item.title, payload),
+        other => log::warn!("info_action: unknown kind {other:?} for id {id:?}"),
+    }
+}
+
+fn is_openable_url(s: &str) -> bool {
+    s.starts_with("https://") || s.starts_with("http://") || s.starts_with("file://")
+}
+
+fn open_external(target: &str) {
+    let prog = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    match std::process::Command::new(prog).arg(target).spawn() {
+        Ok(_) => log::info!("info_action: opened {target:?} via {prog}"),
+        Err(e) => log::warn!("info_action: {prog} {target:?} failed: {e}"),
+    }
+}
+
+fn open_app(action_or_name: &str, title_fallback: &str) {
+    let name = if action_or_name.is_empty() {
+        title_fallback
+    } else {
+        action_or_name
+    };
+    if cfg!(target_os = "macos") {
+        match std::process::Command::new("open")
+            .args(["-a", name])
+            .spawn()
+        {
+            Ok(_) => log::info!("info_action: opened app {name:?}"),
+            Err(e) => log::warn!("info_action: open -a {name:?} failed: {e}"),
+        }
+    } else {
+        open_external(name);
+    }
+}
+
+fn open_research_page(title: &str, payload: &str) {
+    let body = if is_openable_url(payload) {
+        format!(
+            "<h1>{}</h1><p><a href=\"{}\">{}</a></p>",
+            html_escape(title),
+            html_escape(payload),
+            html_escape(payload)
+        )
+    } else {
+        format!(
+            "<h1>{}</h1><pre>{}</pre>",
+            html_escape(title),
+            html_escape(payload)
+        )
+    };
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><body style=\"font-family:-apple-system,sans-serif;max-width:680px;margin:40px auto;padding:0 16px\">{}",
+        body
+    );
+    let mut path = std::env::temp_dir();
+    path.push(format!("fae-info-{}.html", short_hash(title)));
+    if let Err(e) = std::fs::write(&path, &html) {
+        log::warn!("info_action: failed to write research page {:?}: {e}", path);
+        return;
+    }
+    open_external(&path_to_file_url(&path));
+}
+
+fn short_hash(s: &str) -> String {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    for &b in s.as_bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01B3);
+    }
+    format!("{:x}", h & 0xFFFF_FFFF)
+}
+
+fn path_to_file_url(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy().replace(' ', "%20");
+    if s.starts_with('/') {
+        format!("file://{s}")
+    } else {
+        format!("file:///{s}")
     }
 }
 
@@ -1385,9 +1526,20 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;
 #line.multi #dot{margin-top:6px}
 #line.multi #txt{white-space:pre-wrap;overflow:hidden;text-overflow:clip;line-height:1.5}
 #shell.multi{border-radius:20px}
+/* Info indicator: a second line under the caption — a green dot + summary,
+ * shown only when the daemon has pushed `info.update` items. Click opens the
+ * item's action (url/app/research page) via the orb-host router. */
+#info{display:none;align-items:center;gap:8px;padding:0 15px 9px;cursor:pointer;
+ white-space:nowrap;overflow:hidden}
+#shell.has-info #info{display:flex}
+#info .idot{width:7px;height:7px;border-radius:50%;flex:none;background:#5F7F6F;
+ box-shadow:0 0 7px rgba(95,127,111,.55)}
+#info .itxt{font:12px/1.3 var(--sans);color:#A9C2B6;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto}
+#info:hover .itxt{color:#C7D9CE}
 </style></head><body>
 <div id='shell'>
  <div id='line'><span id='dot'></span><span id='txt'></span></div>
+ <div id='info'><span class='idot'></span><span class='itxt'></span></div>
  <div id='exp'>
   <div id='head'><span class='l'>Conversation</span><span id='cl'>⌄</span></div>
   <div id='log'></div>
@@ -1398,24 +1550,29 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;
 var shell=document.getElementById('shell'),line=document.getElementById('line'),
  dot=document.getElementById('dot'),txt=document.getElementById('txt'),log=document.getElementById('log'),
  input=document.getElementById('in'),snd=document.getElementById('snd'),cl=document.getElementById('cl');
-var messages=[],status=null;
+var messages=[],status=null,infoItems=[];
 var post=function(o){if(window.ipc&&window.ipc.postMessage)window.ipc.postMessage(JSON.stringify(o));};
 function rc(r){return r==='fae'?'fae':((r==='you'||r==='user')?'you':'');}
 var fadeTimer=null,fadeOut=null;
 function clearFade(){if(fadeTimer){clearTimeout(fadeTimer);fadeTimer=null;}
  if(fadeOut){clearTimeout(fadeOut);fadeOut=null;}line.classList.remove('fading');}
+// Collapsed pill height: taller when the info indicator (second line) is shown
+// so the green-dot line isn't clipped. Matches the Rust clamp (52..240).
+function baseHeight(){return infoItems.length?78:52;}
 function sizePill(isMsg){
  if(shell.classList.contains('expanded'))return;
  if(!isMsg){line.classList.remove('multi');shell.classList.remove('multi');
-  post({type:'pill_resize',height:52});return;}
+  post({type:'pill_resize',height:baseHeight()});return;}
  // Let the text wrap, then measure its FULL content height (scrollHeight — not
- // getBoundingClientRect, which is clipped by the 52px window) and grow only
- // when it actually needs >1 line. Short lines stay a one-line pill.
+ // getBoundingClientRect, which is clipped by the window) and grow only
+ // when it actually needs >1 line. Short lines stay a one-line pill; add the
+ // info line height when the indicator is visible.
  line.classList.add('multi');shell.classList.add('multi');
  requestAnimationFrame(function(){
   var sh=txt.scrollHeight,multi=sh>26;
   line.classList.toggle('multi',multi);shell.classList.toggle('multi',multi);
-  post({type:'pill_resize',height:multi?Math.min(220,Math.max(60,sh+30)):52});});}
+  var h=multi?Math.min(240,Math.max(60,sh+30)):baseHeight();
+  post({type:'pill_resize',height:h});});}
 function armFade(){fadeTimer=setTimeout(function(){line.classList.add('fading');
  fadeOut=setTimeout(function(){line.className='muted';dot.className='';
   txt.textContent='Hold right ⌥ to talk · click to see conversation';line.classList.remove('fading');sizePill(false);},360);},7000);}
@@ -1453,6 +1610,18 @@ function submit(){var t=input.value.trim();if(!t)return;post({type:'send_text',t
 snd.addEventListener('click',submit);
 input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}
  else if(e.key==='Escape'){post({type:'pill_collapse'});}});
+function renderInfo(){
+ var n=infoItems.length;
+ shell.classList.toggle('has-info',n>0);
+ if(!shell.classList.contains('expanded')){sizePill(false);}
+ if(n===0)return;
+ var box=document.getElementById('info');
+ var t=box.querySelector('.itxt');
+ t.textContent=(n===1)?(infoItems[0].title||'1 update'):(n+' updates');
+}
+window.__faeSetInfoItems=function(a){infoItems=Array.isArray(a)?a:[];renderInfo();};
+document.getElementById('info').addEventListener('click',function(e){
+ e.stopPropagation();var it=infoItems[0];if(!it)return;post({type:'info_action',id:it.id});});
 renderLine();
 })();</script></body></html>"#;
 

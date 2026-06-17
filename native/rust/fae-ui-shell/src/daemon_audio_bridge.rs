@@ -7,9 +7,10 @@
 //! payload}`), but feeds `UserEvent::DaemonAudio` into the tao event loop so the
 //! render thread applies it.
 //!
-//! Compile-gated: Unix-only + the `daemon-audio-bridge` cargo feature. Runtime-
-//! gated by `FAE_ORB_DAEMON_AUDIO=1` (default OFF — zero behavior change for the
-//! macOS Swift-relay path, which feeds levels via stdin `state.audio` instead).
+//! Compile-gated: Unix-only (`#![cfg(unix)]`). Runtime-gated by
+//! `FAE_ORB_DAEMON_AUDIO` — **default ON** (the orb host owns its mode from the
+//! daemon now); set `FAE_ORB_DAEMON_AUDIO=0/false/off/no` to disable and fall
+//! back to a calm idle (the retired Swift relay no longer feeds `state.audio`).
 //!
 //! Reconnect: on any error the bridge sleeps with capped exponential backoff
 //! (250 ms → … → 5 s) and reconnects. It NEVER blocks the render loop — it runs
@@ -186,8 +187,9 @@ fn session(proxy: &EventLoopProxy<UserEvent>) -> Result<(), String> {
     Ok(())
 }
 
-/// Parse `info.update { items: [{id,kind,title}] }`. Drops malformed items
-/// rather than failing the whole frame (a partial update is still useful).
+/// Parse `info.update { items: [{id,kind,title,action?}] }`. Drops malformed
+/// items rather than failing the whole frame (a partial update is still
+/// useful). The optional `action` carries the click-routing payload.
 fn parse_info_items(payload: &serde_json::Value) -> Option<InfoItems> {
     let items = payload.get("items")?.as_array()?;
     let parsed: Vec<InfoItem> = items
@@ -197,6 +199,10 @@ fn parse_info_items(payload: &serde_json::Value) -> Option<InfoItems> {
                 id: item.get("id")?.as_str()?.to_owned(),
                 kind: item.get("kind")?.as_str()?.to_owned(),
                 title: item.get("title")?.as_str()?.to_owned(),
+                action: item
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
             })
         })
         .collect();
@@ -216,12 +222,24 @@ fn read_token(path: &Path) -> Result<String, String> {
         })
 }
 
+/// Authenticate under the daemon's single bootstrapped client id
+/// ([`fae_control_plane::BOOTSTRAP_CLIENT_ID`]). The orb host is launched by the
+/// same Swift frontend inside the same trust boundary and reads the same
+/// `bootstrap.token`; `registry.authenticate` rejects any other id with
+/// `UnknownClient`, which would leave the bridge reconnect-looping and the orb
+/// stuck idle. The bootstrap client's `SwiftFrontend` scopes
+/// (`StatusRead`/`ConversationRead`/`AudioPlayback`) are exactly what the
+/// subscribed events (`info.update`/`assistant.generating`/`audio.level`)
+/// require.
 fn authenticate(stream: &mut UnixStream, token: &str) -> Result<(), String> {
     send_command(
         stream,
         "sub-auth",
         "session.authenticate",
-        serde_json::json!({ "client_id": "fae-ui-shell", "token": token }),
+        serde_json::json!({
+            "client_id": fae_control_plane::BOOTSTRAP_CLIENT_ID,
+            "token": token,
+        }),
     )
 }
 
@@ -263,4 +281,47 @@ struct EventFrame {
     event: Option<String>,
     #[serde(default)]
     payload: serde_json::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_info_items;
+
+    #[test]
+    fn parse_info_items_with_action() {
+        let payload = serde_json::json!({
+            "items": [
+                {"id":"r1","kind":"research","title":"New research result","action":"https://example.org/r/1"},
+                {"id":"wa","kind":"app","title":"WhatsApp"}
+            ]
+        });
+        let parsed = parse_info_items(&payload).expect("parsed");
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(
+            parsed.items[0].action.as_deref(),
+            Some("https://example.org/r/1")
+        );
+        assert!(parsed.items[1].action.is_none());
+    }
+
+    #[test]
+    fn parse_info_items_drops_malformed() {
+        // Missing `kind` and a non-string `title` are dropped; the valid item survives.
+        let payload = serde_json::json!({
+            "items": [
+                {"id":"ok","kind":"url","title":"good","action":"https://x"},
+                {"id":"bad","title":"no kind"},
+                {"id":"bad2","kind":"url","title":{"nested":true}}
+            ]
+        });
+        let parsed = parse_info_items(&payload).expect("parsed");
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].id, "ok");
+    }
+
+    #[test]
+    fn parse_info_items_missing_items_returns_none() {
+        assert!(parse_info_items(&serde_json::json!({})).is_none());
+        assert!(parse_info_items(&serde_json::json!({"items": "notarray"})).is_none());
+    }
 }

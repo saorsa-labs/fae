@@ -68,12 +68,17 @@ pub struct InfoItems {
     pub items: Vec<InfoItem>,
 }
 
-/// One info indicator item. `kind` routes the click (research/x0x/app/url).
+/// One info indicator item. `kind` routes the click (research/x0x/app/url):
+/// the optional `action` carries a url / app name / payload for the router.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InfoItem {
     pub id: String,
     pub kind: String,
     pub title: String,
+    /// Optional routing payload (a URL for `url`, an app name for `app`, a
+    /// page path or research id for `research`/`x0x`). Absent → fall back to
+    /// `id` / `title` as the router sees fit.
+    pub action: Option<String>,
 }
 
 impl OrbDaemonEvent {

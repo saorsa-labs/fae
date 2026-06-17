@@ -69,7 +69,7 @@ async fn main() -> DaemonResult<()> {
     println!("token   : {} (0600)", token_path.display());
 
     let client = ClientRecord {
-        client_id: "swift-frontend-bootstrap".to_owned(),
+        client_id: fae_control_plane::BOOTSTRAP_CLIENT_ID.to_owned(),
         class: ClientClass::SwiftFrontend,
         scopes: ClientClass::SwiftFrontend
             .default_scopes()
@@ -101,7 +101,10 @@ async fn main() -> DaemonResult<()> {
     // end-reason (`completed` vs `interrupted`) for `audio.playback_ended`.
     let playbacks = events::PlaybackRegistry::new();
     println!("audit   : {} (jsonl)", audit_path.display());
-    println!("client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"swift-frontend-bootstrap\",\"token\":<file>}}}}");
+    println!(
+        "client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"{}\",\"token\":<file>}}}}",
+        fae_control_plane::BOOTSTRAP_CLIENT_ID
+    );
 
     // Optional TCP-loopback HTTP/WS diagnostic surface (opt-in, never default).
     if let Some(port) = diagnostic_port() {
