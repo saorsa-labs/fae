@@ -403,7 +403,7 @@ actor ACPSessionManager {
         "no native root CA certificates found",
     ]
 
-    private static func isAgentTransportNoise(_ text: String) -> Bool {
+    static func isAgentTransportNoise(_ text: String) -> Bool {
         agentNoiseMarkers.contains(where: text.contains)
     }
 

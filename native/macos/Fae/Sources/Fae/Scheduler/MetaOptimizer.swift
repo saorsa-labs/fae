@@ -493,9 +493,9 @@ actor MetaOptimizer {
             surface: result.surface.rawValue,
             description: result.description,
             targetDimension: result.targetDimension.rawValue,
-            beforeScores: encodeScores(result.beforeScores),
-            afterScores: encodeScores(result.afterScores),
-            delta: encodeScores(result.delta),
+            beforeScores: Self.encodeScores(result.beforeScores),
+            afterScores: Self.encodeScores(result.afterScores),
+            delta: Self.encodeScores(result.delta),
             kept: result.kept,
             reason: result.reason,
             createdAt: ISO8601DateFormatter().string(from: result.timestamp)
@@ -523,7 +523,7 @@ actor MetaOptimizer {
     }
 
     /// Encode DimensionScores to a JSON string for storage.
-    private func encodeScores(_ scores: DimensionScores) -> String {
+    static func encodeScores(_ scores: DimensionScores) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         guard let data = try? encoder.encode(scores),
