@@ -1,8 +1,33 @@
 # Mega-prompt — orb host owns its state via the daemon (retire Swift orb-drive) + info indicator (2026-06-17)
 
 Paste into a fresh session. Self-contained; **verify every claim against the repo and live output** —
-dev-agents have fabricated reports. Main session is REVIEWER and gates on verbatim evidence
-(diff-stat, `env -u RUSTFLAGS` clippy/test tails, live socket transcripts, on-screen behavior).
+dev-agents have fabricated reports.
+
+---
+
+## Workflow — read first
+
+**You (the team) implement AND test this to completion, then HAND BACK for review. You do NOT commit
+or push.** The owner's reviewer commits + publishes after review.
+
+1. **Build it** per "The work" below, smallest-increment-first (the "Suggested order").
+2. **Test to completion** — every item in "Done criteria" must pass with **verbatim evidence you
+   captured yourself**, not asserted:
+   - `git diff --stat` of everything you changed.
+   - `cd crates && env -u RUSTFLAGS cargo fmt -p <c> -- --check && cargo clippy -p <c> --all-targets --
+     -D warnings && cargo nextest run -p <c>` tails for each touched crate, and the orb host
+     (`native/rust/fae-ui-shell`); Swift `swift build` clean.
+   - A **live run** of the dev app (`FAE_DAEMON_PLAYBACK=1`, `FAE_TEST_SERVER=1`) driving a real turn
+     via `POST http://127.0.0.1:7433/inject` (Python urllib — a hook intercepts curl): paste the
+     mode-transition trace showing **no `thinking→idle→thinking` / `speaking→idle→speaking` flips**,
+     and confirm on-screen that thinking holds steadily, the reply streams, the orb is bright at rest,
+     and the info indicator works.
+   - **Heed the BUNDLING TRAP** (gotchas): a `just build` alone does NOT update the running app — your
+     Swift changes won't take effect until you `_bundle-app`/`_sign-bundle`. Confirm the live behavior,
+     don't trust the source diff.
+3. **Hand back a report** with all the above evidence + a short summary of what changed and any
+   deviations/risks. Then STOP — the reviewer validates against the evidence, commits the series, and
+   publishes. Flag anything you could not verify; do not paper over it.
 
 ---
 
@@ -154,9 +179,10 @@ session (V3b/V4 + orb UX). Verify with `git status`/`git diff`.
 ## Suggested order
 1. Daemon `assistant.generating` event (+ test). 2. Orb host: extend the bridge to drive mode +
 grace-hold (un-gate, enable macOS); verify the flicker is gone via a turn. 3. Info: daemon
-`info.update` + orb host second-line + click-action. 4. Retire Swift orb-drive; verify. 5. Commit
-the whole series (V3b+V4+orb-host-owns-state+info) with verbatim evidence; update
-`open-gaps-2026-06-16.md` D5, memory, Obsidian.
+`info.update` + orb host second-line + click-action. 4. Retire Swift orb-drive; verify. 5. **Hand back** the full
+evidence report (do NOT commit/push) — the reviewer validates, commits the whole series
+(V3b+V4+orb-host-owns-state+info), and updates `open-gaps-2026-06-16.md` D5 + memory + Obsidian on
+publish.
 
 **Current uncommitted state to fold in / not lose:** V3b (daemon TTS playback), V4 (relay — being
 retired), V4b bridge, the 3 V4 bug fixes, and all the orb-host pill UX (brightness/fade/expand/format/
