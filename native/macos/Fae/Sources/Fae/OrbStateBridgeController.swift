@@ -146,6 +146,59 @@ final class OrbStateBridgeController: ObservableObject {
                 }
             }
         )
+
+        // Voice spine V3b/V4: daemon-owned TTS playback emits `.faeDaemonAudioLevel`
+        // (RMS) + `.faeDaemonAudioEnded`. With FAE_DAEMON_PLAYBACK there is no local
+        // `.faeAudioLevel`, so without this the orb never enters `.speaking` during a
+        // daemon-spoken turn. Unlike the local path, hold `.speaking` for the WHOLE
+        // playback (any level → speaking) and relax only on the explicit end signal:
+        // daemon TTS RMS is quiet and dips below the speaking threshold in every
+        // pause, so the rms-gated + silence-watchdog handler would flicker the orb
+        // (and the pill) speaking↔idle with the speech envelope.
+        observations.append(
+            center.addObserver(
+                forName: .faeDaemonAudioLevel, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleDaemonSpeaking()
+                }
+            }
+        )
+        observations.append(
+            center.addObserver(
+                forName: .faeDaemonAudioEnded, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleDaemonPlaybackEnded()
+                }
+            }
+        )
+    }
+
+    /// Daemon playback is active — hold `.speaking` steadily (no rms threshold,
+    /// no silence watchdog; `.faeDaemonAudioEnded` is the authoritative end).
+    /// Never overrides `.listening` (the user owns the mic during barge-in).
+    private func handleDaemonSpeaking() {
+        guard let orbState else { return }
+        if orbState.mode == .idle || orbState.mode == .thinking {
+            orbState.mode = .speaking
+        }
+    }
+
+    /// Daemon playback ended. A multi-sentence reply is several back-to-back
+    /// `tts.speak` playbacks, so relaxing to idle immediately would flicker the
+    /// orb (and pill) idle↔speaking between every sentence. Arm a short grace
+    /// window instead; the next sentence's `handleDaemonSpeaking` cancels it, so
+    /// the orb only settles to idle once the whole reply is done.
+    private func handleDaemonPlaybackEnded() {
+        speakingSilenceTask?.cancel()
+        speakingSilenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled, let self, let orbState = self.orbState else { return }
+            if orbState.mode == .speaking {
+                orbState.mode = .idle
+            }
+        }
     }
 
     /// Drive `.speaking` from Fae's TTS playback level and relax to a lively

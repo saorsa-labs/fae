@@ -49,6 +49,13 @@ actor DaemonTTSEngine: TTSEngine {
 
     var isLoaded: Bool { loadState.isLoaded }
 
+    /// Socket + token paths this engine connects with (voice spine V3b: shared
+    /// with the pipeline's event subscriber so it opens its OWN connection to
+    /// the same daemon).
+    var endpoints: (socketPath: String, tokenPath: String) {
+        (socketPath, tokenPath)
+    }
+
     /// Voice used when the configured voice has no daemon-side equivalent
     /// (e.g. Fae's custom "fae" embedding, which is not ported to voice-tts yet).
     static let fallbackVoice = "af_heart"
@@ -187,11 +194,63 @@ actor DaemonTTSEngine: TTSEngine {
         return try Self.makePCMBuffer(samples: samples, sampleRate: sampleRate)
     }
 
+    // MARK: - Daemon-owned playback (voice spine V3b, FAE_DAEMON_PLAYBACK)
+
+    /// Synthesize and play in the daemon, returning the daemon playback id
+    /// immediately (non-blocking). The daemon streams `audio.level` and
+    /// `audio.playback_ended` on the event bus; a subscriber drives the orb +
+    /// pipeline state from those (see `DaemonEventSubscriber`).
+    ///
+    /// `speed` is sent to the daemon because the flag-ON path skips
+    /// `AudioPlaybackManager` resampling (where speed is applied today) —
+    /// otherwise the voice changes speed when the flag flips. Returns nil for
+    /// empty input / empty audio (nothing to play, not an error).
+    func speak(
+        text: String, voiceInstruct: String?, speed: Float
+    ) async throws -> String? {
+        guard isLoaded, let connection else { throw DaemonTTSEngineError.notLoaded }
+        let voice = Self.requestVoice(instruct: voiceInstruct, current: voice)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let requestID = nextRequestID()
+        let frame = try DaemonWire.encodeFrame(
+            requestID: requestID,
+            command: "tts.speak",
+            payload: [
+                "text": String(trimmed.prefix(2_000)),
+                "voice": voice,
+                "speed": Double(speed),
+            ])
+        let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
+        let response = try DaemonWire.unwrapResponse(raw)
+        let result = (response["result"] as? [String: Any]) ?? [:]
+        guard let playbackID = result["playback_id"] as? String else {
+            throw DaemonTTSEngineError.invalidAudioPayload("tts.speak returned no playback_id")
+        }
+        NSLog("DaemonTTSEngine: tts.speak playback_id=%@ voice=%@", playbackID, voice)
+        return playbackID
+    }
+
+    /// Barge-in (voice spine V3b): stop a daemon-owned playback. A nil
+    /// `playbackID` stops all live playbacks. Errors are logged and swallowed
+    /// — a failed stop must not strand the pipeline (the playback_ended event
+    /// or a natural finish still resolves state).
+    func stopPlayback(playbackID: String?) async {
+        guard isLoaded, let connection else { return }
+        var payload: [String: Any] = [:]
+        if let playbackID { payload["playback_id"] = playbackID }
+        let requestID = nextRequestID()
+        guard let frame = try? DaemonWire.encodeFrame(
+            requestID: requestID, command: "audio.stop", payload: payload)
+        else { return }
+        _ = try? await connection.roundTrip(frame: frame, expectRequestID: requestID)
+    }
+
     private func nextRequestID() -> String {
         requestCounter += 1
         return "t\(requestCounter)"
     }
-
     /// Connect to the existing daemon's socket (no launch, no polling — the
     /// daemon is already serving the LLM lane) and authenticate with the
     /// bootstrap token. The token is hash-verified per connection, so a second

@@ -59,6 +59,21 @@ final class RustUiShellController {
     private var stdoutBuffer = Data()
     private var cancellables: Set<AnyCancellable> = []
 
+    /// Voice spine V4 (`FAE_ORB_REAL_AUDIO`): when ON, the orb host receives the
+    /// live TTS RMS as `state.audio` and visibly rides Fae's voice instead of a
+    /// synthetic breath. Default OFF — the orb keeps its synthetic breath until
+    /// V3b daemon playback + this flag are both on. Independent of V3b so the
+    /// real-audio orb can be A/B'd against the synthetic breath in flag-ON mode.
+    private var useRealAudioOrb: Bool {
+        let value = ProcessInfo.processInfo.environment["FAE_ORB_REAL_AUDIO"]?
+            .lowercased()
+        return ["1", "true", "yes", "on"].contains(value ?? "")
+    }
+    /// True while we are actively pushing `state.audio` frames so the orb rides
+    /// the live voice; cleared (→ `audio: null`) when speech ends so the orb
+    /// returns to its synthetic breath.
+    private var ridingRealAudio: Bool = false
+
     /// Overall startup fraction (monotonic max of runtimeProgress events) —
     /// shown by the whisper pill + Messages status chip while starting.
     private var startupProgress: Double = 0
@@ -302,6 +317,34 @@ final class RustUiShellController {
                 self?.sendConversationSnapshot(messages)
             }
             .store(in: &cancellables)
+
+        // Voice spine V4: relay the DAEMON-originated TTS RMS into the orb host
+        // as `state.audio` so the orb visibly rides Fae's real voice (the shell
+        // applies `bridge_audio.unwrap_or(breath)`). Distinct from `.faeAudioLevel`
+        // (which also carries LOCAL AudioPlaybackManager levels) — V4 rides ONLY
+        // the daemon voice, so it subscribes to the daemon-specific names posted
+        // by PipelineCoordinator.handleDaemonPlaybackEvent. Gated by
+        // `FAE_ORB_REAL_AUDIO`; default OFF keeps the synthetic breath.
+        NotificationCenter.default.publisher(for: .faeDaemonAudioLevel)
+            .compactMap { ($0.userInfo?["rms"] as? Double).map(Float.init) }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] rms in
+                guard let self, self.useRealAudioOrb else { return }
+                self.ridingRealAudio = true
+                self.sendAudioLevel(rms)
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .faeDaemonAudioEnded)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                // Daemon playback ended (completed or interrupted) — stop riding
+                // and return the orb to its synthetic breath.
+                guard let self, self.ridingRealAudio else { return }
+                self.ridingRealAudio = false
+                self.sendAudioLevel(nil)
+            }
+            .store(in: &cancellables)
     }
 
     private func sendStateForCurrentOrbMode() {
@@ -331,6 +374,21 @@ final class RustUiShellController {
         // observes a willSet, so reading orbState.feeling there is stale).
         if let feeling = (feeling ?? orbState?.feeling)?.rawValue {
             message["feeling"] = feeling
+        }
+        send(message)
+    }
+
+    /// Voice spine V4: push the live TTS level to the orb host. `rms` (clamped
+    /// to 0…1) makes the orb ride Fae's real voice; `nil` returns it to the
+    /// synthetic breath. Sends a `state` command carrying ONLY `audio` (no
+    /// `state`/`feeling` change) so it composes with mode transitions. The shell
+    /// applies `bridge_audio.unwrap_or(breath)` per frame.
+    private func sendAudioLevel(_ rms: Float?) {
+        var message: [String: Any] = ["type": "state"]
+        if let rms {
+            message["audio"] = max(0, min(1, rms))
+        } else {
+            message["audio"] = NSNull()
         }
         send(message)
     }

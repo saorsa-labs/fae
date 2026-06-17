@@ -17,3 +17,6 @@ wgpu = "0.20"
 # `transparent` is opt-in (private `drawsBackground` API): without it the
 # whisper pill's webview paints an opaque canvas behind the frosted pill.
 wry = { version = "0.55", features = ["transparent"] }
+
+[dependencies.fae-control-plane]
+path = "../../../crates/fae-control-plane"

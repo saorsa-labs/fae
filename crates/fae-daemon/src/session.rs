@@ -302,7 +302,7 @@ async fn dispatch(
                 "tts": { "backend": tts_info.backend, "model_id": tts_info.model_id },
             }))
         }
-        "conversation.inject_text" => inject_text(backends.engine, cmd).await,
+        "conversation.inject_text" => inject_text(backends, cmd).await,
         // Open this connection's server-push event stream (voice spine V2). The
         // ack is the signal the transport uses to register the connection's sink
         // as a subscriber; events (e.g. `audio.level`) are then pushed to it,
@@ -325,6 +325,9 @@ async fn dispatch(
         "agent.list" => agent_list(),
         "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
         "engine.reload" => reload_adapter(backends.engine, cmd).await,
+        // Orb-host-owns-state: push an info set → publishes `info.update` to
+        // subscribed orb hosts (the green-dot indicator). StatusRead scope.
+        "info.push" => info_push(backends, cmd).await,
         _ => Err("not_implemented"),
     }
 }
@@ -805,7 +808,7 @@ fn parse_chat_request(payload: &serde_json::Value) -> Result<ChatRequest, &'stat
 /// single response. Streaming these as live protocol events is a follow-on, once
 /// the event/`conversation.subscribe` channel lands.
 async fn inject_text(
-    engine: &dyn ProviderAdapter,
+    backends: &SessionBackends<'_>,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
     // Diagnostic payload dump (dev only): FAE_DUMP_REQUESTS=<dir> writes each
@@ -824,6 +827,17 @@ async fn inject_text(
     }
     let request = parse_chat_request(&cmd.payload)?;
 
+    // Orb-host-owns-state: signal that the assistant is generating. Published
+    // ONLY after a successful parse (a malformed payload returns above before
+    // this, so it never publishes `active:true`). The paired `active:false` is
+    // guaranteed exactly once by the run loop below — every return path runs
+    // through it. Scope `ConversationRead` (the orb host's subscribe grant).
+    backends.events.publish(
+        "assistant.generating",
+        Scope::ConversationRead,
+        serde_json::json!({ "active": true }),
+    );
+
     // Gemma 4 on Metal produces NaN logits when a prompt's TOTAL length lands
     // in a narrow window of sequence lengths (mistral.rs kernel tiling edge;
     // deterministic per payload, diagnosed 2026-06-12, still present at
@@ -833,34 +847,75 @@ async fn inject_text(
     const NAN_PAD_UNIT: &str = "(Padding line for runtime alignment — ignore this line entirely.)";
     const NAN_RETRY_PADS: [usize; 3] = [4, 24, 80];
 
+    let engine = backends.engine;
     let mut attempt_request = request.clone();
-    for (attempt, pad_units) in std::iter::once(0_usize).chain(NAN_RETRY_PADS).enumerate() {
-        if pad_units > 0 {
-            let pad = std::iter::repeat_n(NAN_PAD_UNIT, pad_units)
-                .collect::<Vec<_>>()
-                .join("\n");
-            let base = request.system.clone().unwrap_or_default();
-            attempt_request = request.clone();
-            attempt_request.system = Some(format!("{base}\n\n{pad}"));
-            eprintln!(
-                "fae-daemon: inject_text retry {attempt} with {pad_units} pad units (NaN-logits length workaround)"
-            );
-        }
-        match run_turn(engine, attempt_request.clone()).await {
-            Ok(value) => return Ok(value),
-            Err(detail) if is_nan_logits_failure(&detail) && attempt < NAN_RETRY_PADS.len() => {
+    let outcome = async {
+        for (attempt, pad_units) in std::iter::once(0_usize).chain(NAN_RETRY_PADS).enumerate() {
+            if pad_units > 0 {
+                let pad = std::iter::repeat_n(NAN_PAD_UNIT, pad_units)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let base = request.system.clone().unwrap_or_default();
+                attempt_request = request.clone();
+                attempt_request.system = Some(format!("{base}\n\n{pad}"));
                 eprintln!(
-                    "fae-daemon: inject_text NaN-logits failure (attempt {attempt}): {detail}"
+                    "fae-daemon: inject_text retry {attempt} with {pad_units} pad units (NaN-logits length workaround)"
                 );
-                continue;
             }
-            Err(detail) => {
-                eprintln!("fae-daemon: inject_text failed: {detail}");
-                return Err("inference_failed");
+            match run_turn(engine, attempt_request.clone()).await {
+                Ok(value) => return Ok(value),
+                Err(detail) if is_nan_logits_failure(&detail) && attempt < NAN_RETRY_PADS.len() => {
+                    eprintln!(
+                        "fae-daemon: inject_text NaN-logits failure (attempt {attempt}): {detail}"
+                    );
+                    continue;
+                }
+                Err(detail) => {
+                    eprintln!("fae-daemon: inject_text failed: {detail}");
+                    return Err("inference_failed");
+                }
             }
+        }
+        Err("inference_failed")
+    }
+    .await;
+
+    // Exactly-once `active:false` — success, inference failure, OR retry
+    // exhaustion all reach here. The orb host's grace-hold turns this into an
+    // armed (not immediate) idle transition.
+    backends.events.publish(
+        "assistant.generating",
+        Scope::ConversationRead,
+        serde_json::json!({ "active": false }),
+    );
+    outcome
+}
+
+/// Orb-host-owns-state: publish an info set to subscribed orb hosts (the
+/// green-dot indicator). Payload: `{ items: [{ id, kind, title, action? }] }`.
+/// `kind` is forwarded as-is (router: `research`/`x0x`/`app`/`url`); unknown
+/// kinds are surfaced verbatim so the host can extend without a daemon change.
+async fn info_push(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let items = cmd.payload.get("items").ok_or("bad_request")?;
+    let items = items.as_array().ok_or("bad_request")?;
+    // Light validation: each item must carry id + kind + title (strings). We
+    // forward the whole item (including `action`) rather than reconstructing it.
+    for item in items {
+        if item.get("id").and_then(|v| v.as_str()).is_none()
+            || item.get("kind").and_then(|v| v.as_str()).is_none()
+            || item.get("title").and_then(|v| v.as_str()).is_none()
+        {
+            return Err("bad_request");
         }
     }
-    Err("inference_failed")
+    let payload = serde_json::json!({ "items": items });
+    backends
+        .events
+        .publish("info.update", Scope::StatusRead, payload.clone());
+    Ok(payload)
 }
 
 /// True when an engine failure carries the NaN-logits signature that the
@@ -1669,5 +1724,152 @@ mod tests {
             parse_chat_request(&huge).unwrap().max_tokens,
             MAX_TOKENS_CEILING
         );
+    }
+
+    // ── Orb-host-owns-state: assistant.generating event ──
+
+    /// A minimal capturing event sink for inject_text event tests. The real
+    /// transport's `ConnSink` is in `events.rs`; here we only need to record
+    /// the JSON lines published on the bus.
+    struct CapturingSink(std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>);
+
+    impl CapturingSink {
+        fn new() -> (
+            std::sync::Arc<Self>,
+            std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        ) {
+            let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            (
+                std::sync::Arc::new(CapturingSink(captured.clone())),
+                captured,
+            )
+        }
+    }
+
+    impl crate::events::EventSink for CapturingSink {
+        fn deliver(&self, line: &std::sync::Arc<Vec<u8>>) {
+            if let Ok(bytes) = serde_json::from_slice::<serde_json::Value>(line.as_ref()) {
+                if let Ok(mut store) = self.0.lock() {
+                    store.push(bytes);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn inject_text_publishes_generating_active_then_inactive_on_success() {
+        let bus = crate::events::EventBus::new();
+        let playbacks = crate::events::PlaybackRegistry::new();
+        let (sink, captured) = CapturingSink::new();
+        let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
+        bus.subscribe(
+            std::sync::Arc::downgrade(&sink_dyn),
+            [Scope::ConversationRead].into_iter().collect(),
+        );
+        let backends = SessionBackends {
+            engine: &mock(),
+            tts: &mock_tts(),
+            audio: &AudioManager::new(),
+            events: &bus,
+            playbacks: &playbacks,
+        };
+        let cmd = fae_control_plane::Command {
+            v: 2,
+            request_id: "gen1".to_owned(),
+            command: "conversation.inject_text".to_owned(),
+            payload: serde_json::json!({ "text": "hello" }),
+        };
+        let result = inject_text(&backends, &cmd).await.expect("turn ok");
+        assert_eq!(
+            result.get("text").and_then(|v| v.as_str()),
+            Some("echo: hello")
+        );
+
+        // Exactly two events, in order: active:true then active:false. This is
+        // the contract the orb host's grace-hold relies on (one paired signal
+        // per turn, never orphaned).
+        let store = captured.lock().expect("captured lock");
+        let actives: Vec<bool> = store
+            .iter()
+            .filter(|v| v.get("event").and_then(|e| e.as_str()) == Some("assistant.generating"))
+            .filter_map(|v| {
+                v.get("payload")
+                    .and_then(|p| p.get("active"))
+                    .and_then(|a| a.as_bool())
+            })
+            .collect();
+        assert_eq!(actives, vec![true, false], "paired generating signal");
+    }
+
+    #[tokio::test]
+    async fn info_push_validates_and_publishes_items() {
+        let bus = crate::events::EventBus::new();
+        let playbacks = crate::events::PlaybackRegistry::new();
+        let (sink, captured) = CapturingSink::new();
+        let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
+        // StatusRead scope — info.update is StatusRead (the orb host holds it).
+        bus.subscribe(
+            std::sync::Arc::downgrade(&sink_dyn),
+            [Scope::StatusRead].into_iter().collect(),
+        );
+        let backends = SessionBackends {
+            engine: &mock(),
+            tts: &mock_tts(),
+            audio: &AudioManager::new(),
+            events: &bus,
+            playbacks: &playbacks,
+        };
+        let cmd = fae_control_plane::Command {
+            v: 2,
+            request_id: "i1".to_owned(),
+            command: "info.push".to_owned(),
+            payload: serde_json::json!({
+                "items": [
+                    { "id": "r1", "kind": "research", "title": "Tidal energy notes", "action": { "url": "file:///tmp/r1.html" } }
+                ]
+            }),
+        };
+        let result = info_push(&backends, &cmd).await.expect("info ok");
+        assert!(result.get("items").is_some());
+
+        let store = captured.lock().expect("captured lock");
+        let updates: Vec<&serde_json::Value> = store
+            .iter()
+            .filter(|v| v.get("event").and_then(|e| e.as_str()) == Some("info.update"))
+            .collect();
+        assert_eq!(updates.len(), 1, "exactly one info.update");
+        let item = updates[0]
+            .get("payload")
+            .and_then(|p| p.get("items"))
+            .and_then(|i| i.get(0))
+            .expect("item forwarded");
+        assert_eq!(item.get("kind").and_then(|v| v.as_str()), Some("research"));
+        assert_eq!(
+            item.get("title").and_then(|v| v.as_str()),
+            Some("Tidal energy notes")
+        );
+    }
+
+    #[tokio::test]
+    async fn info_push_rejects_items_missing_required_fields() {
+        let bus = crate::events::EventBus::new();
+        let playbacks = crate::events::PlaybackRegistry::new();
+        let backends = SessionBackends {
+            engine: &mock(),
+            tts: &mock_tts(),
+            audio: &AudioManager::new(),
+            events: &bus,
+            playbacks: &playbacks,
+        };
+        // kind missing → bad_request, nothing published.
+        let cmd = fae_control_plane::Command {
+            v: 2,
+            request_id: "i2".to_owned(),
+            command: "info.push".to_owned(),
+            payload: serde_json::json!({ "items": [{ "id": "x", "title": "no kind" }] }),
+        };
+        let err = info_push(&backends, &cmd).await.expect_err("must reject");
+        assert_eq!(err, "bad_request");
+        assert_eq!(bus.subscriber_count(), 0, "no publish on rejection");
     }
 }

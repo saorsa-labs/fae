@@ -248,6 +248,9 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "engine.set_adapter_scale" => &[Scope::ModelManagement],
         // Deploy: restart the serving sidecar with a freshly-trained adapter.
         "engine.reload" => &[Scope::ModelManagement],
+        // Orb-host-owns-state: the info indicator (green-dot pill line). The
+        // daemon publishes the current info set to subscribed orb hosts.
+        "info.push" => &[Scope::StatusRead],
         "runtime.shutdown" | "runtime.emergency_lockout" => &[Scope::Admin],
         _ => return None,
     };

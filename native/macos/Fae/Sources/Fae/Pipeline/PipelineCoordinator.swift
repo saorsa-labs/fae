@@ -39,6 +39,24 @@ actor PipelineCoordinator {
     private let isRescueMode: Bool
     private let toolExecutor: ToolExecutor
 
+    // MARK: - Voice spine V3b (FAE_DAEMON_PLAYBACK)
+
+    /// When true, assistant TTS plays in the daemon (`tts.speak`) and the level
+    /// envelope + playback-end arrive as server-push events (see
+    /// `DaemonEventSubscriber`), NOT via local `AudioPlaybackManager`. Default
+    /// OFF: the shipping voice path is byte-identical until the flag is set.
+    /// Computed (not a stored init) so it reads the env lazily without a
+    /// `Self`-reference in a stored-property initializer.
+    private var useDaemonPlayback: Bool { Self.readDaemonPlaybackFlag() }
+
+    /// Live daemon playback id for the current assistant utterance (flag-ON).
+    /// Nil when nothing is playing through the daemon.
+    private var currentDaemonPlaybackID: String?
+
+    /// Dedicated event-subscribe connection (flag-ON only). Nil until the
+    /// daemon TTS engine provides its endpoints and the subscriber is started.
+    private var eventSubscriber: DaemonEventSubscriber?
+
     /// JSC runtime for executing `<tool_program>` script blocks.
     /// Lazily created on first script execution to avoid unnecessary
     /// JSC overhead when no scripts are used.
@@ -173,7 +191,7 @@ actor PipelineCoordinator {
         if assistantSpeaking {
             markGenerationInterrupted()
             ttsState.cancelPending()
-            await playback.stop()
+            await stopAssistantPlaybackForInterrupt()
         }
         pttCapturing = true
         pttHoldMode = holdMode
@@ -789,6 +807,13 @@ actor PipelineCoordinator {
         await playback.setSpeed(config.tts.speed)
         await setPlaybackEventHandler()
 
+        // Voice spine V3b: when the flag is ON, open the daemon event stream so
+        // `audio.level` / `audio.playback_ended` drive the orb + pipeline state.
+        // Flag-OFF never starts it (byte-identical shipping path).
+        if useDaemonPlayback {
+            await startDaemonEventSubscriberIfNeeded()
+        }
+
         if let wakeStore = wakeWordProfileStore {
             wakeAliases = await wakeStore.allAliases()
             debugLog(debugConsole, .command, "Wake aliases loaded: \(wakeAliases.joined(separator: ", "))")
@@ -837,7 +862,10 @@ actor PipelineCoordinator {
         await closeConversationSessionIfNeeded(reason: "pipeline_stop")
         await abandonAllWorkflowTraces(reason: "Pipeline stopped before workflow completion.")
         await capture.stopCapture()
-        await playback.stop()
+        await stopAssistantPlaybackForInterrupt()
+        // Voice spine V3b: close the daemon event stream on teardown (flag-ON).
+        eventSubscriber?.stop()
+        eventSubscriber = nil
         await llmEngine.shutdown()
         currentTurnID = nil
         eventBus.send(.pipelineStateChanged(.stopped))
@@ -862,7 +890,7 @@ actor PipelineCoordinator {
         }
 
         Task { [weak self] in
-            await self?.playback.stop()
+            await self?.stopAssistantPlaybackForInterrupt()
         }
         // Clear generation flag immediately so the pipeline accepts new segments.
         // Without this, a cancel during multi-tool recursion could leave
@@ -889,7 +917,7 @@ actor PipelineCoordinator {
         ttsState.resetForNewTurn()
 
         cancelDeferredToolJobs()
-        await playback.stop()
+        await stopAssistantPlaybackForInterrupt()
         assistantSpeaking = false
         lastAssistantStart = nil
         echoSuppressor.reset()
@@ -986,7 +1014,7 @@ actor PipelineCoordinator {
         // do not light the orb, but typed user input still supersedes them.
         if assistantSpeaking || assistantGenerating || assistantGenerationTracker.hasActiveGeneration {
             markGenerationInterrupted()
-            await playback.stop()
+            await stopAssistantPlaybackForInterrupt()
         }
 
         // Handle governance voice commands from injected text (mirrors voice segment processing).
@@ -1476,7 +1504,7 @@ actor PipelineCoordinator {
         engagedUntil = nil
         if assistantSpeaking || assistantGenerating || assistantGenerationTracker.hasActiveGeneration {
             markGenerationInterrupted()
-            Task { await playback.stop() }
+            Task { await stopAssistantPlaybackForInterrupt() }
         }
         NSLog("PipelineCoordinator: gate → idle")
     }
@@ -1771,7 +1799,7 @@ actor PipelineCoordinator {
         // Stop any active speech/generation immediately.
         if assistantSpeaking || assistantGenerating || assistantGenerationTracker.hasActiveGeneration {
             markGenerationInterrupted()
-            await playback.stop()
+            await stopAssistantPlaybackForInterrupt()
         }
         sleep(requireExplicitWake: true)
         currentTurnGenerationContext = nil
@@ -2207,7 +2235,7 @@ actor PipelineCoordinator {
         if assistantSpeaking {
             markGenerationInterrupted()
             ttsState.cancelPending()
-            await playback.stop()
+            await stopAssistantPlaybackForInterrupt()
         } else if assistantGenerating {
             // Silent generation in progress. Post-S18 every turn reaching here
             // is a DELIBERATE act (PTT capture or typed text) — dropping it
@@ -5126,7 +5154,7 @@ actor PipelineCoordinator {
             // playback cleanup, not about the LLM. Tool follow-up generations were
             // being killed here because assistantSpeaking was still true from the
             // first turn's "Let me check that for you" TTS.
-            await playback.stop()
+            await stopAssistantPlaybackForInterrupt()
             markAssistantSpeechEnded(reason: "speech_drain_timeout")
         }
     }
@@ -5182,6 +5210,39 @@ actor PipelineCoordinator {
 
         let effectiveVoiceInstruct = voiceInstruct ?? config.tts.defaultVoiceInstruct
         var didProduceAudio = false
+
+        // Voice spine V3b (FAE_DAEMON_PLAYBACK): synthesize + play in the
+        // daemon. Returns immediately with a playback id; the level envelope +
+        // playback-end arrive as server-push events
+        // (`handleDaemonPlaybackEvent`). No local enqueue/markEnd — the daemon
+        // owns playback, so there is no dual audio stream. Flag-OFF never runs
+        // this branch (byte-identical shipping path below).
+        if daemonPlaybackActive, let daemon = ttsEngine as? DaemonTTSEngine {
+            // Serialize segments: wait for any in-flight daemon playback to end
+            // before starting the next (otherwise clips overlap — the daemon's
+            // play_start is non-blocking). Bounded; a missing end-event falls
+            // through to the speech-drain watchdog.
+            await awaitDaemonPlaybackDrained(timeoutMs: 30_000)
+            do {
+                let playbackID = try await daemon.speak(
+                    text: text, voiceInstruct: effectiveVoiceInstruct, speed: config.tts.speed)
+                if let playbackID {
+                    currentDaemonPlaybackID = playbackID
+                    didProduceAudio = true
+                }
+                // `audio.playback_ended` resolves speech-end for the final
+                // chunk; for a non-final sentence there is no markEnd analogue
+                // (the daemon plays it through). If synthesis produced nothing,
+                // fall through to the no-audio handling below.
+                if isFinal && !didProduceAudio && assistantSpeaking {
+                    markAssistantSpeechEnded(reason: "tts_final_no_audio")
+                }
+            } catch {
+                NSLog("PipelineCoordinator: daemon tts.speak failed: %@", error.localizedDescription)
+                markAssistantSpeechEnded(reason: "tts_error")
+            }
+            return
+        }
 
         var ttsSamplesForEcho: [Float] = []
         var ttsSampleRate = 24_000
@@ -5274,7 +5335,7 @@ actor PipelineCoordinator {
         } catch {
             NSLog("PipelineCoordinator: TTS error: %@", error.localizedDescription)
             markAssistantSpeechEnded(reason: "tts_error")
-            await playback.stop()
+            await stopAssistantPlaybackForInterrupt()
         }
     }
 
@@ -5370,6 +5431,110 @@ actor PipelineCoordinator {
     }
 
     // MARK: - Playback Events
+
+    // MARK: - Voice spine V3b (FAE_DAEMON_PLAYBACK) helpers
+
+    /// `FAE_DAEMON_PLAYBACK` is ON only for `1/true/yes/on` (case-insensitive).
+    /// Unset/any other value → OFF (the shipping voice path is untouched).
+    private static func readDaemonPlaybackFlag() -> Bool {
+        let value = ProcessInfo.processInfo.environment["FAE_DAEMON_PLAYBACK"]?
+            .lowercased() ?? ""
+        return ["1", "true", "yes", "on"].contains(value)
+    }
+
+    /// Whether the daemon-owned playback path is active RIGHT NOW: the flag is
+    /// ON, the configured TTS engine is the daemon engine (the in-process MLX
+    /// lane has no `tts.speak`), AND the event stream is subscribed (without it,
+    /// `audio.playback_ended` would never arrive and strand the speaking state —
+    /// so we fall back to the local path rather than risk a hang).
+    private var daemonPlaybackActive: Bool {
+        useDaemonPlayback && (ttsEngine is DaemonTTSEngine) && eventSubscriber != nil
+    }
+
+    /// Open the daemon event-subscribe connection (once) and route
+    /// `audio.level` / `audio.playback_ended` into the existing playback-event
+    /// path. No-op if already started or if the daemon endpoints are missing.
+    private func startDaemonEventSubscriberIfNeeded() async {
+        guard eventSubscriber == nil,
+              let daemon = ttsEngine as? DaemonTTSEngine
+        else { return }
+        let endpoints = await daemon.endpoints
+        let deliveryQueue = DispatchQueue(label: "fae.daemon-events.delivery")
+        let subscriber = DaemonEventSubscriber(
+            socketPath: endpoints.socketPath,
+            tokenPath: endpoints.tokenPath,
+            deliveryQueue: deliveryQueue
+        ) { [weak self] event in
+            Task { await self?.handleDaemonPlaybackEvent(event) }
+        }
+        do {
+            try await subscriber.start()
+            eventSubscriber = subscriber
+            NSLog("PipelineCoordinator: daemon event stream subscribed (V3b)")
+        } catch {
+            NSLog(
+                "PipelineCoordinator: daemon event subscribe failed (%@) — flag-ON without levels",
+                error.localizedDescription)
+        }
+    }
+
+    /// Route a daemon server-push event into the pipeline. `audio.level` reuses
+    /// the local playback-level path (orb motion + TTFA); `audio.playback_ended`
+    /// ends assistant speech exactly like a local `.finished`/`.stopped`.
+    private func handleDaemonPlaybackEvent(_ event: DaemonPlaybackEvent) {
+        switch event {
+        case .level(let rms, let playbackID):
+            // Only ride the level for the playback we started — a stale event
+            // from a previous (already-stopped) clip must not move the orb.
+            guard playbackID == currentDaemonPlaybackID else { return }
+            handlePlaybackEvent(.level(rms: rms))
+            // Voice spine V4: notify daemon-specific consumers (the Rust orb
+            // shell's real-audio ride) with a name DISTINCT from `.faeAudioLevel`
+            // (which also carries local AudioPlaybackManager levels). V4 rides
+            // ONLY the daemon's voice.
+            NotificationCenter.default.post(
+                name: .faeDaemonAudioLevel, object: nil,
+                userInfo: ["rms": Double(rms), "playback_id": playbackID])
+        case .ended(let playbackID, let reason):
+            guard playbackID == currentDaemonPlaybackID else { return }
+            currentDaemonPlaybackID = nil
+            handlePlaybackEvent(reason == "interrupted" ? .stopped : .finished)
+            // Voice spine V4: tell the real-audio orb to stop riding (return to
+            // its synthetic breath).
+            NotificationCenter.default.post(
+                name: .faeDaemonAudioEnded, object: nil,
+                userInfo: ["playback_id": playbackID, "reason": reason])
+        }
+    }
+
+    /// Central assistant-speech interrupt (barge-in / teardown). Flag-ON stops
+    /// the daemon playback; flag-OFF stops local playback. Tones/beeps are NOT
+    /// routed through here — they keep using `playback.stop()`/tone helpers
+    /// directly.
+    /// Wait for the current daemon playback to end (driven by the
+    /// `audio.playback_ended` event), so multi-segment turns play sequentially
+    /// with NO overlap (the local path achieves this by queueing in
+    /// AudioPlaybackManager; the daemon path must serialize explicitly). Bounded
+    /// by `timeoutMs` so a missing end-event can't hang a turn.
+    private func awaitDaemonPlaybackDrained(timeoutMs: Int) async {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000.0)
+        while currentDaemonPlaybackID != nil, Date() < deadline {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 20_000_000)  // 20 ms poll
+        }
+    }
+
+    private func stopAssistantPlaybackForInterrupt() async {
+        if daemonPlaybackActive, let id = currentDaemonPlaybackID {
+            // Ask the daemon to stop; do NOT clear currentDaemonPlaybackID here —
+            // the daemon's `audio.playback_ended{interrupted}` event clears it
+            // (and resolves pipeline state via handleDaemonPlaybackEvent). If we
+            // nilled it now, that end-event would be ignored as a stale id.
+            await (ttsEngine as? DaemonTTSEngine)?.stopPlayback(playbackID: id)
+        } else {
+            await playback.stop()
+        }
+    }
 
     private func setPlaybackEventHandler() async {
         await playback.setEventHandler { [weak self] event in

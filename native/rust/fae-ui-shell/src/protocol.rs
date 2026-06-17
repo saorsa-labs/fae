@@ -1,6 +1,36 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::menu::MenuAction;
+
+/// Voice spine V4: tri-state `state.audio` patch. Distinguishes three wire
+/// shapes so a plain mode/status command (which OMITS `audio`) never clobber
+/// the live-voice ride:
+/// - field omitted → [`AudioPatch::Unchanged`] (no-op)
+/// - numeric value → [`AudioPatch::Set(f32)`] (clamp 0…1, ride the voice)
+/// - explicit `null` → [`AudioPatch::Clear`] (return to synthetic breath)
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum AudioPatch {
+    /// Field omitted — no-op (so a plain mode command never clobbers the ride).
+    #[default]
+    Unchanged,
+    Set(f32),
+    Clear,
+}
+
+impl<'de> Deserialize<'de> for AudioPatch {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Delegate to `Option<f32>`: `None` (explicit `null`) → Clear,
+        // `Some(v)` (number) → Set. The OMITTED case never reaches here —
+        // `#[serde(default)]` on the struct field supplies `Unchanged` first.
+        match Option::<f32>::deserialize(deserializer)? {
+            None => Ok(AudioPatch::Clear),
+            Some(value) => Ok(AudioPatch::Set(value)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,8 +48,13 @@ pub enum FaeUiState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ShellCommand {
     State {
-        state: FaeUiState,
-        audio: Option<f32>,
+        /// Optional so an audio-only frame (voice spine V4 level push) is valid
+        /// and leaves the mode untouched. Absent → keep the current orb mode;
+        /// present → set it (active/visuals/feeling as before).
+        #[serde(default)]
+        state: Option<FaeUiState>,
+        #[serde(default)]
+        audio: AudioPatch,
         /// Butler demeanor (OrbFeeling rawValue from Swift): neutral, calm,
         /// curiosity, warmth, concern, delight, focus, playful. Optional for
         /// protocol compatibility with senders that do not include it.
@@ -135,21 +170,34 @@ mod tests {
             serde_json::from_str(r#"{"type":"state","state":"listening","audio":0.25}"#)?;
         let decoded = match command {
             ShellCommand::State {
-                state: FaeUiState::Listening,
-                audio: Some(audio),
+                state: Some(FaeUiState::Listening),
+                audio: AudioPatch::Set(audio),
                 feeling: None,
             } => (audio - 0.25).abs() < f32::EPSILON,
             _ => false,
         };
         assert!(decoded);
 
+        // Voice spine V4: an audio-only frame (no `state`) must decode — it
+        // must NOT require a mode, or every level push is dropped.
+        let audio_only: ShellCommand = serde_json::from_str(r#"{"type":"state","audio":0.42}"#)?;
+        let decoded_audio_only = matches!(
+            audio_only,
+            ShellCommand::State {
+                state: None,
+                audio: AudioPatch::Set(_),
+                feeling: None,
+            }
+        );
+        assert!(decoded_audio_only, "audio-only state frame must decode");
+
         let with_feeling: ShellCommand = serde_json::from_str(
             r#"{"type":"state","state":"thinking","audio":null,"feeling":"concern"}"#,
         )?;
         let decoded_feeling = match with_feeling {
             ShellCommand::State {
-                state: FaeUiState::Thinking,
-                audio: None,
+                state: Some(FaeUiState::Thinking),
+                audio: AudioPatch::Clear,
                 feeling: Some(feeling),
             } => feeling == "concern",
             _ => false,

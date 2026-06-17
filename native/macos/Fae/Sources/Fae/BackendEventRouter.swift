@@ -355,6 +355,22 @@ extension Notification.Name {
     /// - `rms: Double` — root-mean-square amplitude 0.0–1.0
     static let faeAudioLevel = Notification.Name("faeAudioLevel")
 
+    // MARK: Voice spine V4 (daemon-originated audio)
+    //
+    // These are DISTINCT from `.faeAudioLevel` (which also carries LOCAL
+    // `AudioPlaybackManager` levels). V4's real-audio orb must ride ONLY the
+    // daemon's voice — so the RustUiShellController subscribes to these
+    // daemon-specific names, not the generic one.
+    //
+    /// `faeDaemonAudioLevel` userInfo:
+    /// - `rms: Double` — daemon playback RMS 0.0–1.0
+    /// - `playback_id: String` — the daemon playback this level belongs to
+    static let faeDaemonAudioLevel = Notification.Name("faeDaemonAudioLevel")
+    /// `faeDaemonAudioEnded` userInfo:
+    /// - `playback_id: String` — which playback ended
+    /// - `reason: String` — "completed" | "interrupted"
+    static let faeDaemonAudioEnded = Notification.Name("faeDaemonAudioEnded")
+
     // MARK: Pipeline State
 
     /// Posted for pipeline lifecycle events not handled by more specific notifications.

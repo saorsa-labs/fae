@@ -1,4 +1,11 @@
+/// Orb-host-owns-state: direct daemon subscription (own connection, drives the
+/// orb mode + voice ride via the grace-hold state machine). Unix-only (the orb
+/// host is a Unix GUI app; there is no non-Unix target). Default ON at runtime
+/// unless `FAE_ORB_DAEMON_AUDIO=0/false/off/no`.
+#[cfg(unix)]
+mod daemon_audio_bridge;
 mod menu;
+mod orb_state;
 mod protocol;
 
 use std::{
@@ -10,8 +17,8 @@ use std::{
 
 use menu::{MenuAction, OrbMenu};
 use protocol::{
-    FaeUiState, SchedulerTask, SettingItem, SettingOption, SettingsCard, SettingsSection,
-    ShellCommand, SkillSummary,
+    AudioPatch, FaeUiState, SchedulerTask, SettingItem, SettingOption, SettingsCard,
+    SettingsSection, ShellCommand, SkillSummary,
 };
 use tao::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
@@ -31,6 +38,12 @@ enum UserEvent {
     Menu(muda::MenuEvent),
     Bridge(ShellCommand),
     PanelAction(String),
+    /// Voice spine / orb-host-owns-state: a daemon-originated orb event. The
+    /// render loop runs the grace-hold state machine (`OrbStateMachine`) on
+    /// generating/level/ended/reset and applies the audio level to the orb.
+    /// Carried unconditionally (cheap enum); the bridge only emits when compiled
+    /// in + enabled.
+    DaemonOrb(orb_state::OrbDaemonEvent),
 }
 
 #[repr(C)]
@@ -119,6 +132,9 @@ struct OrbUiModel {
     skills: Vec<SkillSummary>,
     settings_sections: Vec<SettingsSection>,
     settings_cards: Vec<SettingsCard>,
+    /// Orb-host-owns-state: the current info-indicator set (green-dot pill line).
+    /// Populated by `info.update` events from the daemon bridge.
+    info_items: orb_state::InfoItems,
 }
 
 impl OrbUiModel {
@@ -133,6 +149,7 @@ impl OrbUiModel {
             skills: Vec::new(),
             settings_sections: Vec::new(),
             settings_cards: Vec::new(),
+            info_items: orb_state::InfoItems::default(),
         }
     }
 
@@ -196,6 +213,31 @@ struct State {
     /// Latest voice level from the Swift bridge; None means no live audio,
     /// so the orb falls back to a slow synthetic breath.
     bridge_audio: Option<f32>,
+}
+
+/// Voice spine V4: map a raw TTS RMS (`state.audio`) into the orb's expressive
+/// audio band. Speech RMS is quiet — peaks ~0.1, mean ~0.03 (measured live) —
+/// so passing it through raw rides the orb BELOW its rest breath (~0.12–0.22)
+/// and the voice never visibly swells the silhouette. Lift it so pauses sit
+/// near the rest level and speech peaks push well above it.
+fn rms_to_level(rms: f32) -> f32 {
+    // 0.0 rms → 0.18 (≈ rest breath, smooth); 0.12+ rms → 0.60 (full swell).
+    let normalized = (rms / 0.12).clamp(0.0, 1.0);
+    0.18 + normalized * 0.42
+}
+
+/// Voice spine V4: map a parsed `state.audio` patch onto the live level the
+/// orb rides. `Set(rms)` lifts the raw RMS into the expressive band (see
+/// [`rms_to_level`]); `Clear` returns the orb to its synthetic breath;
+/// `Unchanged` is a no-op (so a plain mode command that OMITS `audio` never
+/// clobbers an in-progress ride). Pure/free so it is unit-testable without
+/// constructing a full `State` (which needs a GPU window).
+fn apply_audio_patch(patch: AudioPatch, bridge_audio: &mut Option<f32>) {
+    match patch {
+        AudioPatch::Unchanged => {}
+        AudioPatch::Set(rms) => *bridge_audio = Some(rms_to_level(rms)),
+        AudioPatch::Clear => *bridge_audio = None,
+    }
 }
 
 impl State {
@@ -375,10 +417,8 @@ impl State {
         self.set_active(!self.active);
     }
 
-    fn set_audio(&mut self, audio: Option<f32>) {
-        if let Some(audio) = audio {
-            self.bridge_audio = Some(audio.clamp(0.0, 1.0));
-        }
+    fn set_audio(&mut self, patch: AudioPatch) {
+        apply_audio_patch(patch, &mut self.bridge_audio);
     }
 
     fn set_status_progress(&mut self, progress: Option<f32>, visible: bool) {
@@ -410,8 +450,10 @@ impl State {
             let breath = 0.12 + 0.10 * (0.5 + 0.5 * (time * 0.8).sin());
             self.bridge_audio.unwrap_or(breath)
         } else {
-            // Calm idle breath: lower baseline, gentler swing, slower period.
-            0.05 + 0.04 * (0.5 + 0.5 * (time * 0.45).sin())
+            // Calm idle breath: a touch gentler than active, but a full resting
+            // baseline (not a dim ember) so the orb returns to its start glow
+            // after speaking instead of looking extinguished.
+            0.11 + 0.05 * (0.5 + 0.5 * (time * 0.45).sin())
         };
         self.uniforms.audio += (target - self.uniforms.audio) * 0.08;
         // Ease emotion params toward their targets so demeanor shifts read as
@@ -491,6 +533,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }));
     spawn_stdin_bridge(proxy.clone());
+    // Orb-host-owns-state: spawn the direct daemon subscription. The bridge
+    // derives the orb mode (thinking/speaking/idle via grace-hold) from
+    // `assistant.generating` + `audio.level` + `audio.playback_ended`, and
+    // rides the voice RMS. Default ON; FAE_ORB_DAEMON_AUDIO=0 disables.
+    #[cfg(unix)]
+    daemon_audio_bridge::spawn_daemon_bridge(proxy.clone());
 
     let window = WindowBuilder::new()
         .with_title("Fae Orb")
@@ -512,9 +560,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut pill = open_pill_panel(&event_loop, &panel_proxy)?;
     position_pill(window, &pill);
     let mut last_pill: Option<(String, String)> = None;
+    // Last applied collapsed-pill height — skip redundant resizes so the pill
+    // doesn't flicker as a streamed reply re-measures on every sentence.
+    let mut last_pill_height: u32 = COLLAPSED_PILL.height;
     // When Fae entered thinking mode — drives the pill's elapsed counter so
     // long turns (NaN retries can take 30s+) read as progress, not a hang.
     let mut thinking_since: Option<Instant> = None;
+    // Orb-host-owns-state: the grace-hold state machine driven by daemon events
+    // (assistant.generating / audio.level / playback_ended). Derives the orb
+    // mode WITHOUT the thinking→idle→thinking / speaking→idle→speaking flicker.
+    let mut orb_state_machine = orb_state::OrbStateMachine::new();
+    // Stable epoch for the state machine's `now_ms` clock (monotonic).
+    let process_start = Instant::now();
+    // Last OrbUiState we applied from the state machine — lets us skip redundant
+    // set_active/set_emotion/orb_ui writes when the mode is unchanged.
+    let mut last_applied_mode: Option<orb_state::OrbMode> = None;
     // Orb long-press gesture (owner design, touch-friendly): press-and-HOLD
     // starts capture (release sends); moving past the slop before the hold
     // fires means the user is dragging the orb, not talking.
@@ -584,16 +644,83 @@ fn main() -> Result<(), Box<dyn Error>> {
             Event::UserEvent(UserEvent::PanelAction(action_json)) => {
                 // The pill drives expand/collapse locally (window resize); all
                 // other panel actions (send_text, set_access, …) forward to Swift.
-                match serde_json::from_str::<serde_json::Value>(&action_json)
-                    .ok()
+                let parsed = serde_json::from_str::<serde_json::Value>(&action_json).ok();
+                let kind = parsed
                     .as_ref()
                     .and_then(|value| value.get("type"))
-                    .and_then(|kind| kind.as_str())
-                {
+                    .and_then(|kind| kind.as_str());
+                match kind {
                     Some("pill_expand") => set_pill_expanded(&mut pill, window, true),
                     Some("pill_collapse") => set_pill_expanded(&mut pill, window, false),
+                    // The collapsed pill grows to fit a wrapped response (and
+                    // shrinks back for a one-line status/hint). Ignored while
+                    // expanded — the conversation panel owns the size there.
+                    Some("pill_resize") => {
+                        if !pill.expanded {
+                            if let Some(height) = parsed
+                                .as_ref()
+                                .and_then(|value| value.get("height"))
+                                .and_then(serde_json::Value::as_u64)
+                            {
+                                let height = (height as u32).clamp(52, 240);
+                                if height != last_pill_height {
+                                    last_pill_height = height;
+                                    pill.window.set_inner_size(LogicalSize::new(
+                                        COLLAPSED_PILL.width,
+                                        height,
+                                    ));
+                                    position_pill(window, &pill);
+                                }
+                            }
+                        }
+                    }
                     _ => emit_panel_action(&action_json),
                 }
+            }
+            // Orb-host-owns-state: a daemon-originated event. Apply the audio
+            // side-band (ride the voice) AND run the grace-hold state machine
+            // to derive the orb mode (thinking/speaking/idle WITHOUT the
+            // mid-turn flicker). The state machine is the single source of
+            // truth for the mode now — Swift no longer drives it.
+            #[cfg(unix)]
+            Event::UserEvent(UserEvent::DaemonOrb(event)) => {
+                use orb_state::OrbDaemonEvent;
+                // Audio side-band: ride the RMS while speaking, clear on end/reset.
+                match &event {
+                    OrbDaemonEvent::AudioLevel(rms) => {
+                        state.set_audio(AudioPatch::Set(*rms));
+                    }
+                    OrbDaemonEvent::PlaybackEnded
+                    | OrbDaemonEvent::ConnectionReset
+                    | OrbDaemonEvent::Generating(false) => {
+                        state.set_audio(AudioPatch::Clear);
+                    }
+                    _ => {}
+                }
+                // Run the grace-hold state machine on the mode-relevant inputs.
+                let now_ms = process_start.elapsed().as_millis();
+                if let Some(input) = event.to_state_input() {
+                    let mode = orb_state_machine.event(input, now_ms);
+                    apply_orb_mode(
+                        mode,
+                        &mut orb_ui,
+                        &mut state,
+                        &mut last_applied_mode,
+                        &mut thinking_since,
+                    );
+                }
+                // Forward info updates to the pill model (Step 3: the indicator).
+                if let OrbDaemonEvent::InfoUpdate(items) = &event {
+                    orb_ui.info_items = items.clone();
+                    push_pill_messages(&pill, &orb_ui);
+                    refresh_pill(
+                        &pill,
+                        &orb_ui,
+                        thinking_since.map(|since| since.elapsed().as_secs()),
+                        &mut last_pill,
+                    );
+                }
+                window.request_redraw();
             }
             Event::WindowEvent {
                 event, window_id, ..
@@ -706,6 +833,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             Event::MainEventsCleared => {
+                // Orb-host-owns-state: tick the grace-hold state machine so an
+                // expired grace (assistant stopped, audio gone) returns the orb
+                // to idle without waiting for the next daemon event.
+                let now_ms = process_start.elapsed().as_millis();
+                let mode = orb_state_machine.tick(now_ms);
+                apply_orb_mode(
+                    mode,
+                    &mut orb_ui,
+                    &mut state,
+                    &mut last_applied_mode,
+                    &mut thinking_since,
+                );
                 // Tick the thinking counter once a second (refresh_pill dedupes
                 // by content, so per-frame calls only repaint on text change).
                 if thinking_since.is_some() {
@@ -872,6 +1011,42 @@ fn emit_menu_action(action: MenuAction) {
     }
 }
 
+/// Orb-host-owns-state: apply a derived [`OrbMode`] to the orb + pill model.
+/// No-op when the mode is unchanged (the grace-hold re-arms frequently during
+/// a turn but the effective mode is stable — skip redundant writes). Mirrors
+/// what the Swift `State` command used to do, now driven from daemon events.
+fn apply_orb_mode(
+    mode: orb_state::OrbMode,
+    orb_ui: &mut OrbUiModel,
+    state: &mut State,
+    last_applied: &mut Option<orb_state::OrbMode>,
+    thinking_since: &mut Option<Instant>,
+) {
+    if *last_applied == Some(mode) {
+        return;
+    }
+    *last_applied = Some(mode);
+    let ui_state = match mode {
+        orb_state::OrbMode::Quiescent => FaeUiState::Quiescent,
+        orb_state::OrbMode::Thinking => FaeUiState::Thinking,
+        orb_state::OrbMode::Speaking => FaeUiState::Speaking,
+    };
+    orb_ui.ui_mode = ui_state;
+    let active = matches!(
+        ui_state,
+        FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
+    );
+    state.set_active(active);
+    state.set_emotion(ui_state, None);
+    // Track thinking-entry for the pill's elapsed counter (long turns read as
+    // progress, not a hang).
+    *thinking_since = if ui_state == FaeUiState::Thinking {
+        Some(Instant::now())
+    } else {
+        None
+    };
+}
+
 fn emit_panel_action(action_json: &str) {
     let mut stdout = io::stdout().lock();
     if let Err(error) = writeln!(stdout, "{action_json}") {
@@ -896,16 +1071,20 @@ fn apply_bridge_command(
             // S18: the orb is Fae's only UI and the push-to-talk button — it
             // stays visible at all times; thinking/speaking/listening animate
             // it. Hiding flows through the explicit Hide command (Hide Fae).
-            let active = matches!(
-                ui_state,
-                FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
-            );
-            orb_ui.ui_mode = ui_state;
-            state.set_active(active);
+            // An audio-only frame (`state` absent, voice spine V4 level push)
+            // leaves the mode untouched and only updates the live level.
+            if let Some(ui_state) = ui_state {
+                let active = matches!(
+                    ui_state,
+                    FaeUiState::Thinking | FaeUiState::Speaking | FaeUiState::Listening
+                );
+                orb_ui.ui_mode = ui_state;
+                state.set_active(active);
+                state.set_emotion(ui_state, feeling.as_deref());
+                state.set_status_progress(None, false);
+                window.set_visible(true);
+            }
             state.set_audio(audio);
-            state.set_emotion(ui_state, feeling.as_deref());
-            state.set_status_progress(None, false);
-            window.set_visible(true);
         }
         ShellCommand::Status {
             phase,
@@ -917,7 +1096,7 @@ fn apply_bridge_command(
             state.set_active(should_show);
             state.set_status_progress(orb_ui.status_progress, should_show);
             if let Some(progress) = orb_ui.status_progress {
-                state.set_audio(Some(progress));
+                state.set_audio(AudioPatch::Set(progress));
             }
             // Status changes animate the orb but never hide it (S18: the orb
             // is the talk button and must stay clickable while idle).
@@ -1187,7 +1366,7 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;
 .msg{display:flex;gap:9px;align-items:flex-start;animation:rise .2s ease-out}
 .msg .d{width:6px;height:6px;border-radius:50%;margin-top:6px;flex:none;background:var(--muted)}
 .msg.you .d{background:var(--you)}.msg.fae .d{background:var(--fae)}
-.msg .b{font:13px/1.42 var(--serif);white-space:pre-wrap;word-break:break-word}
+.msg .b{font:13px/1.55 var(--serif);white-space:pre-wrap;word-break:break-word}
 .msg.you .b{color:#CEC4DC}
 @keyframes rise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 #cmp{display:flex;align-items:center;gap:8px;padding:9px 11px 11px;flex:none;
@@ -1200,6 +1379,12 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;
  background:var(--fae);color:#0F1013;font-size:15px;font-weight:600;
  display:flex;align-items:center;justify-content:center;opacity:.5;transition:opacity .15s}
 #snd.ready{opacity:1}
+#line{transition:opacity .35s ease}
+#line.fading{opacity:0}
+#line.multi{height:auto;align-items:flex-start;padding:11px 16px;white-space:normal}
+#line.multi #dot{margin-top:6px}
+#line.multi #txt{white-space:pre-wrap;overflow:hidden;text-overflow:clip;line-height:1.5}
+#shell.multi{border-radius:20px}
 </style></head><body>
 <div id='shell'>
  <div id='line'><span id='dot'></span><span id='txt'></span></div>
@@ -1216,17 +1401,43 @@ var shell=document.getElementById('shell'),line=document.getElementById('line'),
 var messages=[],status=null;
 var post=function(o){if(window.ipc&&window.ipc.postMessage)window.ipc.postMessage(JSON.stringify(o));};
 function rc(r){return r==='fae'?'fae':((r==='you'||r==='user')?'you':'');}
+var fadeTimer=null,fadeOut=null;
+function clearFade(){if(fadeTimer){clearTimeout(fadeTimer);fadeTimer=null;}
+ if(fadeOut){clearTimeout(fadeOut);fadeOut=null;}line.classList.remove('fading');}
+function sizePill(isMsg){
+ if(shell.classList.contains('expanded'))return;
+ if(!isMsg){line.classList.remove('multi');shell.classList.remove('multi');
+  post({type:'pill_resize',height:52});return;}
+ // Let the text wrap, then measure its FULL content height (scrollHeight — not
+ // getBoundingClientRect, which is clipped by the 52px window) and grow only
+ // when it actually needs >1 line. Short lines stay a one-line pill.
+ line.classList.add('multi');shell.classList.add('multi');
+ requestAnimationFrame(function(){
+  var sh=txt.scrollHeight,multi=sh>26;
+  line.classList.toggle('multi',multi);shell.classList.toggle('multi',multi);
+  post({type:'pill_resize',height:multi?Math.min(220,Math.max(60,sh+30)):52});});}
+function armFade(){fadeTimer=setTimeout(function(){line.classList.add('fading');
+ fadeOut=setTimeout(function(){line.className='muted';dot.className='';
+  txt.textContent='Hold right ⌥ to talk · click to see conversation';line.classList.remove('fading');sizePill(false);},360);},7000);}
+// Make a spoken reply readable: keep any real structure (newlines), else break
+// a run-on paragraph into one line per sentence (caption style) so it doesn't
+// read as a single dense block.
+function formatBody(t){t=(t||'').trim();
+ if(t.indexOf('\n')>=0)return t;
+ return t.replace(/([.!?])\s+(?=[A-Z0-9"'(‘“])/g,'$1\n');}
 function renderLine(){
+ clearFade();
  if(status){line.className=(status.kind||'');dot.className=status.live?'live':'';
-  txt.textContent=status.text;line.classList.toggle('muted',status.muted===true);return;}
+  txt.textContent=status.text;line.classList.toggle('muted',status.muted===true);sizePill(false);return;}
  var m=messages[messages.length-1];
- if(m){line.className='';dot.className=rc(m.role);txt.textContent=m.text;}
- else{line.className='muted';dot.className='';txt.textContent='Hold ⌥ or click to talk';}
+ if(m){line.className='';dot.className=rc(m.role);txt.textContent=formatBody(m.text);
+  if(!shell.classList.contains('expanded')){sizePill(true);armFade();}}
+ else{line.className='muted';dot.className='';txt.textContent='Hold right ⌥ to talk · click to see conversation';sizePill(false);}
 }
 function renderLog(){log.innerHTML='';messages.forEach(function(m){
  var e=document.createElement('div');e.className='msg '+rc(m.role);
  var d=document.createElement('span');d.className='d';
- var b=document.createElement('span');b.className='b';b.textContent=m.text;
+ var b=document.createElement('span');b.className='b';b.textContent=formatBody(m.text);
  e.appendChild(d);e.appendChild(b);log.appendChild(e);});log.scrollTop=log.scrollHeight;}
 window.__faeSetMessages=function(a){messages=a||[];shell.classList.add('show');renderLine();
  if(shell.classList.contains('expanded'))renderLog();};
@@ -1279,16 +1490,18 @@ fn pill_status(
                 };
                 Some(("info", text, "{live:true}"))
             }
-            FaeUiState::Speaking => {
-                Some(("info", "Speaking — tap ⌥ to interrupt".to_string(), "{}"))
-            }
+            // Voice spine V4: during the reply, clear the status so the pill
+            // shows the streaming response TEXT (the latest message) rather than
+            // a static "Speaking" label — the orb's speaking glow already says
+            // she's talking, and the owner wants to watch the words arrive.
+            FaeUiState::Speaking => None,
             FaeUiState::Quiescent => {
                 if !orb_ui.has_user_message() {
                     // The one teaching moment that matters: shown until the
                     // user's first turn of the session.
                     Some((
                         "hint",
-                        "Hold ⌥ or click to talk".to_string(),
+                        "Hold right ⌥ to talk · click to see conversation".to_string(),
                         "{muted:true}",
                     ))
                 } else {
@@ -1762,5 +1975,68 @@ fn show_context_menu(menu: &OrbMenu, window: &Window, position: PhysicalPosition
     {
         let _ = (&menu.menu, window, position);
         log::warn!("context menu popup is not wired for this platform yet");
+    }
+}
+
+#[cfg(test)]
+mod v4_tests {
+    use super::{apply_audio_patch, rms_to_level};
+    use crate::protocol::AudioPatch;
+
+    fn approx(level: Option<f32>, expected: f32) -> bool {
+        level.map(|v| (v - expected).abs() < 1e-5).unwrap_or(false)
+    }
+
+    #[test]
+    fn set_maps_raw_rms_into_the_expressive_band() {
+        // Raw TTS RMS is quiet; Set lifts it so a pause sits near the rest
+        // breath and speech peaks swell well above it (the live bug: raw RMS
+        // ~0.03 rode the orb BELOW its ~0.12 breath baseline).
+        let mut level = None;
+        apply_audio_patch(AudioPatch::Set(0.0), &mut level);
+        assert!(approx(level, 0.18), "silence → rest level, got {level:?}");
+        apply_audio_patch(AudioPatch::Set(0.06), &mut level);
+        assert!(approx(level, 0.39), "mid speech → mid swell, got {level:?}");
+        apply_audio_patch(AudioPatch::Set(0.12), &mut level);
+        assert!(
+            approx(level, 0.60),
+            "strong speech → full swell, got {level:?}"
+        );
+        // Monotonic + always above the rest breath while speaking.
+        assert!(rms_to_level(0.02) > rms_to_level(0.0));
+    }
+
+    #[test]
+    fn set_clamps_oversized_and_negative_into_the_band() {
+        // RMS can briefly exceed the band or glitch negative — clamp into 0.18…0.60.
+        let mut level = None;
+        apply_audio_patch(AudioPatch::Set(1.7), &mut level);
+        assert!(
+            approx(level, 0.60),
+            "oversize clamps to full, got {level:?}"
+        );
+        apply_audio_patch(AudioPatch::Set(-0.4), &mut level);
+        assert!(
+            approx(level, 0.18),
+            "negative clamps to rest, got {level:?}"
+        );
+    }
+
+    #[test]
+    fn clear_resets_the_ride() {
+        // Explicit `null` → Clear → orb returns to synthetic breath.
+        let mut level = Some(0.8);
+        apply_audio_patch(AudioPatch::Clear, &mut level);
+        assert_eq!(level, None);
+    }
+
+    #[test]
+    fn unchanged_does_not_clobber_an_in_progress_ride() {
+        // The crucial V4 invariant: a mode/status command that OMITS `audio`
+        // (→ Unchanged) must NOT clear an in-progress ride. Without this, every
+        // plain `sendState` would reset the orb to the synthetic breath.
+        let mut level = Some(0.6);
+        apply_audio_patch(AudioPatch::Unchanged, &mut level);
+        assert_eq!(level, Some(0.6));
     }
 }
