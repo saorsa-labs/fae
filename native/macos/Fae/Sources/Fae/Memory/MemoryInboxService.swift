@@ -416,7 +416,7 @@ actor MemoryInboxService {
     /// for FTS5 search and recall snippets.
     private static let maxRecordTextChars = 2000
 
-    private static func importedRecordText(
+    static func importedRecordText(
         sourceType: MemoryArtifactSourceType,
         title: String?,
         origin: String?,
@@ -483,7 +483,7 @@ actor MemoryInboxService {
         throw ImportError.unsupportedFileType(url.lastPathComponent)
     }
 
-    private static func readPlainText(url: URL) throws -> String {
+    static func readPlainText(url: URL) throws -> String {
         if let text = try? String(contentsOf: url, encoding: .utf8) {
             return text
         }
