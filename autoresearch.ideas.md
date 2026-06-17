@@ -104,3 +104,42 @@ To push beyond 30% would require:
 - XCUITest for SwiftUI views
 
 The 90% target is a category error for a SwiftUI-heavy macOS app with system framework dependencies. Natural ceiling: **30-35%**.
+
+## Phase 2 (Real Measurement, 2026-06-17) — coverage_pct 27.8% → 36.5%
+
+### KEY METHODOLOGY FIX (run #127-128)
+- autoresearch.sh had TWO bugs preventing completion: (1) skip_suite compared
+  full name vs short name → ran the hanging VocabularyHarvestTests under
+  --enable-code-coverage; (2) no resume → every run re-ran discovery(50s)+250
+  suites and got killed. Fixed: prefix-stripping skip, FAE_COV_RESUME, suite
+  cache. Now completes in ~7-8min reliably.
+- TRUE baseline is 35.8% (total_lines=90283), NOT the prior 29.4% which was
+  measured against incomplete profraw sets (sweeps killed mid-run, ~40K line
+  undercount). 35.8% is reproducible to the line.
+- VocabularyHarvestTests genuinely hangs under coverage instrumentation (exit 124).
+
+### WINNING STRATEGY: mine 0%-covered PURE-LOGIC files (2 per iteration)
+Each batch of 2 tractable zero-cov files → +0.1pt +2 files_covered, reliably.
+Highest-ROI pattern: expose/test pure static funcs or pure parsers.
+Completed: EntityLinker, WorkspaceSnapshot, ACPSessionManager, MetaOptimizer,
+DeviceHandoff, TestServer, CircuitBreaker, SearchHTTPClient, BraveEngine,
+StartpageEngine, + earlier BuiltinToolsStatic/FaeCore builders/pure helpers.
+
+### Recurring techniques
+- XCTestAssert*(await ...) fails — autoclosures don't support concurrency.
+  Extract: `let r = await x(); XCTAssertTrue(r)`.
+- SearchResult/ExtractedEdge not Equatable → use .isEmpty / field asserts.
+- Nested-private types (CircuitState, errnoString at brace-depth 2): test
+  behaviourally or skip.
+- @MainActor test class needed for @MainActor types (TestServer).
+- In-memory GRDB: `EntityStore(dbQueue: try DatabaseQueue())` unlocks actor
+  instance-method coverage.
+- Making an instance func `static` (when it doesn't use self) avoids actor/DB
+  construction deps (MetaOptimizer.encodeScores).
+
+### Remaining tractable zero-cov (74 total, keep batching 2/iter)
+ReversibilityEngine (122L, fs-checkpoints), ToolAnalytics (180L, actor+DB-file),
+VectorStore (203L actor), AudioToneGenerator (70L), HandoffKVStore (62L, iCloud-
+NO), MCPToolProxy (43L), MemoryBackup (55L), DependencyInstaller (170L),
+DockIconAnimator (137L), ProcessCommandSender (147L), MLXVLMEngine (242L),
+SearchOrchestrator (239L).
