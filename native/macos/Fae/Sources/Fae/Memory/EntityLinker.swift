@@ -276,7 +276,7 @@ actor EntityLinker {
     // MARK: - Private Helpers
 
     /// Extract first name-like token from text.
-    private func extractFirstName(from text: String) -> String? {
+    func extractFirstName(from text: String) -> String? {
         let words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
         var nameParts: [String] = []
         for word in words {
