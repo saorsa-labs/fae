@@ -64,7 +64,7 @@ actor VoiceLibrary {
     /// Copies the WAV file and creates a metadata JSON.
     func save(name: String, wavURL: URL, referenceText: String?, description: String? = nil) throws {
         ensureDirectory()
-        let sanitized = sanitizeName(name)
+        let sanitized = Self.sanitizeName(name)
         let destWAV = Self.voicesDirectory.appendingPathComponent("\(sanitized).wav")
         let destJSON = Self.voicesDirectory.appendingPathComponent("\(sanitized).json")
 
@@ -87,7 +87,7 @@ actor VoiceLibrary {
 
     /// Load a voice by name. Returns (wavURL, referenceText) or nil if not found.
     func load(name: String) -> (url: URL, referenceText: String?)? {
-        let sanitized = sanitizeName(name)
+        let sanitized = Self.sanitizeName(name)
         let wavPath = Self.voicesDirectory.appendingPathComponent("\(sanitized).wav")
         let jsonPath = Self.voicesDirectory.appendingPathComponent("\(sanitized).json")
 
@@ -104,7 +104,7 @@ actor VoiceLibrary {
 
     /// Delete a voice from the library.
     func delete(name: String) throws {
-        let sanitized = sanitizeName(name)
+        let sanitized = Self.sanitizeName(name)
         let wavPath = Self.voicesDirectory.appendingPathComponent("\(sanitized).wav")
         let jsonPath = Self.voicesDirectory.appendingPathComponent("\(sanitized).json")
 
@@ -121,7 +121,7 @@ actor VoiceLibrary {
 
     /// Set a voice as the default.
     func setDefault(name: String) throws {
-        let sanitized = sanitizeName(name)
+        let sanitized = Self.sanitizeName(name)
         let wavPath = Self.voicesDirectory.appendingPathComponent("\(sanitized).wav")
         guard FileManager.default.fileExists(atPath: wavPath.path) else {
             throw NSError(domain: "VoiceLibrary", code: 1,
@@ -145,7 +145,7 @@ actor VoiceLibrary {
     }
 
     /// Sanitize a voice name for use as a filename (lowercase, alphanumeric + hyphens).
-    private func sanitizeName(_ name: String) -> String {
+    static func sanitizeName(_ name: String) -> String {
         let cleaned = name.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.union(.init(charactersIn: "-_")).inverted)
             .joined(separator: "-")
