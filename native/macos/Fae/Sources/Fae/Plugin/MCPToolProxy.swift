@@ -62,7 +62,7 @@ final class MCPToolProxy: Tool, @unchecked Sendable {
     }
 
     /// Convert MCP Value schema to JSON string.
-    private static func schemaToString(_ schema: MCP.Value) -> String {
+    static func schemaToString(_ schema: MCP.Value) -> String {
         // Encode the MCP Value to JSON data, then to string.
         if let data = try? JSONEncoder().encode(schema),
            let str = String(data: data, encoding: .utf8)
