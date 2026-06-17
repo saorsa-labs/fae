@@ -241,6 +241,7 @@ actor DaemonTTSEngine: TTSEngine {
         var payload: [String: Any] = [:]
         if let playbackID { payload["playback_id"] = playbackID }
         let requestID = nextRequestID()
+        NSLog("DaemonTTSEngine: audio.stop playback_id=%@", playbackID ?? "<all>")
         guard let frame = try? DaemonWire.encodeFrame(
             requestID: requestID, command: "audio.stop", payload: payload)
         else { return }

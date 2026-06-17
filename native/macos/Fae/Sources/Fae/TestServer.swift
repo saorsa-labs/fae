@@ -13,6 +13,8 @@ import Network
 /// - `GET  /events?since=N`— Debug console events since sequence N
 /// - `GET  /conversation`  — Messages array + isGenerating + streamingText
 /// - `POST /cancel`        — Cancel current LLM generation
+/// - `POST /ptt-start`     — Trigger PTT start (barge-in test; hits `FaeCore.pttStart`)
+/// - `POST /ptt-stop`      — Trigger PTT stop (ends a `/ptt-start` hold capture)
 /// - `POST /config`        — `{"key":"...","value":"..."}` → FaeCore.patchConfig()
 /// - `POST /approve`       — `{"approved":true}` → resolve pending tool approval
 /// - `GET  /approvals`     — List pending approval requests
@@ -171,6 +173,10 @@ final class TestServer {
             handleConversation(connection: connection)
         case ("POST", "/cancel"):
             handleCancel(connection: connection)
+        case ("POST", "/ptt-start"):
+            handlePttStart(connection: connection)
+        case ("POST", "/ptt-stop"):
+            handlePttStop(connection: connection)
         case ("POST", "/config"):
             handleConfig(body: body, connection: connection)
         case ("POST", "/approve"):
@@ -417,6 +423,27 @@ final class TestServer {
     private func handleCancel(connection: NWConnection) {
         faeCore?.cancel()
         sendResponse(connection: connection, status: 200, body: ["ok": true, "cancelled": true])
+    }
+
+    // MARK: - PTT (barge-in test) Endpoint
+
+    /// Test-only PTT trigger so barge-in can be exercised headlessly (the real
+    /// PTT hotkey is a hardware Right-⌥ global monitor this test server can't
+    /// synthesize). `/ptt-start` calls `FaeCore.pttStart()`, which — if the
+    /// assistant is speaking — interrupts via `stopAssistantPlaybackForInterrupt`
+    /// (daemon path: daemon `audio.stop` + `audio.playback_ended{interrupted}`;
+    /// local path: `AudioPlaybackManager.stop`). Pair with `/ptt-stop` to end
+    /// the hold capture, or it self-ends on silence/timeout.
+    private func handlePttStart(connection: NWConnection) {
+        let faeCore = self.faeCore
+        Task { await faeCore?.pttStart() }
+        sendResponse(connection: connection, status: 200, body: ["ok": true, "ptt": "start"])
+    }
+
+    private func handlePttStop(connection: NWConnection) {
+        let faeCore = self.faeCore
+        Task { await faeCore?.pttStop() }
+        sendResponse(connection: connection, status: 200, body: ["ok": true, "ptt": "stop"])
     }
 
     // MARK: - Config Endpoint

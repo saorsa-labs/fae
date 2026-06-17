@@ -43,19 +43,30 @@ actor PipelineCoordinator {
 
     /// When true, assistant TTS plays in the daemon (`tts.speak`) and the level
     /// envelope + playback-end arrive as server-push events (see
-    /// `DaemonEventSubscriber`), NOT via local `AudioPlaybackManager`. Default
-    /// OFF: the shipping voice path is byte-identical until the flag is set.
-    /// Computed (not a stored init) so it reads the env lazily without a
-    /// `Self`-reference in a stored-property initializer.
+    /// `DaemonEventSubscriber`), NOT via local `AudioPlaybackManager`.
+    ///
+    /// DEFAULT ON (V3b cutover, 2026-06-17). This is the path that emits daemon
+    /// `audio.level`, which the orb host now rides to derive Speaking
+    /// (orb-host-owns-state, commit 908485a3). Set `FAE_DAEMON_PLAYBACK=0` to
+    /// opt OUT — it is a loud kill switch so an audio regression is one env
+    /// var away from the old local-playback behavior. Computed (not a stored
+    /// init) so it reads the env lazily without a `Self`-reference in a
+    /// stored-property initializer.
     private var useDaemonPlayback: Bool { Self.readDaemonPlaybackFlag() }
 
     /// Live daemon playback id for the current assistant utterance (flag-ON).
     /// Nil when nothing is playing through the daemon.
     private var currentDaemonPlaybackID: String?
 
-    /// Dedicated event-subscribe connection (flag-ON only). Nil until the
+    /// Dedicated event-subscribe connection (default-ON only). Nil until the
     /// daemon TTS engine provides its endpoints and the subscriber is started.
     private var eventSubscriber: DaemonEventSubscriber?
+
+    /// Tracks which daemon-playback fallback reasons have already been loudly
+    /// logged this run, so we log each distinct reason ONCE (not per turn).
+    /// Cleared never — a fallback reason is a runtime condition, not a
+    /// turn-local one.
+    private var daemonPlaybackFallbackReasonsLogged: Set<String> = []
 
     /// JSC runtime for executing `<tool_program>` script blocks.
     /// Lazily created on first script execution to avoid unnecessary
@@ -807,9 +818,11 @@ actor PipelineCoordinator {
         await playback.setSpeed(config.tts.speed)
         await setPlaybackEventHandler()
 
-        // Voice spine V3b: when the flag is ON, open the daemon event stream so
-        // `audio.level` / `audio.playback_ended` drive the orb + pipeline state.
-        // Flag-OFF never starts it (byte-identical shipping path).
+        // Voice spine V3b: daemon-owned playback is now the default, so open
+        // the daemon event stream so `audio.level` / `audio.playback_ended`
+        // drive the orb + pipeline state. With the kill switch
+        // (`FAE_DAEMON_PLAYBACK=0`) we never start it (byte-identical legacy
+        // local-playback path).
         if useDaemonPlayback {
             await startDaemonEventSubscriberIfNeeded()
         }
@@ -5211,12 +5224,15 @@ actor PipelineCoordinator {
         let effectiveVoiceInstruct = voiceInstruct ?? config.tts.defaultVoiceInstruct
         var didProduceAudio = false
 
-        // Voice spine V3b (FAE_DAEMON_PLAYBACK): synthesize + play in the
-        // daemon. Returns immediately with a playback id; the level envelope +
-        // playback-end arrive as server-push events
+        // Voice spine V3b (FAE_DAEMON_PLAYBACK, default-on since 2026-06-17):
+        // synthesize + play in the daemon. Returns immediately with a playback
+        // id; the level envelope + playback-end arrive as server-push events
         // (`handleDaemonPlaybackEvent`). No local enqueue/markEnd — the daemon
-        // owns playback, so there is no dual audio stream. Flag-OFF never runs
-        // this branch (byte-identical shipping path below).
+        // owns playback, so there is no dual audio stream. When the daemon path
+        // is requested but unavailable (e.g. the MLX in-process TTS lane is
+        // selected, or the event subscriber failed to start) we fall through to
+        // the local Swift path below AND log loudly (once) that the orb will
+        // not show Speaking on that fallback.
         if daemonPlaybackActive, let daemon = ttsEngine as? DaemonTTSEngine {
             // Serialize segments: wait for any in-flight daemon playback to end
             // before starting the next (otherwise clips overlap — the daemon's
@@ -5243,6 +5259,11 @@ actor PipelineCoordinator {
             }
             return
         }
+
+        // We wanted daemon-owned playback (default-on) but it is not active at
+        // runtime — loudly note the fallback so the no-Speaking orb is
+        // diagnosable, then continue on the local Swift playback path.
+        logDaemonPlaybackFallbackIfNeeded()
 
         var ttsSamplesForEcho: [Float] = []
         var ttsSampleRate = 24_000
@@ -5434,21 +5455,61 @@ actor PipelineCoordinator {
 
     // MARK: - Voice spine V3b (FAE_DAEMON_PLAYBACK) helpers
 
-    /// `FAE_DAEMON_PLAYBACK` is ON only for `1/true/yes/on` (case-insensitive).
-    /// Unset/any other value → OFF (the shipping voice path is untouched).
+    /// `FAE_DAEMON_PLAYBACK` is **DEFAULT ON** (V3b cutover, 2026-06-17). It is
+    /// an opt-OUT kill switch: set it to `0/false/off/no` (case-insensitive) to
+    /// restore the legacy local Swift playback path (`tts.synthesize` +
+    /// `AudioPlaybackManager`). Any other value (including UNSET) → ON.
+    ///
+    /// Why default-on: the orb host now derives Speaking from daemon
+    /// `audio.level` events (orb-host-owns-state, commit 908485a3), which are
+    /// emitted ONLY by daemon-owned playback (`tts.speak`). On the old default
+    /// lane the daemon emits no levels, so the orb shows no Speaking. Keeping
+    /// this default-on is the gate that makes orb-speaking work for
+    /// default-config users.
     private static func readDaemonPlaybackFlag() -> Bool {
         let value = ProcessInfo.processInfo.environment["FAE_DAEMON_PLAYBACK"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
-        return ["1", "true", "yes", "on"].contains(value)
+        return !["0", "false", "off", "no"].contains(value)
     }
 
     /// Whether the daemon-owned playback path is active RIGHT NOW: the flag is
-    /// ON, the configured TTS engine is the daemon engine (the in-process MLX
-    /// lane has no `tts.speak`), AND the event stream is subscribed (without it,
-    /// `audio.playback_ended` would never arrive and strand the speaking state —
-    /// so we fall back to the local path rather than risk a hang).
+    /// ON (now the default), the configured TTS engine is the daemon engine
+    /// (the in-process MLX lane has no `tts.speak`), AND the event stream is
+    /// subscribed (without it, `audio.playback_ended` would never arrive and
+    /// strand the speaking state — so we fall back to the local path rather
+    /// than risk a hang). When this is false but `useDaemonPlayback` is true,
+    /// the orb will NOT show Speaking on the local fallback (the Swift
+    /// orb-drive was retired by orb-host-owns-state) — see
+    /// `logDaemonPlaybackFallbackIfNeeded()`.
     private var daemonPlaybackActive: Bool {
         useDaemonPlayback && (ttsEngine is DaemonTTSEngine) && eventSubscriber != nil
+    }
+
+    /// Loudly log ONCE per distinct reason when daemon-owned playback is
+    /// requested (default-on) but can't run, so the local Swift fallback is
+    /// taken. On that fallback the daemon emits no `audio.level`, so the orb
+    /// shows no Speaking even though she still talks — this log makes that
+    /// diagnosable instead of silently looking broken. Called from the TTS
+    /// speak site before falling through to the local path.
+    private func logDaemonPlaybackFallbackIfNeeded() {
+        guard useDaemonPlayback, !daemonPlaybackActive else { return }
+        let reason: String
+        if !(ttsEngine is DaemonTTSEngine) {
+            reason = "tts_engine_not_daemon"
+        } else if eventSubscriber == nil {
+            reason = "event_subscriber_not_started"
+        } else {
+            reason = "unknown"
+        }
+        guard daemonPlaybackFallbackReasonsLogged.insert(reason).inserted else { return }
+        NSLog(
+            "PipelineCoordinator: daemon-owned playback requested but UNAVAILABLE (reason=%@) — " +
+                "falling back to local Swift AudioPlaybackManager. NOTE: the daemon emits no " +
+                "audio.level on this path, so the orb will NOT show Speaking even though TTS " +
+                "plays. To restore the daemon-owned path check the daemon TTS engine and event " +
+                "subscriber. Set FAE_DAEMON_PLAYBACK=0 to silence this if the local path is intended.",
+            reason)
     }
 
     /// Open the daemon event-subscribe connection (once) and route
@@ -5458,6 +5519,22 @@ actor PipelineCoordinator {
         guard eventSubscriber == nil,
               let daemon = ttsEngine as? DaemonTTSEngine
         else { return }
+        // DEV/TEST HOOK (not shipped behavior): force the daemon-owned playback
+        // FALLBACK so the local Swift path + its loud log can be exercised
+        // deterministically without racing startup. Leaves useDaemonPlayback
+        // true and ttsEngine a DaemonTTSEngine, but keeps eventSubscriber nil →
+        // daemonPlaybackActive is false → local playback + the
+        // `event_subscriber_not_started` fallback log. Only active under
+        // FAE_DEV=1 + FAE_DEV_SKIP_DAEMON_EVENT_SUBSCRIBER=1.
+        let env = ProcessInfo.processInfo.environment
+        if env["FAE_DEV"] == "1",
+           env["FAE_DEV_SKIP_DAEMON_EVENT_SUBSCRIBER"] == "1" {
+            NSLog(
+                "PipelineCoordinator: DEV_TEST skipping daemon event subscriber " +
+                    "(FAE_DEV_SKIP_DAEMON_EVENT_SUBSCRIBER=1); daemon playback fallback " +
+                    "will use local Swift AudioPlaybackManager")
+            return
+        }
         let endpoints = await daemon.endpoints
         let deliveryQueue = DispatchQueue(label: "fae.daemon-events.delivery")
         let subscriber = DaemonEventSubscriber(
@@ -5497,6 +5574,9 @@ actor PipelineCoordinator {
                 userInfo: ["rms": Double(rms), "playback_id": playbackID])
         case .ended(let playbackID, let reason):
             guard playbackID == currentDaemonPlaybackID else { return }
+            NSLog(
+                "PipelineCoordinator: daemon audio.playback_ended playback_id=%@ reason=%@",
+                playbackID, reason)
             currentDaemonPlaybackID = nil
             handlePlaybackEvent(reason == "interrupted" ? .stopped : .finished)
             // Voice spine V4: tell the real-audio orb to stop riding (return to
