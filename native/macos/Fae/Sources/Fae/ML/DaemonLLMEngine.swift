@@ -255,12 +255,12 @@ enum DaemonWire {
         )
     }
 
-    private static func estimateTextTokens(_ byteOrCharCount: Int) -> Int {
+    static func estimateTextTokens(_ byteOrCharCount: Int) -> Int {
         guard byteOrCharCount > 0 else { return 0 }
         return max(1, (byteOrCharCount + 3) / 4)
     }
 
-    private static func jsonByteCount(_ object: Any) -> Int {
+    static func jsonByteCount(_ object: Any) -> Int {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         else { return 0 }
@@ -372,14 +372,14 @@ enum DaemonWire {
         return paths
     }
 
-    private static func valueAfterColon(_ line: String) -> String? {
+    static func valueAfterColon(_ line: String) -> String? {
         guard let colon = line.firstIndex(of: ":") else { return nil }
         let value = stripTrailingAnnotation(String(line[line.index(after: colon)...]))
         return value.isEmpty ? nil : value
     }
 
     /// Drop a trailing ` (...)` annotation (e.g. ` (0700)`, ` (NDJSON)`).
-    private static func stripTrailingAnnotation(_ raw: String) -> String {
+    static func stripTrailingAnnotation(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespaces)
         if value.hasSuffix(")"), let open = value.range(of: " (", options: .backwards) {
             value = String(value[..<open.lowerBound])
@@ -592,7 +592,7 @@ final class DaemonSocketConnection: @unchecked Sendable {
         }
     }
 
-    private static func errnoString() -> String {
+    static func errnoString() -> String {
         if let cString = strerror(errno) {
             return String(cString: cString)
         }

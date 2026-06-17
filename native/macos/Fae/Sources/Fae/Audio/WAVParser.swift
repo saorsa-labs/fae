@@ -98,18 +98,18 @@ enum WAVParser {
 
     // MARK: - Private helpers
 
-    private static func readU16(_ data: Data, at offset: Int) -> UInt16 {
+    static func readU16(_ data: Data, at offset: Int) -> UInt16 {
         UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
     }
 
-    private static func readU32(_ data: Data, at offset: Int) -> UInt32 {
+    static func readU32(_ data: Data, at offset: Int) -> UInt32 {
         UInt32(data[offset])
             | (UInt32(data[offset + 1]) << 8)
             | (UInt32(data[offset + 2]) << 16)
             | (UInt32(data[offset + 3]) << 24)
     }
 
-    private static func readI16(_ data: Data, at offset: Int) -> Int16 {
+    static func readI16(_ data: Data, at offset: Int) -> Int16 {
         Int16(bitPattern: readU16(data, at: offset))
     }
 }

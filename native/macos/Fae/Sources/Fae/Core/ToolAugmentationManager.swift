@@ -369,7 +369,7 @@ extension ToolAugmentationManager {
     }
 
     /// Detect project type from manifest files.
-    private static func detectProjectType(at path: String) -> String? {
+    static func detectProjectType(at path: String) -> String? {
         let fm = FileManager.default
         if fm.fileExists(atPath: "\(path)/Cargo.toml") { return "Rust" }
         if fm.fileExists(atPath: "\(path)/Package.swift") { return "Swift" }
@@ -393,7 +393,7 @@ extension ToolAugmentationManager {
     }
 
     /// Extract the first git remote URL from .git/config.
-    private static func extractGitRemote(at path: String) -> String? {
+    static func extractGitRemote(at path: String) -> String? {
         let configPath = "\(path)/.git/config"
         guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return nil }
 
