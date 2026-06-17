@@ -1099,7 +1099,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         ]
     }
 
-    private static func settingsSection(
+    static func settingsSection(
         id: String,
         title: String,
         description: String,
@@ -1113,7 +1113,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         ]
     }
 
-    private static func setting(
+    static func setting(
         key: String,
         title: String,
         description: String,
@@ -1142,15 +1142,15 @@ final class FaeCore: ObservableObject, HostCommandSender {
         return object
     }
 
-    private static func option(_ value: String, _ label: String) -> [String: String] {
+    static func option(_ value: String, _ label: String) -> [String: String] {
         ["value": value, "label": label]
     }
 
-    private static func settingsCard(title: String, body: String, detail: String) -> [String: Any] {
+    static func settingsCard(title: String, body: String, detail: String) -> [String: Any] {
         ["title": title, "body": body, "detail": detail]
     }
 
-    private static func decimal(_ value: Float) -> String {
+    static func decimal(_ value: Float) -> String {
         String(format: "%.2f", Double(value))
     }
 
@@ -1579,7 +1579,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     /// Load 16kHz mono PCM16 WAV file into Float32 samples.
-    private static func loadWAVSamples(at path: String) throws -> [Float] {
+    static func loadWAVSamples(at path: String) throws -> [Float] {
         let url = URL(fileURLWithPath: path)
         let data = try Data(contentsOf: url)
 
