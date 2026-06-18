@@ -46,7 +46,7 @@ run-ui-shell: build-ui-shell
     cd native/rust/fae-ui-shell && cargo run --release
 
 # Build and launch the Swift app with the Rust UI shell bridge enabled.
-run-native-with-ui-shell: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _sign-bundle _kill-fae
+run-native-with-ui-shell: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
     FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
 
 # Validate the Rust orb UI shell prototype.
@@ -72,36 +72,36 @@ _kill-fae:
     fi
 
 # Build, bundle, sign, and launch the native app (production mode).
-run-native: build _bundle-app _sign-bundle _kill-fae
+run-native: build _bundle-app _embed-llamacpp-runtime _sign-bundle _kill-fae
     open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
 
 # Build, bundle, sign, and launch in DEV mode (isolated data directory).
 # Uses ~/Library/Application Support/fae-dev/ — does NOT touch production Fae.
 # Reads config.toml from fae-dev/. Uses separate UserDefaults, memories, skills.
-run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _sign-bundle _kill-fae
+run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
     FAE_DEV=1 FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1 --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae (DEV) launched — logs: tail -f /tmp/fae-dev.log"
     @echo "  Data: ~/Library/Application Support/fae-dev/"
     @echo "  Vault: ~/.fae-vault-dev/"
 
 # Build the Swift app, create .app bundle, sign, and verify it (without launching).
-bundle-native: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
+bundle-native: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bundle _verify-bundle
     @echo "✓ Signed bundle ready: {{_app_bundle}}"
 
 # Full clean rebuild and launch (production).
-rebuild: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
+rebuild: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bundle _verify-bundle
     open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
     @echo "✓ Fae launched — logs: tail -f /tmp/fae-test.log"
 
 # Full clean rebuild and launch in DEV mode.
-rebuild-dev: _kill-fae clean build _bundle-app _sign-bundle _verify-bundle
+rebuild-dev: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bundle _verify-bundle
     FAE_DEV=1 open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1
     @echo "✓ Fae (DEV) rebuilt and launched — logs: tail -f /tmp/fae-dev.log"
 
 # ── Test Harness ─────────────────────────────────────────────────────────
 
 # Build, sign, and launch Fae with the test server enabled. Polls until /health responds.
-test-serve: build _bundle-app _sign-bundle _kill-fae
+test-serve: build _bundle-app _embed-llamacpp-runtime _sign-bundle _kill-fae
     #!/usr/bin/env bash
     set -euo pipefail
     BUNDLE="{{_app_bundle}}"
@@ -416,6 +416,29 @@ _embed-daemon:
     chmod 755 "$BUNDLE/Contents/MacOS/fae-daemon"
     echo "  → Embedded fae-daemon"
 
+# Download + verify the pinned llama.cpp runtime into repo-local resources.
+install-llamacpp-runtime:
+    python3 scripts/install-llamacpp-runtime.py
+
+# (internal) Embed Fae-owned llama.cpp runtime in the app bundle. This target is
+# intentionally before signing so the nested binary is code-signed with the app.
+_embed-llamacpp-runtime:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUNDLE="{{_app_bundle}}"
+    python3 scripts/install-llamacpp-runtime.py
+    SRC_DIR="$(git rev-parse --show-toplevel)/native/macos/Fae/Resources/LlamaCpp"
+    if [ ! -x "$SRC_DIR/llama-server" ]; then
+        echo "Missing llama.cpp runtime: $SRC_DIR/llama-server" >&2
+        echo "Run: just install-llamacpp-runtime" >&2
+        exit 1
+    fi
+    rm -rf "$BUNDLE/Contents/Resources/LlamaCpp"
+    mkdir -p "$BUNDLE/Contents/Resources"
+    cp -R "$SRC_DIR" "$BUNDLE/Contents/Resources/LlamaCpp"
+    chmod 755 "$BUNDLE/Contents/Resources/LlamaCpp/llama-server"
+    echo "  → Embedded llama.cpp runtime"
+
 # (internal) Sign the .app bundle with Developer ID.
 _sign-bundle:
     #!/usr/bin/env bash
@@ -449,6 +472,12 @@ _sign-bundle:
         codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
             "$BUNDLE/Contents/MacOS/fae-daemon"
     fi
+    if [ -d "$BUNDLE/Contents/Resources/LlamaCpp" ]; then
+        find "$BUNDLE/Contents/Resources/LlamaCpp" -type f \( -perm -111 -o -name '*.dylib' \) -print0 | \
+            while IFS= read -r -d '' bin; do
+                codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" "$bin"
+            done
+    fi
     codesign --force --sign "$MACOS_SIGNING_IDENTITY" --keychain "$KC" \
         --entitlements "$ENT" "$BUNDLE"
     echo "✓ Signed: $BUNDLE"
@@ -476,6 +505,12 @@ _verify-bundle:
         fi
     else
         echo "  ℹ Rust UI shell not bundled (default Swift-only bundle)"
+    fi
+    if [ ! -x "$BUNDLE/Contents/Resources/LlamaCpp/llama-server" ]; then
+        echo "  ✗ FAIL: Missing bundled llama.cpp runtime (Contents/Resources/LlamaCpp/llama-server)"
+        ERRORS=$((ERRORS+1))
+    else
+        echo "  ✓ llama.cpp runtime present"
     fi
     # Check Fae's own Metal shader
     METALLIB="$BUNDLE/Contents/Resources/Fae_Fae.bundle/Contents/Resources/default.metallib"

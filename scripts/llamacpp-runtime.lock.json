@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-06-18T00:00:00Z",
+  "source": "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest verified on 2026-06-18",
+  "runtime": {
+    "name": "llama.cpp llama-server",
+    "release_tag": "b9692",
+    "platform": "macos-arm64",
+    "asset_name": "llama-b9692-bin-macos-arm64.tar.gz",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9692/llama-b9692-bin-macos-arm64.tar.gz",
+    "size_bytes": 10910279,
+    "sha256": "751c2978074d52288682fa74cc8ffddae039e45a816affccb05b08ea4c40f0be",
+    "binary": "llama-server",
+    "binary_size_bytes": 33472,
+    "binary_sha256": "c68b4016e18701e8293e3730a8f13272d8d2d6c10139c8b00421332604b06347",
+    "signed_cdhash_sha256": "3d5c9574d44b155e1d2551cc082cbff8c5d9d0c8",
+    "signed_team_identifier": "MEGSB2GXGZ"
+  }
+}

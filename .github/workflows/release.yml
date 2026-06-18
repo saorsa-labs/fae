@@ -288,6 +288,13 @@ jobs:
           chmod 755 "$APP_BUNDLE/Contents/MacOS/fae-ui-shell" "$APP_BUNDLE/Contents/MacOS/fae-daemon"
           echo "Embedded Rust auxiliaries: fae-ui-shell, fae-daemon"
 
+          # Fae-owned llama.cpp runtime (llama-server + sibling dylibs). Models
+          # download on request via llama.cpp `-hf` into Fae's LLAMA_CACHE.
+          python3 scripts/install-llamacpp-runtime.py
+          cp -R native/macos/Fae/Resources/LlamaCpp "$APP_BUNDLE/Contents/Resources/LlamaCpp"
+          chmod 755 "$APP_BUNDLE/Contents/Resources/LlamaCpp/llama-server"
+          echo "Embedded llama.cpp runtime"
+
           # acpx (ACP agent client) is installed on-demand by Fae at runtime,
           # not bundled in the app (58MB binary, user may not need it).
           # See Resources/Skills/acp-setup/ for the installation skill.
@@ -482,6 +489,19 @@ jobs:
             fi
           done
 
+          echo "=== Signing llama.cpp runtime ==="
+          if [ -d "$APP_BUNDLE/Contents/Resources/LlamaCpp" ]; then
+            find "$APP_BUNDLE/Contents/Resources/LlamaCpp" -type f | while read f; do
+              if file "$f" | grep -q "Mach-O"; then
+                codesign --force --options runtime \
+                  --sign "$MACOS_SIGNING_IDENTITY" \
+                  --timestamp \
+                  "$f"
+                echo "  Signed: $f"
+              fi
+            done
+          fi
+
           echo "=== Signing main executable ==="
           codesign --force --options runtime \
             --sign "$MACOS_SIGNING_IDENTITY" \
@@ -517,13 +537,25 @@ jobs:
               echo "Ad-hoc signed: $helper"
             fi
           done
+          if [ -d "$APP_BUNDLE/Contents/Resources/LlamaCpp" ]; then
+            find "$APP_BUNDLE/Contents/Resources/LlamaCpp" -type f | while read f; do
+              if file "$f" | grep -q "Mach-O"; then
+                codesign --force --sign - "$f"
+                echo "Ad-hoc signed: $f"
+              fi
+            done
+          fi
 
-      - name: Verify embedded fae-daemon
+      - name: Verify embedded fae-daemon and llama.cpp runtime
         run: |
           DAEMON="$APP_BUNDLE/Contents/MacOS/fae-daemon"
+          LLAMA_SERVER="$APP_BUNDLE/Contents/Resources/LlamaCpp/llama-server"
           test -x "$DAEMON"
+          test -x "$LLAMA_SERVER"
           codesign --verify --verbose=2 "$DAEMON"
+          codesign --verify --verbose=2 "$LLAMA_SERVER"
           "$DAEMON" --version
+          "$LLAMA_SERVER" --version
 
       - name: Free disk space before DMG creation
         run: |

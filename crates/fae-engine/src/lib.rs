@@ -19,6 +19,7 @@
     not(test),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod llamacpp_adapter;
 mod mistralrs_adapter;
@@ -29,7 +30,10 @@ mod tts;
 #[cfg(target_os = "macos")]
 mod voice_tts_adapter;
 
-pub use llamacpp_adapter::{LlamaServerAdapter, LlamaServerConfig, LlamaServerHandle};
+pub use llamacpp_adapter::{
+    kill_all_registered_sidecars, LazyLlamaServerAdapter, LlamaModelSource, LlamaServerAdapter,
+    LlamaServerConfig, LlamaServerHandle, RemoteModelArtifact,
+};
 pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::MockAdapter;
 pub use models_lock::{Artifact, LockError, ModelsLock, SUPPORTED_SCHEMA_VERSION};

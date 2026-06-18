@@ -1910,8 +1910,11 @@ dependencies = [
  "fae-engine",
  "fae-envelope-gate",
  "futures-util",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.24.0",
 ]

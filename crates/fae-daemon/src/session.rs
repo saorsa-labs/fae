@@ -954,11 +954,51 @@ async fn run_turn(
             }
         }
     }
+    let visible_answer = strip_served_thinking(&answer);
     Ok(serde_json::json!({
-        "text": answer,
+        "text": visible_answer,
         "tool_calls": tool_calls,
         "finish_reason": finish_reason,
     }))
+}
+
+/// Remove model-served thinking spans from a completed turn. The Swift pipeline
+/// strips these while streaming; the daemon API also returns completed turns, so
+/// it must not hand thought text to clients that speak or display `result.text`
+/// directly. Gemma 4's llama.cpp chat template closes thought with `<channel|>`
+/// (not `<|channel>response`); Qwen-style `<think>...</think>` is also removed.
+fn strip_served_thinking(text: &str) -> String {
+    let mut rest = text;
+    let mut out = String::new();
+    loop {
+        let gemma = rest.find("<|channel>thought");
+        let qwen = rest.find("<think>");
+        let Some(start) = (match (gemma, qwen) {
+            (Some(g), Some(q)) => Some(g.min(q)),
+            (Some(g), None) => Some(g),
+            (None, Some(q)) => Some(q),
+            (None, None) => None,
+        }) else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start..];
+        if after_open.starts_with("<|channel>thought") {
+            if let Some(close) = after_open.find("<channel|>") {
+                rest = &after_open[close + "<channel|>".len()..];
+                continue;
+            }
+            // Incomplete thought-only response: fail closed by withholding it.
+            break;
+        }
+        if let Some(close) = after_open.find("</think>") {
+            rest = &after_open[close + "</think>".len()..];
+            continue;
+        }
+        break;
+    }
+    out.trim().to_owned()
 }
 
 /// An audit row for a non-authz, non-authenticate event (parse failure, command
@@ -1566,6 +1606,20 @@ mod tests {
             hash_token("good-token"),
         );
         registry
+    }
+
+    #[test]
+    fn strip_served_thinking_removes_gemma_channel_with_real_close_marker() {
+        let raw = "<|channel>thought\nreasoning that must not be spoken<channel|>Visible answer.";
+        assert_eq!(strip_served_thinking(raw), "Visible answer.");
+        let incomplete = "<|channel>thought\nreasoning only";
+        assert_eq!(strip_served_thinking(incomplete), "");
+    }
+
+    #[test]
+    fn strip_served_thinking_removes_qwen_think_blocks() {
+        let raw = "Hello <think>hidden</think>world";
+        assert_eq!(strip_served_thinking(raw), "Hello world");
     }
 
     #[test]
