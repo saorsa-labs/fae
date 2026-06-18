@@ -55,7 +55,7 @@ check-ui-shell:
     cd native/rust/fae-ui-shell && cargo clippy --all-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
     cd native/rust/fae-ui-shell && cargo check --workspace --all-targets
 
-# ── Native App (macOS, legacy Swift shell during migration) ────────────────
+# ── Native App (macOS bundle + canonical Rust orb shell) ──────────────────
 
 # xcodebuild output paths
 _xcode_products := "native/macos/Fae/.build/xcode/Build/Products/Debug"
@@ -101,12 +101,22 @@ rebuild-dev: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bun
 # ── Test Harness ─────────────────────────────────────────────────────────
 
 # Build, sign, and launch Fae with the test server enabled. Polls until /health responds.
-test-serve: build _bundle-app _embed-llamacpp-runtime _sign-bundle _kill-fae
+# Uses the same orb-first bundle shape as run-dev: Rust UI shell + embedded daemon.
+test-serve: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
     #!/usr/bin/env bash
     set -euo pipefail
     BUNDLE="{{_app_bundle}}"
-    echo "Launching Fae with --test-server…"
-    open "$BUNDLE" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --args --test-server
+    ROOT="$(git rev-parse --show-toplevel)"
+    UI_SHELL_BIN="$ROOT/$BUNDLE/Contents/MacOS/fae-ui-shell"
+    echo "Launching Fae DEV with Rust orb shell + --test-server…"
+    FAE_DEV=1 FAE_TEST_SERVER=1 FAE_UI_SHELL_BIN="$UI_SHELL_BIN" \
+        open "$BUNDLE" \
+            --stdout /tmp/fae-test.log \
+            --stderr /tmp/fae-test.log \
+            --env FAE_DEV=1 \
+            --env FAE_TEST_SERVER=1 \
+            --env FAE_UI_SHELL_BIN="$UI_SHELL_BIN" \
+            --args --test-server
     echo "Waiting for test server on 127.0.0.1:7433…"
     for i in $(seq 1 120); do
         if curl -sf http://127.0.0.1:7433/health > /dev/null 2>&1; then
@@ -398,7 +408,7 @@ _embed-ui-shell:
 
 # Build the Rust daemon (primary LLM lane).
 build-daemon:
-    cd crates && cargo build --release -p fae-daemon
+    cd crates && env -u RUSTFLAGS cargo build --release -p fae-daemon
 
 # (internal) Embed the explicitly-built fae-daemon in the .app bundle so the
 # daemon lane works without FAE_DAEMON_BIN or llm.daemonBinaryPath.

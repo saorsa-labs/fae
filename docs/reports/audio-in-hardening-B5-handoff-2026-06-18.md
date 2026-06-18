@@ -165,8 +165,73 @@ Summary after stricter prompt:
 
 The prompt fix corrected the `What is the capital of France` → `Paris` failure, but Gemma/mmproj still corrupts Fae/name/vocab clips (`Hello Fae`→`hello`, `My name is David`→`My name is Dayed`, `Call Sarah`→`call sa`, `Spell it F A E`→`Stella F F A`, `Stop`→`start`). The fallback decision still holds.
 
+## Full app dynamic-vocabulary measurement (orb-shell TestServer)
+
+Reviewer correctly flagged that the first app-path run was launched through the old `test-serve` recipe, which did **not** embed/start the Rust orb UI shell. I fixed `just test-serve` so it now matches the orb-first dev bundle shape:
+
+- builds `fae-ui-shell`
+- builds `fae-daemon` with `env -u RUSTFLAGS`
+- embeds `Contents/MacOS/fae-ui-shell`
+- embeds `Contents/MacOS/fae-daemon`
+- launches with `FAE_DEV=1`, `FAE_TEST_SERVER=1`, and `FAE_UI_SHELL_BIN=<bundle>/Contents/MacOS/fae-ui-shell`
+
+Verification for the accepted run:
+
+```text
+Fae.app/Contents/MacOS/Fae --test-server
+Fae.app/Contents/MacOS/fae-ui-shell
+Fae.app/Contents/MacOS/fae-daemon
+```
+
+and app log showed:
+
+```text
+FaeAppDelegate: orb host active — main window stays hidden
+TestServer: listening on 127.0.0.1:7433
+```
+
+I then re-ran the full app evaluator:
+
+```bash
+cd native/macos/Fae
+uv run autoresearch/asr_b5_app_eval.py --corpus autoresearch/asr_corpus --timeout-s 300
+```
+
+Latest accepted output: `native/macos/Fae/autoresearch/results/b5_asr_app_20260618_200143.{json,md}`.
+
+This run used a controlled `fae-dev/personal_lexicon.json` containing only the B5 seed entries (`David`, `Sarah`, `James`, `GitHub`, `Fae`) and `config.toml` userName `David`. The previous harvested-contact lexicon caused false dynamic corrections such as `run`→`Rune Bondal` and `set`→`Sat Panesar`, so it is useful as a separate DVC false-positive finding, but not the controlled acceptance table. Backups were written under `~/Library/Application Support/fae-dev/*.b5-backup-20260618195803` before the controlled seed was installed.
+
+Summary of controlled full-app final `[heard]` table:
+
+- Overall WER: **20.2%**
+- Exact-match: **78.6%**
+- Clean WER: **25.0%**
+- Vocab exact-match: **57.1%**
+- Safe re-ask / quality-gate transcripts: **1**
+- Decision against bar: **FAIL**
+
+Key full-app observations:
+
+- Dynamic correction fixed/kept several important cases: `Hello Fae`, `My name is David`, `Send a message to James`, `GitHub`, noisy `Hello Fae check my calendar`.
+- Residual correction-proof failures remain:
+  - `Call Sarah` → `call ser`
+  - `The number is four one five two three six` → `The number is 415236`
+  - `Yes` → `(unclear audio)`
+  - `Stop` → `Stap`
+  - `Spell it F A E` → `Stellar FA`
+- Full app dynamic-vocab measurement therefore still fails the bar. The fallback decision remains justified.
+
+Degraded-path live proof through the same orb-shell TestServer path:
+
+```text
+HEARD PTT [heard]: (unclear audio)
+REASK True
+conversation user: (unclear audio)
+conversation assistant: I didn't catch that, please say it again.
+```
+
 ## Not completed / reviewer follow-up
 
-- I did **not** wire the Qwen3-ASR/whisper.cpp fallback yet; the measurement says it is required.
+- I did **not** wire the Qwen3-ASR/whisper.cpp fallback yet; the full-app measurement says it is required.
 - I did **not** complete a bundled app/test-server live audio turn with TTS + `ORB_MODE`→Speaking in this pass. The measured path is daemon live ASR over the same control-plane command the Swift app uses underneath, but the full app proof remains for reviewer/follow-up.
 - The B1.5 thinking/MTP warning sweep was not changed; audio pass 1 already suppresses thinking, and no cheap MTP warning-only patch was identified during this pass.
