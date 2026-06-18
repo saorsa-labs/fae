@@ -72,8 +72,9 @@ _kill-fae:
     fi
 
 # Build, bundle, sign, and launch the native app (production mode).
-run-native: build _bundle-app _embed-llamacpp-runtime _sign-bundle _kill-fae
-    open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+# Orb-first: embeds the Rust orb shell + daemon (the only product UI + brain).
+run-native: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _kill-fae
+    FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
 
 # Build, bundle, sign, and launch in DEV mode (isolated data directory).
 # Uses ~/Library/Application Support/fae-dev/ — does NOT touch production Fae.
@@ -85,17 +86,18 @@ run-dev: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-da
     @echo "  Vault: ~/.fae-vault-dev/"
 
 # Build the Swift app, create .app bundle, sign, and verify it (without launching).
-bundle-native: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bundle _verify-bundle
+# Orb-first: embeds the Rust orb shell + daemon.
+bundle-native: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _verify-bundle
     @echo "✓ Signed bundle ready: {{_app_bundle}}"
 
-# Full clean rebuild and launch (production).
-rebuild: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bundle _verify-bundle
-    open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log
+# Full clean rebuild and launch (production). Orb-first: embeds orb shell + daemon.
+rebuild: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _verify-bundle
+    FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-test.log --stderr /tmp/fae-test.log --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae launched — logs: tail -f /tmp/fae-test.log"
 
-# Full clean rebuild and launch in DEV mode.
-rebuild-dev: _kill-fae clean build _bundle-app _embed-llamacpp-runtime _sign-bundle _verify-bundle
-    FAE_DEV=1 open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1
+# Full clean rebuild and launch in DEV mode. Orb-first: embeds orb shell + daemon.
+rebuild-dev: _kill-fae clean build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed-daemon _embed-llamacpp-runtime _sign-bundle _verify-bundle
+    FAE_DEV=1 FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell" open "{{_app_bundle}}" --stdout /tmp/fae-dev.log --stderr /tmp/fae-dev.log --env FAE_DEV=1 --env FAE_UI_SHELL_BIN="{{justfile_directory()}}/{{_app_bundle}}/Contents/MacOS/fae-ui-shell"
     @echo "✓ Fae (DEV) rebuilt and launched — logs: tail -f /tmp/fae-dev.log"
 
 # ── Test Harness ─────────────────────────────────────────────────────────
@@ -108,14 +110,16 @@ test-serve: build-ui-shell build-daemon build _bundle-app _embed-ui-shell _embed
     BUNDLE="{{_app_bundle}}"
     ROOT="$(git rev-parse --show-toplevel)"
     UI_SHELL_BIN="$ROOT/$BUNDLE/Contents/MacOS/fae-ui-shell"
-    echo "Launching Fae DEV with Rust orb shell + --test-server…"
-    FAE_DEV=1 FAE_TEST_SERVER=1 FAE_UI_SHELL_BIN="$UI_SHELL_BIN" \
+    DAEMON_BIN="$ROOT/$BUNDLE/Contents/MacOS/fae-daemon"
+    echo "Launching Fae DEV with Rust orb shell + embedded daemon + --test-server…"
+    FAE_DEV=1 FAE_TEST_SERVER=1 FAE_UI_SHELL_BIN="$UI_SHELL_BIN" FAE_DAEMON_BIN="$DAEMON_BIN" \
         open "$BUNDLE" \
             --stdout /tmp/fae-test.log \
             --stderr /tmp/fae-test.log \
             --env FAE_DEV=1 \
             --env FAE_TEST_SERVER=1 \
             --env FAE_UI_SHELL_BIN="$UI_SHELL_BIN" \
+            --env FAE_DAEMON_BIN="$DAEMON_BIN" \
             --args --test-server
     echo "Waiting for test server on 127.0.0.1:7433…"
     for i in $(seq 1 120); do
