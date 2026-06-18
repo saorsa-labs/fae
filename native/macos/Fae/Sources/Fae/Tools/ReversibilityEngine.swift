@@ -12,7 +12,12 @@ enum ReversibilityEngine {
     }
 
     private static var recoveryDir: URL {
-                return FaeDirectories.recoveryDirectory
+        if let raw = getenv("FAE_REVERSIBILITY_RECOVERY_DIR"),
+           let path = String(validatingUTF8: raw),
+           !path.isEmpty {
+            return URL(fileURLWithPath: path)
+        }
+        return FaeDirectories.recoveryDirectory
     }
 
     private static var indexURL: URL {
