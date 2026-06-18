@@ -108,6 +108,7 @@ strip starves the Swift signal.
 1. Diagnose attribution (the one question that matters). 2. If MLX-fallback, find+fix why. 3. Fix the
    label. 4. Prove the full path. 5. Thinking-strip guard. 6. Hand back.
 
-> Scope: B1.5 only — prove/wire the app onto the already-working daemon. B2 (full bundled-runtime
-> packaging in release.yml CI), B3 (GGUF-LoRA personalization live), B4 (delete candle/mistral.rs) are
-> separate follow-ons; B4 unblocks once B1.5 is proven.
+> Scope: B1.5 only — prove/wire the app onto the already-working daemon. It is product-correctness, NOT
+> a gate for any deletion: **B4 (delete candle/mistral.rs) is DEFERRED — keep the vendored libs** (owner
+> decision 2026-06-18). The full sequence of remaining phases is in
+> `docs/plans/cross-platform-completion-roadmap-2026-06-18.md` (B1.5 = phase P1).
