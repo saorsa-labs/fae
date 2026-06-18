@@ -226,3 +226,48 @@ license = "gemma"
 hardware_profile = "Apple Silicon Metal via mistral.rs"
 approved_by = "owner"
 created_at = "2026-06-15T00:00:00Z"
+
+[[artifact]]
+id = "llamacpp-b9692-llama-server-macos-arm64"
+role = "asr_binary"
+loader = "llamacpp-sidecar"
+source_repo = "ggml-org/llama.cpp"
+source_revision = "b9692"
+filename = "llama-server"
+size_bytes = 33472
+sha256 = "c68b4016e18701e8293e3730a8f13272d8d2d6c10139c8b00421332604b06347"
+signature = ""
+license = "MIT"
+hardware_profile = "macOS arm64 Metal llama.cpp sidecar"
+approved_by = "owner"
+created_at = "2026-06-18T00:00:00Z"
+
+[[artifact]]
+id = "ggml-org-qwen3-asr-1-7b-q8-0-gguf"
+role = "asr_model"
+loader = "llamacpp-sidecar"
+source_repo = "ggml-org/Qwen3-ASR-1.7B-GGUF"
+source_revision = "36a678687ba7d07a74ca70ccb0e36902e005fb80"
+filename = "Qwen3-ASR-1.7B-Q8_0.gguf"
+size_bytes = 2165034944
+sha256 = "58e22d0532d4eacaf034cfac17a6fed159f37c41390c710186783be439d1fc57"
+signature = ""
+license = "apache-2.0 (base model Qwen/Qwen3-ASR-1.7B)"
+hardware_profile = "llama.cpp sidecar ASR model, cross-platform GPU/CPU by runtime"
+approved_by = "owner"
+created_at = "2026-06-18T00:00:00Z"
+
+[[artifact]]
+id = "ggml-org-qwen3-asr-1-7b-mmproj-q8-0-gguf"
+role = "asr_mmproj"
+loader = "llamacpp-sidecar"
+source_repo = "ggml-org/Qwen3-ASR-1.7B-GGUF"
+source_revision = "36a678687ba7d07a74ca70ccb0e36902e005fb80"
+filename = "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"
+size_bytes = 355709344
+sha256 = "46c1d533af3f354ceb37ce855dbceff7da7fa7cf1e6a523df3b13440bd164c0d"
+signature = ""
+license = "apache-2.0 (base model Qwen/Qwen3-ASR-1.7B)"
+hardware_profile = "llama.cpp sidecar ASR audio projector, cross-platform GPU/CPU by runtime"
+approved_by = "owner"
+created_at = "2026-06-18T00:00:00Z"

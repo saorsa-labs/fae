@@ -7,19 +7,110 @@
     "Original clean/spontaneous/vocab clips were generated with macOS say using Samantha.",
     "accented_*.wav clips were generated with macOS say voices Moira (en_IE) and Rishi (en_IN).",
     "noisy_*.wav clips were generated from Samantha speech with deterministic Gaussian room-noise overlay (rng seed 20260618).",
-    "This corpus is synthetic and reproducible enough for regression measurement; it is not a substitute for final live-mic release validation."
+    "This corpus is synthetic and reproducible enough for regression measurement; it is not a substitute for final live-mic release validation.",
+    "2026-06-18 B5 expansion adds short-command, numeric dictation, spelling, and DVC false-positive guard clips before fallback evaluation."
   ],
   "categories": {
-    "clean": ["command_*.wav", "greeting_*.wav", "question_*.wav", "short_*.wav"],
-    "spontaneous": ["casual_*.wav", "conv_*.wav"],
-    "vocab": ["name_*.wav", "number_*.wav", "spell_*.wav", "tech_*.wav"],
-    "noisy": ["noisy_*.wav"],
-    "accented": ["accented_*.wav"]
+    "clean": [
+      "command_*.wav",
+      "greeting_*.wav",
+      "question_*.wav",
+      "short_*.wav"
+    ],
+    "spontaneous": [
+      "casual_*.wav",
+      "conv_*.wav"
+    ],
+    "vocab": [
+      "name_*.wav",
+      "number_*.wav",
+      "spell_*.wav",
+      "tech_*.wav"
+    ],
+    "noisy": [
+      "noisy_*.wav"
+    ],
+    "accented": [
+      "accented_*.wav"
+    ],
+    "dvc_guard": [
+      "dvc_*.wav"
+    ]
   },
   "generated_2026_06_18": [
-    {"id": "noisy_01", "text": "Hello Fae check my calendar", "voice": "Samantha", "noise_sigma": 0.018},
-    {"id": "noisy_02", "text": "Set a reminder to call David tomorrow", "voice": "Samantha", "noise_sigma": 0.022},
-    {"id": "accented_01", "text": "Hello Fae", "voice": "Moira", "noise_sigma": 0.0},
-    {"id": "accented_02", "text": "Open the terminal and run git status", "voice": "Rishi", "noise_sigma": 0.0}
+    {
+      "id": "noisy_01",
+      "text": "Hello Fae check my calendar",
+      "voice": "Samantha",
+      "noise_sigma": 0.018
+    },
+    {
+      "id": "noisy_02",
+      "text": "Set a reminder to call David tomorrow",
+      "voice": "Samantha",
+      "noise_sigma": 0.022
+    },
+    {
+      "id": "accented_01",
+      "text": "Hello Fae",
+      "voice": "Moira",
+      "noise_sigma": 0.0
+    },
+    {
+      "id": "accented_02",
+      "text": "Open the terminal and run git status",
+      "voice": "Rishi",
+      "noise_sigma": 0.0
+    }
+  ],
+  "generated_2026_06_18_b5_expansion": [
+    {
+      "id": "short_04",
+      "text": "Start",
+      "voice": "Samantha",
+      "purpose": "short command fallback/quality gate"
+    },
+    {
+      "id": "short_05",
+      "text": "Run",
+      "voice": "Samantha",
+      "purpose": "short command fallback/quality gate"
+    },
+    {
+      "id": "dvc_01",
+      "text": "Set a timer for five minutes",
+      "voice": "Samantha",
+      "purpose": "DVC guard: set must not become a contact name"
+    },
+    {
+      "id": "dvc_02",
+      "text": "Open the terminal and run git status",
+      "voice": "Samantha",
+      "purpose": "DVC guard: run must not become a contact name"
+    },
+    {
+      "id": "dvc_03",
+      "text": "Run git status",
+      "voice": "Samantha",
+      "purpose": "DVC guard: leading run must remain verb"
+    },
+    {
+      "id": "name_04",
+      "text": "Call Sarah now",
+      "voice": "Samantha",
+      "purpose": "name correction / fallback"
+    },
+    {
+      "id": "spell_02",
+      "text": "Spell F A E slowly",
+      "voice": "Samantha",
+      "purpose": "spelling dictation fallback"
+    },
+    {
+      "id": "number_02",
+      "text": "Four one five two three six",
+      "voice": "Samantha",
+      "purpose": "numeric dictation fallback"
+    }
   ]
 }

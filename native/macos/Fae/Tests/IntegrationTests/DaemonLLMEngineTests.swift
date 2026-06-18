@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 @testable import Fae
@@ -349,6 +350,14 @@ final class DaemonWireTests: XCTestCase {
 /// `[heard]:` transcript followed by the spoken answer.
 final class DaemonAudioTwoPassTests: XCTestCase {
 
+    private struct StaticAudioFallbackTranscriber: AudioFallbackTranscribing {
+        let transcript: String?
+
+        func transcribe(audioWAVBase64: String) async -> String? {
+            transcript
+        }
+    }
+
     // MARK: flattenTranscript
 
     func testFlattenTranscriptCollapsesNewlinesToOneLine() {
@@ -393,6 +402,159 @@ final class DaemonAudioTwoPassTests: XCTestCase {
         XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("@@@ ### ???").isUsable)
         XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("स्टार्ट").isUsable)
         XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("sto").isUsable)
+    }
+
+    func testAudioFallbackTriggersOnQualityFailure() {
+        let quality = DaemonLLMEngine.assessAudioTranscript("sto")
+        XCTAssertTrue(DaemonLLMEngine.shouldAttemptAudioFallback(
+            transcript: "sto", quality: quality, mode: .qualityFail))
+    }
+
+    func testAudioFallbackFragileModeCoversShortAndDictationCases() {
+        XCTAssertTrue(DaemonLLMEngine.shouldAttemptAudioFallback(
+            transcript: "Stap",
+            quality: DaemonLLMEngine.assessAudioTranscript("Stap"),
+            mode: .fragile))
+        XCTAssertTrue(DaemonLLMEngine.shouldAttemptAudioFallback(
+            transcript: "The number is 415236",
+            quality: DaemonLLMEngine.assessAudioTranscript("The number is 415236"),
+            mode: .fragile))
+        XCTAssertTrue(DaemonLLMEngine.shouldAttemptAudioFallback(
+            transcript: "call ser",
+            quality: DaemonLLMEngine.assessAudioTranscript("call ser"),
+            mode: .fragile))
+        XCTAssertFalse(DaemonLLMEngine.shouldAttemptAudioFallback(
+            transcript: "Open the terminal and run git status",
+            quality: DaemonLLMEngine.assessAudioTranscript("Open the terminal and run git status"),
+            mode: .fragile))
+    }
+
+    func testResolveAudioTranscriptUsesFallbackWhenPrimaryFailsGate() async {
+        let engine = DaemonLLMEngine(
+            binaryPath: nil,
+            modelID: "test",
+            audioFallbackTranscriber: StaticAudioFallbackTranscriber(transcript: "Stop"),
+            audioFallbackMode: .qualityFail)
+        let result = await engine.resolveAudioTranscript(
+            primaryTranscript: "sto",
+            primaryQuality: DaemonLLMEngine.assessAudioTranscript("sto"),
+            audioWAVBase64: "ZmFrZS13YXY=")
+        XCTAssertEqual(result, "Stop")
+    }
+
+    func testResolveAudioTranscriptFailsClosedWhenFallbackBad() async {
+        let engine = DaemonLLMEngine(
+            binaryPath: nil,
+            modelID: "test",
+            audioFallbackTranscriber: StaticAudioFallbackTranscriber(transcript: ""),
+            audioFallbackMode: .qualityFail)
+        let result = await engine.resolveAudioTranscript(
+            primaryTranscript: "sto",
+            primaryQuality: DaemonLLMEngine.assessAudioTranscript("sto"),
+            audioWAVBase64: "ZmFrZS13YXY=")
+        XCTAssertEqual(result, "sto")
+    }
+
+    func testAudioFallbackConfigRequiresLockedBinaryArtifactID() throws {
+        let (dir, binary, lock) = try makeFallbackFixture(binarySHA: "abc")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = AudioFallbackTranscriberConfig.fromEnvironment([
+            "FAE_AUDIO_FALLBACK_BIN": binary.path,
+            "FAE_AUDIO_FALLBACK_LOCK": lock.path,
+        ])
+        XCTAssertNil(config)
+    }
+
+    func testAudioFallbackConfigRejectsBinaryHashMismatch() throws {
+        let (dir, binary, lock) = try makeFallbackFixture(binarySHA: "0000")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = AudioFallbackTranscriberConfig.fromEnvironment([
+            "FAE_AUDIO_FALLBACK_BIN": binary.path,
+            "FAE_AUDIO_FALLBACK_BIN_ARTIFACT_ID": "test-whisper-bin",
+            "FAE_AUDIO_FALLBACK_LOCK": lock.path,
+        ])
+        XCTAssertNil(config)
+    }
+
+    func testAudioFallbackConfigRejectsModelWithoutLockedArtifactID() throws {
+        let (dir, binary, lock) = try makeFallbackFixture()
+        let model = dir.appendingPathComponent("model.bin")
+        try Data("model".utf8).write(to: model)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = AudioFallbackTranscriberConfig.fromEnvironment([
+            "FAE_AUDIO_FALLBACK_BIN": binary.path,
+            "FAE_AUDIO_FALLBACK_BIN_ARTIFACT_ID": "test-whisper-bin",
+            "FAE_AUDIO_FALLBACK_MODEL": model.path,
+            "FAE_AUDIO_FALLBACK_LOCK": lock.path,
+        ])
+        XCTAssertNil(config)
+    }
+
+    func testAudioFallbackConfigAcceptsLockedBinaryAndModel() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-fallback-test-")
+            .appendingPathExtension(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let binary = try writeExecutableFixture(in: dir)
+        let model = dir.appendingPathComponent("model.bin")
+        try Data("model".utf8).write(to: model)
+        let binarySHA = try ExternalProcessAudioFallbackTranscriber.sha256Hex(of: binary)
+        let modelSHA = try ExternalProcessAudioFallbackTranscriber.sha256Hex(of: model)
+        let lock = dir.appendingPathComponent("models.lock")
+        try lockText(binarySHA: binarySHA, modelSHA: modelSHA).write(to: lock, atomically: true, encoding: .utf8)
+
+        let config = try XCTUnwrap(AudioFallbackTranscriberConfig.fromEnvironment([
+            "FAE_AUDIO_FALLBACK_BIN": binary.path,
+            "FAE_AUDIO_FALLBACK_BIN_ARTIFACT_ID": "test-whisper-bin",
+            "FAE_AUDIO_FALLBACK_MODEL": model.path,
+            "FAE_AUDIO_FALLBACK_MODEL_ARTIFACT_ID": "test-whisper-model",
+            "FAE_AUDIO_FALLBACK_LOCK": lock.path,
+        ]))
+        XCTAssertEqual(config.binaryArtifactID, "test-whisper-bin")
+        XCTAssertEqual(config.modelArtifactID, "test-whisper-model")
+        XCTAssertEqual(config.argumentTemplate, ["-m", "{model}", "-f", "{wav}", "-nt", "-np"])
+    }
+
+    private func makeFallbackFixture(binarySHA: String? = nil) throws -> (URL, URL, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-fallback-test-")
+            .appendingPathExtension(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let binary = try writeExecutableFixture(in: dir)
+        let actualSHA = try ExternalProcessAudioFallbackTranscriber.sha256Hex(of: binary)
+        let lock = dir.appendingPathComponent("models.lock")
+        try lockText(binarySHA: binarySHA ?? actualSHA, modelSHA: nil).write(to: lock, atomically: true, encoding: .utf8)
+        return (dir, binary, lock)
+    }
+
+    private func writeExecutableFixture(in dir: URL) throws -> URL {
+        let binary = dir.appendingPathComponent("fallback.sh")
+        try "#!/bin/sh\necho transcript\n".write(to: binary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        return binary
+    }
+
+    private func lockText(binarySHA: String, modelSHA: String?) -> String {
+        var text = """
+        schema_version = 1
+
+        [[artifact]]
+        id = \"test-whisper-bin\"
+        role = \"asr_binary\"
+        sha256 = \"\(binarySHA)\"
+
+        """
+        if let modelSHA {
+            text += """
+            [[artifact]]
+            id = \"test-whisper-model\"
+            role = \"asr_model\"
+            sha256 = \"\(modelSHA)\"
+
+            """
+        }
+        return text
     }
 
     func testUnclearAudioRetryResponseIsSafeReask() {

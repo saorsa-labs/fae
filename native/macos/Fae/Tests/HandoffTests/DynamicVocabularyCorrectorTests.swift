@@ -101,6 +101,94 @@ final class DynamicVocabularyCorrectorTests: XCTestCase {
         XCTAssertEqual(result, "Hello world, nice day")
     }
 
+    func testCorrectDoesNotRewriteRunAsHarvestedContactName() async {
+        let corrector = DynamicVocabularyCorrector()
+        await corrector.rebuild(
+            ownerName: nil,
+            entityNames: [(canonical: "Rune Bondal", aliases: [], type: "person")],
+            speakerNames: []
+        )
+
+        let result = await corrector.correct("Open the terminal and run git status")
+        XCTAssertEqual(result, "Open the terminal and run git status")
+    }
+
+    func testCorrectDoesNotRewriteSetAsHarvestedContactName() async {
+        let corrector = DynamicVocabularyCorrector()
+        await corrector.rebuild(
+            ownerName: nil,
+            entityNames: [(canonical: "Sat Panesar", aliases: [], type: "person")],
+            speakerNames: []
+        )
+
+        let result = await corrector.correct("Set a timer for five minutes")
+        XCTAssertEqual(result, "Set a timer for five minutes")
+    }
+
+    func testCorrectDoesNotRewriteAndAsHarvestedContactName() async {
+        let corrector = DynamicVocabularyCorrector()
+        await corrector.rebuild(
+            ownerName: nil,
+            entityNames: [(canonical: "Andy Lim", aliases: [], type: "person")],
+            speakerNames: []
+        )
+
+        let result = await corrector.correct("Open the terminal and run git status")
+        XCTAssertEqual(result, "Open the terminal and run git status")
+    }
+
+    func testCorrectDoesNotRewriteNumberWordsAsHarvestedContactName() async {
+        let corrector = DynamicVocabularyCorrector()
+        await corrector.rebuild(
+            ownerName: nil,
+            entityNames: [(canonical: "Wellness Tree", aliases: [], type: "person")],
+            speakerNames: []
+        )
+
+        let result = await corrector.correct("The number is four one five two three six")
+        XCTAssertEqual(result, "The number is four one five two three six")
+    }
+
+    func testCorrectCanStillApplyExplicitSarahVariant() async {
+        let corrector = DynamicVocabularyCorrector()
+        let snapshot = PersonalLexicon.Snapshot(entries: [
+            PersonalLexicon.Entry(
+                canonical: "Sarah",
+                variants: ["sara", "ser"],
+                source: "test",
+                createdAt: Date(),
+                updatedAt: Date())
+        ], timestamp: Date())
+        await corrector.ingestLexicon(snapshot)
+
+        let result = await corrector.correct("Call ser")
+        XCTAssertEqual(result, "Call Sarah")
+    }
+
+    func testContactPhoneticsDoNotOverrideSeededPreferredSpelling() async {
+        let corrector = DynamicVocabularyCorrector()
+        let snapshot = PersonalLexicon.Snapshot(entries: [
+            PersonalLexicon.Entry(
+                canonical: "Sara",
+                variants: [],
+                source: "contact",
+                createdAt: Date(),
+                updatedAt: Date()),
+            PersonalLexicon.Entry(
+                canonical: "Sarah",
+                variants: ["sara", "ser"],
+                source: "b5_app_eval",
+                createdAt: Date(),
+                updatedAt: Date()),
+        ], timestamp: Date())
+        await corrector.ingestLexicon(snapshot)
+
+        let alreadyPreferred = await corrector.correct("Call Sarah")
+        let explicitVariant = await corrector.correct("Call Sara")
+        XCTAssertEqual(alreadyPreferred, "Call Sarah")
+        XCTAssertEqual(explicitVariant, "Call Sarah")
+    }
+
     func testEmptyCorrectionsPassThrough() async {
         let corrector = DynamicVocabularyCorrector()
         // No rebuild — empty corrections

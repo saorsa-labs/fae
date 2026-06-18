@@ -1,8 +1,8 @@
-# Audio-In Hardening B5 Partial Handback — 2026-06-18
+# Audio-In Hardening B5 Handback — 2026-06-18
 
 ## Scope
 
-P2 / B5 measurement-and-decision work for Fae push-to-talk audio-in. This is **not B5 complete**: it measures the existing llama.cpp Gemma-4 E4B + BF16 mmproj pass-1 ASR path, adds a reproducible evaluator/corpus extension, and hardens the degraded path so bad pass-1 transcripts are stopped before pass-2 reasoning. Remaining required work is an integrity-gated Qwen3-ASR/whisper fallback and full bundled-app proof.
+P2 / B5 measurement-and-decision work for Fae push-to-talk audio-in. This report preserves the initial Gemma/mmproj failure evidence, then documents the completed daemon-side Qwen3-ASR fallback, DVC false-positive hardening, and final orb-shell TestServer app-path acceptance run.
 
 ## Reliability bar
 
@@ -230,8 +230,233 @@ conversation user: (unclear audio)
 conversation assistant: I didn't catch that, please say it again.
 ```
 
-## Not completed / reviewer follow-up
+## Follow-up implementation: fallback scaffold, DVC guard, expanded corpus
 
-- I did **not** wire the Qwen3-ASR/whisper.cpp fallback yet; the full-app measurement says it is required.
-- I did **not** complete a bundled app/test-server live audio turn with TTS + `ORB_MODE`→Speaking in this pass. The measured path is daemon live ASR over the same control-plane command the Swift app uses underneath, but the full app proof remains for reviewer/follow-up.
-- The B1.5 thinking/MTP warning sweep was not changed; audio pass 1 already suppresses thinking, and no cheap MTP warning-only patch was identified during this pass.
+Implemented next B5 step after the full-app FAIL:
+
+### Integrity-gated fallback wiring
+
+Added `native/macos/Fae/Sources/Fae/ML/AudioFallbackTranscriber.swift` and wired it into `DaemonLLMEngine.runAudioTurn`.
+
+Contract:
+
+- this is **interface/scaffold only** until an approved ASR binary/model is added to `models.lock`
+- runtime env may select `FAE_AUDIO_FALLBACK_BIN` and `FAE_AUDIO_FALLBACK_MODEL`, but expected SHA-256 values come from a trusted lock entry, not from env
+- `FAE_AUDIO_FALLBACK_BIN_ARTIFACT_ID` must resolve in `models.lock`
+- if a model path is configured via `FAE_AUDIO_FALLBACK_MODEL`, `FAE_AUDIO_FALLBACK_MODEL_ARTIFACT_ID` must also resolve in `models.lock`
+- default args support `whisper.cpp`-style CLIs: `-m {model} -f {wav} -nt -np`
+- wrapper/Qwen3-ASR CLIs can provide `FAE_AUDIO_FALLBACK_ARGS` with `{wav}` and `{model}` placeholders
+- mode is `FAE_AUDIO_FALLBACK_MODE=quality_fail|fragile|always`, default `fragile`
+- fail-closed behavior: missing lock entry / hash mismatch / timeout / bad fallback transcript keeps the primary path and, if primary is still unusable, returns the safe re-ask
+
+`fragile` mode attempts fallback for:
+
+- quality-gate failures
+- short/ambiguous turns such as `Stap`
+- numeric dictation collapsed to digits
+- spelling-like failures (`Stellar FA` etc.)
+- short `call <name>` turns such as `call ser`
+
+This deliberately addresses the real app-path failures that passed the coarse quality gate but were too fragile to trust.
+
+Important: no arbitrary Qwen3-ASR/whisper asset was downloaded or trusted. A real post-fallback corpus run still needs an approved binary/model pair added to `models.lock`.
+
+### DVC false-positive fix
+
+Changed `DynamicVocabularyCorrector` to protect ordinary command/control words from broad phonetic corrections. This prevents harvested multi-token contact names from rewriting command verbs, e.g.:
+
+- `run` → `Rune Bondal` no longer happens
+- `set` → `Sat Panesar` no longer happens
+
+The guard still allows explicit vocabulary variants such as `ser` → `Sarah`.
+
+Live orb-shell TestServer proof after the fix:
+
+```text
+HEARD PTT [heard]: Set a timer for five minutes.
+ASSISTANT_LAST Let me check that for you. What should I label the five-minute timer?
+```
+
+No `Sat Panesar` false correction occurred.
+
+### Corpus expansion
+
+Expanded `native/macos/Fae/autoresearch/asr_corpus` with eight additional clips:
+
+- `short_04`: `Start`
+- `short_05`: `Run`
+- `dvc_01`: `Set a timer for five minutes`
+- `dvc_02`: `Open the terminal and run git status`
+- `dvc_03`: `Run git status`
+- `name_04`: `Call Sarah now`
+- `spell_02`: `Spell F A E slowly`
+- `number_02`: `Four one five two three six`
+
+`manifest.json` now marks `dvc_*.wav` as `dvc_guard` clips.
+
+### Validation
+
+Targeted tests passed:
+
+```bash
+cd native/macos/Fae
+swift test --filter 'DynamicVocabularyCorrectorTests|DaemonAudioTwoPassTests'
+# 38 tests, 0 failures
+swift build
+# passed
+```
+
+Full `swift test` is still not green in this checkout due unrelated pre-existing failures (examples from `/tmp/fae-swift-test-b5.log`: `AgentAndMetaOptStaticTests.testEncodeScoresAllNilStillValid`, `AudioAndBackupStaticTests` SQLite backup cases, `BuiltinToolsStaticTests.testParseFormValuesNilWhenAllEmpty`, plus Contacts/CoreData XPC errors). The B5-targeted tests pass.
+
+`just test-serve` also rebuilt and launched the orb-first bundle with the embedded daemon forced via `FAE_DAEMON_BIN`:
+
+```text
+Fae.app/Contents/MacOS/Fae --test-server
+Fae.app/Contents/MacOS/fae-ui-shell
+Fae.app/Contents/MacOS/fae-daemon
+health {'pipeline': 'running', 'status': 'ok'}
+```
+
+## Qwen3-ASR asset selection progress
+
+Owner selected Qwen3-ASR as the fallback direction. I searched existing local assets/locks first; no Qwen3-ASR GGUF is currently installed under `~/Library/Application Support/fae*/models`, and no Qwen3-ASR entries existed in `models.lock`.
+
+Selected exact upstream candidate for the next locked run:
+
+- repo: `ggml-org/Qwen3-ASR-1.7B-GGUF`
+- revision: `36a678687ba7d07a74ca70ccb0e36902e005fb80`
+- model: `Qwen3-ASR-1.7B-Q8_0.gguf`
+  - size: `2165034944`
+  - sha256: `58e22d0532d4eacaf034cfac17a6fed159f37c41390c710186783be439d1fc57`
+- audio projector: `mmproj-Qwen3-ASR-1.7B-Q8_0.gguf`
+  - size: `355709344`
+  - sha256: `46c1d533af3f354ceb37ce855dbceff7da7fa7cf1e6a523df3b13440bd164c0d`
+- license: Apache-2.0 inherited from base model `Qwen/Qwen3-ASR-1.7B`
+
+I appended lock entries for those two ASR artifacts to `native/macos/Fae/Sources/Fae/Resources/Models/models.lock`, plus an `asr_binary` entry for the already-pinned macOS-arm64 `llama-server` binary from `scripts/llamacpp-runtime.lock.json`:
+
+- `llamacpp-b9692-llama-server-macos-arm64`
+- `ggml-org-qwen3-asr-1-7b-q8-0-gguf`
+- `ggml-org-qwen3-asr-1-7b-mmproj-q8-0-gguf`
+
+No Qwen3-ASR artifact was downloaded yet, and no fallback corpus run was attempted yet. The next safe step is adding a daemon-side resolver/downloader for these locked ASR artifact ids and a daemon-side `audio.transcribe_fallback` command (or equivalent) that supervises the Qwen3-ASR llama.cpp sidecar under ADR-010.
+
+## Final implementation: daemon-side Qwen3-ASR fallback
+
+The production fallback is now daemon-side, not Swift app-side process spawning.
+
+Implemented:
+
+- `audio.transcribe_fallback` control-plane command, requiring `ConversationWrite`.
+- Daemon `SessionBackends.asr_fallback` with fail-closed handling:
+  - missing fallback provider: `fallback_unavailable`
+  - bad payload: `bad_request`
+  - provider error: `fallback_failed`
+  - empty normalized transcript: `empty_transcript`
+- Daemon-owned lazy Qwen3-ASR `llama-server` sidecar using the ADR-010 sidecar boundary:
+  - model: `Qwen3-ASR-1.7B-Q8_0.gguf`
+  - mmproj: `mmproj-Qwen3-ASR-1.7B-Q8_0.gguf`
+  - no MTP/drafter for the ASR sidecar
+  - default port `18081`, cache under the llama cache `asr/`
+  - disabled only with `FAE_AUDIO_FALLBACK=0|false`
+- Pinned artifact download/verification reuses the existing `RemoteModelArtifact` path. Expected size/SHA for Qwen3-ASR model, mmproj, and the ASR `llama-server` binary is resolved from the installed `models.lock`, not env-provided hashes or duplicated code constants.
+- Swift `DaemonLLMEngine` now defaults to no app-side `AudioFallbackTranscriber`; production fallback calls daemon command `audio.transcribe_fallback` and unwraps `result.transcript`.
+- Qwen3-ASR output normalization strips the model's `language English<asr_text>` prefix before transcript quality checks.
+
+Live sidecar proof through the canonical orb-shell TestServer path:
+
+```text
+Fae.app/Contents/MacOS/Fae --test-server
+Fae.app/Contents/MacOS/fae-ui-shell
+Fae.app/Contents/MacOS/fae-daemon
+llama-server ... --alias qwen3-asr --port 18081 --reasoning off --reasoning-format none
+```
+
+Injected `short_03.wav` (`Stop`) produced:
+
+```text
+HEARD_EVENT PTT [heard]: Stop.
+conversation user: Stop.
+conversation assistant: Stopping the current session.
+```
+
+Lock-on smoke was also run outside `FAE_DEV`/`FAE_MODELS_LOCK=off`:
+
+```bash
+env -u FAE_DEV -u FAE_MODELS_LOCK \
+  FAE_TEST_SERVER=1 \
+  FAE_UI_SHELL_BIN=<bundle>/Contents/MacOS/fae-ui-shell \
+  FAE_DAEMON_BIN=<bundle>/Contents/MacOS/fae-daemon \
+  <bundle>/Contents/MacOS/Fae --test-server
+```
+
+Result:
+
+```text
+HEARD_EVENT PTT [heard]: Stop.
+LOCK_ON_NO_SKIP_WARNINGS
+```
+
+No `skipping artifact digest verification` warning was present in the lock-on smoke log.
+
+## Final B5 acceptance measurement
+
+Final full-app run, through `just test-serve` orb-shell bundle and `TestServer test.inject_audio`:
+
+```bash
+cd native/macos/Fae
+uv run autoresearch/asr_b5_app_eval.py --seed-dev-vocab --seed-only
+# from repo root: just test-serve
+uv run autoresearch/asr_b5_app_eval.py --base-url http://127.0.0.1:7433 --timeout-s 180
+```
+
+Output:
+
+- `native/macos/Fae/autoresearch/results/b5_asr_app_20260618_235312.json`
+- `native/macos/Fae/autoresearch/results/b5_asr_app_20260618_235312.md`
+
+Summary:
+
+- Overall WER: **2.5%** ✅ (bar ≤ 20%)
+- Exact-match: **94.4%**
+- Clean WER: **0.0%** ✅ (bar ≤ 10%)
+- Vocab exact-match: **90.0%** ✅ (bar ≥ 90%)
+- Safe re-ask / quality-gate transcripts: **0** ✅
+- Decision against bar: **PASS**
+
+Notable residual miss: `spell_02.wav` (`Spell F A E slowly`) heard as `Star fade slowly`, but the aggregate vocab exact bar still passes at 90.0%. This should stay on the watchlist for future ASR corpus expansion.
+
+## Final DVC hardening
+
+Additional false-positive fixes after the Qwen3-ASR run:
+
+- Protected conjunction/filler words (`and`, `or`, articles/prepositions) and number words (`zero`…`nine`) from generated contact-name corrections.
+- Stopped generating phonetic variants for broad harvested `contact` lexicon entries. Explicit variants still apply, but contacts no longer rewrite preferred seeded spellings; this prevents `Sarah` from being rewritten to harvested contact `Sara`.
+- Added tests for `and`→`Andy Lim`, `three`→`Wellness Tree`, and contact `Sara` not overriding seeded `Sarah`.
+
+## Final validation
+
+Passed:
+
+```bash
+cd crates
+cargo fmt --all
+cargo test -p fae-control-plane -p fae-daemon
+# fae-control-plane: 23 passed; fae-daemon: 44 passed
+cargo clippy --all-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+cargo check --workspace --all-targets
+
+cd native/macos/Fae
+swift test --filter 'DynamicVocabularyCorrectorTests|DaemonAudioTwoPassTests'
+swift build
+python3 -m py_compile autoresearch/asr_b5_app_eval.py
+uv run autoresearch/asr_b5_app_eval.py --base-url http://127.0.0.1:7433 --timeout-s 180
+```
+
+`swift test` full-suite was attempted again but timed out after 1200s in this checkout; earlier full-suite attempts also had unrelated pre-existing static/SQLite/CoreData failures. The B5-targeted tests and final app-path corpus acceptance run pass.
+
+## Remaining reviewer/release follow-up
+
+- Full release-style real-mic/TTS validation remains pending; this handback proves TestServer-injected audio through the canonical orb-shell app path.
+- Keep `spell_02` on the watchlist despite aggregate PASS.
+- Full corpus reliability PASS was measured with `just test-serve` (`FAE_DEV=1`); a separate lock-on smoke verified the Qwen3-ASR fallback path without `FAE_MODELS_LOCK=off` and with no digest-skip warnings.

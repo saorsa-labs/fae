@@ -29,7 +29,8 @@ use fae_control_plane::{
 };
 use fae_engine::{
     kill_all_registered_sidecars, LazyLlamaServerAdapter, LlamaModelSource, LlamaServerAdapter,
-    LlamaServerConfig, MockTtsAdapter, ProviderAdapter, RemoteModelArtifact, TtsAdapter,
+    LlamaServerConfig, MockTtsAdapter, ModelsLock, ProviderAdapter, RemoteModelArtifact,
+    TtsAdapter,
 };
 
 mod diagnostic;
@@ -90,6 +91,13 @@ async fn main() -> DaemonResult<()> {
     let engine = build_engine().await;
     let info = engine.describe();
     println!("engine  : {} ({})", info.backend, info.model_id);
+    let asr_fallback = build_asr_fallback_engine();
+    if let Some(asr) = &asr_fallback {
+        let info = asr.describe();
+        println!("asr     : {} ({}) — lazy", info.backend, info.model_id);
+    } else {
+        println!("asr     : disabled");
+    }
     let tts = build_tts_engine();
     let tts_info = tts.describe();
     println!("tts     : {} ({})", tts_info.backend, tts_info.model_id);
@@ -134,6 +142,7 @@ async fn main() -> DaemonResult<()> {
         socket_path,
         registry,
         engine,
+        asr_fallback,
         tts,
         audio,
         audit_path,
@@ -197,10 +206,13 @@ const DEFAULT_MMPROJ_SHA256: &str =
 const DEFAULT_MTP_FILE: &str = "mtp-gemma-4-E4B-it.gguf";
 const DEFAULT_MTP_SIZE: u64 = 59_676_544;
 const DEFAULT_MTP_SHA256: &str = "b0005dc39d47ede950c3ec413cb20e832f15b216126eae368d9f572676153cb6";
+
+const QWEN3_ASR_REPO: &str = "ggml-org/Qwen3-ASR-1.7B-GGUF";
+const QWEN3_ASR_REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
+const QWEN3_ASR_MODEL_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-q8-0-gguf";
+const QWEN3_ASR_MMPROJ_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-mmproj-q8-0-gguf";
 const LLAMACPP_RUNTIME_RELEASE: &str = "b9692";
-const LLAMA_SERVER_BINARY_SIZE: u64 = 33_472;
-const LLAMA_SERVER_BINARY_SHA256: &str =
-    "c68b4016e18701e8293e3730a8f13272d8d2d6c10139c8b00421332604b06347";
+const LLAMA_SERVER_BINARY_ARTIFACT_ID: &str = "llamacpp-b9692-llama-server-macos-arm64";
 #[cfg(target_os = "macos")]
 const LLAMA_SERVER_SIGNED_CDHASH: &str = "3d5c9574d44b155e1d2551cc082cbff8c5d9d0c8";
 #[cfg(target_os = "macos")]
@@ -215,6 +227,146 @@ async fn build_engine() -> Arc<dyn ProviderAdapter> {
         exit_fatal("engine_selection", &detail);
     }
     build_llamacpp_engine().await
+}
+
+/// Build the optional daemon-owned Qwen3-ASR sidecar. It is lazy: the ~2.5 GB
+/// Qwen3-ASR artifacts are downloaded and verified only if a fragile audio turn
+/// asks for `audio.transcribe_fallback`.
+fn build_asr_fallback_engine() -> Option<Arc<dyn ProviderAdapter>> {
+    if std::env::var("FAE_AUDIO_FALLBACK")
+        .is_ok_and(|value| value == "0" || value.eq_ignore_ascii_case("false"))
+    {
+        return None;
+    }
+    let binary = match resolve_llama_server_binary() {
+        Ok(path) => path,
+        Err(detail) => {
+            eprintln!("fae-daemon: ASR fallback disabled; llama.cpp runtime unavailable: {detail}");
+            return None;
+        }
+    };
+    if let Err(detail) = verify_llama_server_binary(&binary) {
+        eprintln!("fae-daemon: ASR fallback disabled; llama.cpp runtime digest failed: {detail}");
+        return None;
+    }
+    let cache_dir = std::env::var_os("FAE_ASR_LLAMA_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            default_llama_cache_dir()
+                .unwrap_or_else(|_| PathBuf::from("models/llamacpp"))
+                .join("asr")
+        });
+    if let Err(error) = std::fs::create_dir_all(&cache_dir) {
+        eprintln!(
+            "fae-daemon: ASR fallback disabled; create cache {}: {error}",
+            cache_dir.display()
+        );
+        return None;
+    }
+    let (repo, revision, model, mmproj) = match qwen3_asr_locked_artifacts() {
+        Ok(artifacts) => artifacts,
+        Err(detail) => {
+            eprintln!("fae-daemon: ASR fallback disabled; models.lock: {detail}");
+            return None;
+        }
+    };
+    let config = LlamaServerConfig {
+        binary: binary.to_string_lossy().to_string(),
+        model: LlamaModelSource::PinnedHuggingFace {
+            repo,
+            revision,
+            cache_dir: cache_dir.to_string_lossy().to_string(),
+            model,
+            mmproj,
+            mtp_draft: None,
+        },
+        lora_gguf: None,
+        alias: "qwen3-asr".to_owned(),
+        enable_thinking: false,
+        mtp_draft_tokens: None,
+        port: env_parsed("FAE_ASR_LLAMA_PORT", 18_081_u16),
+        ctx_size: env_parsed("FAE_ASR_LLAMA_CTX", 4096_u32),
+        ngl: env_parsed("FAE_ASR_LLAMA_NGL", 999_u32),
+    };
+    Some(Arc::new(LazyLlamaServerAdapter::new(
+        config,
+        "qwen3-asr",
+        std::time::Duration::from_secs(env_parsed("FAE_ASR_LLAMA_TIMEOUT_S", 180_u64)),
+    )))
+}
+
+fn qwen3_asr_locked_artifacts(
+) -> Result<(String, String, RemoteModelArtifact, RemoteModelArtifact), String> {
+    let lock = load_installed_models_lock()?;
+    let model = locked_remote_artifact(&lock, QWEN3_ASR_MODEL_ARTIFACT_ID, "asr_model")?;
+    let mmproj = locked_remote_artifact(&lock, QWEN3_ASR_MMPROJ_ARTIFACT_ID, "asr_mmproj")?;
+    if model.source_repo != mmproj.source_repo || model.source_revision != mmproj.source_revision {
+        return Err("Qwen3-ASR model/mmproj lock entries must share repo and revision".to_owned());
+    }
+    if model.source_repo != QWEN3_ASR_REPO || model.source_revision != QWEN3_ASR_REVISION {
+        return Err(format!(
+            "Qwen3-ASR lock entry points at unexpected source {}@{}",
+            model.source_repo, model.source_revision
+        ));
+    }
+    Ok((
+        model.source_repo.clone(),
+        model.source_revision.clone(),
+        remote_artifact_from_lock(&model),
+        remote_artifact_from_lock(&mmproj),
+    ))
+}
+
+fn load_installed_models_lock() -> Result<ModelsLock, String> {
+    let path = data_directory()
+        .map_err(|error| error.to_string())?
+        .join("models.lock");
+    ModelsLock::load(&path).map_err(|error| error.to_string())
+}
+
+fn locked_remote_artifact(
+    lock: &ModelsLock,
+    id: &str,
+    expected_role: &str,
+) -> Result<fae_engine::Artifact, String> {
+    let artifact = lock
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.id == id)
+        .ok_or_else(|| format!("missing required artifact {id}"))?;
+    if artifact.role != expected_role {
+        return Err(format!(
+            "artifact {id} role mismatch: expected {expected_role}, got {}",
+            artifact.role
+        ));
+    }
+    if artifact.loader != "llamacpp-sidecar" {
+        return Err(format!(
+            "artifact {id} loader mismatch: expected llamacpp-sidecar, got {}",
+            artifact.loader
+        ));
+    }
+    if artifact.source_repo.is_empty() || artifact.source_revision.is_empty() {
+        return Err(format!(
+            "artifact {id} must pin source_repo and source_revision"
+        ));
+    }
+    if artifact.size_bytes == 0 {
+        return Err(format!("artifact {id} must pin size_bytes"));
+    }
+    let sha = artifact.sha256.trim();
+    if sha.len() != 64 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("artifact {id} must pin a 64-hex sha256"));
+    }
+    Ok(artifact.clone())
+}
+
+fn remote_artifact_from_lock(artifact: &fae_engine::Artifact) -> RemoteModelArtifact {
+    RemoteModelArtifact {
+        filename: artifact.filename.clone(),
+        size_bytes: artifact.size_bytes,
+        sha256: artifact.sha256.clone(),
+    }
 }
 
 /// Resolve the `llama-server` binary. Fae owns this runtime; production never
@@ -297,23 +449,35 @@ fn verify_llama_server_binary(path: &Path) -> Result<(), String> {
 }
 
 fn verify_unsigned_llama_server_binary(path: &Path) -> Result<(), String> {
+    let lock = load_installed_models_lock()?;
+    let artifact = lock
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.id == LLAMA_SERVER_BINARY_ARTIFACT_ID)
+        .ok_or_else(|| format!("missing required artifact {LLAMA_SERVER_BINARY_ARTIFACT_ID}"))?;
+    if artifact.role != "asr_binary" || artifact.loader != "llamacpp-sidecar" {
+        return Err(format!(
+            "artifact {LLAMA_SERVER_BINARY_ARTIFACT_ID} must be role=asr_binary loader=llamacpp-sidecar"
+        ));
+    }
     let metadata = std::fs::metadata(path)
         .map_err(|error| format!("stat llama-server {}: {error}", path.display()))?;
-    if metadata.len() != LLAMA_SERVER_BINARY_SIZE {
+    if metadata.len() != artifact.size_bytes {
         return Err(format!(
             "llama-server binary size mismatch for {} (runtime {LLAMACPP_RUNTIME_RELEASE}): expected {}, got {}",
             path.display(),
-            LLAMA_SERVER_BINARY_SIZE,
+            artifact.size_bytes,
             metadata.len()
         ));
     }
     let actual = sha256_file(path)
         .map_err(|error| format!("hash llama-server {}: {error}", path.display()))?;
-    if actual != LLAMA_SERVER_BINARY_SHA256 {
+    let expected = artifact.sha256.trim().to_ascii_lowercase();
+    if actual != expected {
         return Err(format!(
             "llama-server binary sha256 mismatch for {} (runtime {LLAMACPP_RUNTIME_RELEASE}): expected {}, got {}",
             path.display(),
-            LLAMA_SERVER_BINARY_SHA256,
+            expected,
             actual
         ));
     }
@@ -736,9 +900,45 @@ mod tests {
             "FAE_GEMMA_THINKING",
             "FAE_LLAMA_SERVER_URL",
             "FAE_MODELS_LOCK",
+            "FAE_AUDIO_FALLBACK",
+            "FAE_ASR_LLAMA_CACHE_DIR",
         ] {
             std::env::remove_var(key);
         }
+    }
+
+    fn write_test_models_lock(home: &Path, extra_artifacts: &str) {
+        #[cfg(target_os = "macos")]
+        let dir = home.join("Library/Application Support/fae");
+        #[cfg(not(target_os = "macos"))]
+        let dir = home.join(".local/share/fae");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("models.lock"),
+            format!("schema_version = 1\ncreated_at = \"test\"\n{extra_artifacts}"),
+        )
+        .unwrap();
+    }
+
+    fn artifact_toml(id: &str, role: &str, filename: &str, size: u64, sha256: &str) -> String {
+        format!(
+            r#"
+[[artifact]]
+id = "{id}"
+role = "{role}"
+loader = "llamacpp-sidecar"
+source_repo = "{QWEN3_ASR_REPO}"
+source_revision = "{QWEN3_ASR_REVISION}"
+filename = "{filename}"
+size_bytes = {size}
+sha256 = "{sha256}"
+signature = ""
+license = "test"
+hardware_profile = "test"
+approved_by = "test"
+created_at = "test"
+"#
+        )
     }
 
     #[test]
@@ -818,6 +1018,17 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        std::env::set_var("HOME", dir.path());
+        write_test_models_lock(
+            dir.path(),
+            &artifact_toml(
+                LLAMA_SERVER_BINARY_ARTIFACT_ID,
+                "asr_binary",
+                "llama-server",
+                999,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        );
         assert!(verify_llama_server_binary(&bin)
             .unwrap_err()
             .contains("size mismatch"));
@@ -831,6 +1042,96 @@ mod tests {
         std::env::set_var("FAE_DEV", "1");
         validate_models_lock_escape().unwrap();
         verify_llama_server_binary(&bin).unwrap();
+    }
+
+    #[test]
+    fn qwen_asr_artifacts_are_resolved_from_models_lock() {
+        let _g = _lock_env();
+        clear_fae_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+        let sha = "1111111111111111111111111111111111111111111111111111111111111111";
+        let toml = format!(
+            "{}{}",
+            artifact_toml(
+                QWEN3_ASR_MODEL_ARTIFACT_ID,
+                "asr_model",
+                "model.gguf",
+                123,
+                sha
+            ),
+            artifact_toml(
+                QWEN3_ASR_MMPROJ_ARTIFACT_ID,
+                "asr_mmproj",
+                "mmproj.gguf",
+                456,
+                sha
+            )
+        );
+        write_test_models_lock(dir.path(), &toml);
+
+        let (repo, revision, model, mmproj) = qwen3_asr_locked_artifacts().unwrap();
+        assert_eq!(repo, QWEN3_ASR_REPO);
+        assert_eq!(revision, QWEN3_ASR_REVISION);
+        assert_eq!(model.filename, "model.gguf");
+        assert_eq!(model.size_bytes, 123);
+        assert_eq!(model.sha256, sha);
+        assert_eq!(mmproj.filename, "mmproj.gguf");
+        assert_eq!(mmproj.size_bytes, 456);
+    }
+
+    #[test]
+    fn qwen_asr_artifacts_fail_closed_when_lock_entry_missing() {
+        let _g = _lock_env();
+        clear_fae_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+        let sha = "1111111111111111111111111111111111111111111111111111111111111111";
+        write_test_models_lock(
+            dir.path(),
+            &artifact_toml(
+                QWEN3_ASR_MODEL_ARTIFACT_ID,
+                "asr_model",
+                "model.gguf",
+                123,
+                sha,
+            ),
+        );
+
+        let err = qwen3_asr_locked_artifacts().unwrap_err();
+        assert!(
+            err.contains(QWEN3_ASR_MMPROJ_ARTIFACT_ID),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn qwen_asr_artifacts_fail_closed_on_unpinned_hash() {
+        let _g = _lock_env();
+        clear_fae_env();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+        let toml = format!(
+            "{}{}",
+            artifact_toml(
+                QWEN3_ASR_MODEL_ARTIFACT_ID,
+                "asr_model",
+                "model.gguf",
+                123,
+                "not-a-sha"
+            ),
+            artifact_toml(
+                QWEN3_ASR_MMPROJ_ARTIFACT_ID,
+                "asr_mmproj",
+                "mmproj.gguf",
+                456,
+                "1111111111111111111111111111111111111111111111111111111111111111"
+            )
+        );
+        write_test_models_lock(dir.path(), &toml);
+
+        let err = qwen3_asr_locked_artifacts().unwrap_err();
+        assert!(err.contains("64-hex sha256"), "unexpected error: {err}");
     }
 
     #[test]

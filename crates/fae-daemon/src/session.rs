@@ -31,6 +31,7 @@ pub enum SessionState {
 /// Runtime backends used by command dispatch.
 pub struct SessionBackends<'a> {
     pub engine: &'a dyn ProviderAdapter,
+    pub asr_fallback: Option<&'a dyn ProviderAdapter>,
     pub tts: &'a dyn TtsAdapter,
     pub audio: &'a AudioManager,
     /// Server-push event bus — producers (voice spine V3a `tts.speak`) publish
@@ -46,6 +47,11 @@ pub struct SessionBackends<'a> {
 struct AuthPayload {
     client_id: String,
     token: String,
+}
+
+#[derive(Deserialize)]
+struct TranscribeFallbackPayload {
+    wav_base64: String,
 }
 
 /// Result of handling one frame: what to write back, what to audit, and whether
@@ -303,6 +309,7 @@ async fn dispatch(
             }))
         }
         "conversation.inject_text" => inject_text(backends, cmd).await,
+        "audio.transcribe_fallback" => transcribe_fallback(backends, cmd).await,
         // Open this connection's server-push event stream (voice spine V2). The
         // ack is the signal the transport uses to register the connection's sink
         // as a subscriber; events (e.g. `audio.level`) are then pushed to it,
@@ -891,6 +898,58 @@ async fn inject_text(
     outcome
 }
 
+/// B5 cascaded ASR fallback. The Swift app decides when a primary transcript is
+/// fragile; the daemon owns the Qwen3-ASR sidecar and model-lock-gated assets.
+async fn transcribe_fallback(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let Some(engine) = backends.asr_fallback else {
+        return Err("fallback_unavailable");
+    };
+    let payload: TranscribeFallbackPayload =
+        serde_json::from_value(cmd.payload.clone()).map_err(|_| "bad_request")?;
+    if payload.wav_base64.is_empty() {
+        return Err("bad_request");
+    }
+    let request = ChatRequest {
+        system: Some(
+            "Transcribe the user's audio verbatim. Output only the exact words spoken — no labels, commentary, or answers."
+                .to_owned(),
+        ),
+        messages: vec![ChatMessage {
+            role: Role::User,
+            content: String::new(),
+            audio_wav_base64: Some(payload.wav_base64),
+        }],
+        tools: Vec::new(),
+        max_tokens: 128,
+    };
+    let result = run_turn(engine, request).await.map_err(|detail| {
+        eprintln!("fae-daemon: audio.transcribe_fallback failed: {detail}");
+        "fallback_failed"
+    })?;
+    let transcript = result
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_asr_transcript)
+        .unwrap_or_default();
+    if transcript.is_empty() {
+        return Err("empty_transcript");
+    }
+    Ok(serde_json::json!({ "transcript": transcript }))
+}
+
+fn normalize_asr_transcript(raw: &str) -> String {
+    let mut text = raw.trim();
+    if let Some((_, after)) = text.rsplit_once("<asr_text>") {
+        text = after.trim();
+    }
+    text.trim_matches(|ch: char| ch.is_whitespace() || ch == '"' || ch == '\'')
+        .trim()
+        .to_owned()
+}
+
 /// Orb-host-owns-state: publish an info set to subscribed orb hosts (the
 /// green-dot indicator). Payload: `{ items: [{ id, kind, title, action? }] }`.
 /// `kind` is forwarded as-is (router: `research`/`x0x`/`app`/`url`); unknown
@@ -1055,6 +1114,18 @@ mod tests {
         assert!(agents.iter().any(|a| a == "claude"));
     }
 
+    #[test]
+    fn normalize_asr_transcript_strips_qwen_marker() {
+        assert_eq!(
+            super::normalize_asr_transcript("language English<asr_text>Stop."),
+            "Stop."
+        );
+        assert_eq!(
+            super::normalize_asr_transcript("  Call Sarah now  "),
+            "Call Sarah now"
+        );
+    }
+
     #[tokio::test]
     async fn agent_run_rejects_missing_fields() {
         // No agent, no prompt → bad_request before any subprocess is spawned.
@@ -1086,6 +1157,7 @@ mod tests {
         let playbacks = crate::events::PlaybackRegistry::new();
         let backends = SessionBackends {
             engine,
+            asr_fallback: None,
             tts,
             audio,
             events: &events,
@@ -1266,6 +1338,32 @@ mod tests {
         assert_eq!(
             out.response.error.as_ref().map(|e| e.code.as_str()),
             Some("missing_scope")
+        );
+    }
+
+    #[tokio::test]
+    async fn audio_transcribe_fallback_fails_closed_when_provider_unavailable() {
+        let reg = registry();
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame(
+                "audio.transcribe_fallback",
+                serde_json::json!({ "wav_base64": "AAAA" }),
+            ),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(!out.response.ok);
+        assert_eq!(
+            out.response.error.as_ref().map(|e| e.code.as_str()),
+            Some("fallback_unavailable")
         );
     }
 
@@ -1822,6 +1920,7 @@ mod tests {
         );
         let backends = SessionBackends {
             engine: &mock(),
+            asr_fallback: None,
             tts: &mock_tts(),
             audio: &AudioManager::new(),
             events: &bus,
@@ -1868,6 +1967,7 @@ mod tests {
         );
         let backends = SessionBackends {
             engine: &mock(),
+            asr_fallback: None,
             tts: &mock_tts(),
             audio: &AudioManager::new(),
             events: &bus,
@@ -1910,6 +2010,7 @@ mod tests {
         let playbacks = crate::events::PlaybackRegistry::new();
         let backends = SessionBackends {
             engine: &mock(),
+            asr_fallback: None,
             tts: &mock_tts(),
             audio: &AudioManager::new(),
             events: &bus,

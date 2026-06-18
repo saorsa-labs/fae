@@ -48,7 +48,7 @@ RELIABILITY_BAR = {
 
 SEED_ENTRIES = [
     {"canonical": "David", "variants": ["dayed", "daved", "devid", "david"], "source": "b5_app_eval"},
-    {"canonical": "Sarah", "variants": ["sarah", "sara", "sar", "sa", "zara"], "source": "b5_app_eval"},
+    {"canonical": "Sarah", "variants": ["sarah", "sara", "sar", "ser", "zara"], "source": "b5_app_eval"},
     {"canonical": "James", "variants": ["james", "jaymes"], "source": "b5_app_eval"},
     {"canonical": "GitHub", "variants": ["github", "git hub", "get hub"], "source": "b5_app_eval"},
     {"canonical": "Fae", "variants": ["fay", "faye", "fey", "faith", "phase"], "source": "b5_app_eval"},
@@ -199,6 +199,8 @@ def infer_category(path: Path) -> str:
         return "clean"
     if prefix in {"name", "tech", "number", "spell"}:
         return "vocab"
+    if prefix in {"dvc"}:
+        return "dvc_guard"
     if prefix in {"casual", "conv"}:
         return "spontaneous"
     if prefix in {"noisy", "noise"}:
@@ -233,18 +235,23 @@ def extract_heard(events: list[dict[str, Any]]) -> tuple[str, int] | None:
     return None
 
 
-def wait_for_heard(client: TestServerClient, since: int, timeout_s: float) -> tuple[str, int]:
+def wait_for_final_heard(client: TestServerClient, since: int, timeout_s: float) -> tuple[str, int]:
     deadline = time.monotonic() + timeout_s
     last_since = since
+    last_heard: tuple[str, int] | None = None
+    heard_at: float | None = None
     while time.monotonic() < deadline:
         data = client.events(last_since)
         events = data.get("events", [])
         found = extract_heard(events)
         if found:
-            return found
+            last_heard = found
+            heard_at = time.monotonic()
         last_since = int(data.get("total", last_since))
+        if last_heard and heard_at and (time.monotonic() - heard_at) >= 1.0:
+            return last_heard
         time.sleep(0.5)
-    raise TimeoutError(f"timed out waiting for PTT [heard] after event {since}")
+    raise TimeoutError(f"timed out waiting for final PTT [heard] after event {since}")
 
 
 def run_clip(client: TestServerClient, wav: Path, expected: str, category: str, timeout_s: float) -> ClipResult:
@@ -252,7 +259,7 @@ def run_clip(client: TestServerClient, wav: Path, expected: str, category: str, 
     start_events = int(client.events(0).get("total", 0))
     start = time.perf_counter()
     client.command("test.inject_audio", {"path": str(wav.resolve())})
-    heard, seq = wait_for_heard(client, start_events, timeout_s)
+    heard, seq = wait_for_final_heard(client, start_events, timeout_s)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     client.cancel()
     return ClipResult(

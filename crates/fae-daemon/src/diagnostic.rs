@@ -437,6 +437,7 @@ async fn ws_message_loop(
         let event_id = next_event_id(now);
         let backends = SessionBackends {
             engine,
+            asr_fallback: None,
             tts,
             audio,
             events,

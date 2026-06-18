@@ -228,7 +228,7 @@ impl Scope {
 pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
     let scopes: &'static [Scope] = match command {
         "host.ping" | "host.version" | "runtime.status" => &[Scope::StatusRead],
-        "conversation.inject_text" => &[Scope::ConversationWrite],
+        "conversation.inject_text" | "audio.transcribe_fallback" => &[Scope::ConversationWrite],
         "conversation.subscribe" => &[Scope::ConversationRead],
         "audio.capture_start"
         | "audio.capture_stop"

@@ -41,6 +41,7 @@ pub async fn serve_unix(
     socket_path: PathBuf,
     registry: Arc<ClientRegistry>,
     engine: Arc<dyn ProviderAdapter>,
+    asr_fallback: Option<Arc<dyn ProviderAdapter>>,
     tts: Arc<dyn TtsAdapter>,
     audio: Arc<AudioManager>,
     audit_path: PathBuf,
@@ -65,6 +66,7 @@ pub async fn serve_unix(
         let (stream, _addr) = listener.accept().await?;
         let registry = Arc::clone(&registry);
         let engine = Arc::clone(&engine);
+        let asr_fallback = asr_fallback.as_ref().map(Arc::clone);
         let tts = Arc::clone(&tts);
         let audio = Arc::clone(&audio);
         let audit_path = audit_path.clone();
@@ -75,6 +77,7 @@ pub async fn serve_unix(
                 stream,
                 &registry,
                 engine.as_ref(),
+                asr_fallback.as_deref(),
                 tts.as_ref(),
                 audio.as_ref(),
                 &audit_path,
@@ -95,6 +98,7 @@ async fn handle_connection(
     stream: UnixStream,
     registry: &ClientRegistry,
     engine: &dyn ProviderAdapter,
+    asr_fallback: Option<&dyn ProviderAdapter>,
     tts: &dyn TtsAdapter,
     audio: &AudioManager,
     audit_path: &Path,
@@ -136,6 +140,7 @@ async fn handle_connection(
             let event_id = next_event_id(now);
             let backends = SessionBackends {
                 engine,
+                asr_fallback,
                 tts,
                 audio,
                 events,

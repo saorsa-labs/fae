@@ -640,6 +640,8 @@ actor DaemonLLMEngine: LLMEngine {
     /// ignored MLX preset id.
     let daemonModelID: String
     private let eventBus: FaeEventBus?
+    private let audioFallbackTranscriber: AudioFallbackTranscribing?
+    private let audioFallbackMode: AudioFallbackMode
 
     private var process: Process?
     private var connection: DaemonSocketConnection?
@@ -719,10 +721,18 @@ actor DaemonLLMEngine: LLMEngine {
     ///   - modelID: Model id exported as `FAE_MODEL_ID` at daemon launch.
     ///   - eventBus: Optional bus for `runtimeProgress` events during the
     ///     potentially long daemon startup.
-    init(binaryPath: String?, modelID: String, eventBus: FaeEventBus? = nil) {
+    init(
+        binaryPath: String?,
+        modelID: String,
+        eventBus: FaeEventBus? = nil,
+        audioFallbackTranscriber: AudioFallbackTranscribing? = nil,
+        audioFallbackMode: AudioFallbackMode = .fromEnvironment()
+    ) {
         self.configuredBinaryPath = binaryPath
         self.daemonModelID = modelID
         self.eventBus = eventBus
+        self.audioFallbackTranscriber = audioFallbackTranscriber
+        self.audioFallbackMode = audioFallbackMode
     }
 
     deinit {
@@ -853,10 +863,15 @@ actor DaemonLLMEngine: LLMEngine {
             transcript.isEmpty ? "<empty>" : transcript)
 
         let quality = Self.assessAudioTranscript(transcript)
-        guard quality.isUsable else {
+        let finalTranscript = await resolveAudioTranscript(
+            primaryTranscript: transcript,
+            primaryQuality: quality,
+            audioWAVBase64: audio)
+        let finalQuality = Self.assessAudioTranscript(finalTranscript)
+        guard finalQuality.isUsable else {
             NSLog(
                 "DaemonLLMEngine: audio two-pass — rejecting transcript (%@)",
-                quality.reason ?? "unknown")
+                finalQuality.reason ?? quality.reason ?? "unknown")
             continuation.yield(.text(Self.unclearAudioRetryResponse()))
             continuation.finish()
             return
@@ -866,7 +881,7 @@ actor DaemonLLMEngine: LLMEngine {
         // (now redundant) `[heard]:` contract; the transcript IS the user turn.
         var reasonOptions = options
         reasonOptions.audioWAVBase64 = nil
-        let reasonMessages = Self.replacingFinalUserContent(messages, with: transcript)
+        let reasonMessages = Self.replacingFinalUserContent(messages, with: finalTranscript)
         let answerTurn = try await runTurn(
             messages: reasonMessages,
             systemPrompt: Self.strippingHeardInstruction(systemPrompt),
@@ -876,7 +891,7 @@ actor DaemonLLMEngine: LLMEngine {
             return
         }
 
-        let combined = Self.combineHeard(transcript: transcript, answer: answerTurn.text)
+        let combined = Self.combineHeard(transcript: finalTranscript, answer: answerTurn.text)
         if !combined.isEmpty {
             continuation.yield(.text(combined))
         }
@@ -1030,6 +1045,71 @@ actor DaemonLLMEngine: LLMEngine {
         return AudioTranscriptQuality(isUsable: true, reason: nil)
     }
 
+    func resolveAudioTranscript(
+        primaryTranscript: String,
+        primaryQuality: AudioTranscriptQuality,
+        audioWAVBase64: String
+    ) async -> String {
+        guard Self.shouldAttemptAudioFallback(
+            transcript: primaryTranscript,
+            quality: primaryQuality,
+            mode: audioFallbackMode)
+        else {
+            return primaryTranscript
+        }
+        let fallback: String?
+        if let audioFallbackTranscriber {
+            fallback = await audioFallbackTranscriber.transcribe(audioWAVBase64: audioWAVBase64)
+        } else {
+            fallback = await requestDaemonAudioFallback(audioWAVBase64: audioWAVBase64)
+        }
+        guard let fallback else {
+            NSLog("DaemonLLMEngine: audio fallback produced no transcript; keeping primary")
+            return primaryTranscript
+        }
+        let flattened = Self.flattenTranscript(fallback)
+        let fallbackQuality = Self.assessAudioTranscript(flattened)
+        guard fallbackQuality.isUsable else {
+            NSLog(
+                "DaemonLLMEngine: audio fallback rejected (%@); keeping primary",
+                fallbackQuality.reason ?? "unknown")
+            return primaryTranscript
+        }
+        NSLog("DaemonLLMEngine: audio fallback accepted transcript=%@", flattened)
+        return flattened
+    }
+
+    static func shouldAttemptAudioFallback(
+        transcript: String,
+        quality: AudioTranscriptQuality,
+        mode: AudioFallbackMode
+    ) -> Bool {
+        switch mode {
+        case .always:
+            return true
+        case .qualityFail:
+            return !quality.isUsable
+        case .fragile:
+            return !quality.isUsable || isFragileAudioTranscript(transcript)
+        }
+    }
+
+    static func isFragileAudioTranscript(_ transcript: String) -> Bool {
+        let lower = transcript.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return true }
+        let tokens = lower.split { scalar in
+            !(scalar.isLetter || scalar.isNumber || scalar == "'")
+        }.map(String.init)
+        if tokens.count <= 2 { return true }
+        if lower.unicodeScalars.contains(where: { CharacterSet.decimalDigits.contains($0) }) {
+            return true
+        }
+        let spellLikePrefixes = ["spell", "stella", "stellar", "stelled", "stellid"]
+        if spellLikePrefixes.contains(where: { lower.hasPrefix($0) }) { return true }
+        if tokens.first == "call", tokens.count <= 3 { return true }
+        return false
+    }
+
     private static let shortAudioTranscriptAllowlist: Set<String> = [
         "a", "i", "ok", "okay", "yes", "yeah", "yep", "no", "nope", "stop",
         "hi", "hey", "hello", "bye", "fae", "thanks", "set", "run", "call",
@@ -1135,6 +1215,26 @@ actor DaemonLLMEngine: LLMEngine {
                 "DaemonLLMEngine: turn %@ failed (%@) — daemon tail: %@",
                 requestID, error.localizedDescription, output.tail(1_500))
             throw error
+        }
+    }
+
+    private func requestDaemonAudioFallback(audioWAVBase64: String) async -> String? {
+        guard isLoaded, let connection else { return nil }
+        let requestID = nextRequestID()
+        do {
+            let frame = try DaemonWire.encodeFrame(
+                requestID: requestID,
+                command: "audio.transcribe_fallback",
+                payload: ["wav_base64": audioWAVBase64])
+            let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
+            let response = try DaemonWire.unwrapResponse(raw)
+            let result = (response["result"] as? [String: Any]) ?? [:]
+            return result["transcript"] as? String
+        } catch {
+            NSLog(
+                "DaemonLLMEngine: audio fallback command %@ failed (%@) — daemon tail: %@",
+                requestID, error.localizedDescription, output.tail(1_500))
+            return nil
         }
     }
 
