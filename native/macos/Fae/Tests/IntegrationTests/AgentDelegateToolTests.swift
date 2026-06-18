@@ -54,4 +54,28 @@ final class AgentDelegateToolTests: XCTestCase {
         let prompt = AgentDelegateTool.buildPrompt(prompt: "fix this", mode: .readOnly, appendSystemPrompt: "extra context")
         XCTAssertTrue(prompt.contains("extra context"))
     }
+
+    // MARK: - shouldUseDaemon (gap A1 lane selection)
+
+    func testShouldUseDaemonRejectsModelOverride() {
+        // The daemon `agent.run` does not yet forward a provider-specific model,
+        // so a model override must stay on the subprocess path that honors it.
+        XCTAssertFalse(
+            AgentDelegateTool.shouldUseDaemon(model: "gpt-5", secretBindings: [:]))
+    }
+
+    func testShouldUseDaemonRejectsSecretBindings() {
+        // Secret env injection is a subprocess-only feature today.
+        XCTAssertFalse(
+            AgentDelegateTool.shouldUseDaemon(model: nil, secretBindings: ["API_KEY": "k"]))
+    }
+
+    func testShouldUseDaemonDefaultsToDaemon() {
+        // Default lane is the daemon — only meaningful when the force-subprocess
+        // override is not set in this process's environment.
+        if ProcessInfo.processInfo.environment["FAE_AGENT_SUBPROCESS"] == nil {
+            XCTAssertTrue(
+                AgentDelegateTool.shouldUseDaemon(model: nil, secretBindings: [:]))
+        }
+    }
 }

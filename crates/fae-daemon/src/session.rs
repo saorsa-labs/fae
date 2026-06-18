@@ -17,6 +17,7 @@ use fae_engine::{
 use futures_util::StreamExt;
 use serde::Deserialize;
 
+use crate::agents::AgentSessionRegistry;
 use crate::events::{EventBus, PlaybackRegistry};
 
 /// Daemon version surfaced by `host.version`.
@@ -39,6 +40,9 @@ pub struct SessionBackends<'a> {
     /// Live daemon-owned playbacks — resolves end-reason (`completed` vs
     /// `interrupted`) for `audio.playback_ended`.
     pub playbacks: &'a PlaybackRegistry,
+    /// Live native-ACP sessions (gap A2): `agent.session_start/prompt/cancel/
+    /// close` look sessions up here.
+    pub agents: &'a AgentSessionRegistry,
 }
 
 /// The `session.authenticate` payload.
@@ -323,6 +327,11 @@ async fn dispatch(
         "audio.stop" => audio_stop(backends, cmd).await,
         "agent.run" => agent_run(cmd).await,
         "agent.list" => agent_list(),
+        "agent.session_start" => agent_session_start(backends, cmd).await,
+        "agent.prompt" => agent_prompt(backends, cmd).await,
+        "agent.cancel" => agent_cancel(backends, cmd),
+        "agent.close" => agent_close(backends, cmd),
+        "agent.session_list" => agent_session_list(backends),
         "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
         "engine.reload" => reload_adapter(backends.engine, cmd).await,
         // Orb-host-owns-state: push an info set → publishes `info.update` to
@@ -432,6 +441,187 @@ async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
         "stop_reason": outcome.stop_reason,
         "tool_calls": tool_calls,
     }))
+}
+
+/// Map a payload's `approval_policy` to the ACP client policy. Defaults to
+/// approving the agent's own tool calls (the owner approved the delegation at
+/// the Fae tool layer; per-call permission round-trips are gap A3).
+fn agent_approval_policy(cmd: &Command) -> fae_acp::ApprovalPolicy {
+    match cmd
+        .payload
+        .get("approval_policy")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("deny" | "deny_all") => fae_acp::ApprovalPolicy::DenyAll,
+        _ => fae_acp::ApprovalPolicy::ApproveAll,
+    }
+}
+
+/// `agent.session_start` — spawn a persistent native-ACP session and return its
+/// daemon handle. Requires `AgentExecute`.
+async fn agent_session_start(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let agent = cmd
+        .payload
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let cwd = cmd
+        .payload
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("bad_request")?;
+    let policy = agent_approval_policy(cmd);
+
+    let session = fae_acp::AcpSession::start(agent, &cwd, policy)
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: agent.session_start failed: {error}");
+            match error {
+                fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
+                _ => "agent_error",
+            }
+        })?;
+    let session_id = backends
+        .agents
+        .insert(session, agent.to_owned(), cwd.display().to_string());
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+/// `agent.prompt` — submit a prompt to a live session, republishing the agent's
+/// streamed output as `agent.output` / `agent.tool_call` events on the V2 bus
+/// (so the orb narrates live) and returning the final turn. Requires
+/// `AgentExecute`.
+async fn agent_prompt(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let session_id = cmd
+        .payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let prompt = cmd
+        .payload
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let session = backends.agents.get(session_id).ok_or("unknown_session")?;
+    let handle = session
+        .prompt(prompt.to_owned())
+        .map_err(|_| "session_closed")?;
+
+    // Drain the live update stream onto the V2 event bus. `turn_id` is this
+    // prompt's request id, so a subscriber can correlate events with the final
+    // `ok`. The stream closes when the turn completes (the session drops its
+    // sender), ending this task.
+    let events = backends.events.clone();
+    let turn_id = cmd.request_id.clone();
+    let session_label = session_id.to_owned();
+    let mut updates = handle.updates;
+    let drain = tokio::spawn(async move {
+        while let Some(update) = updates.recv().await {
+            match update {
+                fae_acp::AcpUpdate::Text(delta) => events.publish(
+                    "agent.output",
+                    Scope::AgentExecute,
+                    serde_json::json!({
+                        "session_id": session_label,
+                        "turn_id": turn_id,
+                        "delta": delta,
+                    }),
+                ),
+                fae_acp::AcpUpdate::ToolCall { id, title } => events.publish(
+                    "agent.tool_call",
+                    Scope::AgentExecute,
+                    serde_json::json!({
+                        "session_id": session_label,
+                        "turn_id": turn_id,
+                        "id": id,
+                        "title": title,
+                    }),
+                ),
+            }
+        }
+    });
+
+    let outcome = handle
+        .reply
+        .await
+        .map_err(|_| "agent_error")?
+        .map_err(|error| {
+            eprintln!("fae-daemon: agent.prompt turn failed: {error}");
+            "agent_error"
+        })?;
+    let _ = drain.await;
+
+    let tool_calls: Vec<serde_json::Value> = outcome
+        .tool_calls
+        .into_iter()
+        .map(|tc| serde_json::json!({ "id": tc.id, "title": tc.title }))
+        .collect();
+    Ok(serde_json::json!({
+        "text": outcome.text,
+        "stop_reason": outcome.stop_reason,
+        "tool_calls": tool_calls,
+    }))
+}
+
+/// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).
+/// Requires `AgentExecute`.
+fn agent_cancel(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let session_id = cmd
+        .payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let session = backends.agents.get(session_id).ok_or("unknown_session")?;
+    session.cancel();
+    Ok(serde_json::json!({ "cancelled": true }))
+}
+
+/// `agent.close` — tear a session down and drop it from the registry. Requires
+/// `AgentExecute`.
+fn agent_close(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let session_id = cmd
+        .payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    match backends.agents.remove(session_id) {
+        Some(session) => {
+            session.close();
+            Ok(serde_json::json!({ "closed": true }))
+        }
+        None => Err("unknown_session"),
+    }
+}
+
+/// `agent.session_list` — handles of all live native-ACP sessions. Read-only.
+fn agent_session_list(backends: &SessionBackends<'_>) -> Result<serde_json::Value, &'static str> {
+    let sessions: Vec<serde_json::Value> = backends
+        .agents
+        .list()
+        .into_iter()
+        .map(|info| {
+            serde_json::json!({
+                "session_id": info.id,
+                "agent": info.agent,
+                "cwd": info.cwd,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "sessions": sessions }))
 }
 
 async fn audio_devices(audio: &AudioManager) -> Result<serde_json::Value, &'static str> {
@@ -1084,12 +1274,14 @@ mod tests {
         // unused instances (no subscriber ever receives these publishes).
         let events = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let backends = SessionBackends {
             engine,
             tts,
             audio,
             events: &events,
             playbacks: &playbacks,
+            agents: &agents,
         };
         super::handle_frame(registry, &backends, state, line, now_ms, event_id).await
     }
@@ -1814,6 +2006,7 @@ mod tests {
     async fn inject_text_publishes_generating_active_then_inactive_on_success() {
         let bus = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let (sink, captured) = CapturingSink::new();
         let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
         bus.subscribe(
@@ -1826,6 +2019,7 @@ mod tests {
             audio: &AudioManager::new(),
             events: &bus,
             playbacks: &playbacks,
+            agents: &agents,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -1859,6 +2053,7 @@ mod tests {
     async fn info_push_validates_and_publishes_items() {
         let bus = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let (sink, captured) = CapturingSink::new();
         let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
         // StatusRead scope — info.update is StatusRead (the orb host holds it).
@@ -1872,6 +2067,7 @@ mod tests {
             audio: &AudioManager::new(),
             events: &bus,
             playbacks: &playbacks,
+            agents: &agents,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -1908,12 +2104,14 @@ mod tests {
     async fn info_push_rejects_items_missing_required_fields() {
         let bus = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let backends = SessionBackends {
             engine: &mock(),
             tts: &mock_tts(),
             audio: &AudioManager::new(),
             events: &bus,
             playbacks: &playbacks,
+            agents: &agents,
         };
         // kind missing → bad_request, nothing published.
         let cmd = fae_control_plane::Command {

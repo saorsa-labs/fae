@@ -16,6 +16,7 @@ use fae_engine::{ProviderAdapter, TtsAdapter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::agents::AgentSessionRegistry;
 use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
 use crate::session::{handle_frame, SessionBackends, SessionState};
 use crate::{next_event_id, now_ms};
@@ -46,6 +47,7 @@ pub async fn serve_unix(
     audit_path: PathBuf,
     events: EventBus,
     playbacks: PlaybackRegistry,
+    agents: AgentSessionRegistry,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -70,6 +72,7 @@ pub async fn serve_unix(
         let audit_path = audit_path.clone();
         let events = events.clone();
         let playbacks = playbacks.clone();
+        let agents = agents.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -80,6 +83,7 @@ pub async fn serve_unix(
                 &audit_path,
                 &events,
                 &playbacks,
+                &agents,
             )
             .await
             {
@@ -100,6 +104,7 @@ async fn handle_connection(
     audit_path: &Path,
     events: &EventBus,
     playbacks: &PlaybackRegistry,
+    agents: &AgentSessionRegistry,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -140,6 +145,7 @@ async fn handle_connection(
                 audio,
                 events,
                 playbacks,
+                agents,
             };
             let outcome =
                 handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;

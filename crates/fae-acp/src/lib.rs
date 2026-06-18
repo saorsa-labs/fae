@@ -22,11 +22,12 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
+    ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, TextContent,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 /// Errors surfaced by the ACP client.
 #[derive(Debug, thiserror::Error)]
@@ -174,6 +175,288 @@ pub async fn run_one_shot(
     })
 }
 
+/// A streamed update emitted during an [`AcpSession`] prompt turn. The daemon
+/// republishes these on the V2 event bus (`agent.output` / `agent.tool_call`)
+/// so the orb can narrate the agent live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcpUpdate {
+    /// A chunk of agent message text.
+    Text(String),
+    /// A tool call the agent initiated.
+    ToolCall {
+        /// Stable id of the tool call within the session.
+        id: String,
+        /// Human-readable title.
+        title: String,
+    },
+}
+
+/// In-flight handle for one prompt turn: a live stream of updates plus the final
+/// outcome. The daemon drains `updates` (publishing events) while awaiting
+/// `reply`. When the turn ends, the session drops the update sender, closing
+/// `updates`.
+pub struct PromptHandle {
+    /// Live updates for this turn (closed when the turn completes).
+    pub updates: mpsc::UnboundedReceiver<AcpUpdate>,
+    /// The final turn outcome.
+    pub reply: oneshot::Receiver<Result<AcpOutcome, AcpError>>,
+}
+
+/// Mutable per-turn accumulation, shared between the streaming notification
+/// handler and the session command loop.
+#[derive(Default)]
+struct TurnState {
+    text: String,
+    tool_calls: Vec<AcpToolCall>,
+    /// Live sink for the active turn; `None` between turns.
+    live: Option<mpsc::UnboundedSender<AcpUpdate>>,
+}
+
+impl TurnState {
+    /// Start a fresh turn: clear the accumulators and install the live sink.
+    fn begin(&mut self, live: mpsc::UnboundedSender<AcpUpdate>) {
+        self.text.clear();
+        self.tool_calls.clear();
+        self.live = Some(live);
+    }
+
+    /// Fold one streamed `session/update` into the turn, forwarding it live.
+    fn absorb(&mut self, update: SessionUpdate) {
+        match update {
+            SessionUpdate::AgentMessageChunk(chunk) => {
+                if let ContentBlock::Text(text) = chunk.content {
+                    self.text.push_str(&text.text);
+                    if let Some(sink) = &self.live {
+                        let _ = sink.send(AcpUpdate::Text(text.text));
+                    }
+                }
+            }
+            SessionUpdate::ToolCall(call) => {
+                let id = call.tool_call_id.to_string();
+                if let Some(sink) = &self.live {
+                    let _ = sink.send(AcpUpdate::ToolCall {
+                        id: id.clone(),
+                        title: call.title.clone(),
+                    });
+                }
+                self.tool_calls.push(AcpToolCall {
+                    id,
+                    title: call.title,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// End the turn: drop the live sink and build the outcome from the accumulated
+    /// text/tool calls + the prompt's stop reason.
+    fn finish(
+        &mut self,
+        result: Result<StopReason, agent_client_protocol::Error>,
+    ) -> Result<AcpOutcome, AcpError> {
+        self.live = None;
+        let text = std::mem::take(&mut self.text);
+        let tool_calls = std::mem::take(&mut self.tool_calls);
+        match result {
+            Ok(stop) => Ok(AcpOutcome {
+                text,
+                stop_reason: stop_reason_str(&stop).to_owned(),
+                tool_calls,
+            }),
+            Err(error) => Err(AcpError::Protocol(error.to_string())),
+        }
+    }
+}
+
+/// Command sent from an [`AcpSession`] handle to its driver task.
+enum SessionCommand {
+    Prompt {
+        text: String,
+        updates: mpsc::UnboundedSender<AcpUpdate>,
+        reply: oneshot::Sender<Result<AcpOutcome, AcpError>>,
+    },
+    Close,
+}
+
+/// A persistent ACP session: the agent's ACP server is spawned once
+/// (`initialize → session/new`) and the connection is kept alive across many
+/// `prompt` turns, the native-Rust replacement for the acpx one-shot-per-prompt
+/// transcript replay. `cancel` interrupts the in-flight turn (`session/cancel`);
+/// `close` tears the session down.
+pub struct AcpSession {
+    cmd_tx: mpsc::UnboundedSender<SessionCommand>,
+    cancel: Arc<Notify>,
+}
+
+impl AcpSession {
+    /// Spawn the agent's ACP server, run `initialize → session/new`, and return
+    /// once the session is ready for prompts. The driver task owns the live
+    /// connection until [`close`](Self::close) (or the handle is dropped).
+    pub async fn start(
+        agent: &str,
+        cwd: &Path,
+        policy: ApprovalPolicy,
+    ) -> Result<AcpSession, AcpError> {
+        let server = resolve_agent(agent)?;
+        let cwd = cwd.to_path_buf();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        let cancel = Arc::new(Notify::new());
+        let cancel_task = Arc::clone(&cancel);
+        let turn_state = Arc::new(Mutex::new(TurnState::default()));
+        let handler_state = Arc::clone(&turn_state);
+        let (ready_tx, ready_rx) = oneshot::channel::<Result<(), AcpError>>();
+
+        tokio::spawn(async move {
+            let driver = agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    move |notification: SessionNotification, _cx| {
+                        let state = Arc::clone(&handler_state);
+                        async move {
+                            if let Ok(mut turn) = state.lock() {
+                                turn.absorb(notification.update);
+                            }
+                            Ok(())
+                        }
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_request(
+                    async move |request: RequestPermissionRequest, responder, _connection| {
+                        let outcome = match policy {
+                            ApprovalPolicy::ApproveAll => request
+                                .options
+                                .first()
+                                .map(|opt| {
+                                    RequestPermissionOutcome::Selected(
+                                        SelectedPermissionOutcome::new(opt.option_id.clone()),
+                                    )
+                                })
+                                .unwrap_or(RequestPermissionOutcome::Cancelled),
+                            ApprovalPolicy::DenyAll => RequestPermissionOutcome::Cancelled,
+                        };
+                        responder.respond(RequestPermissionResponse::new(outcome))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_with(server, move |connection: ConnectionTo<Agent>| async move {
+                    // initialize → session/new; signal readiness (or the failure).
+                    let session_id = match Self::handshake(&connection, cwd).await {
+                        Ok(id) => {
+                            let _ = ready_tx.send(Ok(()));
+                            id
+                        }
+                        Err(error) => {
+                            let _ = ready_tx.send(Err(error));
+                            return Ok(());
+                        }
+                    };
+
+                    while let Some(command) = cmd_rx.recv().await {
+                        match command {
+                            SessionCommand::Prompt {
+                                text,
+                                updates,
+                                reply,
+                            } => {
+                                if let Ok(mut turn) = turn_state.lock() {
+                                    turn.begin(updates);
+                                }
+                                let prompt_fut = connection
+                                    .send_request(PromptRequest::new(
+                                        session_id.clone(),
+                                        vec![ContentBlock::Text(TextContent::new(text))],
+                                    ))
+                                    .block_task();
+                                tokio::pin!(prompt_fut);
+                                let mut cancelled = false;
+                                let stop = loop {
+                                    tokio::select! {
+                                        result = &mut prompt_fut => break result.map(|r| r.stop_reason),
+                                        _ = cancel_task.notified(), if !cancelled => {
+                                            cancelled = true;
+                                            let _ = connection.send_notification(
+                                                CancelNotification::new(session_id.clone()));
+                                        }
+                                    }
+                                };
+                                let outcome = match turn_state.lock() {
+                                    Ok(mut turn) => turn.finish(stop),
+                                    Err(_) => Err(AcpError::Protocol(
+                                        "session turn state poisoned".to_owned(),
+                                    )),
+                                };
+                                let _ = reply.send(outcome);
+                            }
+                            SessionCommand::Close => break,
+                        }
+                    }
+                    Ok::<(), agent_client_protocol::Error>(())
+                })
+                .await;
+            if let Err(error) = driver {
+                eprintln!("fae-acp: session driver ended with error: {error}");
+            }
+        });
+
+        match ready_rx.await {
+            Ok(Ok(())) => Ok(AcpSession { cmd_tx, cancel }),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(AcpError::Protocol(
+                "session driver ended before it became ready".to_owned(),
+            )),
+        }
+    }
+
+    /// `initialize → session/new`, returning the ACP session id.
+    async fn handshake(
+        connection: &ConnectionTo<Agent>,
+        cwd: std::path::PathBuf,
+    ) -> Result<agent_client_protocol::schema::SessionId, AcpError> {
+        connection
+            .send_request(InitializeRequest::new(ProtocolVersion::V1))
+            .block_task()
+            .await
+            .map_err(|error| AcpError::Protocol(error.to_string()))?;
+        let session = connection
+            .send_request(NewSessionRequest::new(cwd))
+            .block_task()
+            .await
+            .map_err(|error| AcpError::Protocol(error.to_string()))?;
+        Ok(session.session_id)
+    }
+
+    /// Submit a prompt to the live session, returning a streaming handle. The
+    /// caller drains `updates` (republishing events) and awaits `reply` for the
+    /// final outcome.
+    pub fn prompt(&self, text: String) -> Result<PromptHandle, AcpError> {
+        let (updates_tx, updates_rx) = mpsc::unbounded_channel();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .send(SessionCommand::Prompt {
+                text,
+                updates: updates_tx,
+                reply: reply_tx,
+            })
+            .map_err(|_| AcpError::Protocol("session is closed".to_owned()))?;
+        Ok(PromptHandle {
+            updates: updates_rx,
+            reply: reply_rx,
+        })
+    }
+
+    /// Cancel the in-flight turn (`session/cancel`). A no-op if no turn is
+    /// running; the cancelled turn resolves with stop reason `cancelled`.
+    pub fn cancel(&self) {
+        self.cancel.notify_waiters();
+    }
+
+    /// Tear the session down: the driver task ends and the agent server exits.
+    pub fn close(&self) {
+        let _ = self.cmd_tx.send(SessionCommand::Close);
+    }
+}
+
 fn launch_err(error: impl std::fmt::Display) -> AcpError {
     AcpError::Launch(error.to_string())
 }
@@ -236,5 +519,42 @@ mod tests {
     fn stop_reasons_map_to_wire_strings() {
         assert_eq!(stop_reason_str(&StopReason::EndTurn), "end_turn");
         assert_eq!(stop_reason_str(&StopReason::Cancelled), "cancelled");
+    }
+
+    #[tokio::test]
+    async fn session_start_rejects_unknown_agent() {
+        let result = AcpSession::start(
+            "definitely-not-an-agent",
+            Path::new("/tmp"),
+            ApprovalPolicy::DenyAll,
+        )
+        .await;
+        assert!(matches!(result, Err(AcpError::UnknownAgent(_))));
+    }
+
+    #[test]
+    fn turn_state_streams_and_accumulates() {
+        // The streaming sink and the final accumulation see the same text/tool
+        // calls — the orb narration and the tool's final result stay in sync.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut turn = TurnState::default();
+        turn.begin(tx);
+        turn.absorb(SessionUpdate::AgentMessageChunk(
+            agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(TextContent::new(
+                "hello ".to_owned(),
+            ))),
+        ));
+        turn.absorb(SessionUpdate::AgentMessageChunk(
+            agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(TextContent::new(
+                "world".to_owned(),
+            ))),
+        ));
+        let outcome = turn.finish(Ok(StopReason::EndTurn)).expect("outcome built");
+        assert_eq!(outcome.text, "hello world");
+        assert_eq!(outcome.stop_reason, "end_turn");
+        assert_eq!(rx.try_recv(), Ok(AcpUpdate::Text("hello ".to_owned())));
+        assert_eq!(rx.try_recv(), Ok(AcpUpdate::Text("world".to_owned())));
+        // Finishing dropped the live sink, so the stream is closed.
+        assert!(rx.try_recv().is_err());
     }
 }

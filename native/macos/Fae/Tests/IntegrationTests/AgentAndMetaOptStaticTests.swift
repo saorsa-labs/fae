@@ -1,34 +1,10 @@
 import XCTest
 @testable import Fae
 
-/// Coverage for two more previously-0% files: ACPSessionManager (static
-/// agent-noise detector) and MetaOptimizer (score encoder). Both pure.
+/// Coverage for MetaOptimizer (score encoder). Pure. (The ACPSessionManager
+/// noise-detector tests were removed in gap A2 when that acpx-subprocess manager
+/// was deleted in favour of the daemon's native ACP sessions.)
 final class AgentAndMetaOptStaticTests: XCTestCase {
-
-    // MARK: - ACPSessionManager.isAgentTransportNoise
-
-    func testIsAgentTransportNoiseDetectsWebSocketFallback() {
-        XCTAssertTrue(
-            ACPSessionManager.isAgentTransportNoise(
-                "Warning: Falling back from WebSockets to HTTPS transport"))
-    }
-
-    func testIsAgentTransportNoiseDetectsStreamDisconnect() {
-        XCTAssertTrue(
-            ACPSessionManager.isAgentTransportNoise(
-                "Error: stream disconnected before completion"))
-    }
-
-    func testIsAgentTransportNoiseDetectsRootCA() {
-        XCTAssertTrue(
-            ACPSessionManager.isAgentTransportNoise(
-                "no native root CA certificates found in keychain"))
-    }
-
-    func testIsAgentTransportNoiseRejectsNormalText() {
-        XCTAssertFalse(ACPSessionManager.isAgentTransportNoise("Here is your answer."))
-        XCTAssertFalse(ACPSessionManager.isAgentTransportNoise(""))
-    }
 
     // MARK: - MetaOptimizer.encodeScores
 
