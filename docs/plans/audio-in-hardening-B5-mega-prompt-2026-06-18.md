@@ -11,18 +11,23 @@
 >    (answer-not-transcribe); overall WER 17→15.1%, clean 20.8→12.5% (still fails). BUT vocab regressed
 >    57.1→42.9% (literal prompt worsens names: `David→Dayed`); and `Stop→"start"` now passes the gate
 >    (was safely rejected). Confirms prompt tuning alone can't reach the bar.
-> 1. ⛔ **THE GATING NEXT STEP (skipped twice — DO THIS BEFORE ANY FALLBACK WIRING): re-measure through
->    the FULL APP path** (TestServer audio inject) so `DynamicVocabularyCorrector` (owner/entity/speaker
->    vocab) is applied. Every WER/vocab number so far is daemon-only and OMITS the corrector that is
->    built to fix exactly the `David→Dayed`/dropped-`Fae` garbles driving the vocab failure — so the real
->    vocab accuracy is unknown. The bar is judged on THIS table, not the daemon eval. Either drive the
->    corpus through the running app (TestServer audio) and read the final post-correction `[heard]`, OR
->    instantiate `DynamicVocabularyCorrector` in the eval harness with a representative owner/entity vocab.
-> 3. **Only if #1 still fails the bar:** wire the integrity-gated **Qwen3-ASR or whisper.cpp** fallback
->    under the llama.cpp sidecar (SHA-pinned, fail-closed), re-measure on the same corpus. (Note: some
->    failures — truncations like `Call Sarah→call sa`, `Stop→start` — won't be fixed by correction and
->    do argue for the fallback; #1 quantifies how many remain.)
-> 4. **Live bundled-app proof**: real audio turns → correct `[heard]` → answer → TTS + `ORB_MODE`→Speaking.
+> 1. ✅ **DONE (commit 7a681557): full-app measure** (fixed `test-serve` → canonical orb shell first;
+>    the old harness launched the legacy Swift UI). With `DynamicVocabularyCorrector` applied (controlled
+>    lexicon): overall WER 20.2%, clean 25.0%, vocab 57.1% → STILL FAILS. Correction fixes name garbles
+>    (Hello Fae/David/James/GitHub) but leaves correction-proof residuals (`Call Sarah→call ser`,
+>    `Stop→Stap`, `Spell F A E→Stellar FA`). Degraded path proven LIVE on the orb path. (Clean-WER % is
+>    noisy — small corpus + ASR sampling; the decision rests on the qualitative residuals, not the %.)
+> 3. ⏳ **ACTIVE NEXT — wire the integrity-gated `Qwen3-ASR` or `whisper.cpp` fallback** under the
+>    llama.cpp sidecar (SHA-pinned, fail-closed), re-measure on the corpus. Decide replace-pass-1 vs
+>    fallback-on-low-confidence. **EXPAND the corpus first** (more clean + Fae-vocab clips) so the
+>    fallback's gain clears the small-corpus noise that makes today's clean-WER unstable.
+> 5. ⚠️ **NEW (separate from the fallback) — fix `DynamicVocabularyCorrector` false positives.** With the
+>    real harvested-contact lexicon, DVC corrupts common command words into contact names
+>    (`run`→`Rune Bondal`, `set`→`Sat Panesar`). Protect a command-word allowlist and/or raise the
+>    phonetic-distance threshold so DVC never rewrites a plausible common word into a name. Measure both
+>    ways (controlled + real lexicon).
+> 4. **Live bundled-app proof**: ✅ degraded path proven on the orb shell; still want a CLEAN audio turn
+>    end-to-end (correct `[heard]` → answer → TTS + `ORB_MODE`→Speaking) once the fallback lands.
 > The original prompt below is the full context.
 
 # (original prompt) Mega-prompt — audio-in hardening + STT reliability decision (P2 / gap B5)
