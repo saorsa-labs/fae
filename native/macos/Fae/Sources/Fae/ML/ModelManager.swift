@@ -281,9 +281,11 @@ actor ModelManager {
             // Report the model that is ACTUALLY serving turns: the daemon lane
             // ignores the MLX preset id, so use its model for UI labels
             // (otherwise the Messages panel claims the MLX fallback is loading).
-            let servingModelId = (llm as? DaemonLLMEngine)?.daemonModelID ?? modelId
+            let daemonModelId = (llm as? DaemonLLMEngine)?.daemonModelID
+            let servingModelId = daemonModelId ?? modelId
             loadedModelId = servingModelId
-            eventBus.send(.modelLoaded(engine: "llm", modelId: servingModelId))
+            let reportedModelId = daemonModelId.map { "\($0) (llama.cpp)" } ?? servingModelId
+            eventBus.send(.modelLoaded(engine: "llm", modelId: reportedModelId))
             eventBus.send(.runtimeProgress(stage: "load_complete", progress: 0.6))
             eventBus.send(.runtimeProgress(stage: "llm", progress: 1.0))
 

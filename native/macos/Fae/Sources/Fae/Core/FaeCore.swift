@@ -253,11 +253,12 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     NSLog("FaeCore: low-resident-memory profile active")
                 }
 
-                // Daemon LLM lane (experimental): route turns to the local Rust
-                // fae-daemon (mistral.rs) instead of in-process MLX. The daemon
-                // engine's load() is idempotent, so modelManager.loadAll() below
-                // re-invoking load is a no-op. On any launch failure we fall
-                // back to the MLX engine and log loudly.
+                // Daemon LLM lane: route turns to the local Rust fae-daemon,
+                // which owns the llama.cpp sidecar, instead of in-process MLX.
+                // The daemon engine's load() is idempotent, so
+                // modelManager.loadAll() below re-invoking load is a no-op. On
+                // any launch failure we fall back to the MLX engine and log
+                // loudly.
                 if runtimeConfig.llm.useDaemonEngine {
                     let daemonModelId = FaeConfig.daemonModelId(
                         preset: runtimeConfig.llm.voiceModelPreset)
@@ -270,7 +271,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         try await daemonEngine.load(modelID: daemonModelId)
                         llmEngine = daemonEngine
                         NSLog(
-                            "FaeCore: daemon LLM lane ACTIVE — fae-daemon (mistral.rs) serving %@",
+                            "FaeCore: daemon LLM lane ACTIVE — fae-daemon (llama.cpp) serving %@",
                             daemonModelId)
 
                         // Daemon TTS lane: second socket connection to the

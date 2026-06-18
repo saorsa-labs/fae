@@ -405,6 +405,24 @@ private final class DaemonOutputAccumulator: @unchecked Sendable {
             text = String(text.suffix(32_000))
         }
         lock.unlock()
+
+        let env = ProcessInfo.processInfo.environment
+        let shouldForwardDiagnostics = env["FAE_DEV"] == "1"
+            || env["FAE_TEST_SERVER"] == "1"
+            || env["FAE_FORWARD_DAEMON_LOGS"] == "1"
+        for line in chunk.split(whereSeparator: \.isNewline).map(String.init) {
+            let lower = line.lowercased()
+            let isFailure = lower.contains("fatal") || lower.contains("error")
+            let isDiagnostic = lower.contains("engine  :")
+                || lower.contains("llama")
+                || lower.contains("slot")
+                || lower.contains("prompt")
+                || lower.contains("eval")
+                || lower.contains("generation")
+            if isFailure || (shouldForwardDiagnostics && isDiagnostic) {
+                NSLog("fae-daemon: %@", line)
+            }
+        }
     }
 
     func lines() -> [String] {
@@ -602,7 +620,7 @@ final class DaemonSocketConnection: @unchecked Sendable {
 
 // MARK: - Engine
 
-/// LLM engine that routes turns to the local Rust `fae-daemon` (mistral.rs)
+/// LLM engine that routes turns to the local Rust `fae-daemon` (llama.cpp)
 /// over its NDJSON Unix-socket protocol instead of running MLX in-process.
 ///
 /// Enabled via `llm.useDaemonEngine` (see `FaeConfig.LlmConfig`). The daemon is
@@ -662,7 +680,7 @@ actor DaemonLLMEngine: LLMEngine {
     }
 
     /// Copy the bundled fail-closed model lock into `<fae data dir>/models.lock`,
-    /// where `fae-daemon` verifies Gemma artifacts before loading mistral.rs.
+    /// where `fae-daemon` verifies Gemma/llama.cpp artifacts before loading.
     /// Idempotent: an existing byte-identical file is left untouched; a
     /// different lock is replaced by the bundled release pin so production
     /// launches always enforce the reviewed snapshot.
@@ -1020,6 +1038,17 @@ actor DaemonLLMEngine: LLMEngine {
         return URL(fileURLWithPath: expanded)
     }
 
+    static func bundledLlamaCppRuntimeDirectory() -> String? {
+        guard let llamaServer = Bundle.main.url(
+            forResource: "llama-server",
+            withExtension: nil,
+            subdirectory: "LlamaCpp"
+        ), FileManager.default.isExecutableFile(atPath: llamaServer.path) else {
+            return nil
+        }
+        return llamaServer.deletingLastPathComponent().path
+    }
+
     private func launchAndConnect() async throws {
         Self.installBundledModelsLock()
         let binary = try resolveBinaryURL()
@@ -1040,6 +1069,17 @@ actor DaemonLLMEngine: LLMEngine {
         }
         if environment["FAE_DEV"] == "1", environment["FAE_MODELS_LOCK"] == nil {
             environment["FAE_MODELS_LOCK"] = "off"
+        }
+        if environment["FAE_LLAMA_BIN"] == nil,
+           environment["FAE_LLAMACPP_RUNTIME_DIR"] == nil,
+           let bundledRuntimeDir = Self.bundledLlamaCppRuntimeDirectory()
+        {
+            // Dev configs may point `llm.daemonBinaryPath` at a repo-built
+            // fae-daemon instead of the embedded helper. The daemon resolves
+            // bundled llama.cpp relative to its own executable, so pass the
+            // app-bundled runtime explicitly to keep the signed app path on
+            // llama.cpp instead of failing over to the MLX lane.
+            environment["FAE_LLAMACPP_RUNTIME_DIR"] = bundledRuntimeDir
         }
         daemonProcess.environment = environment
 
