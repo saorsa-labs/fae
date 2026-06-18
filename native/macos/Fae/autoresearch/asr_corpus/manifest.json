@@ -1,0 +1,25 @@
+{
+  "name": "B5 audio-in hardening corpus",
+  "created": "2026-06-18",
+  "sample_rate_hz": 16000,
+  "format": "mono WAV + matching .txt transcript",
+  "notes": [
+    "Original clean/spontaneous/vocab clips were generated with macOS say using Samantha.",
+    "accented_*.wav clips were generated with macOS say voices Moira (en_IE) and Rishi (en_IN).",
+    "noisy_*.wav clips were generated from Samantha speech with deterministic Gaussian room-noise overlay (rng seed 20260618).",
+    "This corpus is synthetic and reproducible enough for regression measurement; it is not a substitute for final live-mic release validation."
+  ],
+  "categories": {
+    "clean": ["command_*.wav", "greeting_*.wav", "question_*.wav", "short_*.wav"],
+    "spontaneous": ["casual_*.wav", "conv_*.wav"],
+    "vocab": ["name_*.wav", "number_*.wav", "spell_*.wav", "tech_*.wav"],
+    "noisy": ["noisy_*.wav"],
+    "accented": ["accented_*.wav"]
+  },
+  "generated_2026_06_18": [
+    {"id": "noisy_01", "text": "Hello Fae check my calendar", "voice": "Samantha", "noise_sigma": 0.018},
+    {"id": "noisy_02", "text": "Set a reminder to call David tomorrow", "voice": "Samantha", "noise_sigma": 0.022},
+    {"id": "accented_01", "text": "Hello Fae", "voice": "Moira", "noise_sigma": 0.0},
+    {"id": "accented_02", "text": "Open the terminal and run git status", "voice": "Rishi", "noise_sigma": 0.0}
+  ]
+}

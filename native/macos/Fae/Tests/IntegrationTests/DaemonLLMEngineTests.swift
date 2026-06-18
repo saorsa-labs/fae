@@ -372,6 +372,35 @@ final class DaemonAudioTwoPassTests: XCTestCase {
         XCTAssertEqual(DaemonLLMEngine.flattenTranscript(""), "")
     }
 
+    // MARK: degraded audio quality gate
+
+    func testAudioTranscriptQualityAcceptsShortCommands() {
+        XCTAssertTrue(DaemonLLMEngine.assessAudioTranscript("yes").isUsable)
+        XCTAssertTrue(DaemonLLMEngine.assessAudioTranscript("no").isUsable)
+        XCTAssertTrue(DaemonLLMEngine.assessAudioTranscript("stop").isUsable)
+        XCTAssertTrue(DaemonLLMEngine.assessAudioTranscript("Spell it F A E").isUsable)
+    }
+
+    func testAudioTranscriptQualityRejectsEmptyAndNoSpeechMarkers() {
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("").isUsable)
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("[inaudible]").isUsable)
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("I can't transcribe the audio").isUsable)
+    }
+
+    func testAudioTranscriptQualityRejectsMarkupAndRepeatedGarbage() {
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("<think>I should call a tool</think>").isUsable)
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("la la la la la la").isUsable)
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("@@@ ### ???").isUsable)
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("स्टार्ट").isUsable)
+        XCTAssertFalse(DaemonLLMEngine.assessAudioTranscript("sto").isUsable)
+    }
+
+    func testUnclearAudioRetryResponseIsSafeReask() {
+        XCTAssertEqual(
+            DaemonLLMEngine.unclearAudioRetryResponse(),
+            "[heard]: (unclear audio)\nI didn't catch that — please say it again.")
+    }
+
     // MARK: combineHeard
 
     func testCombineHeardPrependsTranscriptThenAnswer() {

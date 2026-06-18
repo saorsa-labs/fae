@@ -852,6 +852,16 @@ actor DaemonLLMEngine: LLMEngine {
             "DaemonLLMEngine: audio two-pass — pass1 transcript=%@",
             transcript.isEmpty ? "<empty>" : transcript)
 
+        let quality = Self.assessAudioTranscript(transcript)
+        guard quality.isUsable else {
+            NSLog(
+                "DaemonLLMEngine: audio two-pass — rejecting transcript (%@)",
+                quality.reason ?? "unknown")
+            continuation.yield(.text(Self.unclearAudioRetryResponse()))
+            continuation.finish()
+            return
+        }
+
         // Pass 2 — reason on the transcript as text. Drop the audio and the
         // (now redundant) `[heard]:` contract; the transcript IS the user turn.
         var reasonOptions = options
@@ -918,6 +928,127 @@ actor DaemonLLMEngine: LLMEngine {
             .split(whereSeparator: \.isNewline)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    struct AudioTranscriptQuality: Equatable {
+        let isUsable: Bool
+        let reason: String?
+    }
+
+    static let unclearAudioTranscript = "(unclear audio)"
+    static let unclearAudioRetryText = "I didn't catch that — please say it again."
+
+    static func unclearAudioRetryResponse() -> String {
+        combineHeard(transcript: unclearAudioTranscript, answer: unclearAudioRetryText)
+    }
+
+    /// Conservative quality gate for pass-1 ASR. Empty audio, model apologies,
+    /// tool/thinking markup, and obvious repeated garbage must stop the turn
+    /// before pass 2 can confidently answer a mis-heard request. Legitimate
+    /// short commands ("yes", "no", "stop") stay usable.
+    static func assessAudioTranscript(_ transcript: String) -> AudioTranscriptQuality {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            return AudioTranscriptQuality(isUsable: false, reason: "empty")
+        }
+
+        let lower = text.lowercased()
+        if lower.count > 300 {
+            return AudioTranscriptQuality(isUsable: false, reason: "runaway_transcript")
+        }
+
+        let markupFragments = [
+            "<tool", "</tool", "<think", "</think", "function_call", "tool_call",
+            "{\"name\"", "{\"arguments\"", "[audio", "[inaudible]",
+        ]
+        if markupFragments.contains(where: { lower.contains($0) }) {
+            return AudioTranscriptQuality(isUsable: false, reason: "model_markup")
+        }
+
+        let noSpeechFragments = [
+            "inaudible", "unintelligible", "no speech", "nothing was said",
+            "silent audio", "silence", "can't hear", "cannot hear",
+            "can't transcribe", "cannot transcribe", "unable to transcribe",
+            "no audio", "empty audio",
+        ]
+        if noSpeechFragments.contains(where: { lower.contains($0) }) {
+            return AudioTranscriptQuality(isUsable: false, reason: "no_speech_marker")
+        }
+
+        if (lower.hasPrefix("sorry") || lower.hasPrefix("i'm sorry")
+            || lower.hasPrefix("i am sorry") || lower.hasPrefix("i can't")
+            || lower.hasPrefix("i cannot"))
+            && (lower.contains("audio") || lower.contains("hear")
+                || lower.contains("transcribe") || lower.contains("understand"))
+        {
+            return AudioTranscriptQuality(isUsable: false, reason: "model_apology")
+        }
+
+        let nonWhitespaceScalars = text.unicodeScalars.filter { !$0.properties.isWhitespace }
+        if nonWhitespaceScalars.count >= 8 {
+            let letterOrNumberCount = nonWhitespaceScalars.filter {
+                CharacterSet.alphanumerics.contains($0)
+            }.count
+            let ratio = Double(letterOrNumberCount) / Double(nonWhitespaceScalars.count)
+            if ratio < 0.35 {
+                return AudioTranscriptQuality(isUsable: false, reason: "low_alphanumeric_ratio")
+            }
+        }
+
+        let letterScalars = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        let nonLatinLetters = letterScalars.filter { scalar in
+            scalar.value > 127
+                && !(0x00C0...0x024F).contains(Int(scalar.value))
+        }
+        if !letterScalars.isEmpty,
+           Double(nonLatinLetters.count) / Double(letterScalars.count) >= 0.4
+        {
+            return AudioTranscriptQuality(isUsable: false, reason: "non_latin_transcript")
+        }
+
+        let tokens = lower.split { scalar in
+            !(scalar.isLetter || scalar.isNumber || scalar == "'")
+        }.map(String.init)
+        if tokens.count == 1,
+           let token = tokens.first,
+           token.count <= 3,
+           !shortAudioTranscriptAllowlist.contains(token)
+        {
+            return AudioTranscriptQuality(isUsable: false, reason: "short_fragment")
+        }
+        if tokens.count >= 8 {
+            let uniqueRatio = Double(Set(tokens).count) / Double(tokens.count)
+            if uniqueRatio < 0.25 {
+                return AudioTranscriptQuality(isUsable: false, reason: "low_unique_token_ratio")
+            }
+        }
+        if longestRepeatedTokenRun(tokens) >= 5 {
+            return AudioTranscriptQuality(isUsable: false, reason: "repeated_token_run")
+        }
+
+        return AudioTranscriptQuality(isUsable: true, reason: nil)
+    }
+
+    private static let shortAudioTranscriptAllowlist: Set<String> = [
+        "a", "i", "ok", "okay", "yes", "yeah", "yep", "no", "nope", "stop",
+        "hi", "hey", "hello", "bye", "fae", "thanks", "set", "run", "call",
+        "open", "close", "play", "pause",
+    ]
+
+    static func longestRepeatedTokenRun(_ tokens: [String]) -> Int {
+        var longest = 0
+        var previous: String?
+        var current = 0
+        for token in tokens {
+            if token == previous {
+                current += 1
+            } else {
+                previous = token
+                current = 1
+            }
+            longest = max(longest, current)
+        }
+        return longest
     }
 
     /// Replace the final user message's content (the audio placeholder) with
