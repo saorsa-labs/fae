@@ -92,7 +92,15 @@ cross-platform brain pivot (`docs/architecture/cross-platform-brain-llamacpp-202
 candle/Metal path and non-NVIDIA GPUs have no fast lane.
 
 **Owner intent:** retire candle + mistral.rs. B1 does NOT delete them — it makes llama.cpp the default
-and proves parity, leaving mistral.rs reachable as a kill switch until B4. Correctness over speed.
+and proves parity, leaving mistral.rs reachable as a kill switch until B4.
+
+> **Integration is the `llama-server` SIDECAR, not in-process FFI bindings (ADR-010, 2026-06-18).**
+> Do NOT swap the `LlamaServerAdapter` (HTTP/SSE to a spawned, SHA-pinned, signed `llama-server`) for
+> an in-process crate (`llama_cpp`/`llama-cpp-2`/`llama-cpp-rs`). In-process would force the daemon to
+> compile llama.cpp + a GPU backend per target (re-introducing the candle build coupling we're
+> deleting), and loses crash isolation + binary-SHA pinning. The `ProviderAdapter` seam keeps an
+> in-process adapter as a cheap future option (iOS, where subprocesses are banned). See
+> `docs/adr/010-llamacpp-sidecar-vs-inprocess.md`. Correctness over speed.
 
 ---
 
