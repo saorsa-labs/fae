@@ -6,6 +6,49 @@ on this branch. The reviewer will re-run your evidence.
 
 ---
 
+## ⛔ REVISION — reviewer send-back (2026-06-18, round 1)
+
+Round-1 (uncommitted working tree) built the **Fae-owned llama.cpp runtime** — bundled+signed
+`llama-server`, SHA-pinned `runtime.lock.json`, app-support install, `exit_fatal` no-silent-fallback,
+orphan-kill, lazy spawn + async lock, MTP default-on. **That is accepted — KEEP it.** The mistral.rs
+runtime removal is also accepted (owner confirmed "no more mistral.rs" — do NOT restore the kill
+switch). But round-1 did **not** meet the core B1 objective and has a security regression. Fix all of
+the following **in one pass** and re-hand-back with evidence; nothing commits until then.
+
+**Owner decisions (2026-06-18):** (1) **mistral.rs stays removed** — `FAE_ENGINE=mistralrs`-as-hard-
+error is fine. (2) **Default model = Gemma-4 E4B everywhere** — REVERT the `12b` default.
+
+### Required changes (blocking)
+1. **Integrity-gate the downloaded GGUF (security regression — top priority).** The new `-hf`
+   (`LlamaModelSource::HuggingFace`) path does ZERO model verification — Fae will run whatever HF
+   serves. The binary is SHA-pinned but the *model* is not. Wire a **fail-closed digest check** on the
+   downloaded GGUF (+ mmproj, + the MTP drafter if used): extend `models.lock` (the `ModelsLock`
+   loader still exists in `fae-engine`) or an equivalent pinned-SHA gate, verified after download /
+   before the sidecar serves. Tamper/mismatch → `exit_fatal`. Honor `FAE_MODELS_LOCK=off` only under
+   `FAE_DEV`. **Prove it:** a tampered cached GGUF makes the daemon exit fatally.
+2. **Resolve the audio mmproj on the DEFAULT path + prove a `[heard]` turn.** Today `--mmproj` is only
+   wired for the dev `Local` source; the production `-hf` path passes none, so push-to-talk pass-1 ASR
+   has no Gemma-4 audio projector → voice hears nothing. Resolve/download/verify the E4B audio mmproj
+   and pass `--mmproj`, then **prove a real WAV turn produces a correct `[heard]:` transcript.** This is
+   the highest-risk item; if E4B-GGUF audio genuinely can't work on llama.cpp, STOP and hand back the
+   finding (do not ship a voice assistant that can't hear).
+3. **Prove a real Gemma-4 turn end-to-end** (the actual objective — round-1 only did a partial
+   download). Paste evidence for ALL: text tokens stream; native `<tool_call>` runs; served-thinking
+   `<|channel>thought…<channel|>` stripped (don't regress the `<channel|>` close marker); the audio
+   `[heard]` turn from #2; TTS speaks (daemon-owned) and `ORB_MODE` reaches Speaking flicker-free.
+4. **Revert the default model to Gemma-4 E4B.** Change `DEFAULT_LLAMA_MODEL_SPEC` from
+   `unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL` to the **Unsloth E4B GGUF** analog. Fix the MTP drafter
+   reference accordingly (round-1 hardcoded the `mtp-gemma-4-12b-it.gguf` drafter; verify the E4B MTP
+   drafter exists for `-hf` auto-discovery, else default `FAE_LLAMA_MTP` off for E4B and say so).
+   No RAM-tiering needed for now (E4B fits the common Mac); a ≥32GB 12B tier is a later change.
+
+Re-run the full static gate (`env -u RUSTFLAGS` fmt/clippy `-D warnings`/nextest, fae-daemon +
+fae-engine) AND the live evidence. Then hand back — the reviewer commits + publishes.
+
+---
+
+---
+
 ## Workflow — read first
 
 **You (the team) implement AND test this to completion, then HAND BACK for review. You do NOT commit
