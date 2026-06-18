@@ -32,15 +32,26 @@ error is fine. (2) **Default model = Gemma-4 E4B everywhere** — REVERT the `12
    and pass `--mmproj`, then **prove a real WAV turn produces a correct `[heard]:` transcript.** This is
    the highest-risk item; if E4B-GGUF audio genuinely can't work on llama.cpp, STOP and hand back the
    finding (do not ship a voice assistant that can't hear).
+   **Audio reality (owner research 2026-06-18):** Gemma-4 audio-in IS merged in llama.cpp (PR #21421)
+   but **finicky — the mmproj is BF16 (large, can't be low-bit-quantized) and has known bugs (#21820
+   bad transcripts, #21868 server routing); WER ~4.17% clean, worse on noisy mic.** Budget for the
+   large BF16 mmproj download+verify; if the Gemma mmproj path proves shaky, the sanctioned fallback is
+   **Qwen3-ASR or whisper.cpp for STT** (both cross-platform under llama.cpp) — flag it and hand back
+   rather than shipping an unreliable `[heard]`.
 3. **Prove a real Gemma-4 turn end-to-end** (the actual objective — round-1 only did a partial
    download). Paste evidence for ALL: text tokens stream; native `<tool_call>` runs; served-thinking
    `<|channel>thought…<channel|>` stripped (don't regress the `<channel|>` close marker); the audio
    `[heard]` turn from #2; TTS speaks (daemon-owned) and `ORB_MODE` reaches Speaking flicker-free.
-4. **Revert the default model to Gemma-4 E4B.** Change `DEFAULT_LLAMA_MODEL_SPEC` from
-   `unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL` to the **Unsloth E4B GGUF** analog. Fix the MTP drafter
-   reference accordingly (round-1 hardcoded the `mtp-gemma-4-12b-it.gguf` drafter; verify the E4B MTP
-   drafter exists for `-hf` auto-discovery, else default `FAE_LLAMA_MTP` off for E4B and say so).
-   No RAM-tiering needed for now (E4B fits the common Mac); a ≥32GB 12B tier is a later change.
+4. **Revert the default model to Gemma-4 E4B — specifically the QAT build (owner research 2026-06-18).**
+   Change `DEFAULT_LLAMA_MODEL_SPEC` from `unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL` to
+   **`unsloth/gemma-4-E4B-it-qat-GGUF:UD-Q4_K_XL`** (QAT = quantization-aware training: ~5GB RAM, same
+   footprint as plain dynamic but higher accuracy +15.6% on Q4, native audio, 128K ctx — fits 8–16GB
+   Macs alongside Fae's other resident models: Kokoro TTS + SmolVLM ×2 + embeddings + speaker encoder).
+   Do NOT use 12B as the universal default — its Q4 file is already ~8GB, so with Fae's full stack it
+   OOMs/thrashes on ≤16GB; 12B QAT (7GB) is an **opt-in ≥16GB tier for later**, not now.
+   **Fix the MTP drafter:** round-1 hardcoded `mtp-gemma-4-12b-it.gguf`. Use the **E4B** assistant-MTP
+   drafter for `-hf` auto-discovery; if the E4B drafter isn't available, default `FAE_LLAMA_MTP` off for
+   E4B and say so. (MTP = 1.4–2.2× faster, no accuracy loss — keep it on when the right drafter exists.)
 
 Re-run the full static gate (`env -u RUSTFLAGS` fmt/clippy `-D warnings`/nextest, fae-daemon +
 fae-engine) AND the live evidence. Then hand back — the reviewer commits + publishes.
