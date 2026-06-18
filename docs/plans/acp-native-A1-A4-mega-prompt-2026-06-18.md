@@ -5,6 +5,18 @@ P2/B5 on `llamacpp-serving-adapter`. Self-contained; **verify every claim agains
 output** — static-only review has missed a release-blocking bug on this project, and agents have
 fabricated reports. The reviewer re-runs your evidence.
 
+> ## ✅ A1 + A2 DONE — committed `4e1cbd20` on `acp-native` (reviewer-verified, 2026-06-18)
+> - **A1**: `AgentDelegateTool` → daemon `agent.run` via `DaemonAgentClient`; `AgentExecute` on
+>   SwiftFrontend scopes; legacy `acpx` kept behind a daemon-unavailable fallback.
+> - **A2**: `AcpSession` (persistent start/prompt/cancel/close) + `AgentSessionRegistry`; daemon
+>   `agent.session_*` commands republish agent output as `agent.output`/`agent.tool_call` on the
+>   **existing V2 `conversation.subscribe` bus** (one streaming mechanism, correlated by `turn_id`);
+>   `AgentSessionTool` migrated; `ACPSessionManager` deleted. Verified: fmt/clippy `-D warnings`/70 tests;
+>   live (codex) subscriber saw `agent.output{delta:"pong"}` on the V2 bus + full lifecycle.
+> - **NEXT = A3** (server-initiated permission round-trip + fs mediation — the payoff). Follow-ons from
+>   A2: orb-host rendering of `agent.output`/`agent.tool_call` (separate orb lane), deterministic
+>   mid-turn cancel proof. Note: gemini's ACP server now rejects individual clients — use codex for proofs.
+
 ---
 
 ## Workflow — read first (per-STAGE hand-back)
