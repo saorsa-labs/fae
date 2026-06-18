@@ -114,7 +114,7 @@ actor CoreMLAudioClassifier {
         }
 
         // 2. Time-normalize to target frames.
-        let normalized = timeNormalizeMel(
+        let normalized = Self.timeNormalizeMel(
             mel,
             numFrames: numFrames,
             numMels: config.inputFeatures,
@@ -174,7 +174,7 @@ actor CoreMLAudioClassifier {
     // MARK: - Mel Processing
 
     /// Time-normalize a mel spectrogram to a fixed number of frames via linear interpolation.
-    private func timeNormalizeMel(
+    static func timeNormalizeMel(
         _ mel: [Float],
         numFrames: Int,
         numMels: Int,
