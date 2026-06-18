@@ -1,5 +1,27 @@
 # Mega-prompt — audio-in hardening + STT reliability decision (P2 / gap B5)
 
+> ## ✅ Round-1 PARTIAL landed (commit a6338649, 2026-06-18) — CONTINUATION scope below
+> Done + committed: the **degraded-path gate** (`assessAudioTranscript`, 14 tests, reviewer-verified —
+> bad transcript → "(unclear audio) … say it again", never a confident mis-heard answer); a
+> **reproducible evaluator + 28-clip corpus** (`autoresearch/asr_b5_eval.py`, `asr_corpus/`); the
+> **measurement + decision**: Gemma/mmproj FAILS (overall WER 17%, clean 20.8%, vocab 57.1%) — real
+> correction-proof failures (`France→Paris` answer-not-transcribe, `Call Sarah→call sar`,
+> `F A E→Stella F A A`); context-budget check. **REMAINING (do these in order):**
+> 1. **Re-measure through the FULL APP path** (TestServer audio inject) so `DynamicVocabularyCorrector`
+>    (owner/entity/speaker vocab) is applied — the round-1 number omits it and is pessimistic. This is
+>    the real B5 acceptance table; the bar is judged on THIS, not the daemon-only eval.
+> 2. **Try a stricter pass-1 transcription prompt FIRST (cheap, before wiring a 2nd engine).** The
+>    `France→Paris` failure is the transcriber *answering* instead of transcribing — a pass-1 prompt that
+>    hard-constrains verbatim transcription ("Transcribe the audio word-for-word. Do not answer,
+>    interpret, or add anything.") may fix several failures for free. Re-run the corpus; if it clears the
+>    bar (with #1's dynamic correction), a fallback engine may not be needed.
+> 3. **Only if 1+2 still fail the bar:** wire the integrity-gated **Qwen3-ASR or whisper.cpp** fallback
+>    under the llama.cpp sidecar (SHA-pinned, fail-closed), re-measure on the same corpus.
+> 4. **Live bundled-app proof**: real audio turns → correct `[heard]` → answer → TTS + `ORB_MODE`→Speaking.
+> The original prompt below is the full context.
+
+# (original prompt) Mega-prompt — audio-in hardening + STT reliability decision (P2 / gap B5)
+
 Paste into a fresh session. Self-contained; **verify every claim against the repo and live/measured
 output** — static-only review has missed a release-blocking bug on this work, and agents have fabricated
 reports. The reviewer re-runs your evidence.
