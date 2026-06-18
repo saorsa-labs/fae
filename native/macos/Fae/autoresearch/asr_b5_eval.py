@@ -39,9 +39,10 @@ import soundfile as sf
 PROTOCOL_VERSION = 2
 CLIENT_ID = "swift-frontend-bootstrap"
 TRANSCRIBE_SYSTEM_PROMPT = (
-    "Transcribe the user's audio. Output only the exact words spoken — no "
-    "labels, quotation marks, preamble, or commentary. If nothing is said, "
-    "output nothing."
+    "Transcribe the user's audio verbatim. Output only the exact words spoken — no "
+    "labels, quotation marks, preamble, commentary, summaries, or answers. If the "
+    "user asks a question, transcribe the question words; never answer it. If "
+    "nothing is said, output nothing."
 )
 
 # Must stay in sync with TextProcessing.correctNameRecognition's static layer.

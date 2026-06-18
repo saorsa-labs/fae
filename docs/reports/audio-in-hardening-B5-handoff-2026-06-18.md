@@ -138,6 +138,33 @@ Rust crates were not modified. I did launch the daemon with `env -u RUSTFLAGS` f
 
 Measurement caveat: the daemon was launched with `FAE_DEV=1 FAE_MODELS_LOCK=off` because this was a local dev measurement against already-installed artifacts. Production acceptance should re-run with normal integrity gates enabled.
 
+## Continuation check: stricter pass-1 prompt
+
+Reviewer requested trying a cheaper prompt fix before wiring a second STT engine. I strengthened the ASR-only prompt to explicitly forbid answering questions:
+
+```text
+Transcribe the user's audio verbatim. Output only the exact words spoken — no labels, quotation marks, preamble, commentary, summaries, or answers. If the user asks a question, transcribe the question words; never answer it. If nothing is said, output nothing.
+```
+
+Rerun:
+
+```bash
+cd native/macos/Fae
+uv run autoresearch/asr_b5_eval.py --corpus autoresearch/asr_corpus
+```
+
+Latest output: `native/macos/Fae/autoresearch/results/b5_asr_gemma_20260618_190859.{json,md}`.
+
+Summary after stricter prompt:
+
+- Overall WER: **15.1%** (improved from 17.0%)
+- Clean WER: **12.5%** (improved from 20.8%, still fails ≤10%)
+- Vocab exact-match: **42.9%** (worse than 57.1%, still fails ≥90%)
+- Catastrophic/quality-gate garbles: **0** (improved from 1)
+- Decision against bar: **FAIL**
+
+The prompt fix corrected the `What is the capital of France` → `Paris` failure, but Gemma/mmproj still corrupts Fae/name/vocab clips (`Hello Fae`→`hello`, `My name is David`→`My name is Dayed`, `Call Sarah`→`call sa`, `Spell it F A E`→`Stella F F A`, `Stop`→`start`). The fallback decision still holds.
+
 ## Not completed / reviewer follow-up
 
 - I did **not** wire the Qwen3-ASR/whisper.cpp fallback yet; the measurement says it is required.

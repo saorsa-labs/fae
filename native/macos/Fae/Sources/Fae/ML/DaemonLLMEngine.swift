@@ -901,9 +901,10 @@ actor DaemonLLMEngine: LLMEngine {
     /// instruction-only so the model emits the spoken words verbatim in
     /// `content` rather than a conversational reply or tool call.
     private static let transcribeSystemPrompt = """
-        Transcribe the user's audio. Output only the exact words spoken — no \
-        labels, quotation marks, preamble, or commentary. If nothing is said, \
-        output nothing.
+        Transcribe the user's audio verbatim. Output only the exact words spoken — no \
+        labels, quotation marks, preamble, commentary, summaries, or answers. If the \
+        user asks a question, transcribe the question words; never answer it. If \
+        nothing is said, output nothing.
         """
 
     /// First sentence of `PipelineCoordinator.pttHeardInstruction`. Used to
