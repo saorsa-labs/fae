@@ -13,9 +13,19 @@ fabricated reports. The reviewer re-runs your evidence.
 >   **existing V2 `conversation.subscribe` bus** (one streaming mechanism, correlated by `turn_id`);
 >   `AgentSessionTool` migrated; `ACPSessionManager` deleted. Verified: fmt/clippy `-D warnings`/70 tests;
 >   live (codex) subscriber saw `agent.output{delta:"pong"}` on the V2 bus + full lifecycle.
-> - **NEXT = A3** (server-initiated permission round-trip + fs mediation — the payoff). Follow-ons from
->   A2: orb-host rendering of `agent.output`/`agent.tool_call` (separate orb lane), deterministic
->   mid-turn cancel proof. Note: gemini's ACP server now rejects individual clients — use codex for proofs.
+> - **A3a DONE** — committed `158e4ffd` (reviewer-verified). Server-initiated requests: `agent.prompt`
+>   spawns so the read loop keeps reading; `{server_request_id,method,params}` out, client
+>   `{server_request_id,result}` reply routed back (`ServerRequester`). `permission.request` →
+>   Fae governance approval card. fmt/clippy `-D warnings`/73 tests (incl. parse-disambiguation); transport
+>   spawn live-proven (codex/pi). **Live gap: no available agent ASKS** (codex/pi full-auto; claude/gemini
+>   unavailable) — permission round-trip verified by unit tests + spawn path, not a live asking-agent.
+> - **NEXT = build a MOCK ACP asking-agent** (a tiny ACP server that issues `session/request_permission`
+>   + an `fs/*` request) to LIVE-prove the full round-trip end-to-end (agent asks → card → approve →
+>   proceeds). Reviewer decision: do this BEFORE/WITH A3b — it's security-critical and the SAME
+>   server-request mechanism A3b's `fs/read_text_file`/`fs/write_text_file` (gated by DamageControl/
+>   PathPolicy) will reuse, so one mock agent live-proves both. Keep the mock as a regression fixture.
+>   Then **A3b** (fs mediation), then **A4** (conductor seam + cleanup). Follow-ons: orb rendering of
+>   `agent.output` (separate orb lane), deterministic mid-turn cancel proof.
 
 ---
 
