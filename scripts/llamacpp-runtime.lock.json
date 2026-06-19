@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
-  "created_at": "2026-06-18T00:00:00Z",
-  "source": "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest verified on 2026-06-18",
+  "schema_version": 2,
+  "created_at": "2026-06-19T00:00:00Z",
+  "source": "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b9692 verified on 2026-06-19",
   "runtime": {
     "name": "llama.cpp llama-server",
     "release_tag": "b9692",
@@ -15,5 +15,48 @@
     "binary_sha256": "c68b4016e18701e8293e3730a8f13272d8d2d6c10139c8b00421332604b06347",
     "signed_cdhash_sha256": "3d5c9574d44b155e1d2551cc082cbff8c5d9d0c8",
     "signed_team_identifier": "MEGSB2GXGZ"
+  },
+  "runtimes": {
+    "macos-arm64": {
+      "name": "llama.cpp llama-server",
+      "release_tag": "b9692",
+      "platform": "macos-arm64",
+      "archive_format": "tar.gz",
+      "asset_name": "llama-b9692-bin-macos-arm64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9692/llama-b9692-bin-macos-arm64.tar.gz",
+      "size_bytes": 10910279,
+      "sha256": "751c2978074d52288682fa74cc8ffddae039e45a816affccb05b08ea4c40f0be",
+      "binary": "llama-server",
+      "binary_size_bytes": 33472,
+      "binary_sha256": "c68b4016e18701e8293e3730a8f13272d8d2d6c10139c8b00421332604b06347",
+      "signed_cdhash_sha256": "3d5c9574d44b155e1d2551cc082cbff8c5d9d0c8",
+      "signed_team_identifier": "MEGSB2GXGZ"
+    },
+    "linux-x86_64": {
+      "name": "llama.cpp llama-server",
+      "release_tag": "b9692",
+      "platform": "linux-x86_64",
+      "archive_format": "tar.gz",
+      "asset_name": "llama-b9692-bin-ubuntu-x64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9692/llama-b9692-bin-ubuntu-x64.tar.gz",
+      "size_bytes": 15556017,
+      "sha256": "148a3b157ed347eae27ab4a4702be42ad3e8fe180fb604003ac86fb1886fda56",
+      "binary": "llama-server",
+      "binary_size_bytes": 17896,
+      "binary_sha256": "1f0b11b1237e0fee6814207f9f667ff0cadf6b65ae90a04cbbfa70a66c5abc5b"
+    },
+    "linux-aarch64": {
+      "name": "llama.cpp llama-server",
+      "release_tag": "b9692",
+      "platform": "linux-aarch64",
+      "archive_format": "tar.gz",
+      "asset_name": "llama-b9692-bin-ubuntu-arm64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9692/llama-b9692-bin-ubuntu-arm64.tar.gz",
+      "size_bytes": 12567006,
+      "sha256": "7ba37e66c01d992ebf3bc3972268d1bdd2c304a0aa382ff0dfe2b98ce7db6bdd",
+      "binary": "llama-server",
+      "binary_size_bytes": 72480,
+      "binary_sha256": "fcf43e109b269a41fee873eff525dcbe62c52a7a9dbab802ffbd8beb7a63ef4d"
+    }
   }
 }

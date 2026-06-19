@@ -20,6 +20,14 @@ for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
       echo "[guard-no-rust] allowing explicit release auxiliary Rust embedding workflow: $wf"
       continue
       ;;
+    release-linux.yml|release-linux.yaml)
+      echo "[guard-no-rust] allowing explicit Linux release Rust packaging workflow: $wf"
+      continue
+      ;;
+    ci-linux.yml|ci-linux.yaml)
+      echo "[guard-no-rust] allowing explicit Linux Rust CI workflow: $wf"
+      continue
+      ;;
   esac
   if grep -nEi '\b(cargo|rustup|actions-rs|dtolnay/rust-toolchain|Swatinem/rust-cache)\b' "$wf"; then
     echo "[guard-no-rust] ERROR: forbidden rust/cargo references found in active workflow: $wf" >&2

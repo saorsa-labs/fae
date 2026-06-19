@@ -219,7 +219,15 @@ const QWEN3_ASR_REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
 const QWEN3_ASR_MODEL_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-q8-0-gguf";
 const QWEN3_ASR_MMPROJ_ARTIFACT_ID: &str = "ggml-org-qwen3-asr-1-7b-mmproj-q8-0-gguf";
 const LLAMACPP_RUNTIME_RELEASE: &str = "b9692";
+/// `models.lock` artifact id for the bundled `llama-server` binary, per target.
+/// Each platform ships its own prebuilt from the same llama.cpp release, so the
+/// integrity gate must look up the entry matching the binary it actually runs.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const LLAMA_SERVER_BINARY_ARTIFACT_ID: &str = "llamacpp-b9692-llama-server-macos-arm64";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const LLAMA_SERVER_BINARY_ARTIFACT_ID: &str = "llamacpp-b9692-llama-server-linux-x86_64";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const LLAMA_SERVER_BINARY_ARTIFACT_ID: &str = "llamacpp-b9692-llama-server-linux-aarch64";
 #[cfg(target_os = "macos")]
 const LLAMA_SERVER_SIGNED_CDHASH: &str = "3d5c9574d44b155e1d2551cc082cbff8c5d9d0c8";
 #[cfg(target_os = "macos")]
@@ -565,8 +573,33 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
 
 fn bundled_llama_server_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let macos_dir = exe.parent()?;
-    Some(macos_dir.join("../Resources/LlamaCpp/llama-server"))
+    let exe_dir = exe.parent()?;
+    #[cfg(target_os = "macos")]
+    {
+        // Fae.app/Contents/MacOS/fae-daemon → ../Resources/LlamaCpp/llama-server
+        Some(exe_dir.join("../Resources/LlamaCpp/llama-server"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // The runtime ships in `<prefix>/lib/fae/llamacpp`. The daemon's real exe
+        // can sit in two places depending on package + launch: `<prefix>/lib/fae/
+        // bin/fae-daemon` (the FHS `.deb`, reached via the `/usr/bin` symlink that
+        // `current_exe` resolves through) — relative `../llamacpp` — OR
+        // `<prefix>/bin/fae-daemon` (a direct copy) — relative `../lib/fae/llamacpp`.
+        // No single fixed path serves both, so probe by existence.
+        for rel in [
+            "../llamacpp/llama-server",
+            "../lib/fae/llamacpp/llama-server",
+        ] {
+            let candidate = exe_dir.join(rel);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // Neither resolved (e.g. pre-install); default to the FHS sibling layout
+        // so the caller's existence check reports a clear miss.
+        Some(exe_dir.join("../llamacpp/llama-server"))
+    }
 }
 
 fn default_llama_cache_dir() -> Result<PathBuf, String> {
@@ -1187,6 +1220,50 @@ created_at = "test"
                 mmproj: None,
                 mtp_draft: None,
             }
+        );
+    }
+
+    #[test]
+    fn llama_server_artifact_id_matches_host_platform() {
+        // The integrity gate must look up the lock entry for the binary it
+        // actually runs; each platform ships its own prebuilt from the same
+        // llama.cpp release, so the artifact id must track target_os/target_arch.
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        assert_eq!(
+            LLAMA_SERVER_BINARY_ARTIFACT_ID,
+            "llamacpp-b9692-llama-server-macos-arm64"
+        );
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        assert_eq!(
+            LLAMA_SERVER_BINARY_ARTIFACT_ID,
+            "llamacpp-b9692-llama-server-linux-x86_64"
+        );
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        assert_eq!(
+            LLAMA_SERVER_BINARY_ARTIFACT_ID,
+            "llamacpp-b9692-llama-server-linux-aarch64"
+        );
+        // Whatever the host, the id is release-pinned and platform-qualified.
+        assert!(LLAMA_SERVER_BINARY_ARTIFACT_ID.starts_with("llamacpp-b9692-llama-server-"));
+    }
+
+    #[test]
+    fn bundled_llama_server_path_is_platform_shaped() {
+        // Resolution is relative to the daemon executable. Confirm the per-OS
+        // bundle layout: macOS → ../Resources/LlamaCpp, Linux → ../lib/fae/llamacpp.
+        let path = bundled_llama_server_path().expect("current_exe resolves under test");
+        let text = path.to_string_lossy();
+        assert!(text.ends_with("llama-server"), "unexpected path: {text}");
+        #[cfg(target_os = "macos")]
+        assert!(text.contains("Resources/LlamaCpp"), "macOS layout: {text}");
+        // Under `cargo test` neither bundle layout exists next to the test
+        // binary, so resolution falls back to the FHS sibling path `../llamacpp`.
+        // The authoritative bundle-resolution proof is the CI run-smoke that
+        // installs the .deb and starts the daemon.
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            text.ends_with("llamacpp/llama-server"),
+            "linux layout: {text}"
         );
     }
 }

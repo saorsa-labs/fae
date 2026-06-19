@@ -243,6 +243,36 @@ approved_by = "owner"
 created_at = "2026-06-18T00:00:00Z"
 
 [[artifact]]
+id = "llamacpp-b9692-llama-server-linux-x86_64"
+role = "asr_binary"
+loader = "llamacpp-sidecar"
+source_repo = "ggml-org/llama.cpp"
+source_revision = "b9692"
+filename = "llama-server"
+size_bytes = 17896
+sha256 = "1f0b11b1237e0fee6814207f9f667ff0cadf6b65ae90a04cbbfa70a66c5abc5b"
+signature = ""
+license = "MIT"
+hardware_profile = "linux x86_64 CPU llama.cpp sidecar (ggml-org ubuntu-x64 prebuilt)"
+approved_by = "owner"
+created_at = "2026-06-19T00:00:00Z"
+
+[[artifact]]
+id = "llamacpp-b9692-llama-server-linux-aarch64"
+role = "asr_binary"
+loader = "llamacpp-sidecar"
+source_repo = "ggml-org/llama.cpp"
+source_revision = "b9692"
+filename = "llama-server"
+size_bytes = 72480
+sha256 = "fcf43e109b269a41fee873eff525dcbe62c52a7a9dbab802ffbd8beb7a63ef4d"
+signature = ""
+license = "MIT"
+hardware_profile = "linux aarch64 CPU llama.cpp sidecar (ggml-org ubuntu-arm64 prebuilt)"
+approved_by = "owner"
+created_at = "2026-06-19T00:00:00Z"
+
+[[artifact]]
 id = "ggml-org-qwen3-asr-1-7b-q8-0-gguf"
 role = "asr_model"
 loader = "llamacpp-sidecar"

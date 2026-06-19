@@ -1,0 +1,95 @@
+name: CI (Linux)
+
+# Linux build/test gate for the Fae brain (Rust daemon + orb-host). Builds the
+# workspace natively on x86_64 and arm64 hosted runners and exercises the
+# platform-aware runtime resolution + installer SHA-verify. The macOS Swift app
+# is covered by ci.yml; this workflow keeps the off-Mac product green.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, p4-packaging]
+    paths:
+      - "crates/**"
+      - "native/rust/fae-ui-shell/**"
+      - "scripts/install-llamacpp-runtime.py"
+      - "scripts/build-linux-package.py"
+      - "scripts/llamacpp-runtime.lock.json"
+      - ".github/workflows/ci-linux.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "native/rust/fae-ui-shell/**"
+      - "scripts/install-llamacpp-runtime.py"
+      - "scripts/build-linux-package.py"
+      - "scripts/llamacpp-runtime.lock.json"
+      - ".github/workflows/ci-linux.yml"
+
+concurrency:
+  group: ci-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    name: Build + test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            runtime_platform: linux-x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
+            runtime_platform: linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libasound2-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev \
+            libx11-dev libxdo-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxkbcommon-dev libwayland-dev file
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: ${{ matrix.triple }}
+
+      - name: Crate gate (fmt, clippy -D warnings, tests)
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          env -u RUSTFLAGS cargo fmt -p fae-daemon -- --check
+          env -u RUSTFLAGS cargo clippy -p fae-daemon --bin fae-daemon --all-features \
+            -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+          env -u RUSTFLAGS cargo test -p fae-daemon
+
+      - name: Build fae-daemon (native)
+        working-directory: crates
+        run: env -u RUSTFLAGS cargo build -p fae-daemon --all-features
+
+      - name: Build fae-ui-shell (native)
+        working-directory: native/rust/fae-ui-shell
+        run: env -u RUSTFLAGS cargo build
+
+      - name: Install + SHA-verify llama.cpp runtime
+        run: |
+          python3 scripts/install-llamacpp-runtime.py \
+            --platform ${{ matrix.runtime_platform }} \
+            --install-dir build/linux/LlamaCpp-${{ matrix.arch }} --force
+          test -x build/linux/LlamaCpp-${{ matrix.arch }}/llama-server
+          file build/linux/LlamaCpp-${{ matrix.arch }}/llama-server

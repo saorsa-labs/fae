@@ -571,3 +571,34 @@ _verify-bundle:
         exit 1
     fi
     echo "✓ Bundle verification passed"
+
+# ─── Linux packaging (off-Mac: daemon + orb-host brain) ──────────────
+# These recipes are additive and do not touch the macOS recipes above. On a
+# Linux host they build the .deb + AppImage; CI (release-linux.yml) is the
+# canonical path. `arch` is amd64 or arm64; `version` defaults to the VERSION
+# file. Pass `gpg_key` to sign (real release key is a CI secret).
+
+# Download + SHA-verify the pinned llama.cpp runtime for a Linux arch.
+install-llamacpp-runtime-linux arch="amd64":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{arch}}" in
+      amd64) PLAT=linux-x86_64 ;;
+      arm64) PLAT=linux-aarch64 ;;
+      *) echo "unknown arch {{arch}} (amd64|arm64)" >&2; exit 1 ;;
+    esac
+    python3 scripts/install-llamacpp-runtime.py --platform "$PLAT" \
+        --install-dir "build/linux/LlamaCpp-{{arch}}" --force
+
+# Build the Linux .deb + AppImage for the given arch. Requires fae-daemon and
+# fae-ui-shell already built for the matching target (Linux host or CI).
+package-linux arch="amd64" version="" gpg_key="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VER="{{version}}"; [ -n "$VER" ] || VER="$(tr -d '[:space:]' < VERSION)"
+    DAEMON="crates/target/release/fae-daemon"
+    UISHELL="native/rust/fae-ui-shell/target/release/fae-ui-shell"
+    ARGS=(--arch "{{arch}}" --version "$VER" --daemon "$DAEMON")
+    [ -f "$UISHELL" ] && ARGS+=(--ui-shell "$UISHELL")
+    [ -n "{{gpg_key}}" ] && ARGS+=(--gpg-key "{{gpg_key}}")
+    python3 scripts/build-linux-package.py "${ARGS[@]}"

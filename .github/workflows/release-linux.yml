@@ -1,0 +1,198 @@
+name: Release (Linux)
+
+# Linux release path for the Fae brain: the Rust daemon + orb-host + the
+# integrity-gated llama.cpp runtime, packaged as a GPG-signed .deb and an
+# AppImage, per arch (x86_64 + aarch64). The macOS app is built by release.yml;
+# off-Mac the product is daemon + orb-host only (no Swift).
+#
+# Each arch builds NATIVELY on its own hosted runner so ALSA/GTK/WebKit dev
+# libraries come from apt (no cross-compile sysroot needed). The B1 integrity
+# gate is extended here: the bundled llama-server is verified by size+sha256
+# against models.lock, and the .deb's detached GPG signature is verified.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (defaults to VERSION file)"
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    name: Pre-flight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        id: version
+        run: |
+          FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            echo "version=${INPUT_VERSION:-$FILE_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match VERSION file ($FILE_VERSION)"
+            exit 1
+          fi
+          echo "version=$FILE_VERSION" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            runtime_platform: linux-x86_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
+            runtime_platform: linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Install build + packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libasound2-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev \
+            libx11-dev libxdo-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxkbcommon-dev libwayland-dev \
+            dpkg-dev fakeroot file desktop-file-utils
+
+      - name: Install AppImage tooling
+        run: |
+          set -euo pipefail
+          case "${{ matrix.arch }}" in
+            amd64) AI_ARCH=x86_64 ;;
+            arm64) AI_ARCH=aarch64 ;;
+          esac
+          curl -fsSL -o /tmp/appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${AI_ARCH}.AppImage"
+          chmod +x /tmp/appimagetool
+          # appimagetool is itself an AppImage; extract it so it runs without FUSE.
+          ( cd /tmp && ./appimagetool --appimage-extract >/dev/null )
+          sudo ln -sf /tmp/squashfs-root/AppRun /usr/local/bin/appimagetool
+          appimagetool --version || true
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: ${{ matrix.triple }}
+
+      - name: Crate gate (fmt, clippy -D warnings, tests)
+        working-directory: crates
+        run: |
+          set -euo pipefail
+          env -u RUSTFLAGS cargo fmt -p fae-daemon -- --check
+          env -u RUSTFLAGS cargo clippy -p fae-daemon --bin fae-daemon --all-features \
+            -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+          env -u RUSTFLAGS cargo nextest run -p fae-daemon || env -u RUSTFLAGS cargo test -p fae-daemon
+
+      - name: Build fae-daemon (release, native)
+        working-directory: crates
+        run: env -u RUSTFLAGS cargo build --release -p fae-daemon --all-features
+
+      - name: Build fae-ui-shell (release, native)
+        working-directory: native/rust/fae-ui-shell
+        run: env -u RUSTFLAGS cargo build --release
+
+      - name: Install + SHA-verify llama.cpp runtime
+        run: |
+          python3 scripts/install-llamacpp-runtime.py \
+            --platform ${{ matrix.runtime_platform }} \
+            --install-dir build/linux/LlamaCpp-${{ matrix.arch }} --force
+
+      - name: Build packages (.deb + AppImage)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          GPG_ARG=()
+          if [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+            export GNUPGHOME="$(mktemp -d)"
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+            # Cache the passphrase for the non-interactive signer.
+            echo "allow-loopback-pinentry" >> "$GNUPGHOME/gpg-agent.conf"
+            gpgconf --kill gpg-agent || true
+            GPG_ARG=(--gpg-key "$FPR")
+            echo "Signing with imported key $FPR"
+          else
+            echo "::warning::GPG_PRIVATE_KEY not set — building UNSIGNED packages"
+          fi
+          DAEMON="crates/target/release/fae-daemon"
+          UISHELL="native/rust/fae-ui-shell/target/release/fae-ui-shell"
+          python3 scripts/build-linux-package.py \
+            --arch ${{ matrix.arch }} --version "${VERSION}" \
+            --daemon "$DAEMON" --ui-shell "$UISHELL" \
+            --out-dir build/linux/dist "${GPG_ARG[@]}"
+
+      - name: Integrity gate (runtime SHA vs lock + GPG verify)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          RUNTIME="build/linux/LlamaCpp-${{ matrix.arch }}/llama-server"
+          test -x "$RUNTIME"
+          # Re-verify the runtime binary size+sha256 against the runtime lock
+          # (the B1 gate, extended to Linux). Fail the job on any mismatch.
+          python3 - "$RUNTIME" "${{ matrix.runtime_platform }}" <<'PY'
+          import hashlib, json, os, sys, pathlib
+          binp, plat = sys.argv[1], sys.argv[2]
+          lock = json.loads(pathlib.Path("scripts/llamacpp-runtime.lock.json").read_text())
+          rt = lock["runtimes"][plat]
+          size = os.path.getsize(binp)
+          assert size == rt["binary_size_bytes"], f"size {size} != {rt['binary_size_bytes']}"
+          h = hashlib.sha256(pathlib.Path(binp).read_bytes()).hexdigest()
+          assert h == rt["binary_sha256"], f"sha {h} != {rt['binary_sha256']}"
+          print(f"runtime integrity OK: {plat} {size} bytes sha256={h}")
+          PY
+          DEB=$(ls build/linux/dist/fae_*_${{ matrix.arch }}.deb)
+          echo "Built: $DEB"
+          # The .deb must be a real Debian archive.
+          ar t "$DEB" | tr '\n' ' '; echo
+          if [ -n "${GPG_PRIVATE_KEY:-}" ]; then
+            export GNUPGHOME="$(mktemp -d)"
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            gpg --verify "$DEB.asc" "$DEB"
+            echo "GPG signature verified"
+          else
+            echo "::warning::Unsigned build — skipping GPG verify"
+          fi
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fae-linux-${{ matrix.arch }}
+          path: |
+            build/linux/dist/fae_*_${{ matrix.arch }}.deb
+            build/linux/dist/fae_*_${{ matrix.arch }}.deb.asc
+            build/linux/dist/Fae-*-*.AppImage
+          if-no-files-found: error
