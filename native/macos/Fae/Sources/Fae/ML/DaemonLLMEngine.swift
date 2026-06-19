@@ -56,6 +56,10 @@ enum DaemonLLMEngineError: LocalizedError {
     case protocolError(String)
     case daemonError(String)
     case notLoaded
+    /// `engine.reload` / `engine.set_adapter_scale` was rejected by the daemon
+    /// (authz denial, missing scale, reload failure, …). Carries the command and
+    /// the daemon's coarse error code so the failure is never swallowed.
+    case adapterCommandFailed(command: String, code: String)
 
     var errorDescription: String? {
         switch self {
@@ -86,6 +90,8 @@ enum DaemonLLMEngineError: LocalizedError {
             return "fae-daemon returned an error: \(message)"
         case .notLoaded:
             return "Daemon LLM engine not loaded"
+        case .adapterCommandFailed(let command, let code):
+            return "fae-daemon rejected \(command): \(code)"
         }
     }
 }
@@ -983,6 +989,75 @@ actor DaemonLLMEngine: LLMEngine {
     func shutdown() async {
         internalShutdown()
         loadState = .notStarted
+    }
+
+    // MARK: - Personal adapter API (P3/C3)
+
+    /// Reload the daemon's llama.cpp sidecar with a freshly-trained personal LoRA
+    /// GGUF (`engine.reload` → `{ "personal_adapter": <path|null> }`). Passing
+    /// `nil` reloads the base model (no adapter). Requires the `ModelManagement`
+    /// scope, which the bootstrap client (`swift-frontend-bootstrap`) holds — a
+    /// scope drift here would surface as `adapterCommandFailed`, never a silent
+    /// no-op.
+    ///
+    /// `LLMEngine.swapAdapter` is the polymorphic entry point the pipeline calls;
+    /// this is the daemon-lane primitive it routes to (the deploy/self-config
+    /// paths reach it via `PipelineCoordinator.applyAdapterChange`).
+    func reloadAdapter(path: String?) async throws {
+        // JSONSerialization needs NSNull for an explicit JSON null — a Swift
+        // `nil as Any` fails `isValidJSONObject`. The daemon reads
+        // `personal_adapter.as_str()` (null ⇒ base reload).
+        let value: Any = path ?? NSNull()
+        try await sendAdapterCommand(
+            command: "engine.reload",
+            payload: ["personal_adapter": value])
+    }
+
+    /// Toggle the personal-LoRA scale on the running sidecar
+    /// (`engine.set_adapter_scale` → `{ "scale": <f32> }`). `1.0` serves the
+    /// personalized model; `0.0` is an instant rollback to base without a reload.
+    /// The daemon clamps to `0.0..=2.0`. Requires `ModelManagement`.
+    func setAdapterScale(_ scale: Float) async throws {
+        try await sendAdapterCommand(
+            command: "engine.set_adapter_scale",
+            payload: ["scale": Double(scale)])
+    }
+
+    /// `LLMEngine` conformance for the daemon lane: a personal adapter is a GGUF
+    /// the daemon loads + activates, not an MLX adapter directory. `directory`
+    /// here is the GGUF path (the deploy/self-config layer passes the produced
+    /// `personal.gguf`); `nil` drops to base. Reloading a real adapter also
+    /// switches personalization on (`scale 1.0`); `nil` flips the scale to `0.0`
+    /// so the running brain reverts immediately.
+    func swapAdapter(to directory: URL?) async throws {
+        if let directory {
+            try await reloadAdapter(path: directory.path)
+            try await setAdapterScale(1.0)
+        } else {
+            // Instant rollback to base — scale 0 first (cannot fail mid-swap),
+            // then drop the adapter from the sidecar.
+            try await setAdapterScale(0.0)
+            try await reloadAdapter(path: nil)
+        }
+    }
+
+    /// Send one adapter command and surface any daemon rejection as a typed
+    /// `adapterCommandFailed` rather than swallowing it.
+    private func sendAdapterCommand(command: String, payload: [String: Any]) async throws {
+        guard isLoaded, let connection else { throw DaemonLLMEngineError.notLoaded }
+        let requestID = nextRequestID()
+        let frame = try DaemonWire.encodeFrame(
+            requestID: requestID, command: command, payload: payload)
+        let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
+        do {
+            _ = try DaemonWire.unwrapResponse(raw)
+            NSLog("DaemonLLMEngine: %@ accepted (request %@)", command, requestID)
+        } catch let DaemonLLMEngineError.daemonError(code) {
+            NSLog(
+                "DaemonLLMEngine: %@ rejected (%@) — daemon tail: %@",
+                command, code, output.tail(1_000))
+            throw DaemonLLMEngineError.adapterCommandFailed(command: command, code: code)
+        }
     }
 
     // MARK: - Audio two-pass helpers (S18)

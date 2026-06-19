@@ -129,6 +129,14 @@ actor ImprovementCycleCoordinator {
     /// Set after each meta-optimization run, cleared when consumed by the briefing.
     private(set) var pendingMetaOptNarrative: String?
 
+    /// When set, the training step targets the **llama.cpp daemon** brain: it
+    /// trains a portable PEFT adapter and converts it to a GGUF the daemon loads
+    /// via `engine.reload` (P3/C3), instead of producing an mlx-tune
+    /// `.safetensors` adapter the daemon cannot consume. `nil` keeps the legacy
+    /// MLX path. Carries the base model the daemon serves so the GGUF tensor
+    /// layout matches at reload.
+    private var daemonTrainingBaseModel: String?
+
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
 
@@ -168,6 +176,14 @@ actor ImprovementCycleCoordinator {
     /// Set the training bridge. Called by FaeScheduler after wiring.
     func setTrainingBridge(_ bridge: TrainingBridge) {
         trainingBridge = bridge
+    }
+
+    /// Target the llama.cpp daemon brain for training (P3/C3): the training step
+    /// trains a PEFT adapter and converts it to a daemon-loadable GGUF against
+    /// `baseModel`. Called by FaeScheduler when the daemon LLM lane is active.
+    /// Passing `nil` reverts to the legacy mlx-tune (`.safetensors`) path.
+    func setDaemonTrainingBaseModel(_ baseModel: String?) {
+        daemonTrainingBaseModel = baseModel
     }
 
     /// Set the meta-optimizer. Called by FaeScheduler after wiring.
@@ -477,18 +493,38 @@ actor ImprovementCycleCoordinator {
                 return
             }
 
-            // 5b. Choose training mode based on available data.
-            let mode: TrainingMode = exportResult.dpoPairs >= 5 ? .dpo : .sft
-            NSLog("ImprovementCycleCoordinator: launching %@ training", mode.rawValue)
-
-            let launchResult = try await bridge.launchTraining(mode: mode)
-            NSLog(
-                "ImprovementCycleCoordinator: training started (pid=%d, model=%@, adapter=%@)",
-                launchResult.pid, launchResult.modelId, launchResult.adapterPath
-            )
-
-            // 5c. Poll until the detached training worker completes.
-            let adapterPath = try await bridge.pollUntilComplete()
+            // 5b–5c. Produce a deployable adapter. On the daemon lane, train a
+            // portable PEFT adapter and convert it to a GGUF the llama.cpp daemon
+            // loads via engine.reload (P3/C3); otherwise use the legacy detached
+            // mlx-tune path (`.safetensors`, MLX-only).
+            let adapterPath: String
+            if let daemonBase = daemonTrainingBaseModel {
+                guard let sftPath = exportResult.outputFiles["sft_export"] else {
+                    NSLog("ImprovementCycleCoordinator: no sft_export path in export result")
+                    try? await forceIdle(error: "missing_sft_export")
+                    return
+                }
+                NSLog(
+                    "ImprovementCycleCoordinator: daemon lane — train_peft + GGUF convert (base=%@)",
+                    daemonBase)
+                let peft = try await bridge.trainPeftAndConvert(
+                    sftPath: sftPath, baseModel: daemonBase)
+                // The GGUF (not the PEFT dir) is what the daemon loads.
+                adapterPath = peft.ggufPath
+                NSLog(
+                    "ImprovementCycleCoordinator: daemon training complete — gguf=%@ loss=%.4g",
+                    peft.ggufPath, peft.finalLoss)
+            } else {
+                let mode: TrainingMode = exportResult.dpoPairs >= 5 ? .dpo : .sft
+                NSLog("ImprovementCycleCoordinator: launching %@ training (mlx-tune)", mode.rawValue)
+                let launchResult = try await bridge.launchTraining(mode: mode)
+                NSLog(
+                    "ImprovementCycleCoordinator: training started (pid=%d, model=%@, adapter=%@)",
+                    launchResult.pid, launchResult.modelId, launchResult.adapterPath
+                )
+                // Poll until the detached training worker completes.
+                adapterPath = try await bridge.pollUntilComplete()
+            }
             producedAdapterPath = adapterPath
             NSLog("ImprovementCycleCoordinator: training complete — adapter at %@", adapterPath)
 

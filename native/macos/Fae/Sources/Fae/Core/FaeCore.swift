@@ -561,6 +561,14 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
                     await sched.setPersonalLexicon(personalLexicon)
                     await sched.setPipelineCoordinator(coordinator)
+                    // P3/C3: if the daemon LLM lane is live, the nightly
+                    // improvement cycle must train against the daemon's base and
+                    // produce a GGUF (not an mlx-tune `.safetensors` adapter the
+                    // daemon cannot load). `llmEngine` is the daemon engine here
+                    // only if its load() succeeded above (else it fell back to MLX).
+                    if let daemonEngine = llmEngine as? DaemonLLMEngine {
+                        await sched.setDaemonTrainingBaseModel(daemonEngine.daemonModelID)
+                    }
                     await sched.setAwarenessConfig(config.awareness)
                     await sched.setVisionEnabled(config.vision.enabled)
                     await sched.setSpeakerProfileStore(speakerProfileStore)

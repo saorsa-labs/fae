@@ -943,12 +943,20 @@ actor PipelineCoordinator {
 
     /// Hot-swap the personal LoRA adapter overlay on the running LLM engine.
     ///
-    /// Called by `FaeCore.patchConfig` when `training.personal_adapter_path` changes.
-    /// Safe during idle; if generation is in progress the adapter swap runs immediately
-    /// (MLXLLMEngine resets the KV cache after the swap, which has no effect on the
-    /// current turn — the new adapter applies from the next turn onwards).
+    /// Called by `FaeCore.patchConfig` when `training.personal_adapter_path`
+    /// changes, and by the improvement cycle's adapter-deploy/rollback callback
+    /// (P3/C3, wired in `FaeScheduler`).
     ///
-    /// - Parameter path: Filesystem path to the adapter directory, or `nil` to unload.
+    /// Routing is polymorphic via `LLMEngine.swapAdapter`:
+    /// - **Daemon lane** (`DaemonLLMEngine`): `path` is a GGUF — the engine
+    ///   `engine.reload`s the llama.cpp sidecar and sets scale 1.0; `nil` flips
+    ///   scale to 0.0 (instant rollback) then reloads base.
+    /// - **MLX lane**: hot-swaps the adapter directory (resets the KV cache after
+    ///   the swap, no effect on the current turn — applies from the next turn).
+    ///
+    /// Safe during idle; if generation is in progress the swap runs immediately.
+    ///
+    /// - Parameter path: Daemon GGUF / MLX adapter directory, or `nil` to unload.
     func applyAdapterChange(path: String?) async {
         let url = path.map { URL(fileURLWithPath: $0) }
         do {

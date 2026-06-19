@@ -307,10 +307,25 @@ async fn dispatch(
         "runtime.status" => {
             let info = backends.engine.describe();
             let tts_info = backends.tts.describe();
+            // Gap P3/C3 Stage 4: surface the live personal adapter (confined path,
+            // content hash, scale) so a deploy/rollback is auditable — `scale 0`
+            // means rolled back to base, `scale 1` means personalized.
+            let adapter =
+                backends
+                    .engine
+                    .loaded_adapter()
+                    .map_or(serde_json::Value::Null, |loaded| {
+                        serde_json::json!({
+                            "path": loaded.path,
+                            "sha256": loaded.sha256,
+                            "scale": loaded.scale,
+                        })
+                    });
             Ok(serde_json::json!({
                 "status": "ok",
                 "engine": { "backend": info.backend, "model_id": info.model_id },
                 "tts": { "backend": tts_info.backend, "model_id": tts_info.model_id },
+                "adapter": adapter,
             }))
         }
         "conversation.inject_text" => inject_text(backends, cmd).await,
@@ -365,7 +380,16 @@ async fn reload_adapter(
     engine
         .reload_adapter(personal_adapter.clone())
         .await
-        .map_err(|_| "reload_failed")?;
+        .map_err(|error| {
+            eprintln!("fae-daemon: engine.reload failed: {error}");
+            // A confinement/existence rejection is distinct from a sidecar restart
+            // failure — the Swift side maps the codes to different messages and the
+            // safety-gate rejection must never look like a transient reload error.
+            match error {
+                fae_engine::EngineError::AdapterPath(_) => "adapter_path_rejected",
+                _ => "reload_failed",
+            }
+        })?;
     Ok(serde_json::json!({ "reloaded": true, "personal_adapter": personal_adapter }))
 }
 
@@ -1990,6 +2014,38 @@ mod tests {
         )
         .await;
         assert!(!out.response.ok, "model-management command must be denied");
+    }
+
+    #[tokio::test]
+    async fn runtime_status_reports_adapter_field() {
+        // Gap P3/C3 Stage 4: runtime.status must carry an `adapter` key so a
+        // deploy/rollback is auditable. The mock backend loads no adapter, so the
+        // field is null — but it MUST be present (a missing key would mean status
+        // can't report rollback state).
+        let reg = registry(); // client holds StatusRead
+        let mut state =
+            SessionState::Authenticated(reg.authenticate("c1", "good-token", 10).expect("auth"));
+        let out = handle_frame(
+            &reg,
+            &mock(),
+            &mock_tts(),
+            &AudioManager::new(),
+            &mut state,
+            &frame("runtime.status", serde_json::json!({})),
+            11,
+            "e2".to_owned(),
+        )
+        .await;
+        assert!(out.response.ok, "runtime.status should succeed");
+        let result = out.response.result.expect("result");
+        assert!(
+            result.get("adapter").is_some(),
+            "runtime.status must include an `adapter` key (got {result})"
+        );
+        assert!(
+            result["adapter"].is_null(),
+            "mock backend loads no adapter → null"
+        );
     }
 
     #[tokio::test]

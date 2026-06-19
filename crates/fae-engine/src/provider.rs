@@ -98,6 +98,28 @@ pub enum EngineError {
     Inference(String),
     #[error(transparent)]
     Lock(#[from] LockError),
+    /// A personal-adapter path was rejected before it reached `llama-server`:
+    /// missing/unreadable file, or outside the confined personal-adapters
+    /// directory. This is a remotely-reachable command (`engine.reload` over
+    /// NDJSON), so an arbitrary absolute path must never be handed to the sidecar.
+    #[error("adapter path rejected: {0}")]
+    AdapterPath(String),
+}
+
+/// The personal LoRA adapter currently loaded into the serving sidecar — its
+/// confined path, content hash, and live scale. Surfaced by `runtime.status`
+/// so a deploy/rollback is auditable (which adapter, on or off). `None` when no
+/// adapter is loaded (base model).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedAdapter {
+    /// Absolute path of the loaded adapter GGUF (already confinement-checked).
+    pub path: String,
+    /// SHA-256 of the loaded GGUF — the local trust record for a runtime-built
+    /// adapter that cannot be pinned in `models.lock` (it does not exist at
+    /// build time).
+    pub sha256: String,
+    /// Live per-request scale: `0.0` = base (rolled back), `1.0` = personalized.
+    pub scale: f32,
 }
 
 /// A stream of completion events. `'static` so it can be moved into a per-turn
@@ -131,6 +153,14 @@ pub trait ProviderAdapter: Send + Sync {
         Err(EngineError::Inference(
             "adapter reload is not supported by this backend".to_owned(),
         ))
+    }
+
+    /// The personal adapter currently loaded into the serving sidecar, if any
+    /// (gap P3/C3). Backends without a runtime adapter return `None` via this
+    /// default; the llama.cpp lane reports the confined path, content hash, and
+    /// live scale so `runtime.status` can audit a deploy/rollback.
+    fn loaded_adapter(&self) -> Option<LoadedAdapter> {
+        None
     }
 }
 

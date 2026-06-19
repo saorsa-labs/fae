@@ -27,7 +27,8 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 
 use crate::provider::{
-    AdapterInfo, ChatEvent, ChatRequest, ChatStream, EngineError, ProviderAdapter, Role,
+    AdapterInfo, ChatEvent, ChatRequest, ChatStream, EngineError, LoadedAdapter, ProviderAdapter,
+    Role,
 };
 
 /// llama-server loads `--lora` adapters at a fixed index in load order; the
@@ -418,6 +419,68 @@ fn models_lock_disabled_for_dev() -> Result<bool, EngineError> {
     }
 }
 
+/// Confinement root for runtime personal adapters: the Swift app writes GGUFs to
+/// `<data dir>/models/personal/` (`FaeDirectories.personalModelsDirectory`); the
+/// daemon serves them from the same place. `FAE_PERSONAL_ADAPTERS_DIR` overrides
+/// it (tests, and a dev install with a relocated data dir).
+fn personal_adapters_root() -> Result<std::path::PathBuf, EngineError> {
+    if let Some(dir) = std::env::var_os("FAE_PERSONAL_ADAPTERS_DIR") {
+        return Ok(std::path::PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| EngineError::AdapterPath("HOME is not set".to_owned()))?;
+    let home = std::path::PathBuf::from(home);
+    #[cfg(target_os = "macos")]
+    let base = home.join("Library/Application Support/fae");
+    #[cfg(not(target_os = "macos"))]
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(xdg) => std::path::PathBuf::from(xdg).join("fae"),
+        None => home.join(".local/share/fae"),
+    };
+    Ok(base.join("models").join("personal"))
+}
+
+/// Validate a personal-adapter path before it reaches `llama-server` (gap P3/C3
+/// Stage 4). The path arrives over NDJSON (`engine.reload`), so it is untrusted:
+/// it must (a) exist as a readable regular file and (b) resolve INSIDE the
+/// confined personal-adapters directory — no arbitrary absolute path, no `..`
+/// escape. Returns the canonicalized absolute path the sidecar should load.
+///
+/// Note: this is path-confinement + existence + a local trust record (the caller
+/// hashes the file), NOT a static `models.lock` SHA pin — a runtime-generated
+/// adapter does not exist at build time and so cannot be pinned. The existing
+/// model/mmproj `models.lock` gate is untouched.
+fn validate_personal_adapter(path: &str) -> Result<std::path::PathBuf, EngineError> {
+    let root = personal_adapters_root()?;
+    // Canonicalize the root if it exists; if it does not, the adapter cannot be
+    // inside it, so reject. Canonicalizing both sides defeats `..` and symlink
+    // escapes.
+    let canonical_root = root.canonicalize().map_err(|error| {
+        EngineError::AdapterPath(format!(
+            "personal-adapters dir {} is unavailable: {error}",
+            root.display()
+        ))
+    })?;
+    let requested = std::path::Path::new(path);
+    let canonical = requested.canonicalize().map_err(|error| {
+        EngineError::AdapterPath(format!("{path} is not a readable file: {error}"))
+    })?;
+    if !canonical.is_file() {
+        return Err(EngineError::AdapterPath(format!(
+            "{} is not a regular file",
+            canonical.display()
+        )));
+    }
+    if !canonical.starts_with(&canonical_root) {
+        return Err(EngineError::AdapterPath(format!(
+            "{} is outside the personal-adapters directory {}",
+            canonical.display(),
+            canonical_root.display()
+        )));
+    }
+    Ok(canonical)
+}
+
 fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -527,6 +590,9 @@ pub struct LlamaServerAdapter {
     lora_scale: AtomicU32,
     /// The supervised child + its config, swapped on `reload_adapter`.
     sidecar: Mutex<Sidecar>,
+    /// The confined path + content hash of the loaded personal adapter (gap
+    /// P3/C3 Stage 4), for `runtime.status` audit. `None` when serving base.
+    loaded_adapter: Mutex<Option<(String, String)>>,
 }
 
 impl LlamaServerAdapter {
@@ -547,6 +613,7 @@ impl LlamaServerAdapter {
                 handle: None,
                 config: None,
             }),
+            loaded_adapter: Mutex::new(None),
         }
     }
 
@@ -595,6 +662,7 @@ impl LlamaServerAdapter {
                 handle: Some(handle),
                 config: Some(config),
             }),
+            loaded_adapter: Mutex::new(None),
         };
         Ok(if has_lora {
             adapter.with_lora(1.0)
@@ -714,6 +782,16 @@ impl ProviderAdapter for LazyLlamaServerAdapter {
             .await
     }
 
+    fn loaded_adapter(&self) -> Option<LoadedAdapter> {
+        // Only a spawned sidecar can hold an adapter; before first spawn there is
+        // none. Don't force a spawn just to answer a status query.
+        self.spawned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|adapter| adapter.loaded_adapter())
+    }
+
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
         self.ensure_spawned().await?.stream_chat(request).await
     }
@@ -746,7 +824,27 @@ impl ProviderAdapter for LlamaServerAdapter {
                     .to_owned(),
             )
         })?;
-        config.lora_gguf = personal_adapter.clone();
+
+        // Gap P3/C3 Stage 4: validate + hash the adapter BEFORE tearing the old
+        // child down. The path is untrusted (arrives over NDJSON), and a bad path
+        // that fails *after* the kill would leave the daemon deaf. Validating
+        // first means a rejected reload leaves the running sidecar untouched.
+        let validated: Option<(String, String)> = match &personal_adapter {
+            Some(path) => {
+                let canonical = validate_personal_adapter(path)?;
+                let sha = sha256_file(&canonical).map_err(|error| {
+                    EngineError::AdapterPath(format!(
+                        "hash adapter {}: {error}",
+                        canonical.display()
+                    ))
+                })?;
+                Some((canonical.to_string_lossy().into_owned(), sha))
+            }
+            None => None,
+        };
+        // Load the canonical (confinement-checked) path, not the raw request.
+        config.lora_gguf = validated.as_ref().map(|(path, _)| path.clone());
+
         // Kill the old child FIRST so the loopback port is free before re-binding.
         {
             let mut guard = self.sidecar.lock().unwrap_or_else(PoisonError::into_inner);
@@ -762,7 +860,23 @@ impl ProviderAdapter for LlamaServerAdapter {
         // its last value (1.0 unless toggled). Same port ⇒ `base_url` unchanged.
         self.lora_present
             .store(personal_adapter.is_some(), Ordering::Relaxed);
+        *self
+            .loaded_adapter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = validated;
         Ok(())
+    }
+
+    fn loaded_adapter(&self) -> Option<LoadedAdapter> {
+        let guard = self
+            .loaded_adapter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.as_ref().map(|(path, sha256)| LoadedAdapter {
+            path: path.clone(),
+            sha256: sha256.clone(),
+            scale: f32::from_bits(self.lora_scale.load(Ordering::Relaxed)),
+        })
     }
 
     async fn stream_chat(&self, request: ChatRequest) -> Result<ChatStream, EngineError> {
@@ -1279,10 +1393,107 @@ mod tests {
     #[tokio::test]
     async fn reload_without_managed_sidecar_errors() {
         // An attached (connect) adapter owns no child/config, so reload is rejected
-        // — it cannot restart a server it does not manage.
+        // — it cannot restart a server it does not manage. Use a confined path so
+        // the failure is the managed-sidecar check, not the Stage-4 path gate.
+        let dir = std::env::temp_dir().join(format!("fae-adapter-{}", uuid_like()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
+        let gguf = dir.join("p.gguf");
+        std::fs::write(&gguf, b"GGUF").expect("write");
         let adapter = LlamaServerAdapter::connect("http://127.0.0.1:1", "m");
-        let result = adapter.reload_adapter(Some("/tmp/x.gguf".to_owned())).await;
+        let result = adapter
+            .reload_adapter(Some(gguf.to_string_lossy().into_owned()))
+            .await;
         assert!(matches!(result, Err(EngineError::Inference(_))));
+        std::env::remove_var("FAE_PERSONAL_ADAPTERS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Gap P3/C3 Stage 4: personal-adapter path confinement ─────────────────
+
+    /// A weak temp-name helper (the crate avoids a uuid dep in tests).
+    fn uuid_like() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        format!("{nanos}-{:?}", std::thread::current().id()).replace(['(', ')', ' '], "")
+    }
+
+    #[test]
+    fn validate_personal_adapter_accepts_confined_file() {
+        let dir = std::env::temp_dir().join(format!("fae-conf-{}", uuid_like()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
+        let gguf = dir.join("personal.gguf");
+        std::fs::write(&gguf, b"GGUFDATA").expect("write");
+
+        let validated = validate_personal_adapter(&gguf.to_string_lossy())
+            .expect("a real file inside the confined dir is accepted");
+        assert!(validated.ends_with("personal.gguf"));
+
+        std::env::remove_var("FAE_PERSONAL_ADAPTERS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_personal_adapter_rejects_missing_file() {
+        let dir = std::env::temp_dir().join(format!("fae-miss-{}", uuid_like()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
+
+        let result = validate_personal_adapter(&dir.join("nope.gguf").to_string_lossy());
+        assert!(matches!(result, Err(EngineError::AdapterPath(_))));
+
+        std::env::remove_var("FAE_PERSONAL_ADAPTERS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_personal_adapter_rejects_out_of_confinement_path() {
+        // An attacker-supplied absolute path OUTSIDE the personal-adapters dir
+        // (the remotely-reachable injection this gate exists to stop) is rejected
+        // even though the file exists and is readable.
+        let confined = std::env::temp_dir().join(format!("fae-root-{}", uuid_like()));
+        let elsewhere = std::env::temp_dir().join(format!("fae-evil-{}", uuid_like()));
+        std::fs::create_dir_all(&confined).expect("mkdir confined");
+        std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+        std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &confined);
+        let outside = elsewhere.join("evil.gguf");
+        std::fs::write(&outside, b"GGUF").expect("write");
+
+        let result = validate_personal_adapter(&outside.to_string_lossy());
+        assert!(
+            matches!(result, Err(EngineError::AdapterPath(_))),
+            "a path outside the confined dir must be rejected"
+        );
+
+        std::env::remove_var("FAE_PERSONAL_ADAPTERS_DIR");
+        let _ = std::fs::remove_dir_all(&confined);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+
+    #[test]
+    fn validate_personal_adapter_rejects_directory() {
+        let dir = std::env::temp_dir().join(format!("fae-dir-{}", uuid_like()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", &dir);
+        let subdir = dir.join("notafile");
+        std::fs::create_dir_all(&subdir).expect("mkdir subdir");
+
+        let result = validate_personal_adapter(&subdir.to_string_lossy());
+        assert!(matches!(result, Err(EngineError::AdapterPath(_))));
+
+        std::env::remove_var("FAE_PERSONAL_ADAPTERS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loaded_adapter_is_none_for_base_serving() {
+        // A connect adapter with no LoRA reports no loaded adapter (runtime.status
+        // → adapter: null).
+        let adapter = LlamaServerAdapter::connect("http://127.0.0.1:1", "m");
+        assert!(adapter.loaded_adapter().is_none());
     }
 
     fn tiny_wav() -> Vec<u8> {

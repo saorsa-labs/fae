@@ -339,6 +339,58 @@ final class DaemonWireTests: XCTestCase {
         XCTAssertNil(DaemonWire.parseObjectLine("[1,2,3]"))
         XCTAssertNotNil(DaemonWire.parseObjectLine("{\"ok\":true}"))
     }
+
+    // MARK: adapter command frames (P3/C3)
+    //
+    // `reloadAdapter`/`setAdapterScale` build their frames through
+    // `DaemonWire.encodeFrame`; these verify the exact wire shape the daemon's
+    // `engine.reload` / `engine.set_adapter_scale` dispatch reads. A drift here
+    // (wrong key, wrong null encoding) would be silently denied or mis-parsed.
+
+    func testEngineReloadFrameCarriesPersonalAdapterPath() throws {
+        let data = try DaemonWire.encodeFrame(
+            requestID: "r7",
+            command: "engine.reload",
+            payload: ["personal_adapter": "/models/personal/p.gguf"])
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data.dropLast()) as? [String: Any])
+        XCTAssertEqual(object["command"] as? String, "engine.reload")
+        let payload = try XCTUnwrap(object["payload"] as? [String: Any])
+        XCTAssertEqual(payload["personal_adapter"] as? String, "/models/personal/p.gguf")
+    }
+
+    func testEngineReloadFrameEncodesNullForBaseReload() throws {
+        // Base reload sends an explicit JSON null — the daemon reads
+        // `personal_adapter.as_str()` (null ⇒ base). `NSNull` is required; a
+        // Swift `nil as Any` would fail `isValidJSONObject` and never serialize.
+        let data = try DaemonWire.encodeFrame(
+            requestID: "r8",
+            command: "engine.reload",
+            payload: ["personal_adapter": NSNull()])
+        let line = try XCTUnwrap(String(data: data.dropLast(), encoding: .utf8))
+        XCTAssertTrue(line.contains("\"personal_adapter\":null"),
+                      "base reload must serialize an explicit null, got: \(line)")
+    }
+
+    func testEngineSetAdapterScaleFrameCarriesScale() throws {
+        let data = try DaemonWire.encodeFrame(
+            requestID: "r9",
+            command: "engine.set_adapter_scale",
+            payload: ["scale": Double(Float(1.0))])
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data.dropLast()) as? [String: Any])
+        XCTAssertEqual(object["command"] as? String, "engine.set_adapter_scale")
+        let payload = try XCTUnwrap(object["payload"] as? [String: Any])
+        XCTAssertEqual((payload["scale"] as? NSNumber)?.doubleValue, 1.0)
+    }
+
+    func testAdapterCommandFailedErrorIsLoud() {
+        let error = DaemonLLMEngineError.adapterCommandFailed(
+            command: "engine.reload", code: "authorization denied")
+        let description = error.localizedDescription
+        XCTAssertTrue(description.contains("engine.reload"))
+        XCTAssertTrue(description.contains("authorization denied"))
+    }
 }
 
 // MARK: - Audio two-pass helpers (S18)

@@ -38,8 +38,8 @@ pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::MockAdapter;
 pub use models_lock::{Artifact, LockError, ModelsLock, SUPPORTED_SCHEMA_VERSION};
 pub use provider::{
-    AdapterInfo, ChatEvent, ChatMessage, ChatRequest, ChatStream, EngineError, ProviderAdapter,
-    Role, ToolSpec,
+    AdapterInfo, ChatEvent, ChatMessage, ChatRequest, ChatStream, EngineError, LoadedAdapter,
+    ProviderAdapter, Role, ToolSpec,
 };
 pub use tts::{encode_wav_pcm16, MockTtsAdapter, TtsAdapter, TtsAudio};
 #[cfg(target_os = "macos")]

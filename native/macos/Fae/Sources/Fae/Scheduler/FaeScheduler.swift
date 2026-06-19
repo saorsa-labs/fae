@@ -165,7 +165,25 @@ actor FaeScheduler {
     /// Wire the improvement store and create the cycle coordinator.
     func setImprovementStore(_ store: ImprovementStore) {
         improvementStore = store
-        improvementCycleCoordinator = ImprovementCycleCoordinator(store: store)
+        let coordinator = ImprovementCycleCoordinator(store: store)
+        improvementCycleCoordinator = coordinator
+        wireAdapterPatchCallback(on: coordinator)
+    }
+
+    /// Connect the cycle coordinator's adapter-deploy callback to the live
+    /// pipeline so a deploy/rollback actually swaps the model (P3/C3). Without
+    /// this the callback is a dead end (the coordinator's own comment: "nil until
+    /// FaeCore wires it in"). `applyAdapterChange` routes polymorphically: the
+    /// daemon LLM lane reloads the GGUF + sets scale; the MLX lane hot-swaps the
+    /// adapter directory.
+    private func wireAdapterPatchCallback(on coordinator: ImprovementCycleCoordinator) {
+        Task { [weak self] in
+            await coordinator.setAdapterPatchCallback { path in
+                Task { [weak self] in
+                    await self?.pipelineCoordinatorRef?.applyAdapterChange(path: path)
+                }
+            }
+        }
     }
 
     /// Set the proactive query handler (must be called before start for awareness tasks to work).
@@ -184,6 +202,16 @@ actor FaeScheduler {
 
     func setTrainingConfig(_ config: FaeConfig.TrainingConfig) {
         trainingConfig = config
+    }
+
+    /// Base model the llama.cpp daemon serves, set by FaeCore when the daemon LLM
+    /// lane is active (P3/C3). When non-nil, the improvement cycle trains a PEFT
+    /// adapter and converts it to a GGUF for the daemon (`engine.reload`) instead
+    /// of an mlx-tune `.safetensors` adapter. `nil` ⇒ legacy MLX training path.
+    private var daemonTrainingBaseModel: String?
+
+    func setDaemonTrainingBaseModel(_ baseModel: String?) {
+        daemonTrainingBaseModel = baseModel
     }
 
     func setVisionEnabled(_ enabled: Bool) {
@@ -1611,7 +1639,9 @@ actor FaeScheduler {
         }
         // Lazy-create coordinator if needed.
         if improvementCycleCoordinator == nil, let store = improvementStore {
-            improvementCycleCoordinator = ImprovementCycleCoordinator(store: store)
+            let coordinator = ImprovementCycleCoordinator(store: store)
+            improvementCycleCoordinator = coordinator
+            wireAdapterPatchCallback(on: coordinator)
         }
         guard let coordinator = improvementCycleCoordinator else {
             NSLog("FaeScheduler: improvement_cycle — coordinator not available")
@@ -1622,6 +1652,9 @@ actor FaeScheduler {
         do {
             bridge = try await TrainingBridge.createDefault()
             await coordinator.setTrainingBridge(bridge!)
+            // P3/C3: when the daemon LLM lane is active, the cycle must produce a
+            // GGUF the daemon can load (not an mlx-tune `.safetensors` adapter).
+            await coordinator.setDaemonTrainingBaseModel(daemonTrainingBaseModel)
         } catch {
             NSLog("FaeScheduler: improvement_cycle — training bridge unavailable (%@), cycle will skip training", error.localizedDescription)
         }

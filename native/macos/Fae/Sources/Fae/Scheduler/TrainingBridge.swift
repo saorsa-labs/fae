@@ -16,6 +16,11 @@ enum TrainingBridgeError: Error, LocalizedError, Sendable {
     case timeout(seconds: Int)
     /// Not enough data to run training (below minimum thresholds).
     case insufficientData(sftExamples: Int, dpoPairs: Int)
+    /// A training/conversion script reported `status: "error"` in its JSON output.
+    case scriptError(script: String, detail: String)
+    /// A GGUF conversion completed but produced no usable artifact on disk
+    /// (missing or empty file) — never hand an unverified path to the daemon.
+    case ggufNotProduced(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -31,8 +36,33 @@ enum TrainingBridgeError: Error, LocalizedError, Sendable {
             return "Training did not complete within \(seconds)s"
         case .insufficientData(let sft, let dpo):
             return "Insufficient training data: \(sft) SFT examples, \(dpo) DPO pairs"
+        case .scriptError(let script, let detail):
+            return "\(script) reported an error: \(detail.prefix(500))"
+        case .ggufNotProduced(let path):
+            return "GGUF conversion produced no artifact at: \(path)"
         }
     }
+}
+
+/// Result of converting a PEFT adapter to a GGUF the llama.cpp daemon can load.
+struct GGUFConversionResult: Sendable {
+    /// Absolute path to the produced `.gguf` file (verified to exist, non-empty).
+    let ggufPath: String
+    /// Size of the produced GGUF in bytes (always > 0).
+    let sizeBytes: Int
+}
+
+/// Result of the daemon-targeted nightly training path: a PEFT adapter trained
+/// with `train_peft.py`, then converted to a daemon-loadable GGUF.
+struct PeftTrainingResult: Sendable {
+    /// PEFT adapter directory (`adapter_model.safetensors` + `adapter_config.json`).
+    let adapterPath: String
+    /// Verified GGUF the daemon loads via `engine.reload`.
+    let ggufPath: String
+    /// Base model the adapter targets (e.g. `google/gemma-4-E4B-it`).
+    let baseModel: String
+    /// Final training loss reported by `train_peft.py`.
+    let finalLoss: Double
 }
 
 /// Result of exporting training data from fae.db.
@@ -465,6 +495,165 @@ actor TrainingBridge {
         }
 
         throw TrainingBridgeError.timeout(seconds: maxWaitSeconds)
+    }
+
+    // MARK: - Daemon-targeted PEFT path (P3/C3)
+
+    /// Default base model for the daemon-targeted PEFT path. The llama.cpp daemon
+    /// serves Gemma 4 E4B, so the personal adapter must train against the same
+    /// base or the GGUF tensor layout will not match at `engine.reload`.
+    static let defaultPeftBaseModel = "google/gemma-4-E4B-it"
+
+    /// Train a portable PEFT LoRA adapter, then convert it to a verified GGUF the
+    /// llama.cpp daemon can load — the nightly **daemon-targeted** training path.
+    ///
+    /// Unlike `launchTraining` (mlx-tune, detached, `.safetensors` only — kept for
+    /// the Apple-fast experimental lane), this runs `train_peft.py` synchronously
+    /// (it emits its result on stdout when done) and then `convert_to_gguf.py`.
+    /// The returned `ggufPath` is verified to exist and be non-empty, so the
+    /// caller may hand it straight to `DaemonLLMEngine.reloadAdapter`.
+    ///
+    /// - Parameters:
+    ///   - sftPath: Path to the SFT JSONL produced by `build_dataset.py`
+    ///     (`exportTrainingData().outputFiles`).
+    ///   - baseModel: HF repo id of the base the daemon serves. Defaults to
+    ///     `defaultPeftBaseModel`.
+    ///   - outputDir: Directory for the PEFT adapter. Defaults to a timestamped
+    ///     subdirectory of `models/personal/`.
+    ///   - preset: Training intensity (`smoke|light|standard|deep`).
+    ///   - maxExamples: Optional cap on training examples.
+    ///   - outtype: GGUF output type (`f16|bf16|q8_0|f32`). Defaults to `f16`.
+    ///   - trainTimeoutSeconds: Wall-clock budget for the (blocking) train step.
+    /// - Returns: The PEFT adapter dir + the verified GGUF path + final loss.
+    func trainPeftAndConvert(
+        sftPath: String,
+        baseModel: String? = nil,
+        outputDir: String? = nil,
+        preset: String = "light",
+        maxExamples: Int? = nil,
+        outtype: String = "f16",
+        trainTimeoutSeconds: Int = 7200
+    ) async throws -> PeftTrainingResult {
+        let base = baseModel ?? Self.defaultPeftBaseModel
+        let adapterDir = outputDir
+            ?? FaeDirectories.personalModelsDirectory
+                .appendingPathComponent("peft-\(Self.runStamp())")
+                .path
+
+        var trainParams: [String: Any] = [
+            "sft_path": sftPath,
+            "base_model": base,
+            "output_dir": adapterDir,
+            "preset": preset,
+        ]
+        if let maxExamples {
+            trainParams["max_examples"] = maxExamples
+        }
+
+        let trainResult = try await runScript(
+            scriptURL: orchestratorScript("train_peft.py"),
+            params: trainParams,
+            timeoutSeconds: trainTimeoutSeconds
+        )
+        try Self.assertScriptOK(trainResult, script: "train_peft.py")
+        guard let adapterPath = trainResult["adapter_path"] as? String, !adapterPath.isEmpty else {
+            throw TrainingBridgeError.parseError("Missing 'adapter_path' in train_peft.py result")
+        }
+        let finalLoss = (trainResult["final_loss"] as? Double)
+            ?? (trainResult["final_loss"] as? NSNumber)?.doubleValue
+            ?? 999.0
+
+        let outfile = URL(fileURLWithPath: adapterPath)
+            .appendingPathComponent("personal.gguf")
+            .path
+        let conversion = try await convertToGGUF(
+            adapterPath: adapterPath,
+            baseModel: base,
+            outfile: outfile,
+            outtype: outtype
+        )
+
+        return PeftTrainingResult(
+            adapterPath: adapterPath,
+            ggufPath: conversion.ggufPath,
+            baseModel: base,
+            finalLoss: finalLoss
+        )
+    }
+
+    /// Convert a PEFT adapter directory to a GGUF via `convert_to_gguf.py`.
+    ///
+    /// Verifies the produced file exists and is non-empty before returning — a
+    /// silent zero-byte GGUF would crash the daemon's llama-server sidecar at
+    /// `engine.reload` (see the Stage-4 daemon safety gate).
+    ///
+    /// - Parameters:
+    ///   - adapterPath: PEFT adapter directory (`adapter_model.safetensors` +
+    ///     `adapter_config.json`).
+    ///   - baseModel: Base model repo id (resolved offline from the HF cache).
+    ///   - outfile: Absolute path for the produced `.gguf`.
+    ///   - llamaCppDir: Optional llama.cpp checkout (else the script's
+    ///     `FAE_LLAMA_CPP_DIR` default).
+    ///   - outtype: GGUF output type (`f16|bf16|q8_0|f32`).
+    func convertToGGUF(
+        adapterPath: String,
+        baseModel: String,
+        outfile: String,
+        llamaCppDir: String? = nil,
+        outtype: String = "f16",
+        timeoutSeconds: Int = 900
+    ) async throws -> GGUFConversionResult {
+        var params: [String: Any] = [
+            "adapter_path": adapterPath,
+            "base_model": baseModel,
+            "outfile": outfile,
+            "outtype": outtype,
+        ]
+        if let llamaCppDir {
+            params["llama_cpp_dir"] = llamaCppDir
+        }
+
+        let result = try await runScript(
+            scriptURL: orchestratorScript("convert_to_gguf.py"),
+            params: params,
+            timeoutSeconds: timeoutSeconds
+        )
+        try Self.assertScriptOK(result, script: "convert_to_gguf.py")
+
+        let ggufPath = (result["gguf_path"] as? String) ?? outfile
+        // Verify on disk — the script's own error path is trusted, but a verified
+        // path is the contract: the daemon must never be handed a missing/empty GGUF.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: ggufPath)
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        guard FileManager.default.fileExists(atPath: ggufPath), size > 0 else {
+            throw TrainingBridgeError.ggufNotProduced(path: ggufPath)
+        }
+        let reportedSize = (result["size_bytes"] as? Int)
+            ?? (result["size_bytes"] as? NSNumber)?.intValue
+            ?? size
+
+        return GGUFConversionResult(ggufPath: ggufPath, sizeBytes: reportedSize)
+    }
+
+    /// Throw `scriptError` when a training/conversion script reports
+    /// `status: "error"`. A script that exits 0 but signals an error in its JSON
+    /// body must still fail loud — never propagate a bad artifact downstream.
+    private static func assertScriptOK(_ result: [String: Any], script: String) throws {
+        if let status = result["status"] as? String, status == "error" {
+            let detail = (result["error"] as? String)
+                ?? (result["stderr"] as? String)
+                ?? "unknown error"
+            throw TrainingBridgeError.scriptError(script: script, detail: detail)
+        }
+    }
+
+    /// Compact filesystem-safe timestamp for a per-run adapter directory.
+    private static func runStamp() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.string(from: Date())
     }
 
     // MARK: - Evaluation
