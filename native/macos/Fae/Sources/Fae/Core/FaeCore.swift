@@ -274,6 +274,13 @@ final class FaeCore: ObservableObject, HostCommandSender {
                             "FaeCore: daemon LLM lane ACTIVE — fae-daemon (llama.cpp) serving %@",
                             daemonModelId)
 
+                        // Publish live daemon endpoints so the native ACP
+                        // delegation lane (AgentDelegateTool → daemon `agent.run`,
+                        // gap A1) can open its own authenticated connection.
+                        if let endpoints = await daemonEngine.endpoints {
+                            await DaemonEndpointStore.shared.set(endpoints)
+                        }
+
                         // Daemon TTS lane: second socket connection to the
                         // same daemon (LLM turns serialize for minutes — TTS
                         // must not queue behind them on one connection).
@@ -298,6 +305,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         NSLog(
                             "FaeCore: ⚠️ daemon LLM engine FAILED to start — falling back to in-process MLX: %@",
                             error.localizedDescription)
+                        await DaemonEndpointStore.shared.set(nil)
                         await daemonEngine.shutdown()
                     }
                 } else if runtimeConfig.tts.useDaemonEngine {

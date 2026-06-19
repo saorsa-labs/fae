@@ -7,6 +7,7 @@ struct AgentDelegateTool: Tool {
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"delegate_agent","arguments":{"provider":"codex","mode":"read_write","workdir":"~/Projects/app","prompt":"Implement the failing parser fix and run the relevant tests."}}</tool_call>"#
+    private let runner: AgentRunner = DaemonAgentRunner()
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let providerRaw = input["provider"] as? String,
@@ -49,6 +50,40 @@ struct AgentDelegateTool: Tool {
             return .error("Working directory does not exist: \(workdir.path)")
         }
 
+        // Native ACP lane (gap A1): route delegation to the daemon's `agent.run`
+        // instead of the macOS-only `acpx`/subprocess path. The daemon spawns
+        // the agent as an ACP server, so it is the cross-platform route. We fall
+        // back to the legacy subprocess path when the daemon is unavailable, the
+        // owner forces it (`FAE_AGENT_SUBPROCESS`), or the request needs
+        // features the daemon lane does not yet honor (model / secret bindings).
+        if Self.shouldUseDaemon(model: model, secretBindings: secretBindings) {
+            let daemonPrompt = Self.buildPrompt(
+                prompt: prompt, mode: mode, appendSystemPrompt: appendSystemPrompt)
+            do {
+                let outcome = try await runner.run(
+                    agent: providerRaw.lowercased(),
+                    prompt: daemonPrompt,
+                    cwd: workdir.path
+                )
+                NSLog(
+                    "AgentDelegateTool: daemon agent.run served provider=%@ stop=%@ tool_calls=%d",
+                    providerRaw.lowercased(), outcome.stopReason, outcome.toolCalls.count)
+                let trimmed = outcome.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let final = trimmed.isEmpty ? "[delegate returned no text]" : trimmed
+                return .success(
+                    final.count > 20_000 ? String(final.prefix(20_000)) + "\n[truncated]" : final)
+            } catch DaemonAgentClientError.daemonUnavailable {
+                NSLog(
+                    "AgentDelegateTool: daemon unavailable — falling back to subprocess agent path")
+                // Fall through to the subprocess path below.
+            } catch {
+                NSLog(
+                    "AgentDelegateTool: ⚠️ daemon agent.run failed (%@) — falling back to subprocess",
+                    error.localizedDescription)
+                // Fall through to the subprocess path below.
+            }
+        }
+
         do {
             let output = try await ExternalAgentDelegate.run(
                 provider: provider,
@@ -65,6 +100,23 @@ struct AgentDelegateTool: Tool {
         } catch {
             return .error("Delegate execution failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Whether to prefer the daemon `agent.run` lane over the legacy subprocess
+    /// path. The daemon lane is the default; it is skipped when the owner forces
+    /// the legacy path (`FAE_AGENT_SUBPROCESS` set to a truthy value), or when
+    /// the request carries `model`/`secret_bindings`, which the daemon's
+    /// `agent.run` does not yet forward — those still need the subprocess route.
+    static func shouldUseDaemon(model: String?, secretBindings: [String: String]) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        if let force = env["FAE_AGENT_SUBPROCESS"]?.lowercased(),
+           ["1", "true", "yes", "on"].contains(force)
+        {
+            return false
+        }
+        if let model, !model.isEmpty { return false }
+        if !secretBindings.isEmpty { return false }
+        return true
     }
 
     private func parseStringMap(_ raw: Any?) -> [String: String]? {

@@ -5,6 +5,41 @@ P2/B5 on `llamacpp-serving-adapter`. Self-contained; **verify every claim agains
 output** — static-only review has missed a release-blocking bug on this project, and agents have
 fabricated reports. The reviewer re-runs your evidence.
 
+> ## ✅ A1 + A2 DONE — committed `4e1cbd20` on `acp-native` (reviewer-verified, 2026-06-18)
+> - **A1**: `AgentDelegateTool` → daemon `agent.run` via `DaemonAgentClient`; `AgentExecute` on
+>   SwiftFrontend scopes; legacy `acpx` kept behind a daemon-unavailable fallback.
+> - **A2**: `AcpSession` (persistent start/prompt/cancel/close) + `AgentSessionRegistry`; daemon
+>   `agent.session_*` commands republish agent output as `agent.output`/`agent.tool_call` on the
+>   **existing V2 `conversation.subscribe` bus** (one streaming mechanism, correlated by `turn_id`);
+>   `AgentSessionTool` migrated; `ACPSessionManager` deleted. Verified: fmt/clippy `-D warnings`/70 tests;
+>   live (codex) subscriber saw `agent.output{delta:"pong"}` on the V2 bus + full lifecycle.
+> - **A3a DONE** — committed `158e4ffd` (reviewer-verified). Server-initiated requests: `agent.prompt`
+>   spawns so the read loop keeps reading; `{server_request_id,method,params}` out, client
+>   `{server_request_id,result}` reply routed back (`ServerRequester`). `permission.request` →
+>   Fae governance approval card. fmt/clippy `-D warnings`/73 tests (incl. parse-disambiguation); transport
+>   spawn live-proven (codex/pi). **Live gap: no available agent ASKS** (codex/pi full-auto; claude/gemini
+>   unavailable) — permission round-trip verified by unit tests + spawn path, not a live asking-agent.
+> - **A3b + MOCK AGENT DONE** — committed `24492e8b` (reviewer-verified). The mock ACP asking-agent
+>   (`crates/fae-acp/src/bin/mock_acp_agent.rs` + `tests/mock_agent.rs`) LIVE-proves the round-trip
+>   (permission: PERMISSION_REQUESTS_SEEN:1; fs.write → temp file → approved → wrote) — closing the A3a
+>   live gap. fs/read+write route via the server-request mechanism; `fs.write` gated by
+>   `PathPolicy.validateWritePath`. Fixed a real ACP dispatch-loop deadlock (`cx.spawn`). 76 tests +
+>   3 Swift PathPolicy tests; clippy `-D warnings` clean.
+> - **fs.read SECURITY GATE DONE** — committed `d1884f7f` (reviewer-implemented; the team had read the
+>   "REQUIRED fix" as a coverage gap and left `fs.read` unrestricted). Added `PathPolicy.validateReadPath`
+>   (reuses `blockedDotfiles` + `protectedFaeRoots`/`protectedFaeFiles` so read/write blocklists can't
+>   drift): blocks the secret/identity set on the delegated read path (`~/.ssh`, `speakers.json`,
+>   `~/.fae-vault`, …) while ALLOWING general project/system reads. `readFile` gates through it. 3 tests
+>   pass (block `~/.ssh`/`speakers.json`, allow `~/Documents`).
+> - **A4 DONE** — committed `d1884f7f` (reviewer-verified). Conductor seam (`AgentRunner` protocol +
+>   `DaemonAgentRunner`, injected into the tools); error differentiation (`classify_agent_error` →
+>   auth/rate/network/… + Swift `friendlyAgentError`); dead `ACPProtocol.swift` + tests deleted. 77 crate
+>   tests + 19/19 AgentDelegateToolTests; clippy `-D warnings`/swift build clean.
+> - **✅ NATIVE ACP TRACK A1→A4 COMPLETE + gate-green.** Deferred/follow-ons (with the conductor):
+>   attachments, config-driven agent discovery, orb rendering of `agent.output` (separate orb lane),
+>   deterministic mid-turn cancel proof, and the bundled run-dev surface (real LLM `delegate_agent` +
+>   real authed agent card) — that last is the one path the mock/headless proofs can't exercise.
+
 ---
 
 ## Workflow — read first (per-STAGE hand-back)

@@ -17,7 +17,9 @@ use fae_engine::{
 use futures_util::StreamExt;
 use serde::Deserialize;
 
+use crate::agents::AgentSessionRegistry;
 use crate::events::{EventBus, PlaybackRegistry};
+use crate::server_request::ServerRequester;
 
 /// Daemon version surfaced by `host.version`.
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -40,6 +42,9 @@ pub struct SessionBackends<'a> {
     /// Live daemon-owned playbacks — resolves end-reason (`completed` vs
     /// `interrupted`) for `audio.playback_ended`.
     pub playbacks: &'a PlaybackRegistry,
+    /// Live native-ACP sessions (gap A2): `agent.session_start/prompt/cancel/
+    /// close` look sessions up here.
+    pub agents: &'a AgentSessionRegistry,
 }
 
 /// The `session.authenticate` payload.
@@ -330,6 +335,11 @@ async fn dispatch(
         "audio.stop" => audio_stop(backends, cmd).await,
         "agent.run" => agent_run(cmd).await,
         "agent.list" => agent_list(),
+        "agent.session_start" => agent_session_start(backends, cmd).await,
+        "agent.prompt" => agent_prompt(backends, cmd).await,
+        "agent.cancel" => agent_cancel(backends, cmd),
+        "agent.close" => agent_close(backends, cmd),
+        "agent.session_list" => agent_session_list(backends),
         "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
         "engine.reload" => reload_adapter(backends.engine, cmd).await,
         // Orb-host-owns-state: push an info set → publishes `info.update` to
@@ -423,10 +433,7 @@ async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
         .await
         .map_err(|error| {
             eprintln!("fae-daemon: agent.run failed: {error}");
-            match error {
-                fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
-                _ => "agent_error",
-            }
+            classify_agent_error(&error)
         })?;
 
     let tool_calls: Vec<serde_json::Value> = outcome
@@ -439,6 +446,389 @@ async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
         "stop_reason": outcome.stop_reason,
         "tool_calls": tool_calls,
     }))
+}
+
+/// Map a payload's `approval_policy` to the ACP client policy. Defaults to
+/// approving the agent's own tool calls (the owner approved the delegation at
+/// the Fae tool layer; per-call permission round-trips are gap A3).
+fn agent_approval_policy(cmd: &Command) -> fae_acp::ApprovalPolicy {
+    match cmd
+        .payload
+        .get("approval_policy")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("deny" | "deny_all") => fae_acp::ApprovalPolicy::DenyAll,
+        _ => fae_acp::ApprovalPolicy::ApproveAll,
+    }
+}
+
+/// Classify an ACP failure into a coarse wire code the UI maps to a friendly
+/// message (gap A4): auth / rate-limit / network problems are distinguished from
+/// a generic agent error so the user gets an actionable hint.
+fn classify_agent_error(error: &fae_acp::AcpError) -> &'static str {
+    match error {
+        fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
+        fae_acp::AcpError::Launch(_) => "agent_launch_failed",
+        fae_acp::AcpError::Protocol(message) => {
+            let lower = message.to_lowercase();
+            if lower.contains("rate limit")
+                || lower.contains("429")
+                || lower.contains("quota")
+                || lower.contains("overloaded")
+            {
+                "rate_limited"
+            } else if lower.contains("unauthorized")
+                || lower.contains("401")
+                || lower.contains("forbidden")
+                || lower.contains("403")
+                || lower.contains("log in")
+                || lower.contains("login")
+                || lower.contains("authenticate")
+                || lower.contains("api key")
+                || lower.contains("no longer supported")
+            {
+                "auth_error"
+            } else if lower.contains("network")
+                || lower.contains("connection")
+                || lower.contains("timed out")
+                || lower.contains("timeout")
+                || lower.contains("econnrefused")
+                || lower.contains("dns")
+                || lower.contains("offline")
+            {
+                "network_error"
+            } else {
+                "agent_error"
+            }
+        }
+    }
+}
+
+/// `agent.session_start` — spawn a persistent native-ACP session and return its
+/// daemon handle. Requires `AgentExecute`.
+async fn agent_session_start(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let agent = cmd
+        .payload
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let cwd = cmd
+        .payload
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("bad_request")?;
+    let policy = agent_approval_policy(cmd);
+
+    let session = fae_acp::AcpSession::start(agent, &cwd, policy)
+        .await
+        .map_err(|error| {
+            eprintln!("fae-daemon: agent.session_start failed: {error}");
+            classify_agent_error(&error)
+        })?;
+    let session_id = backends
+        .agents
+        .insert(session, agent.to_owned(), cwd.display().to_string());
+    Ok(serde_json::json!({ "session_id": session_id }))
+}
+
+/// `agent.prompt` (inline/diagnostic path, no `ServerRequester`) — permission
+/// requests fall back to approve-first since there is no UI to ask.
+async fn agent_prompt(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    agent_prompt_inner(backends.agents, backends.events, None, cmd).await
+}
+
+/// `agent.prompt` core — submit a prompt to a live session, republishing the
+/// agent's streamed output as `agent.output` / `agent.tool_call` events on the
+/// V2 bus (so the orb narrates live), driving mid-turn permission requests to
+/// the client over `requester` (gap A3), and returning the final turn. Requires
+/// `AgentExecute`.
+async fn agent_prompt_inner(
+    agents: &AgentSessionRegistry,
+    events: &EventBus,
+    requester: Option<ServerRequester>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let session_id = cmd
+        .payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let prompt = cmd
+        .payload
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let session = agents.get(session_id).ok_or("unknown_session")?;
+    let handle = session
+        .prompt(prompt.to_owned())
+        .map_err(|_| "session_closed")?;
+
+    // Drain the live update stream onto the V2 event bus. `turn_id` is this
+    // prompt's request id, so a subscriber can correlate events with the final
+    // `ok`. The stream closes when the turn completes (the session drops its
+    // sender), ending this task.
+    let events_drain = events.clone();
+    let turn_id = cmd.request_id.clone();
+    let session_label = session_id.to_owned();
+    let mut updates = handle.updates;
+    let updates_drain = tokio::spawn(async move {
+        while let Some(update) = updates.recv().await {
+            match update {
+                fae_acp::AcpUpdate::Text(delta) => events_drain.publish(
+                    "agent.output",
+                    Scope::AgentExecute,
+                    serde_json::json!({
+                        "session_id": session_label,
+                        "turn_id": turn_id,
+                        "delta": delta,
+                    }),
+                ),
+                fae_acp::AcpUpdate::ToolCall { id, title } => events_drain.publish(
+                    "agent.tool_call",
+                    Scope::AgentExecute,
+                    serde_json::json!({
+                        "session_id": session_label,
+                        "turn_id": turn_id,
+                        "id": id,
+                        "title": title,
+                    }),
+                ),
+            }
+        }
+    });
+
+    // Drain mid-turn server requests (gap A3). With a `ServerRequester` each
+    // permission request is driven to the client (→ Fae's approval card) and the
+    // decision flows back; without one (diagnostic path), approve the first
+    // option so the agent can proceed.
+    let mut requests = handle.requests;
+    let requests_drain = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            match request {
+                fae_acp::AcpServerRequest::Permission {
+                    title,
+                    options,
+                    reply,
+                } => {
+                    let decision = resolve_permission(&requester, &title, &options).await;
+                    let _ = reply.send(decision);
+                }
+                fae_acp::AcpServerRequest::ReadFile { path, reply } => {
+                    let result = resolve_fs(&requester, "fs.read", &path, None).await;
+                    let _ = reply.send(result.map(|value| {
+                        value
+                            .get("content")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    }));
+                }
+                fae_acp::AcpServerRequest::WriteFile {
+                    path,
+                    content,
+                    reply,
+                } => {
+                    let result = resolve_fs(&requester, "fs.write", &path, Some(content)).await;
+                    let _ = reply.send(result.map(|_| ()));
+                }
+            }
+        }
+    });
+
+    let outcome = handle
+        .reply
+        .await
+        .map_err(|_| "agent_error")?
+        .map_err(|error| {
+            eprintln!("fae-daemon: agent.prompt turn failed: {error}");
+            classify_agent_error(&error)
+        })?;
+    let _ = updates_drain.await;
+    let _ = requests_drain.await;
+
+    let tool_calls: Vec<serde_json::Value> = outcome
+        .tool_calls
+        .into_iter()
+        .map(|tc| serde_json::json!({ "id": tc.id, "title": tc.title }))
+        .collect();
+    Ok(serde_json::json!({
+        "text": outcome.text,
+        "stop_reason": outcome.stop_reason,
+        "tool_calls": tool_calls,
+    }))
+}
+
+/// Resolve one agent permission request: round-trip to the client via
+/// `requester` (gap A3) or, with no requester (diagnostic path), approve the
+/// first option. A disconnected/declined client cancels (fail-safe).
+async fn resolve_permission(
+    requester: &Option<ServerRequester>,
+    title: &str,
+    options: &[fae_acp::AcpPermissionOption],
+) -> fae_acp::AcpPermissionDecision {
+    let Some(requester) = requester else {
+        return options
+            .first()
+            .map(|opt| fae_acp::AcpPermissionDecision::Selected(opt.id.clone()))
+            .unwrap_or(fae_acp::AcpPermissionDecision::Cancelled);
+    };
+    let params = serde_json::json!({
+        "title": title,
+        "options": options
+            .iter()
+            .map(|opt| serde_json::json!({ "id": opt.id, "name": opt.name, "kind": opt.kind }))
+            .collect::<Vec<_>>(),
+    });
+    match requester.request("permission.request", params).await {
+        Ok(reply) => permission_decision_from_reply(&reply),
+        Err(_) => fae_acp::AcpPermissionDecision::Cancelled,
+    }
+}
+
+/// Drive one fs request (`fs.read` / `fs.write`) to the client (gap A3b), which
+/// mediates it through PathPolicy/DamageControl. Returns the reply payload on
+/// success, or an error string when refused / unmediated. A `{ "error": … }`
+/// reply (a blocked path) becomes `Err`.
+async fn resolve_fs(
+    requester: &Option<ServerRequester>,
+    method: &str,
+    path: &str,
+    content: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let Some(requester) = requester else {
+        return Err("filesystem mediation unavailable".to_owned());
+    };
+    let mut params = serde_json::json!({ "path": path });
+    if let Some(content) = content {
+        params["content"] = serde_json::Value::String(content);
+    }
+    match requester.request(method, params).await {
+        Ok(reply) => match reply.get("error").and_then(serde_json::Value::as_str) {
+            Some(error) => Err(error.to_owned()),
+            None => Ok(reply),
+        },
+        Err(_) => Err("filesystem request failed".to_owned()),
+    }
+}
+
+/// Map the client's `permission.request` reply payload to a decision:
+/// `{cancelled:true}` declines, `{option_id:"…"}` approves that option,
+/// anything else declines (fail-safe).
+fn permission_decision_from_reply(reply: &serde_json::Value) -> fae_acp::AcpPermissionDecision {
+    if reply.get("cancelled").and_then(serde_json::Value::as_bool) == Some(true) {
+        fae_acp::AcpPermissionDecision::Cancelled
+    } else if let Some(option_id) = reply.get("option_id").and_then(serde_json::Value::as_str) {
+        fae_acp::AcpPermissionDecision::Selected(option_id.to_owned())
+    } else {
+        fae_acp::AcpPermissionDecision::Cancelled
+    }
+}
+
+/// Authorize + audit + run an `agent.prompt` frame with a live `ServerRequester`
+/// (gap A3 transport spawn path). The transport runs this on a spawned task so
+/// the connection read loop keeps reading the client's server-request replies
+/// while the turn is in flight.
+pub async fn run_authorized_agent_prompt(
+    record: &ClientRecord,
+    cmd: &Command,
+    agents: &AgentSessionRegistry,
+    events: &EventBus,
+    requester: ServerRequester,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => {
+            match agent_prompt_inner(agents, events, Some(requester), cmd).await {
+                Ok(result) => Response::ok(&cmd.request_id, result),
+                Err(code) => {
+                    Response::error(&cmd.request_id, code, "command could not be completed")
+                }
+            }
+        }
+        AuthzDecision::ConfirmRequired => Response::error(
+            &cmd.request_id,
+            "confirm_required",
+            "owner confirmation required for this action",
+        ),
+        AuthzDecision::Deny(reason) => {
+            Response::error(&cmd.request_id, reason.code(), "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).
+/// Requires `AgentExecute`.
+fn agent_cancel(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let session_id = cmd
+        .payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    let session = backends.agents.get(session_id).ok_or("unknown_session")?;
+    session.cancel();
+    Ok(serde_json::json!({ "cancelled": true }))
+}
+
+/// `agent.close` — tear a session down and drop it from the registry. Requires
+/// `AgentExecute`.
+fn agent_close(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    let session_id = cmd
+        .payload
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("bad_request")?;
+    match backends.agents.remove(session_id) {
+        Some(session) => {
+            session.close();
+            Ok(serde_json::json!({ "closed": true }))
+        }
+        None => Err("unknown_session"),
+    }
+}
+
+/// `agent.session_list` — handles of all live native-ACP sessions. Read-only.
+fn agent_session_list(backends: &SessionBackends<'_>) -> Result<serde_json::Value, &'static str> {
+    let sessions: Vec<serde_json::Value> = backends
+        .agents
+        .list()
+        .into_iter()
+        .map(|info| {
+            serde_json::json!({
+                "session_id": info.id,
+                "agent": info.agent,
+                "cwd": info.cwd,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "sessions": sessions }))
 }
 
 async fn audio_devices(audio: &AudioManager) -> Result<serde_json::Value, &'static str> {
@@ -1126,6 +1516,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn agent_errors_classify_into_actionable_codes() {
+        use fae_acp::AcpError;
+        let auth = AcpError::Protocol("Error 401: please log in to continue".to_owned());
+        assert_eq!(super::classify_agent_error(&auth), "auth_error");
+        let rate = AcpError::Protocol("rate limit exceeded (429)".to_owned());
+        assert_eq!(super::classify_agent_error(&rate), "rate_limited");
+        let net = AcpError::Protocol("connection timed out".to_owned());
+        assert_eq!(super::classify_agent_error(&net), "network_error");
+        let generic = AcpError::Protocol("the model returned garbage".to_owned());
+        assert_eq!(super::classify_agent_error(&generic), "agent_error");
+        assert_eq!(
+            super::classify_agent_error(&AcpError::UnknownAgent("x".to_owned())),
+            "unknown_agent"
+        );
+        // Gemini's individual-client rejection is an auth/eligibility problem.
+        let gemini = AcpError::Protocol(
+            "This client is no longer supported for Gemini Code Assist".to_owned(),
+        );
+        assert_eq!(super::classify_agent_error(&gemini), "auth_error");
+    }
+
+    #[test]
+    fn permission_reply_maps_to_decision() {
+        use fae_acp::AcpPermissionDecision;
+        // Approve → Selected(option_id).
+        assert_eq!(
+            super::permission_decision_from_reply(
+                &serde_json::json!({ "option_id": "allow-once" })
+            ),
+            AcpPermissionDecision::Selected("allow-once".to_owned())
+        );
+        // Explicit cancel → Cancelled (even if an option_id is somehow present).
+        assert_eq!(
+            super::permission_decision_from_reply(
+                &serde_json::json!({ "cancelled": true, "option_id": "allow" })
+            ),
+            AcpPermissionDecision::Cancelled
+        );
+        // Empty / malformed reply → Cancelled (fail-safe).
+        assert_eq!(
+            super::permission_decision_from_reply(&serde_json::json!({})),
+            AcpPermissionDecision::Cancelled
+        );
+    }
+
     #[tokio::test]
     async fn agent_run_rejects_missing_fields() {
         // No agent, no prompt → bad_request before any subprocess is spawned.
@@ -1155,6 +1591,7 @@ mod tests {
         // unused instances (no subscriber ever receives these publishes).
         let events = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let backends = SessionBackends {
             engine,
             asr_fallback: None,
@@ -1162,6 +1599,7 @@ mod tests {
             audio,
             events: &events,
             playbacks: &playbacks,
+            agents: &agents,
         };
         super::handle_frame(registry, &backends, state, line, now_ms, event_id).await
     }
@@ -1912,6 +2350,7 @@ mod tests {
     async fn inject_text_publishes_generating_active_then_inactive_on_success() {
         let bus = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let (sink, captured) = CapturingSink::new();
         let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
         bus.subscribe(
@@ -1925,6 +2364,7 @@ mod tests {
             audio: &AudioManager::new(),
             events: &bus,
             playbacks: &playbacks,
+            agents: &agents,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -1958,6 +2398,7 @@ mod tests {
     async fn info_push_validates_and_publishes_items() {
         let bus = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let (sink, captured) = CapturingSink::new();
         let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
         // StatusRead scope — info.update is StatusRead (the orb host holds it).
@@ -1972,6 +2413,7 @@ mod tests {
             audio: &AudioManager::new(),
             events: &bus,
             playbacks: &playbacks,
+            agents: &agents,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2008,6 +2450,7 @@ mod tests {
     async fn info_push_rejects_items_missing_required_fields() {
         let bus = crate::events::EventBus::new();
         let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
         let backends = SessionBackends {
             engine: &mock(),
             asr_fallback: None,
@@ -2015,6 +2458,7 @@ mod tests {
             audio: &AudioManager::new(),
             events: &bus,
             playbacks: &playbacks,
+            agents: &agents,
         };
         // kind missing → bad_request, nothing published.
         let cmd = fae_control_plane::Command {

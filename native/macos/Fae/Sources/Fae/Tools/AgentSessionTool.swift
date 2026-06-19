@@ -1,9 +1,14 @@
 import Foundation
 
+/// Manage persistent native-ACP sessions with external coding agents via the
+/// daemon (`agent.session_start / prompt / cancel / close / session_list`,
+/// gap A2). The daemon keeps each agent's ACP server alive across prompts and
+/// republishes streamed output as `agent.output` / `agent.tool_call` events for
+/// the orb. This replaces the macOS-only `ACPSessionManager` (acpx subprocess).
 struct AgentSessionTool: Tool {
     let name = "agent_session"
     let description = "Manage persistent sessions with external AI coding agents (Claude Code, Codex, Pi, Gemini, etc.) via ACP. Actions: start (high risk), prompt (medium risk), status/cancel/close/list (low risk)."
-    let parametersSchema = #"{"action":"string (required: start|prompt|status|cancel|close|list)","agent":"string (required for start — claude|codex|pi|gemini|copilot|aider or custom command)","prompt":"string (required for start and prompt — task description or follow-up)","session_id":"string (required for prompt|status|cancel|close)","cwd":"string (optional — working directory, defaults to current)","approval_policy":"string (optional — approve_all|approve_reads|deny_all, default approve_reads)","name":"string (optional — session name for identification)"}"#
+    let parametersSchema = #"{"action":"string (required: start|prompt|status|cancel|close|list)","agent":"string (required for start — claude|codex|pi|gemini|copilot)","prompt":"string (required for start and prompt — task description or follow-up)","session_id":"string (required for prompt|status|cancel|close)","cwd":"string (optional — working directory, defaults to current)","approval_policy":"string (optional — approve_all|deny_all, default approve_all)","name":"string (optional — session name for identification)"}"#
 
     /// Tool protocol metadata is static, but this tool is conceptually dynamic:
     /// - start requires approval (spawns external process)
@@ -11,10 +16,10 @@ struct AgentSessionTool: Tool {
     /// - status/cancel/close/list are low risk
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
-    let example = #"<tool_call>{"name":"agent_session","arguments":{"action":"start","agent":"claude","prompt":"Investigate failing unit tests and propose a fix.","cwd":"~/Projects/app","approval_policy":"approve_reads","name":"test-fix"}}</tool_call>"#
+    let example = #"<tool_call>{"name":"agent_session","arguments":{"action":"start","agent":"claude","prompt":"Investigate failing unit tests and propose a fix.","cwd":"~/Projects/app","approval_policy":"approve_all","name":"test-fix"}}</tool_call>"#
 
-    private static let sessionManager = ACPSessionManager()
     private static let maxOutputLength = 20_000
+    private let runner: AgentRunner = DaemonAgentRunner()
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let rawAction = input["action"] as? String else {
@@ -46,17 +51,11 @@ struct AgentSessionTool: Tool {
             return .error("Missing required parameter for start: agent")
         }
 
-        // Validate agent identifier - must be alphanumeric/hyphens/underscores or a simple path.
-        // Built-ins must match an acpx subcommand (acpx --help lists: pi, openclaw, codex,
-        // claude, gemini, cursor, copilot, droid, iflow, kilocode, kimi).
-        let allowedBuiltins: Set<String> = ["claude", "codex", "pi", "gemini", "copilot", "aider"]
-        let isBuiltin = allowedBuiltins.contains(agent.lowercased())
-        let isValidCustom = agent.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "/" || $0 == "." }
-        guard isBuiltin || isValidCustom else {
-            return .error("Invalid agent identifier. Use a built-in name (claude, codex, pi, gemini, copilot, aider) or a simple command path.")
-        }
-        if !isBuiltin && (agent.contains("..") || agent.contains(";") || agent.contains("|") || agent.contains("&") || agent.contains("$") || agent.contains("`")) {
-            return .error("Agent identifier contains disallowed characters.")
+        // Validate the agent identifier. Built-ins are the agents the daemon's
+        // native ACP client knows how to launch.
+        let allowedBuiltins: Set<String> = ["claude", "codex", "pi", "gemini", "copilot", "opencode"]
+        guard allowedBuiltins.contains(agent.lowercased()) else {
+            return .error("Invalid agent. Use claude, codex, pi, gemini, copilot, or opencode.")
         }
 
         guard let prompt = nonEmptyString(input["prompt"]) else {
@@ -74,37 +73,25 @@ struct AgentSessionTool: Tool {
         guard FileManager.default.fileExists(atPath: cwd.path) else {
             return .error("Working directory does not exist: \(cwd.path)")
         }
-
-        let approvalPolicy: ACPSessionManager.ApprovalPolicy
-        do {
-            approvalPolicy = try parseApprovalPolicy(input["approval_policy"])
-        } catch {
-            return .error(error.localizedDescription)
-        }
-
-        let name = nonEmptyString(input["name"])
+        let approvalPolicy = daemonApprovalPolicy(input["approval_policy"])
 
         do {
-            let sessionId = try await Self.sessionManager.startSession(
-                agent: agent,
-                cwd: cwd.path,
-                name: name,
-                approvalPolicy: approvalPolicy
-            )
-
+            let sessionId = try await runner.sessionStart(
+                agent: agent.lowercased(), cwd: cwd.path, approvalPolicy: approvalPolicy)
             do {
-                let response = try await Self.sessionManager.prompt(sessionId: sessionId, text: prompt)
+                let outcome = try await runner.sessionPrompt(
+                    sessionId: sessionId, prompt: prompt)
                 let output = """
                     Started session \(sessionId)
                     Agent: \(agent)
                     CWD: \(cwd.path)
-                    Stop reason: \(response.stopReason)
+                    Stop reason: \(outcome.stopReason)
 
-                    \(formatResponse(response))
+                    \(formatOutcome(outcome))
                     """
                 return .success(truncate(output))
             } catch {
-                await Self.sessionManager.close(sessionId: sessionId)
+                try? await runner.sessionClose(sessionId: sessionId)
                 return .error("Session started but initial prompt failed: \(error.localizedDescription)")
             }
         } catch {
@@ -128,12 +115,13 @@ struct AgentSessionTool: Tool {
         }
 
         do {
-            let response = try await Self.sessionManager.prompt(sessionId: sessionId, text: prompt)
+            let outcome = try await runner.sessionPrompt(
+                sessionId: sessionId, prompt: prompt)
             let output = """
                 Session: \(sessionId)
-                Stop reason: \(response.stopReason)
+                Stop reason: \(outcome.stopReason)
 
-                \(formatResponse(response))
+                \(formatOutcome(outcome))
                 """
             return .success(truncate(output))
         } catch {
@@ -145,47 +133,55 @@ struct AgentSessionTool: Tool {
         guard let sessionId = nonEmptyString(input["session_id"]) else {
             return .error("Missing required parameter for status: session_id")
         }
-
-        let status = await Self.sessionManager.status(sessionId: sessionId)
-        let output = "Session \(sessionId): \(formatStatus(status))"
-        return .success(output)
+        do {
+            let sessions = try await runner.sessionList()
+            if let session = sessions.first(where: { $0.sessionId == sessionId }) {
+                return .success("Session \(sessionId): active | agent=\(session.agent) | cwd=\(session.cwd)")
+            }
+            return .success("Session \(sessionId): not found (closed or never started).")
+        } catch {
+            return .error("Could not read session status: \(error.localizedDescription)")
+        }
     }
 
     private func handleCancel(input: [String: Any]) async -> ToolResult {
         guard let sessionId = nonEmptyString(input["session_id"]) else {
             return .error("Missing required parameter for cancel: session_id")
         }
-
-        await Self.sessionManager.cancel(sessionId: sessionId)
-        return .success("Cancellation requested for session \(sessionId).")
+        do {
+            try await runner.sessionCancel(sessionId: sessionId)
+            return .success("Cancellation requested for session \(sessionId).")
+        } catch {
+            return .error("Cancel failed for session \(sessionId): \(error.localizedDescription)")
+        }
     }
 
     private func handleClose(input: [String: Any]) async -> ToolResult {
         guard let sessionId = nonEmptyString(input["session_id"]) else {
             return .error("Missing required parameter for close: session_id")
         }
-
-        await Self.sessionManager.close(sessionId: sessionId)
-        return .success("Closed session \(sessionId).")
+        do {
+            try await runner.sessionClose(sessionId: sessionId)
+            return .success("Closed session \(sessionId).")
+        } catch {
+            return .error("Close failed for session \(sessionId): \(error.localizedDescription)")
+        }
     }
 
     private func handleList() async -> ToolResult {
-        let sessions = await Self.sessionManager.activeSessions()
-        guard !sessions.isEmpty else {
-            return .success("No active ACP sessions.")
-        }
-
-        let lines = sessions.map { session in
-            let label: String
-            if let sessionName = session.name, !sessionName.isEmpty {
-                label = "\(sessionName) [\(session.id)]"
-            } else {
-                label = session.id
+        do {
+            let sessions = try await runner.sessionList()
+            guard !sessions.isEmpty else {
+                return .success("No active ACP sessions.")
             }
-            return "- \(label) | agent=\(session.agent) | cwd=\(session.cwd) | status=\(formatStatus(session.status)) | turns=\(session.turnCount)"
+            let lines = sessions.map { session in
+                "- \(session.sessionId) | agent=\(session.agent) | cwd=\(session.cwd)"
+            }
+            let output = "Active ACP sessions (\(sessions.count)):\n" + lines.joined(separator: "\n")
+            return .success(truncate(output))
+        } catch {
+            return .error("Could not list sessions: \(error.localizedDescription)")
         }
-        let output = "Active ACP sessions (\(sessions.count)):\n" + lines.joined(separator: "\n")
-        return .success(truncate(output))
     }
 
     private func nonEmptyString(_ raw: Any?) -> String? {
@@ -205,71 +201,24 @@ struct AgentSessionTool: Tool {
             .resolvingSymlinksInPath()
     }
 
-    private func parseApprovalPolicy(_ raw: Any?) throws -> ACPSessionManager.ApprovalPolicy {
-        let value = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "approve_reads"
-
-        switch value {
-        case "approve_reads":
-            return .approveReads
-        case "approve_all":
-            return .approveAll
-        case "deny_all":
-            return .denyAll
-        default:
-            throw NSError(
-                domain: "AgentSessionTool",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid approval_policy: \(value). Use approve_reads, approve_all, or deny_all."]
-            )
-        }
+    /// Map the tool's approval policy to the daemon's `approval_policy` value.
+    /// The daemon distinguishes only deny-all from approve-all today; the finer
+    /// `approve_reads` collapses to approve-all until per-call permission
+    /// round-trips land (gap A3).
+    private func daemonApprovalPolicy(_ raw: Any?) -> String {
+        let value = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value == "deny_all" ? "deny_all" : "approve_all"
     }
 
-    private func formatResponse(_ response: ACPSessionManager.ACPResponse) -> String {
-        let trimmedText = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func formatOutcome(_ outcome: DaemonAgentClient.Outcome) -> String {
+        let trimmedText = outcome.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let textSection = trimmedText.isEmpty ? "[agent returned no text]" : trimmedText
 
-        guard !response.toolCalls.isEmpty else {
+        guard !outcome.toolCalls.isEmpty else {
             return textSection
         }
-
-        let toolLines = response.toolCalls.map { call in
-            var line = "- \(call.toolName) (id: \(call.toolCallId), complete: \(call.isComplete))"
-            let output = call.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !output.isEmpty {
-                line += "\n  output: \(singleLine(output, max: 280))"
-            }
-            return line
-        }
-
+        let toolLines = outcome.toolCalls.map { "- \($0.title) (id: \($0.id))" }
         return textSection + "\n\nTool calls:\n" + toolLines.joined(separator: "\n")
-    }
-
-    private func formatStatus(_ status: ACPSessionManager.SessionStatus) -> String {
-        switch status {
-        case .idle:
-            return "idle"
-        case .prompting:
-            return "prompting"
-        case .streaming(let tokensReceived):
-            return "streaming (tokens_received=\(tokensReceived))"
-        case .awaitingApproval(let toolName, let description):
-            return "awaiting approval for \(toolName): \(singleLine(description, max: 180))"
-        case .completed(let stopReason):
-            return "completed (stop_reason=\(stopReason))"
-        case .failed(let error):
-            return "failed: \(singleLine(error, max: 180))"
-        case .closed:
-            return "closed"
-        }
-    }
-
-    private func singleLine(_ text: String, max: Int) -> String {
-        let oneLine = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if oneLine.count <= max { return oneLine }
-        return String(oneLine.prefix(max)) + "…"
     }
 
     private func truncate(_ text: String) -> String {

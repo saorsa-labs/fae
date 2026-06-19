@@ -81,6 +81,35 @@ final class PathPolicyTests: XCTestCase {
         }
     }
 
+    // MARK: - Delegated read mediation (ACP fs.read, gap A3b)
+
+    func testReadBlocksSSHCredentials() {
+        // An autonomous ACP agent must NOT read credentials through Fae.
+        if case .blocked(let reason) = PathPolicy.validateReadPath("~/.ssh/id_rsa") {
+            XCTAssertTrue(reason.contains("protected"), "Reason: \(reason)")
+        } else {
+            XCTFail("Expected ~/.ssh/id_rsa to be read-blocked for a delegate")
+        }
+    }
+
+    func testReadBlocksFaeSpeakerIdentity() {
+        let home = NSHomeDirectory()
+        let path = "\(home)/Library/Application Support/fae/speakers.json"
+        if case .blocked(let reason) = PathPolicy.validateReadPath(path) {
+            XCTAssertTrue(reason.contains("Fae-protected"), "Reason: \(reason)")
+        } else {
+            XCTFail("Expected speakers.json to be read-blocked for a delegate")
+        }
+    }
+
+    func testReadAllowsGeneralProjectFile() {
+        // A delegate legitimately reads code/docs — general reads stay allowed.
+        if case .allowed = PathPolicy.validateReadPath("~/Documents/notes.txt") {
+        } else {
+            XCTFail("Expected a general file to be read-allowed")
+        }
+    }
+
     func testBlocksProfile() {
         let result = PathPolicy.validateWritePath("~/.profile")
         if case .blocked(let reason) = result {

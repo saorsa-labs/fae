@@ -16,8 +16,10 @@ use fae_engine::{ProviderAdapter, TtsAdapter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::agents::AgentSessionRegistry;
 use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
-use crate::session::{handle_frame, SessionBackends, SessionState};
+use crate::server_request::{ServerReply, ServerRequester};
+use crate::session::{handle_frame, run_authorized_agent_prompt, SessionBackends, SessionState};
 use crate::{next_event_id, now_ms};
 
 /// Reject any single NDJSON frame larger than this **before authentication**.
@@ -47,6 +49,7 @@ pub async fn serve_unix(
     audit_path: PathBuf,
     events: EventBus,
     playbacks: PlaybackRegistry,
+    agents: AgentSessionRegistry,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -72,6 +75,7 @@ pub async fn serve_unix(
         let audit_path = audit_path.clone();
         let events = events.clone();
         let playbacks = playbacks.clone();
+        let agents = agents.clone();
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -83,6 +87,7 @@ pub async fn serve_unix(
                 &audit_path,
                 &events,
                 &playbacks,
+                &agents,
             )
             .await
             {
@@ -104,6 +109,7 @@ async fn handle_connection(
     audit_path: &Path,
     events: &EventBus,
     playbacks: &PlaybackRegistry,
+    agents: &AgentSessionRegistry,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -111,6 +117,10 @@ async fn handle_connection(
     // through one writer task, so an async event push can never interleave
     // mid-frame with a response.
     let (sink, writer) = ConnSink::spawn(write_half);
+    // Per-connection issuer of server-initiated requests (gap A3). The long
+    // `agent.prompt` runs on a spawned task so this read loop keeps reading the
+    // client's `{server_request_id, result}` replies, which `resolve` routes.
+    let requester = ServerRequester::new(Arc::clone(&sink));
     let mut state = SessionState::Unauthenticated;
     let mut line = String::new();
 
@@ -138,6 +148,53 @@ async fn handle_connection(
 
             let now = now_ms();
             let event_id = next_event_id(now);
+
+            // A3: a `{server_request_id, result}` frame is the client's reply to
+            // a server-initiated request, not a command — route it and move on.
+            if let Ok(reply) = serde_json::from_str::<ServerReply>(trimmed) {
+                requester.resolve(&reply.server_request_id, reply.result);
+                continue;
+            }
+
+            // A3: `agent.prompt` can issue mid-turn server-requests (permission/
+            // fs) whose replies arrive on THIS connection, so it must not block
+            // the read loop — run it on a spawned task that audits + responds via
+            // the sink. Every other command stays on the inline path below.
+            if let SessionState::Authenticated(record) = &state {
+                if let Ok(cmd) = serde_json::from_str::<Command>(trimmed) {
+                    if cmd.command == "agent.prompt" {
+                        let record = record.clone();
+                        let agents = agents.clone();
+                        let events = events.clone();
+                        let requester = requester.clone();
+                        let audit_path = audit_path.to_path_buf();
+                        let sink = Arc::clone(&sink);
+                        tokio::spawn(async move {
+                            let outcome = run_authorized_agent_prompt(
+                                &record, &cmd, &agents, &events, requester, now, event_id,
+                            )
+                            .await;
+                            // Same fail-closed contract: audit before responding.
+                            if append_audit_jsonl(&audit_path, &outcome.audit).is_err() {
+                                let response = Response::error(
+                                    &outcome.response.request_id,
+                                    "audit_error",
+                                    "audit write failed",
+                                );
+                                if let Ok(line) = response_line(&response) {
+                                    sink.send_line(line);
+                                }
+                                return;
+                            }
+                            if let Ok(line) = response_line(&outcome.response) {
+                                sink.send_line(line);
+                            }
+                        });
+                        continue;
+                    }
+                }
+            }
+
             let backends = SessionBackends {
                 engine,
                 asr_fallback,
@@ -145,6 +202,7 @@ async fn handle_connection(
                 audio,
                 events,
                 playbacks,
+                agents,
             };
             let outcome =
                 handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;

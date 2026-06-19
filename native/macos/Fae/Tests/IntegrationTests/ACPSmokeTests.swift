@@ -54,56 +54,59 @@ final class ACPSmokeTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Drives ACPSessionManager through the same lifecycle Fae's AgentSessionTool uses:
-    /// startSession → prompt → close. Asserts a non-empty response containing the
-    /// expected substring and a non-error stop reason.
+    /// Drives the daemon's native ACP session lifecycle (gap A2) — the same path
+    /// Fae's AgentSessionTool uses: `agent.session_start → agent.prompt →
+    /// agent.close`. Requires a running daemon (endpoints resolved from the
+    /// default run dir). Asserts a non-empty response containing the expected
+    /// substring and a non-error stop reason.
     private func runSmoke(
         agent: String,
         prompt: String = "Reply with the single word 'pong' and nothing else.",
         expectInResponse: String,
         timeout: TimeInterval = 90
     ) async throws {
-        let manager = ACPSessionManager()
+        // Publish the live daemon endpoints so DaemonAgentClient can connect
+        // (mirrors what FaeCore does at runtime).
+        let runDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/fae/run", isDirectory: true)
+        await DaemonEndpointStore.shared.set((
+            socketPath: runDir.appendingPathComponent("fae-daemon.sock").path,
+            tokenPath: runDir.appendingPathComponent("bootstrap.token").path))
+
         // Run from /tmp so agents that scan their cwd (e.g. pi) don't go off
         // exploring the Fae project tree and pad the response with markdown.
-        let cwd = "/tmp"
-
         let sessionId: String
         do {
-            sessionId = try await manager.startSession(
-                agent: agent,
-                cwd: cwd,
-                name: "smoke-\(agent)",
-                approvalPolicy: .approveReads
-            )
+            sessionId = try await DaemonAgentClient.sessionStart(
+                agent: agent, cwd: "/tmp", approvalPolicy: "approve_all")
         } catch {
-            XCTFail("startSession(\(agent)) threw: \(error)")
+            XCTFail("sessionStart(\(agent)) threw: \(error)")
             return
         }
-        addTeardownBlock { await manager.close(sessionId: sessionId) }
+        addTeardownBlock { try? await DaemonAgentClient.sessionClose(sessionId: sessionId) }
 
-        let response: ACPSessionManager.ACPResponse
+        let outcome: DaemonAgentClient.Outcome
         do {
-            response = try await withTimeout(seconds: timeout) {
-                try await manager.prompt(sessionId: sessionId, text: prompt)
+            outcome = try await withTimeout(seconds: timeout) {
+                try await DaemonAgentClient.sessionPrompt(sessionId: sessionId, prompt: prompt)
             }
         } catch {
             XCTFail("prompt(\(agent)) threw: \(error)")
             return
         }
 
-        XCTAssertFalse(response.text.isEmpty, "\(agent) returned empty text")
+        XCTAssertFalse(outcome.text.isEmpty, "\(agent) returned empty text")
         XCTAssertTrue(
-            response.text.lowercased().contains(expectInResponse.lowercased()),
-            "\(agent) response missing expected substring '\(expectInResponse)'. Got: \(response.text.prefix(200))"
+            outcome.text.lowercased().contains(expectInResponse.lowercased()),
+            "\(agent) response missing expected substring '\(expectInResponse)'. Got: \(outcome.text.prefix(200))"
         )
         XCTAssertNotEqual(
-            response.stopReason.lowercased(),
+            outcome.stopReason.lowercased(),
             "error",
-            "\(agent) stop_reason=error: \(response.text.prefix(200))"
+            "\(agent) stop_reason=error: \(outcome.text.prefix(200))"
         )
 
-        print("  [\(agent)] stopReason=\(response.stopReason) bytes=\(response.text.count) excerpt=\"\(response.text.prefix(80))\"")
+        print("  [\(agent)] stopReason=\(outcome.stopReason) bytes=\(outcome.text.count) excerpt=\"\(outcome.text.prefix(80))\"")
     }
 
     /// One-shot delegation via AgentDelegateTool. Bypasses acpx — directly invokes

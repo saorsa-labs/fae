@@ -33,8 +33,10 @@ use fae_engine::{
     TtsAdapter,
 };
 
+mod agents;
 mod diagnostic;
 mod events;
+mod server_request;
 mod session;
 mod transport;
 
@@ -109,6 +111,9 @@ async fn main() -> DaemonResult<()> {
     // Live daemon-owned playback bookkeeping (voice spine V3a): resolves
     // end-reason (`completed` vs `interrupted`) for `audio.playback_ended`.
     let playbacks = events::PlaybackRegistry::new();
+    // Live native-ACP sessions (gap A2): persistent agent sessions outlive the
+    // connection that created them, so the registry is process-global.
+    let agents = agents::AgentSessionRegistry::new();
     println!("audit   : {} (jsonl)", audit_path.display());
     println!(
         "client  : authenticate with {{\"command\":\"session.authenticate\",\"payload\":{{\"client_id\":\"{}\",\"token\":<file>}}}}",
@@ -126,6 +131,7 @@ async fn main() -> DaemonResult<()> {
             audit_path: audit_path.clone(),
             events: events.clone(),
             playbacks: playbacks.clone(),
+            agents: agents.clone(),
             port,
         });
         println!("diag    : TCP loopback diagnostic enabled on port {port} (opt-in)");
@@ -148,6 +154,7 @@ async fn main() -> DaemonResult<()> {
         audit_path,
         events,
         playbacks,
+        agents,
     )
     .await?;
     Ok(())

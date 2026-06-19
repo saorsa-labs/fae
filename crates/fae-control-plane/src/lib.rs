@@ -252,6 +252,13 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
         "agent.list" => &[Scope::StatusRead],
+        // Persistent native-ACP sessions (gap A2). Lifecycle commands run the
+        // agent autonomously; only listing is read-only.
+        "agent.session_start" => &[Scope::AgentExecute],
+        "agent.prompt" => &[Scope::AgentExecute],
+        "agent.cancel" => &[Scope::AgentExecute],
+        "agent.close" => &[Scope::AgentExecute],
+        "agent.session_list" => &[Scope::StatusRead],
         // Runtime personal-LoRA scale toggle (gap B3b): base ↔ personalized.
         "engine.set_adapter_scale" => &[Scope::ModelManagement],
         // Deploy: restart the serving sidecar with a freshly-trained adapter.
@@ -293,6 +300,11 @@ impl ClientClass {
                     Scope::AudioPlayback,
                     // Owner app may toggle the personal-LoRA scale (gap B3b).
                     Scope::ModelManagement,
+                    // Owner app delegates turns to external coding agents via the
+                    // native ACP client (`agent.run`). The owner approves each
+                    // delegation at the Fae tool layer before it reaches here
+                    // (gap A1).
+                    Scope::AgentExecute,
                 ]
             }
             ClientClass::CliDiagnostic | ClientClass::BrowserDiagnostic => vec![Scope::StatusRead],
@@ -1166,5 +1178,19 @@ mod tests {
         assert!(frontend.contains(&Scope::ConversationWrite));
         assert!(!frontend.contains(&Scope::ToolExecuteDangerous));
         assert!(!frontend.contains(&Scope::MemoryWrite));
+    }
+
+    #[test]
+    fn swift_frontend_can_delegate_to_agents() {
+        // Gap A1: the owner app routes `delegate_agent` to the daemon's
+        // `agent.run`, which requires `AgentExecute`. The owner approves each
+        // delegation at the Fae tool layer, so granting it to the frontend
+        // class (the only client of that class is the owner's Mac) is correct.
+        let frontend = ClientClass::SwiftFrontend.default_scopes();
+        assert!(frontend.contains(&Scope::AgentExecute));
+        assert_eq!(
+            required_scopes("agent.run"),
+            Some(&[Scope::AgentExecute][..])
+        );
     }
 }

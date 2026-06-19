@@ -71,6 +71,46 @@ enum PathPolicy {
         return .allowed(canonicalPath: resolved)
     }
 
+    /// Validate a path an autonomous agent asked Fae to READ (ACP
+    /// `fs/read_text_file`, gap A3b). Owner-initiated Fae reads stay unrestricted;
+    /// this is ONLY for the delegated agent path — a delegate is not the owner.
+    /// It does NOT block general project/system files (an agent legitimately
+    /// reads code) but DOES block the secret/identity set so a delegate cannot
+    /// exfiltrate credentials or Fae's identity through Fae's fs mediation:
+    /// `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.secrets`, `~/.fae-vault`,
+    /// etc. (`blockedDotfiles`) and the protected Fae data files (`speakers.json`,
+    /// `fae.db`, `soul.md`, …). Reuses the write blocklists so the two can't drift.
+    static func validateReadPath(_ path: String) -> PathValidation {
+        let expanded = NSString(string: path).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded).standardized
+        let resolved = url.resolvingSymlinksInPath().path
+        let lowered = resolved.lowercased()
+
+        let home = NSHomeDirectory()
+        let homeLower = home.lowercased()
+        if lowered.hasPrefix(homeLower) {
+            let relative = String(resolved.dropFirst(home.count))
+            let relativeLower = relative.lowercased()
+            for dotfile in blockedDotfiles {
+                if relativeLower == dotfile || relativeLower.hasPrefix(dotfile + "/") {
+                    return .blocked(reason: "Cannot read protected file: ~\(dotfile)")
+                }
+            }
+        }
+
+        for faeRoot in Self.protectedFaeRoots {
+            if lowered.hasPrefix(faeRoot) {
+                let filename = URL(fileURLWithPath: resolved).lastPathComponent.lowercased()
+                if Self.protectedFaeFiles.contains(filename) {
+                    return .blocked(
+                        reason: "Cannot read \(filename) (Fae-protected identity/data file).")
+                }
+            }
+        }
+
+        return .allowed(canonicalPath: resolved)
+    }
+
     // MARK: - Fae Data Protection
 
     /// Both production and dev data roots — protects files in either regardless of current mode.
