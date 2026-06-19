@@ -8,7 +8,7 @@ name: CI (Linux)
 on:
   workflow_dispatch:
   push:
-    branches: [main, p4-packaging]
+    branches: [main]
     paths:
       - "crates/**"
       - "native/rust/fae-ui-shell/**"

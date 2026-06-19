@@ -90,11 +90,24 @@ fmt/clippy -D warnings, nextest 85/85, swift build clean. **Reviewer-verified** 
 re-run gate + the daemon's own audit log. **Deferred:** bundled-app `run-dev` live proof (the
 release-validation/human-in-loop gate); the mandatory FaeBenchmark hard-gate is formalized in P9/C4.
 
-### P4 — B2: cross-platform packaging + CI  (depends on P1)
+### P4 — B2: cross-platform packaging + CI  ✅ LINUX DONE (2026-06-19)
 **Objective:** ship/resolve the `llama-server` binary per platform (bundled+signed macOS done; Linux/
-Windows discovered or installed) + the pinned GGUF/mmproj/drafter under `models.lock` (fail-closed) in
-`release.yml` for every target. Extend the B1 SHA-pinning + signed-CDHash gate into CI.
-**Done:** a release build on each target produces a runnable, integrity-gated llama.cpp runtime; CI green.
+Windows discovered or installed) + the pinned runtime under `models.lock` (fail-closed). Extend the B1
+SHA-pinning gate into CI.
+**Scope (owner):** Linux x86_64 + linux-aarch64, **full native installers** (`.deb` + AppImage,
+GPG-signed). Windows + macOS-x86_64 deferred.
+**Done ✅:** multi-platform `llamacpp-runtime.lock.json` (schema v2, per-platform SHA-pinned, reviewer-
+verified vs real ggml-org b9692 assets); platform-aware install + `bundled_llama_server_path()`
+resolution; `models.lock` Linux binary artifacts (fail-closed); `build-linux-package.py` → `.deb` +
+AppImage + GPG sign/verify (existing `GPG_PRIVATE_KEY`/`GPG_PASSPHRASE` secrets); `ci-linux.yml` /
+`release-linux.yml` build + integrity-gate both arches on **native runners** (ubuntu-latest +
+ubuntu-24.04-arm, **no Docker/QEMU**). **CI proven green both arches** (run 27851337705). Reviewer-
+verified locally: Stage-1 SHAs (both arches), a real signed `.deb` + GPG roundtrip + structure, native
+daemon gate. **Reviewer fix:** Linux runtime-path resolution (`.deb` `/usr/bin` symlink → doubled
+nonexistent dir → daemon wouldn't start) now probes both layouts; arm64 needed `target-feature=+fp16`
+for the dead-on-Linux vendored gemm asm. **CI-only by necessity (proven in CI, not on the Mac):** native
+daemon + orb-host build (ALSA/WebKitGTK), single-file AppImage, daemon run-smoke. **Deferred:** Windows,
+macOS-x86_64; the daemon run-smoke as a dedicated CI step.
 
 ### P5 — D2 / V5: portable voice spine  (depends on P2's STT decision)
 **Objective:** move voice off Apple-only. **V5**: PTT capture → daemon cpal (capture is the last
