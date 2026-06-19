@@ -31,16 +31,19 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
-// MARK: - ConversationController
+// MARK: - ConversationRuntimeController
 
+/// Non-visual conversation runtime state shared by the orb host, handoff,
+/// local compatibility server, and tests.
+///
+/// This is not a Swift conversation surface: it has no transcript view or
+/// composer. The Rust orb/pill consumes snapshots from this controller.
 @MainActor
-final class ConversationController: ObservableObject {
+final class ConversationRuntimeController: ObservableObject {
     @Published var isListening: Bool = true
-    @Published var isConversationPanelOpen: Bool = false
-    @Published var isCanvasPanelOpen: Bool = false
     @Published var lastInteractionTimestamp: Date = Date()
 
-    /// Native message store for SwiftUI conversation window.
+    /// Runtime transcript store mirrored to the Rust orb host.
     @Published var messages: [ChatMessage] = []
 
     /// Whether the assistant is currently generating a response.
@@ -66,8 +69,8 @@ final class ConversationController: ObservableObject {
 
     private let maxMessages = 200
 
-    /// Set when a handoff snapshot is restored. The UI observes this to push
-    /// the restored entries into the conversation web view.
+    /// Set when a handoff snapshot is restored so bridge layers can mirror it
+    /// to the orb host or other runtime integrations.
     @Published private(set) var restoredSnapshot: ConversationSnapshot?
 
     /// The device name that sent the restored conversation (for banner display).
@@ -87,8 +90,8 @@ final class ConversationController: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         lastInteractionTimestamp = Date()
-        // Add to conversation panel immediately — typed messages don't go through
-        // STT/pendingUserTranscription, so we add them here directly.
+        // Add to the runtime transcript immediately — typed messages don't go
+        // through STT/pendingUserTranscription, so we add them here directly.
         appendMessage(role: .user, content: trimmed)
         NotificationCenter.default.post(
             name: .faeConversationInjectText,
@@ -106,7 +109,7 @@ final class ConversationController: ObservableObject {
         restoredSnapshot = snapshot
         restoredFromDevice = device
         lastInteractionTimestamp = Date()
-        NSLog("ConversationController: restored %d entries from handoff%@",
+        NSLog("ConversationRuntimeController: restored %d entries from handoff%@",
               snapshot.entries.count,
               device.map { " (\($0))" } ?? "")
     }
@@ -246,12 +249,6 @@ extension Notification.Name {
     /// The HostCommandBridge forwards this as "conversation.engage" to reset
     /// the direct-address follow-up window so the next utterance is accepted.
     static let faeConversationEngage = Notification.Name("faeConversationEngage")
-    /// Posted by WindowStateController when it expands from collapsed to compact.
-    /// InputBarView listens for this to restore keyboard focus on the text field.
-    static let faeWillFocusInputField = Notification.Name("faeWillFocusInputField")
-    /// Posted by Help menu items to pre-fill the input bar with a topic question.
-    /// userInfo: ["text": String]
-    static let faePrefillInput = Notification.Name("faePrefillInput")
     /// Posted when the push-to-talk key is pressed (hold-to-talk or orb click).
     /// FaeCore listens for this to unmute the microphone.
     static let faePTTPressed = Notification.Name("faePTTPressed")

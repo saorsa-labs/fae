@@ -66,10 +66,12 @@ final class AuxiliaryWindowManager: ObservableObject {
 
     // MARK: - Focus Main Window
 
-    /// Bring the main window to front and focus the input field.
+    /// Bring the retained non-conversation main window to front.
+    ///
+    /// The legacy Swift input bar has been removed; callers that want to send
+    /// text should use the orb host composer or `FaeCore.injectText`.
     func focusMainWindow() {
         windowState?.showWindow()
-        NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
     }
 
     // MARK: - Debug Console

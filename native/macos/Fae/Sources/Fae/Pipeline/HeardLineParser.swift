@@ -7,7 +7,7 @@ import Foundation
 ///
 ///     [heard]: <verbatim transcription of the user's speech>
 ///
-/// That line becomes the user-turn transcript (conversation panel + memory
+/// That line becomes the user-turn transcript (orb transcript + memory
 /// capture) and is never spoken. The remainder — minus any tool-call markup
 /// the model leaks into the text channel — is the spoken reply.
 enum HeardLineParser {

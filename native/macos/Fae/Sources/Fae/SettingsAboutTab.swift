@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsAboutTab: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var onboarding: OnboardingController
-    @EnvironmentObject private var conversation: ConversationController
+    @EnvironmentObject private var conversation: ConversationRuntimeController
     @State private var showResetConfirmation = false
     @State private var isResetting = false
     @State private var resetError: String?

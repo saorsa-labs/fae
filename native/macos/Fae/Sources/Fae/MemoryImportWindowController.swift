@@ -8,7 +8,6 @@ final class MemoryImportWindowController {
     private var window: NSWindow?
 
     /// Dependencies — set by FaeAppDelegate before first use.
-    var auxiliaryWindows: AuxiliaryWindowManager?
     var memoryInboxServiceProvider: (() -> MemoryInboxService?)?
 
     func show() {
@@ -20,9 +19,6 @@ final class MemoryImportWindowController {
         let view = MemoryImportWindowView(
             memoryInboxServiceProvider: { [weak self] in
                 self?.memoryInboxServiceProvider?()
-            },
-            focusMainWindow: { [weak self] in
-                self?.auxiliaryWindows?.focusMainWindow()
             },
             dismissAction: { [weak self] in
                 self?.window?.close()

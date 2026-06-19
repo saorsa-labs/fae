@@ -1,8 +1,25 @@
-# Mega-prompt — retire the legacy Swift conversation UI (orb host is the only product UI)
+# Handoff — retire the legacy Swift conversation UI (orb host is the only product UI)
 
-Paste into a fresh session. **Run this in its OWN git worktree** (not the main repo — the B5 team is live
-there; and the ACP team is in `fae-acp`). Self-contained; verify every claim against the repo and a live
-run. The reviewer re-runs your evidence.
+> ## ✅ DONE — committed `4a482e35` on `retire-legacy-ui` (reviewer-verified, 2026-06-19)
+> ~2071 lines deleted (ContentView, ConversationScrollView, InputBarView, VoiceHintsView,
+> ThinkingTraceViews, old ConversationController/BridgeController); non-visual state split into
+> ConversationRuntimeController + ConversationEventBridgeController; main window = license/status chrome
+> only; "Ask Fae" fallback removed. KEPT (wired): Settings/About/Debug/MemoryImport/Receipts/InputOverlay.
+> Verified: clean deletions (no dangling refs — grep + build), `swift build` clean, 44 targeted tests,
+> live run-dev = orb active / main window hidden / orb-down→alert (no legacy window). **RESIDUAL before
+> merge: a human visual click-through of the kept windows.** Ready to merge `retire-legacy-ui` →
+> `llamacpp-serving-adapter` when the tracks integrate.
+
+> **HANDOFF (2026-06-19): this is yours now.** B5 (audio-in) is DONE + PASS, so the team that built it
+> picks up this track. **Your worktree already exists** — `/Users/davidirvine/Desktop/Devel/projects/
+> fae-ui` on branch `retire-legacy-ui` (off the latest `llamacpp-serving-adapter`, includes B5 + the
+> orb-first build fix). Just `cd` into it and work there (Setup below). Do NOT work in the main repo
+> (`…/projects/fae`) or `fae-acp` (ACP team live). **Implement + test to completion, then HAND BACK with
+> verbatim evidence — do NOT commit/push; the reviewer commits onto `retire-legacy-ui`.** The reviewer
+> re-runs your evidence (live run + `git diff`) — static-only review has missed a release-blocking bug on
+> this project, and an agent once fabricated a report, so claims are verified, not trusted.
+
+Self-contained; verify every claim against the repo and a live run.
 
 ## Why
 The Rust orb host (`native/rust/fae-ui-shell`) is the only product UI; the Swift app is the host
@@ -11,13 +28,16 @@ teams (the recent `test-serve`/`run-native` recipes launched it; those build rec
 always embed the orb shell + daemon — commit dc67d90d). This phase removes the legacy *code* so the old
 UI can't be reached at all, while KEEPING the genuine app windows.
 
-## Setup (worktree — do not work in the main repo)
+## Setup (the worktree already exists — just enter it)
 ```bash
-cd /Users/davidirvine/Desktop/Devel/projects/fae
-git worktree add /Users/davidirvine/Desktop/Devel/projects/fae-ui -b retire-legacy-ui llamacpp-serving-adapter
-cd /Users/davidirvine/Desktop/Devel/projects/fae-ui
+cd /Users/davidirvine/Desktop/Devel/projects/fae-ui   # branch retire-legacy-ui (already created for you)
+git status                                            # confirm clean on retire-legacy-ui
+just --list                                           # build recipes already embed the orb + daemon
 ```
-Hand back when done; do NOT commit/push (the reviewer commits onto `retire-legacy-ui`).
+Do ALL work here. Do NOT `git checkout` a branch in the main repo (`…/projects/fae`) — another team is
+live there; the worktree shares `.git` but has its own working dir. Hand back when done; do NOT
+commit/push (the reviewer commits onto `retire-legacy-ui`). If you want a fresh pull from the base,
+`git merge llamacpp-serving-adapter` from inside this worktree.
 
 ## Scope — DELETE vs KEEP (verify before deleting)
 

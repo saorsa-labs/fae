@@ -23,7 +23,7 @@ final class FaeLocalRuntimeServer {
 
     private var listener: NWListener?
     private weak var faeCore: FaeCore?
-    private weak var conversation: ConversationController?
+    private weak var conversation: ConversationRuntimeController?
     private weak var inputOverlay: InputOverlayController?
 
     let descriptor: FaeLocalRuntimeDescriptor
@@ -31,7 +31,7 @@ final class FaeLocalRuntimeServer {
 
     init(
         faeCore: FaeCore,
-        conversation: ConversationController,
+        conversation: ConversationRuntimeController,
         inputOverlay: InputOverlayController,
         port: UInt16 = 7434
     ) {

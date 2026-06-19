@@ -4,22 +4,21 @@ import Foundation
 /// Bridges backend pipeline events to native SwiftUI state controllers.
 ///
 /// Observes typed `NotificationCenter` notifications posted by `BackendEventRouter`
-/// and drives ``SubtitleStateController`` for overlay display and
-/// ``ConversationController`` for the native message store.
+/// and drives ``SubtitleStateController`` for overlay display plus
+/// ``ConversationRuntimeController`` for the orb-host transcript mirror.
 ///
-/// This replaces the previous implementation that injected JavaScript into a
-/// `WKWebView`. All state is now driven through `@Published` properties with
-/// full type safety.
+/// This bridge is non-visual: the legacy Swift transcript/composer has been
+/// retired, and the Rust orb/pill is the only conversation surface.
 @MainActor
-final class ConversationBridgeController: ObservableObject {
+final class ConversationEventBridgeController: ObservableObject {
 
     /// Native subtitle state for the overlay bubbles.
     /// Set by `FaeApp` during wiring.
     weak var subtitleState: SubtitleStateController?
 
-    /// Native message store for the SwiftUI main conversation window.
+    /// Runtime transcript store mirrored to the Rust orb host.
     /// Set by `FaeApp` during wiring.
-    weak var conversationController: ConversationController?
+    weak var conversationController: ConversationRuntimeController?
 
     private var observations: [NSObjectProtocol] = []
 
@@ -170,7 +169,7 @@ final class ConversationBridgeController: ObservableObject {
         )
     }
 
-    private var activeConversationController: ConversationController? {
+    private var activeConversationRuntimeController: ConversationRuntimeController? {
         conversationController
     }
 
@@ -186,7 +185,7 @@ final class ConversationBridgeController: ObservableObject {
         // The old approach buffered until generation started, creating a perceptible
         // delay where the user spoke but saw no bubble. Noise drops that slip through
         // the echo suppressor are rare and harmless as conversation history entries.
-        activeConversationController?.appendMessage(role: .user, content: text)
+        activeConversationRuntimeController?.appendMessage(role: .user, content: text)
         pendingUserTranscription = nil
     }
 
@@ -200,19 +199,19 @@ final class ConversationBridgeController: ObservableObject {
         subtitleState?.clearToolMessage()
 
         // Transition from think phase → streaming phase on first response token.
-        if activeConversationController?.isStreaming == false {
-            activeConversationController?.startStreamingReply()
+        if activeConversationRuntimeController?.isStreaming == false {
+            activeConversationRuntimeController?.startStreamingReply()
         }
 
-        // Update live streaming bubble in conversation window
-        activeConversationController?.updateStreaming(text: streamingAssistantText)
+        // Update live streaming text for the orb-host transcript mirror.
+        activeConversationRuntimeController?.updateStreaming(text: streamingAssistantText)
 
         if isFinal {
             streamingAssistantText = ""
             // Pass only the last sentence to the subtitle so it shows
             // the final fragment at full opacity rather than the entire accumulated text.
             subtitleState?.finalizeAssistantMessage(text)
-            activeConversationController?.finalizeStreaming()
+            activeConversationRuntimeController?.finalizeStreaming()
         } else {
             subtitleState?.appendStreamingSentence(text)
         }
@@ -223,17 +222,17 @@ final class ConversationBridgeController: ObservableObject {
             subtitleState?.showPersistentToolMessage("Thinking…")
             // Flush the buffered user transcription — coordinator confirmed it was accepted.
             if let pending = pendingUserTranscription, !pending.isEmpty {
-                activeConversationController?.appendMessage(role: .user, content: pending)
+                activeConversationRuntimeController?.appendMessage(role: .user, content: pending)
                 pendingUserTranscription = nil
             }
             // Reset streaming + thinking state for the new turn. isStreaming stays false
             // during the think phase so the crawl can remain visible until the first token.
             streamingAssistantText = ""
             isStreamingAssistant = false
-            activeConversationController?.beginThinkingTurn()
+            activeConversationRuntimeController?.beginThinkingTurn()
         } else {
-            // Native generating state — the conversation surfaces observe this directly.
-            activeConversationController?.isGenerating = false
+            // Native generating state — the orb-host mirror observes this directly.
+            activeConversationRuntimeController?.isGenerating = false
             // Generation stopped — clear the thinking bubble if still showing.
             subtitleState?.clearToolMessage()
             // If there's partial streamed text that never got an isFinal sentence
@@ -241,15 +240,15 @@ final class ConversationBridgeController: ObservableObject {
             if !streamingAssistantText.isEmpty {
                 streamingAssistantText = ""
                 isStreamingAssistant = false
-                activeConversationController?.cancelStreaming()
+                activeConversationRuntimeController?.cancelStreaming()
             } else {
-                activeConversationController?.finalizeStreaming()
+                activeConversationRuntimeController?.finalizeStreaming()
             }
         }
     }
 
     private func handleThinkingText(text: String, isActive: Bool) {
-        let controller = activeConversationController
+        let controller = activeConversationRuntimeController
         if isActive {
             if text.isEmpty {
                 // Start of a new think block
@@ -272,12 +271,12 @@ final class ConversationBridgeController: ObservableObject {
             playToolCueExecuting()
             let message = "⚙ Working: \(name)…"
             subtitleState?.showPersistentToolMessage(message)
-            activeConversationController?.appendMessage(role: .tool, content: message)
+            activeConversationRuntimeController?.appendMessage(role: .tool, content: message)
 
             // Subtle UI signal for deferred/background tool work: only mark as
             // background when no active assistant generation is in progress.
-            if activeConversationController?.isGenerating == false {
-                activeConversationController?.beginBackgroundLookup()
+            if activeConversationRuntimeController?.isGenerating == false {
+                activeConversationRuntimeController?.beginBackgroundLookup()
             }
 
         case "result":
@@ -289,10 +288,10 @@ final class ConversationBridgeController: ObservableObject {
             }
             let message = success ? "✓ Done: \(name)" : "✗ Failed: \(name)"
             subtitleState?.showToolMessage(message)
-            activeConversationController?.appendMessage(role: .tool, content: message)
+            activeConversationRuntimeController?.appendMessage(role: .tool, content: message)
 
-            if activeConversationController?.isBackgroundLookupActive == true {
-                activeConversationController?.endBackgroundLookup()
+            if activeConversationRuntimeController?.isBackgroundLookupActive == true {
+                activeConversationRuntimeController?.endBackgroundLookup()
             }
 
         default:
@@ -519,7 +518,7 @@ final class ConversationBridgeController: ObservableObject {
     ///
     /// Boot/progress/error messages are transient UI feedback — they belong
     /// in the auto-hiding subtitle layer, NOT in the persistent conversation
-    /// message store. The conversation panel should only contain actual
+    /// message store. The orb transcript should only contain actual
     /// user/assistant/tool interaction messages.
     private func appendStatusMessage(_ text: String) {
         subtitleState?.showToolMessage(text)

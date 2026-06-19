@@ -3,9 +3,9 @@ import FaeHandoffKit
 @testable import Fae
 
 @MainActor
-final class ConversationControllerTests: XCTestCase {
+final class ConversationRuntimeControllerTests: XCTestCase {
     func testHandleUserSentTrimsAppendsAndPostsInjectNotification() async throws {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         let expectation = expectation(forNotification: .faeConversationInjectText, object: nil) { notification in
             notification.userInfo?["text"] as? String == "hello fae"
         }
@@ -18,13 +18,13 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testHandleUserSentIgnoresWhitespaceOnlyInput() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.handleUserSent("   \n  ")
         XCTAssertTrue(controller.messages.isEmpty)
     }
 
     func testAppendMessageCapsToLatestTwoHundredMessages() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
 
         for index in 0..<250 {
             controller.appendMessage(role: .user, content: "message-\(index)")
@@ -36,7 +36,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testReplaceMessagesResetsStreamingFlagsAndKeepsNewestMessages() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.isGenerating = true
         controller.startStreaming()
         controller.updateStreaming(text: "partial")
@@ -59,7 +59,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testFinalizeStreamingCommitsAssistantMessageAndClearsState() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.startStreaming()
         controller.updateStreaming(text: "final answer")
 
@@ -72,7 +72,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testCancelStreamingCommitsPartialAssistantMessageAndClearsState() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.startStreaming()
         controller.updateStreaming(text: "partial answer")
 
@@ -85,7 +85,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testStartStreamingReplyFinalizesThinkingTraceIntoReplayState() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.beginThinkingTurn(placeholderTrace: "Preparing context")
         controller.appendThinkingTrace("\nWaiting for first tokens")
 
@@ -101,7 +101,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testBeginThinkingTurnClearsPreviousTraceAndStreamingState() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.completedThinkTrace = "previous trace"
         controller.startStreaming()
         controller.updateStreaming(text: "partial reply")
@@ -116,7 +116,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testRestoreAndClearSnapshotRoundTrip() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         let snapshot = ConversationSnapshot(
             entries: [SnapshotEntry(role: "user", content: "hello")],
             orbMode: "idle",
@@ -138,21 +138,21 @@ final class ConversationControllerTests: XCTestCase {
     // MARK: - Per-Message Model Metadata (Phase 1.1)
 
     func testAppendMessageStoresModelIDAndProviderKind() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.appendMessage(role: .assistant, content: "reply", modelID: "gpt-4o", providerKind: "openAICompatibleExternal")
         XCTAssertEqual(controller.messages.last?.modelID, "gpt-4o")
         XCTAssertEqual(controller.messages.last?.providerKind, "openAICompatibleExternal")
     }
 
     func testAppendMessageNilMetadataForUserMessages() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.appendMessage(role: .user, content: "hello")
         XCTAssertNil(controller.messages.last?.modelID)
         XCTAssertNil(controller.messages.last?.providerKind)
     }
 
     func testFinalizeStreamingPreservesModelMetadata() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.startStreaming()
         controller.updateStreaming(text: "streamed response")
         controller.finalizeStreaming(modelID: "claude-opus-4-6", providerKind: "anthropic")
@@ -162,7 +162,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testCancelStreamingPreservesModelMetadata() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.startStreaming()
         controller.updateStreaming(text: "partial answer")
         controller.cancelStreaming(modelID: "gpt-4o", providerKind: "openAICompatibleExternal")
@@ -171,7 +171,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testFinalizeStreamingWithNilMetadataLeavesFieldsNil() {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         controller.startStreaming()
         controller.updateStreaming(text: "no metadata")
         controller.finalizeStreaming()
@@ -180,7 +180,7 @@ final class ConversationControllerTests: XCTestCase {
     }
 
     func testHandleLinkDetectedPostsEventWithoutMutatingMessages() async throws {
-        let controller = ConversationController()
+        let controller = ConversationRuntimeController()
         let expectation = expectation(forNotification: .faeConversationLinkDetected, object: nil) { notification in
             notification.userInfo?["url"] as? String == "https://example.com/docs"
         }

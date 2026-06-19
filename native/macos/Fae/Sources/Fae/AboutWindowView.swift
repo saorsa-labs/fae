@@ -5,7 +5,7 @@ import SwiftUI
 /// Updates are handled by the Fae menu "Check for Updates..." item (Sparkle).
 /// The About window focuses on system info and release history.
 struct AboutWindowView: View {
-    @ObservedObject var conversation: ConversationController
+    @ObservedObject var conversation: ConversationRuntimeController
     @ObservedObject var sparkleUpdater: SparkleUpdaterController
     @ObservedObject var faeCore: FaeCore
 
