@@ -19,6 +19,7 @@ struct AgentSessionTool: Tool {
     let example = #"<tool_call>{"name":"agent_session","arguments":{"action":"start","agent":"claude","prompt":"Investigate failing unit tests and propose a fix.","cwd":"~/Projects/app","approval_policy":"approve_all","name":"test-fix"}}</tool_call>"#
 
     private static let maxOutputLength = 20_000
+    private let runner: AgentRunner = DaemonAgentRunner()
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let rawAction = input["action"] as? String else {
@@ -75,10 +76,10 @@ struct AgentSessionTool: Tool {
         let approvalPolicy = daemonApprovalPolicy(input["approval_policy"])
 
         do {
-            let sessionId = try await DaemonAgentClient.sessionStart(
+            let sessionId = try await runner.sessionStart(
                 agent: agent.lowercased(), cwd: cwd.path, approvalPolicy: approvalPolicy)
             do {
-                let outcome = try await DaemonAgentClient.sessionPrompt(
+                let outcome = try await runner.sessionPrompt(
                     sessionId: sessionId, prompt: prompt)
                 let output = """
                     Started session \(sessionId)
@@ -90,7 +91,7 @@ struct AgentSessionTool: Tool {
                     """
                 return .success(truncate(output))
             } catch {
-                try? await DaemonAgentClient.sessionClose(sessionId: sessionId)
+                try? await runner.sessionClose(sessionId: sessionId)
                 return .error("Session started but initial prompt failed: \(error.localizedDescription)")
             }
         } catch {
@@ -114,7 +115,7 @@ struct AgentSessionTool: Tool {
         }
 
         do {
-            let outcome = try await DaemonAgentClient.sessionPrompt(
+            let outcome = try await runner.sessionPrompt(
                 sessionId: sessionId, prompt: prompt)
             let output = """
                 Session: \(sessionId)
@@ -133,7 +134,7 @@ struct AgentSessionTool: Tool {
             return .error("Missing required parameter for status: session_id")
         }
         do {
-            let sessions = try await DaemonAgentClient.sessionList()
+            let sessions = try await runner.sessionList()
             if let session = sessions.first(where: { $0.sessionId == sessionId }) {
                 return .success("Session \(sessionId): active | agent=\(session.agent) | cwd=\(session.cwd)")
             }
@@ -148,7 +149,7 @@ struct AgentSessionTool: Tool {
             return .error("Missing required parameter for cancel: session_id")
         }
         do {
-            try await DaemonAgentClient.sessionCancel(sessionId: sessionId)
+            try await runner.sessionCancel(sessionId: sessionId)
             return .success("Cancellation requested for session \(sessionId).")
         } catch {
             return .error("Cancel failed for session \(sessionId): \(error.localizedDescription)")
@@ -160,7 +161,7 @@ struct AgentSessionTool: Tool {
             return .error("Missing required parameter for close: session_id")
         }
         do {
-            try await DaemonAgentClient.sessionClose(sessionId: sessionId)
+            try await runner.sessionClose(sessionId: sessionId)
             return .success("Closed session \(sessionId).")
         } catch {
             return .error("Close failed for session \(sessionId): \(error.localizedDescription)")
@@ -169,7 +170,7 @@ struct AgentSessionTool: Tool {
 
     private func handleList() async -> ToolResult {
         do {
-            let sessions = try await DaemonAgentClient.sessionList()
+            let sessions = try await runner.sessionList()
             guard !sessions.isEmpty else {
                 return .success("No active ACP sessions.")
             }

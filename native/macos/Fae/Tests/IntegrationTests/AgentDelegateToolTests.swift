@@ -123,4 +123,17 @@ final class AgentDelegateToolTests: XCTestCase {
         let result = DaemonAgentClient.readFile(params: ["path": tmp])
         XCTAssertEqual(result["content"] as? String, "hello")
     }
+
+    // MARK: - A4 error differentiation
+
+    func testFriendlyAgentErrorMapsClassesToActionableText() {
+        XCTAssertTrue(DaemonAgentClient.friendlyAgentError("auth_error").lowercased().contains("sign"))
+        XCTAssertTrue(DaemonAgentClient.friendlyAgentError("rate_limited").lowercased().contains("rate"))
+        XCTAssertTrue(
+            DaemonAgentClient.friendlyAgentError("network_error").lowercased().contains("connection"))
+        XCTAssertTrue(
+            DaemonAgentClient.friendlyAgentError("unknown_agent").lowercased().contains("installed"))
+        // An unrecognized code still surfaces it rather than swallowing it.
+        XCTAssertTrue(DaemonAgentClient.friendlyAgentError("weird_code").contains("weird_code"))
+    }
 }

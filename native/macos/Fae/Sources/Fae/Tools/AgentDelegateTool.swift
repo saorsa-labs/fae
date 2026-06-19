@@ -7,6 +7,7 @@ struct AgentDelegateTool: Tool {
     let requiresApproval = true
     let riskLevel: ToolRiskLevel = .high
     let example = #"<tool_call>{"name":"delegate_agent","arguments":{"provider":"codex","mode":"read_write","workdir":"~/Projects/app","prompt":"Implement the failing parser fix and run the relevant tests."}}</tool_call>"#
+    private let runner: AgentRunner = DaemonAgentRunner()
 
     func execute(input: [String: Any]) async throws -> ToolResult {
         guard let providerRaw = input["provider"] as? String,
@@ -59,7 +60,7 @@ struct AgentDelegateTool: Tool {
             let daemonPrompt = Self.buildPrompt(
                 prompt: prompt, mode: mode, appendSystemPrompt: appendSystemPrompt)
             do {
-                let outcome = try await DaemonAgentClient.run(
+                let outcome = try await runner.run(
                     agent: providerRaw.lowercased(),
                     prompt: daemonPrompt,
                     cwd: workdir.path

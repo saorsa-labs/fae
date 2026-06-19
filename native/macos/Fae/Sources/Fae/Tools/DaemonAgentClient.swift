@@ -28,11 +28,16 @@ actor DaemonEndpointStore {
 /// Errors specific to the native ACP delegation lane (daemon `agent.run`).
 enum DaemonAgentClientError: LocalizedError {
     case daemonUnavailable
+    /// A classified delegation failure (gap A4): `message` is already
+    /// user-facing (auth / rate-limit / network / generic).
+    case agentFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .daemonUnavailable:
             return "fae-daemon is not running — the native ACP lane is unavailable"
+        case .agentFailed(let message):
+            return message
         }
     }
 }
@@ -148,18 +153,25 @@ enum DaemonAgentClient {
         }
     }
 
-    /// `fs/read_text_file` mediation (gap A3b). Reads are local-only and never
-    /// path-restricted (Fae reads anything the user can); a read error refuses.
+    /// `fs/read_text_file` mediation (gap A3b). Gated by `PathPolicy.validateReadPath`:
+    /// the requester is an autonomous delegate (NOT the owner), so it must not be
+    /// able to read credentials or Fae's identity (`~/.ssh`, `speakers.json`,
+    /// `~/.fae-vault`, …) through Fae. General project/system reads are allowed.
     static func readFile(params: [String: Any]) -> [String: Any] {
         guard let path = params["path"] as? String, !path.isEmpty else {
             return ["error": "fs.read missing path"]
         }
-        let expanded = NSString(string: path).expandingTildeInPath
-        do {
-            let content = try String(contentsOfFile: expanded, encoding: .utf8)
-            return ["content": content]
-        } catch {
-            return ["error": "could not read \(path): \(error.localizedDescription)"]
+        switch PathPolicy.validateReadPath(path) {
+        case .blocked(let reason):
+            NSLog("DaemonAgentClient: fs.read blocked by PathPolicy: %@", reason)
+            return ["error": "fs.read blocked: \(reason)"]
+        case .allowed(let canonicalPath):
+            do {
+                let content = try String(contentsOfFile: canonicalPath, encoding: .utf8)
+                return ["content": content]
+            } catch {
+                return ["error": "could not read \(path): \(error.localizedDescription)"]
+            }
         }
     }
 
@@ -235,6 +247,38 @@ enum DaemonAgentClient {
         }
     }
 
+    /// Validate a daemon response, mapping a failure's classified `error.code`
+    /// (gap A4) to a user-facing message. `ok` responses pass through.
+    private static func validate(_ raw: [String: Any]) throws -> [String: Any] {
+        if (raw["ok"] as? Bool) == true { return raw }
+        let code = ((raw["error"] as? [String: Any])?["code"] as? String) ?? "agent_error"
+        throw DaemonAgentClientError.agentFailed(friendlyAgentError(code))
+    }
+
+    /// Map a daemon agent error code to an actionable, user-facing message.
+    static func friendlyAgentError(_ code: String) -> String {
+        switch code {
+        case "auth_error":
+            return "The agent needs to be signed in. Open its CLI and log in, then try again."
+        case "rate_limited":
+            return "The agent is rate-limited right now. Try again in a little while."
+        case "network_error":
+            return "Couldn't reach the agent's service. Check your connection and try again."
+        case "unknown_agent":
+            return "That agent isn't installed or recognized."
+        case "agent_launch_failed":
+            return "The agent failed to launch."
+        case "unknown_session":
+            return "That agent session is no longer active."
+        case "session_closed":
+            return "The agent session is closed."
+        case "bad_request":
+            return "The agent request was malformed."
+        default:
+            return "The agent delegation failed (\(code))."
+        }
+    }
+
     /// Like `call`, but server-request frames during the round trip are routed to
     /// `onServerRequest` and answered on the same connection.
     private static func callHandlingServerRequests(
@@ -254,7 +298,7 @@ enum DaemonAgentClient {
             requestID: requestID, command: command, payload: payload)
         let raw = try await connection.roundTrip(
             frame: frame, expectRequestID: requestID, onServerRequest: onServerRequest)
-        return try DaemonWire.unwrapResponse(raw)
+        return try validate(raw)
     }
 
     /// Cancel a session's in-flight turn (`agent.cancel`).
@@ -311,7 +355,7 @@ enum DaemonAgentClient {
         let frame = try DaemonWire.encodeFrame(
             requestID: requestID, command: command, payload: payload)
         let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
-        return try DaemonWire.unwrapResponse(raw)
+        return try validate(raw)
     }
 
     /// Authenticate the connection with the bootstrap token (first frame on the

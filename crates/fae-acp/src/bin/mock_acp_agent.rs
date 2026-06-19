@@ -18,9 +18,9 @@ use std::path::PathBuf;
 use agent_client_protocol::schema::{
     ContentBlock, ContentChunk, InitializeRequest, InitializeResponse, NewSessionRequest,
     NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification,
-    SessionUpdate, StopReason, TextContent, ToolCallUpdate, ToolCallUpdateFields,
-    WriteTextFileRequest,
+    ReadTextFileRequest, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallUpdate,
+    ToolCallUpdateFields, WriteTextFileRequest,
 };
 use agent_client_protocol::{Agent, Stdio};
 
@@ -77,6 +77,7 @@ async fn main() -> Result<(), agent_client_protocol::Error> {
                     // Gated by `FAE_ACP_MOCK_FS` so A3a (permission only) doesn't
                     // wait on an fs request the client can't yet handle.
                     let mut wrote = false;
+                    let mut read_back = false;
                     if approved && std::env::var("FAE_ACP_MOCK_FS").is_ok() {
                         // ACP paths are absolute; use the temp dir (PathPolicy
                         // allows it) so a real client mediator can resolve it.
@@ -84,19 +85,32 @@ async fn main() -> Result<(), agent_client_protocol::Error> {
                         wrote = cx
                             .send_request(WriteTextFileRequest::new(
                                 session_id.clone(),
-                                target,
+                                target.clone(),
                                 "pong\n".to_owned(),
                             ))
                             .block_task()
                             .await
                             .is_ok();
+                        // 2b. Read it back (gap A3b fs read).
+                        if wrote {
+                            read_back = matches!(
+                                cx.send_request(ReadTextFileRequest::new(
+                                    session_id.clone(),
+                                    target,
+                                ))
+                                .block_task()
+                                .await,
+                                Ok(response) if response.content.contains("pong")
+                            );
+                        }
                     }
 
                     // 3. Stream a text chunk reporting what happened, then finish.
-                    let text = match (approved, wrote) {
-                        (true, true) => "pong (approved, wrote file)",
-                        (true, false) => "pong (approved, write refused)",
-                        (false, _) => "declined",
+                    let text = match (approved, wrote, read_back) {
+                        (true, true, true) => "pong (approved, wrote and read back)",
+                        (true, true, false) => "pong (approved, wrote file, read failed)",
+                        (true, false, _) => "pong (approved, write refused)",
+                        (false, _, _) => "declined",
                     };
                     let _ = cx.send_notification(SessionNotification::new(
                         session_id,

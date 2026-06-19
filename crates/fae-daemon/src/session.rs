@@ -426,10 +426,7 @@ async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
         .await
         .map_err(|error| {
             eprintln!("fae-daemon: agent.run failed: {error}");
-            match error {
-                fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
-                _ => "agent_error",
-            }
+            classify_agent_error(&error)
         })?;
 
     let tool_calls: Vec<serde_json::Value> = outcome
@@ -458,6 +455,48 @@ fn agent_approval_policy(cmd: &Command) -> fae_acp::ApprovalPolicy {
     }
 }
 
+/// Classify an ACP failure into a coarse wire code the UI maps to a friendly
+/// message (gap A4): auth / rate-limit / network problems are distinguished from
+/// a generic agent error so the user gets an actionable hint.
+fn classify_agent_error(error: &fae_acp::AcpError) -> &'static str {
+    match error {
+        fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
+        fae_acp::AcpError::Launch(_) => "agent_launch_failed",
+        fae_acp::AcpError::Protocol(message) => {
+            let lower = message.to_lowercase();
+            if lower.contains("rate limit")
+                || lower.contains("429")
+                || lower.contains("quota")
+                || lower.contains("overloaded")
+            {
+                "rate_limited"
+            } else if lower.contains("unauthorized")
+                || lower.contains("401")
+                || lower.contains("forbidden")
+                || lower.contains("403")
+                || lower.contains("log in")
+                || lower.contains("login")
+                || lower.contains("authenticate")
+                || lower.contains("api key")
+                || lower.contains("no longer supported")
+            {
+                "auth_error"
+            } else if lower.contains("network")
+                || lower.contains("connection")
+                || lower.contains("timed out")
+                || lower.contains("timeout")
+                || lower.contains("econnrefused")
+                || lower.contains("dns")
+                || lower.contains("offline")
+            {
+                "network_error"
+            } else {
+                "agent_error"
+            }
+        }
+    }
+}
+
 /// `agent.session_start` — spawn a persistent native-ACP session and return its
 /// daemon handle. Requires `AgentExecute`.
 async fn agent_session_start(
@@ -482,10 +521,7 @@ async fn agent_session_start(
         .await
         .map_err(|error| {
             eprintln!("fae-daemon: agent.session_start failed: {error}");
-            match error {
-                fae_acp::AcpError::UnknownAgent(_) => "unknown_agent",
-                _ => "agent_error",
-            }
+            classify_agent_error(&error)
         })?;
     let session_id = backends
         .agents
@@ -606,7 +642,7 @@ async fn agent_prompt_inner(
         .map_err(|_| "agent_error")?
         .map_err(|error| {
             eprintln!("fae-daemon: agent.prompt turn failed: {error}");
-            "agent_error"
+            classify_agent_error(&error)
         })?;
     let _ = updates_drain.await;
     let _ = requests_drain.await;
@@ -1407,6 +1443,28 @@ mod tests {
         let agents = value["agents"].as_array().expect("agents array");
         assert!(agents.iter().any(|a| a == "codex"));
         assert!(agents.iter().any(|a| a == "claude"));
+    }
+
+    #[test]
+    fn agent_errors_classify_into_actionable_codes() {
+        use fae_acp::AcpError;
+        let auth = AcpError::Protocol("Error 401: please log in to continue".to_owned());
+        assert_eq!(super::classify_agent_error(&auth), "auth_error");
+        let rate = AcpError::Protocol("rate limit exceeded (429)".to_owned());
+        assert_eq!(super::classify_agent_error(&rate), "rate_limited");
+        let net = AcpError::Protocol("connection timed out".to_owned());
+        assert_eq!(super::classify_agent_error(&net), "network_error");
+        let generic = AcpError::Protocol("the model returned garbage".to_owned());
+        assert_eq!(super::classify_agent_error(&generic), "agent_error");
+        assert_eq!(
+            super::classify_agent_error(&AcpError::UnknownAgent("x".to_owned())),
+            "unknown_agent"
+        );
+        // Gemini's individual-client rejection is an auth/eligibility problem.
+        let gemini = AcpError::Protocol(
+            "This client is no longer supported for Gemini Code Assist".to_owned(),
+        );
+        assert_eq!(super::classify_agent_error(&gemini), "auth_error");
     }
 
     #[test]

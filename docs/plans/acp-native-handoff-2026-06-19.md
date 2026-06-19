@@ -1,8 +1,8 @@
 # Native ACP — review-team handoff (2026-06-19)
 
 Status of the P8 / native-ACP track on worktree `…/projects/fae-acp`, branch
-`acp-native`. **A1, A2, A3a, A3b are complete and live-proven. A4 is the only
-remaining stage.** This doc is the single place to review the track end to end.
+`acp-native`. **All stages A1–A4 are complete and (where externally possible)
+live-proven.** This doc is the single place to review the track end to end.
 
 ---
 
@@ -20,26 +20,40 @@ PathPolicy. One mock agent + a set of python harnesses prove every hop live.
 | A2 | Persistent `agent.session_*` lifecycle; streaming `agent.output`/`agent.tool_call` on the V2 bus; `ACPSessionManager` deleted | **committed** `4e1cbd20` |
 | A3a | Server-initiated requests (daemon→client, point-to-point); `session/request_permission` → Fae approval card | **committed** `158e4ffd` |
 | — | Mock asking-agent + regression fixture | **uncommitted** (this handoff) |
-| A3b | fs mediation: `fs/read_text_file` / `fs/write_text_file` → PathPolicy/DamageControl | **uncommitted** (this handoff) |
-| A4 | Conductor seam, error differentiation, delete dead `ACPProtocol.swift` | **not started** |
+| A3b | fs mediation: `fs/read_text_file` + `fs/write_text_file` → PathPolicy | **uncommitted** (this handoff) |
+| A4 | `AgentRunner` conductor seam; error differentiation (auth/rate-limit/network); deleted dead `ACPProtocol.swift` | **uncommitted** (this handoff) |
 
 Crate gate (re-run by you): `cd crates && env -u RUSTFLAGS cargo fmt -p fae-acp
 -p fae-daemon -p fae-control-plane -- --check && cargo clippy … -D warnings &&
-cargo nextest run -p fae-acp -p fae-daemon -p fae-control-plane` → **76 tests,
-fmt + clippy clean.** `swift build --build-tests` clean.
+cargo nextest run -p fae-acp -p fae-daemon -p fae-control-plane` → **77 tests,
+fmt + clippy clean.** `swift build --build-tests` clean; `AgentDelegateToolTests`
+19/19.
 
 ---
 
-## Uncommitted in this handoff (mock + A3b)
+## Committed so far
+
+`4e1cbd20` (A1+A2), `158e4ffd` (A3a), `24492e8b` (A3b + mock asking-agent).
+
+## Uncommitted in this handoff (fs.read proof + A4)
 
 ```
- M crates/fae-acp/src/lib.rs                      # A3b fs handlers/types/caps + perm spawn retrofit + mock resolve
- M crates/fae-daemon/src/session.rs               # A3b fs drive (resolve_fs + requests-drain arms)
- M native/.../Tools/DaemonAgentClient.swift       # A3b fs.read/fs.write → PathPolicy
- M native/.../Tests/.../AgentDelegateToolTests.swift  # A3b Swift fs tests
-?? crates/fae-acp/src/bin/mock_acp_agent.rs       # the mock asking-agent
-?? crates/fae-acp/tests/mock_agent.rs             # 3 regression tests
+ M crates/fae-acp/src/bin/mock_acp_agent.rs        # mock now read-after-writes (proves fs.read)
+ M crates/fae-acp/tests/mock_agent.rs              # test renamed → read_after_write_mediated
+ M crates/fae-daemon/src/session.rs                # A4 classify_agent_error + test
+ M native/.../Tools/DaemonAgentClient.swift        # A4 error codes → friendly messages (validate)
+ M native/.../Tools/AgentDelegateTool.swift        # A4 use injected AgentRunner
+ M native/.../Tools/AgentSessionTool.swift         # A4 use injected AgentRunner
+ M native/.../Tests/.../AgentDelegateToolTests.swift  # A4 friendlyAgentError test
+?? native/.../Tools/AgentRunner.swift              # A4 conductor seam (protocol + DaemonAgentRunner)
+ D native/.../Tools/ACPProtocol.swift              # A4 dead code deleted
+ D native/.../Tests/.../ACPProtocolTests.swift     # A4 dead tests deleted
 ```
+
+**fs.read** is now proven (the reviewer flagged it as required before A4): the
+mock reads back what it wrote, mediated through the per-turn channel; covered by
+`mock_agent_fs_read_after_write_mediated` and the daemon-path proof
+(`/tmp/a3b_acp_proof.py` → `"pong (approved, wrote and read back)"`).
 
 ---
 
@@ -131,13 +145,24 @@ the mock tests + the `ServerRequester`/permission-decision/PathPolicy unit tests
 
 ---
 
-## A4 — the remaining stage
+## A4 — done
 
-Per the original mega-prompt (`docs/plans/acp-native-A1-A4-mega-prompt-2026-06-18.md`):
-expose `AcpClient` behind the future conductor's `Acp` Runner seam; differentiate
-error classes (auth / rate-limit / network) in the UI; attachments; agent
-install/discovery (mirror the `acp-setup` skill, replace the env-gated `mock`/
-recipe table with config); **delete dead `ACPProtocol.swift`.**
+- **Conductor seam** — `AgentRunner` protocol (`native/.../Tools/AgentRunner.swift`)
+  + `DaemonAgentRunner` conformer; `AgentDelegateTool` + `AgentSessionTool` now
+  depend on the injected runner, not the concrete `DaemonAgentClient`. The future
+  cross-machine conductor (and tests) inject their own runner.
+- **Error differentiation** — daemon `classify_agent_error` maps an ACP failure
+  to `auth_error` / `rate_limited` / `network_error` / `unknown_agent` /
+  `agent_launch_failed` / `agent_error`; Swift `friendlyAgentError` turns the
+  code into an actionable message. Both unit-tested (incl. gemini's
+  individual-client rejection → `auth_error`).
+- **Dead code removed** — `ACPProtocol.swift` + `ACPProtocolTests.swift` (43
+  dead tests) deleted; no live references remained.
+
+**Deferred (not blocking; land with their consumers):** attachments in prompts,
+and replacing the env-gated `mock` / hard-coded agent recipes with a config table
+(mirror the `acp-setup` skill) — best done when the conductor's agent-discovery
+needs are concrete.
 
 ## Not yet live-proven through the bundled app
 

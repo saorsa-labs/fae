@@ -77,18 +77,20 @@ async fn mock_agent_permission_declined() {
 }
 
 #[tokio::test]
-async fn mock_agent_fs_write_mediated() {
+async fn mock_agent_fs_read_after_write_mediated() {
     use_mock_agent();
-    // With FS enabled, an approved turn also issues `fs/write_text_file`, which
-    // the client mediates (gap A3b). Here the test plays the mediator: approve
-    // the permission, then accept the write.
+    // With FS enabled, an approved turn issues `fs/write_text_file` then reads it
+    // back with `fs/read_text_file`, both mediated by the client (gap A3b). The
+    // test plays the mediator in memory: store the write, return it on the read.
     std::env::set_var("FAE_ACP_MOCK_FS", "1");
     let session = AcpSession::start("mock", Path::new("/tmp"), ApprovalPolicy::DenyAll)
         .await
         .expect("mock session starts");
     let mut handle = session.prompt("go".to_owned()).expect("prompt accepted");
 
+    let mut stored: Option<String> = None;
     let mut mediated_write = false;
+    let mut mediated_read = false;
     while let Some(request) = handle.requests.recv().await {
         match request {
             AcpServerRequest::Permission { reply, .. } => {
@@ -104,11 +106,14 @@ async fn mock_agent_fs_write_mediated() {
                 assert!(path.ends_with("a3_proof.txt"), "write path: {path}");
                 assert!(content.contains("pong"), "write content: {content}");
                 mediated_write = true;
+                stored = Some(content);
                 reply.send(Ok(())).ok();
-                break; // the write is the agent's last request this turn
             }
-            AcpServerRequest::ReadFile { reply, .. } => {
-                reply.send(Err("no reads expected".to_owned())).ok();
+            AcpServerRequest::ReadFile { path, reply } => {
+                assert!(path.ends_with("a3_proof.txt"), "read path: {path}");
+                mediated_read = true;
+                reply.send(Ok(stored.clone().unwrap_or_default())).ok();
+                break; // the read-back is the agent's last request this turn
             }
         }
     }
@@ -116,9 +121,10 @@ async fn mock_agent_fs_write_mediated() {
 
     let outcome = handle.reply.await.expect("turn resolves").expect("turn ok");
     assert!(mediated_write, "the fs write was mediated by the client");
+    assert!(mediated_read, "the fs read was mediated by the client");
     assert!(
-        outcome.text.contains("wrote file"),
-        "expected the agent to report a successful write, got: {}",
+        outcome.text.contains("read back"),
+        "expected the agent to report a successful read-after-write, got: {}",
         outcome.text
     );
     session.close();
