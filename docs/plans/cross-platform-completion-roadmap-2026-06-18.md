@@ -73,12 +73,22 @@ whisper.cpp** for STT (both cross-platform under llama.cpp) when Gemma audio is 
 clean clip; the chosen path documented; degraded-audio behavior defined (never a silent wrong `[heard]`).
 **Why P2:** a voice assistant that mis-hears is worse than useless; this is the top product risk.
 
-### P3 — C3: close the training→brain consumption loop  (depends on P1)
+### P3 — C3: close the training→brain consumption loop  ✅ DONE (commit c71d6ba1, 2026-06-19)
 **Objective:** trained personal LoRA adapters must reach the **llama.cpp daemon brain**, not just the MLX
-fallback. Wire the nightly loop: train (MLX/Unsloth) → PEFT → `convert_lora_to_gguf` → hot-load into the
+fallback. Wire the nightly loop: train (portable PEFT) → `convert_to_gguf.py` → hot-load into the
 running llama-server via per-request scale (B3 adapter-level already landed) + `engine.reload`.
-**Done:** an end-to-end nightly cycle produces a GGUF LoRA that the daemon loads and serves at scale=1,
-with instant scale=0 rollback, proven live; benchmark gate (P9/C4) enforced before deploy.
+**Decision:** the daemon loop uses the cross-platform **PEFT producer** (`train_peft.py` →
+`convert_to_gguf.py`); mlx-tune stays an out-of-loop Apple-fast experimental lane (its `.safetensors`
+adapters have no proven GGUF path).
+**Done ✅:** end-to-end loop closed and live-proven on the real daemon — a GGUF LoRA loads and serves at
+scale=1 with instant scale=0 rollback (audit.jsonl: reload + set-scale, `model:management`, allow; probe
+fact present at scale=1, absent at scale=0). Swift: `TrainingBridge.trainPeftAndConvert` (verify+fail-loud
+GGUF), `DaemonLLMEngine.reloadAdapter/setAdapterScale`, the previously dead-end ICC `adapterPatchCallback`
+wired → polymorphic `applyAdapterChange` (daemon vs MLX). Rust Stage 4: confinement + existence + SHA
+*before* killing the sidecar, distinct `adapter_path_rejected`, `runtime.status` adapter report. Gate:
+fmt/clippy -D warnings, nextest 85/85, swift build clean. **Reviewer-verified** against the real diff +
+re-run gate + the daemon's own audit log. **Deferred:** bundled-app `run-dev` live proof (the
+release-validation/human-in-loop gate); the mandatory FaeBenchmark hard-gate is formalized in P9/C4.
 
 ### P4 — B2: cross-platform packaging + CI  (depends on P1)
 **Objective:** ship/resolve the `llama-server` binary per platform (bundled+signed macOS done; Linux/
