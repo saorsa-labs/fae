@@ -191,13 +191,51 @@ pub enum AcpUpdate {
     },
 }
 
-/// In-flight handle for one prompt turn: a live stream of updates plus the final
-/// outcome. The daemon drains `updates` (publishing events) while awaiting
-/// `reply`. When the turn ends, the session drops the update sender, closing
-/// `updates`.
+/// One option the agent offered for a permission request (gap A3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpPermissionOption {
+    /// Stable option id to echo back when selected.
+    pub id: String,
+    /// Human-readable label (e.g. "Allow", "Allow once", "Reject").
+    pub name: String,
+    /// Hint about the option (`allow_once`, `allow_always`, `reject_once`, …).
+    pub kind: String,
+}
+
+/// The client's answer to a permission request (gap A3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcpPermissionDecision {
+    /// Approve by selecting the option with this id.
+    Selected(String),
+    /// Decline / cancel the request.
+    Cancelled,
+}
+
+/// A decision the agent needs from the client mid-turn (gap A3). The daemon
+/// drives these to Fae (the approval card, the path/damage policy) and feeds the
+/// answer back into the agent's turn.
+pub enum AcpServerRequest {
+    /// The agent asked permission for a tool call (`session/request_permission`).
+    Permission {
+        /// Best-effort title of the tool call needing permission.
+        title: String,
+        /// The options the agent offered.
+        options: Vec<AcpPermissionOption>,
+        /// Channel for the client's decision.
+        reply: oneshot::Sender<AcpPermissionDecision>,
+    },
+}
+
+/// In-flight handle for one prompt turn: a live stream of updates, a stream of
+/// mid-turn server requests (permission/fs), plus the final outcome. The daemon
+/// drains `updates` (publishing events) and `requests` (driving them to Fae)
+/// while awaiting `reply`. When the turn ends, the session drops the senders,
+/// closing both streams.
 pub struct PromptHandle {
     /// Live updates for this turn (closed when the turn completes).
     pub updates: mpsc::UnboundedReceiver<AcpUpdate>,
+    /// Mid-turn server requests the agent raised (permission, fs).
+    pub requests: mpsc::UnboundedReceiver<AcpServerRequest>,
     /// The final turn outcome.
     pub reply: oneshot::Receiver<Result<AcpOutcome, AcpError>>,
 }
@@ -210,14 +248,22 @@ struct TurnState {
     tool_calls: Vec<AcpToolCall>,
     /// Live sink for the active turn; `None` between turns.
     live: Option<mpsc::UnboundedSender<AcpUpdate>>,
+    /// Sink for mid-turn server requests (permission/fs) of the active turn;
+    /// `None` between turns (the permission handler then uses the static policy).
+    requests: Option<mpsc::UnboundedSender<AcpServerRequest>>,
 }
 
 impl TurnState {
-    /// Start a fresh turn: clear the accumulators and install the live sink.
-    fn begin(&mut self, live: mpsc::UnboundedSender<AcpUpdate>) {
+    /// Start a fresh turn: clear the accumulators and install the live sinks.
+    fn begin(
+        &mut self,
+        live: mpsc::UnboundedSender<AcpUpdate>,
+        requests: mpsc::UnboundedSender<AcpServerRequest>,
+    ) {
         self.text.clear();
         self.tool_calls.clear();
         self.live = Some(live);
+        self.requests = Some(requests);
     }
 
     /// Fold one streamed `session/update` into the turn, forwarding it live.
@@ -255,6 +301,7 @@ impl TurnState {
         result: Result<StopReason, agent_client_protocol::Error>,
     ) -> Result<AcpOutcome, AcpError> {
         self.live = None;
+        self.requests = None;
         let text = std::mem::take(&mut self.text);
         let tool_calls = std::mem::take(&mut self.tool_calls);
         match result {
@@ -273,6 +320,7 @@ enum SessionCommand {
     Prompt {
         text: String,
         updates: mpsc::UnboundedSender<AcpUpdate>,
+        requests: mpsc::UnboundedSender<AcpServerRequest>,
         reply: oneshot::Sender<Result<AcpOutcome, AcpError>>,
     },
     Close,
@@ -304,6 +352,7 @@ impl AcpSession {
         let cancel_task = Arc::clone(&cancel);
         let turn_state = Arc::new(Mutex::new(TurnState::default()));
         let handler_state = Arc::clone(&turn_state);
+        let handler_state_perm = Arc::clone(&turn_state);
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), AcpError>>();
 
         tokio::spawn(async move {
@@ -323,17 +372,14 @@ impl AcpSession {
                 )
                 .on_receive_request(
                     async move |request: RequestPermissionRequest, responder, _connection| {
-                        let outcome = match policy {
-                            ApprovalPolicy::ApproveAll => request
-                                .options
-                                .first()
-                                .map(|opt| {
-                                    RequestPermissionOutcome::Selected(
-                                        SelectedPermissionOutcome::new(opt.option_id.clone()),
-                                    )
-                                })
-                                .unwrap_or(RequestPermissionOutcome::Cancelled),
-                            ApprovalPolicy::DenyAll => RequestPermissionOutcome::Cancelled,
+                        // A3: route to the active turn's request sink so Fae's
+                        // approval card decides; fall back to the static policy
+                        // when no turn is routing (A1/A2 one-shot behavior).
+                        let sink =
+                            handler_state_perm.lock().ok().and_then(|turn| turn.requests.clone());
+                        let outcome = match sink {
+                            Some(sink) => Self::request_permission(&sink, &request).await,
+                            None => Self::fallback_permission(policy, &request),
                         };
                         responder.respond(RequestPermissionResponse::new(outcome))
                     },
@@ -357,10 +403,11 @@ impl AcpSession {
                             SessionCommand::Prompt {
                                 text,
                                 updates,
+                                requests,
                                 reply,
                             } => {
                                 if let Ok(mut turn) = turn_state.lock() {
-                                    turn.begin(updates);
+                                    turn.begin(updates, requests);
                                 }
                                 let prompt_fut = connection
                                     .send_request(PromptRequest::new(
@@ -431,18 +478,92 @@ impl AcpSession {
     /// final outcome.
     pub fn prompt(&self, text: String) -> Result<PromptHandle, AcpError> {
         let (updates_tx, updates_rx) = mpsc::unbounded_channel();
+        let (requests_tx, requests_rx) = mpsc::unbounded_channel();
         let (reply_tx, reply_rx) = oneshot::channel();
         self.cmd_tx
             .send(SessionCommand::Prompt {
                 text,
                 updates: updates_tx,
+                requests: requests_tx,
                 reply: reply_tx,
             })
             .map_err(|_| AcpError::Protocol("session is closed".to_owned()))?;
         Ok(PromptHandle {
             updates: updates_rx,
+            requests: requests_rx,
             reply: reply_rx,
         })
+    }
+
+    /// Drive one permission request to the client (via the turn's request sink)
+    /// and map its decision back to an ACP outcome. A closed sink or cancelled
+    /// decision declines the request (fail-safe).
+    async fn request_permission(
+        sink: &mpsc::UnboundedSender<AcpServerRequest>,
+        request: &RequestPermissionRequest,
+    ) -> RequestPermissionOutcome {
+        let options: Vec<AcpPermissionOption> = request
+            .options
+            .iter()
+            .map(|opt| AcpPermissionOption {
+                id: opt.option_id.to_string(),
+                name: opt.name.clone(),
+                kind: format!("{:?}", opt.kind),
+            })
+            .collect();
+        let title = serde_json::to_value(&request.tool_call)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if sink
+            .send(AcpServerRequest::Permission {
+                title,
+                options,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return RequestPermissionOutcome::Cancelled;
+        }
+        match reply_rx.await {
+            Ok(AcpPermissionDecision::Selected(option_id)) => request
+                .options
+                .iter()
+                .find(|opt| opt.option_id.to_string() == option_id)
+                .map(|opt| {
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                        opt.option_id.clone(),
+                    ))
+                })
+                .unwrap_or(RequestPermissionOutcome::Cancelled),
+            _ => RequestPermissionOutcome::Cancelled,
+        }
+    }
+
+    /// The A1/A2 fallback: approve the first option or decline, per the static
+    /// policy. Used when no turn is routing permissions (e.g. `run_one_shot`).
+    fn fallback_permission(
+        policy: ApprovalPolicy,
+        request: &RequestPermissionRequest,
+    ) -> RequestPermissionOutcome {
+        match policy {
+            ApprovalPolicy::ApproveAll => request
+                .options
+                .first()
+                .map(|opt| {
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                        opt.option_id.clone(),
+                    ))
+                })
+                .unwrap_or(RequestPermissionOutcome::Cancelled),
+            ApprovalPolicy::DenyAll => RequestPermissionOutcome::Cancelled,
+        }
     }
 
     /// Cancel the in-flight turn (`session/cancel`). A no-op if no turn is
@@ -537,8 +658,9 @@ mod tests {
         // The streaming sink and the final accumulation see the same text/tool
         // calls — the orb narration and the tool's final result stay in sync.
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let (req_tx, _req_rx) = mpsc::unbounded_channel();
         let mut turn = TurnState::default();
-        turn.begin(tx);
+        turn.begin(tx, req_tx);
         turn.absorb(SessionUpdate::AgentMessageChunk(
             agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(TextContent::new(
                 "hello ".to_owned(),

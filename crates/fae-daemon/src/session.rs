@@ -19,6 +19,7 @@ use serde::Deserialize;
 
 use crate::agents::AgentSessionRegistry;
 use crate::events::{EventBus, PlaybackRegistry};
+use crate::server_request::ServerRequester;
 
 /// Daemon version surfaced by `host.version`.
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -492,12 +493,24 @@ async fn agent_session_start(
     Ok(serde_json::json!({ "session_id": session_id }))
 }
 
-/// `agent.prompt` — submit a prompt to a live session, republishing the agent's
-/// streamed output as `agent.output` / `agent.tool_call` events on the V2 bus
-/// (so the orb narrates live) and returning the final turn. Requires
-/// `AgentExecute`.
+/// `agent.prompt` (inline/diagnostic path, no `ServerRequester`) — permission
+/// requests fall back to approve-first since there is no UI to ask.
 async fn agent_prompt(
     backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
+    agent_prompt_inner(backends.agents, backends.events, None, cmd).await
+}
+
+/// `agent.prompt` core — submit a prompt to a live session, republishing the
+/// agent's streamed output as `agent.output` / `agent.tool_call` events on the
+/// V2 bus (so the orb narrates live), driving mid-turn permission requests to
+/// the client over `requester` (gap A3), and returning the final turn. Requires
+/// `AgentExecute`.
+async fn agent_prompt_inner(
+    agents: &AgentSessionRegistry,
+    events: &EventBus,
+    requester: Option<ServerRequester>,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
     let session_id = cmd
@@ -510,7 +523,7 @@ async fn agent_prompt(
         .get("prompt")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
-    let session = backends.agents.get(session_id).ok_or("unknown_session")?;
+    let session = agents.get(session_id).ok_or("unknown_session")?;
     let handle = session
         .prompt(prompt.to_owned())
         .map_err(|_| "session_closed")?;
@@ -519,14 +532,14 @@ async fn agent_prompt(
     // prompt's request id, so a subscriber can correlate events with the final
     // `ok`. The stream closes when the turn completes (the session drops its
     // sender), ending this task.
-    let events = backends.events.clone();
+    let events_drain = events.clone();
     let turn_id = cmd.request_id.clone();
     let session_label = session_id.to_owned();
     let mut updates = handle.updates;
-    let drain = tokio::spawn(async move {
+    let updates_drain = tokio::spawn(async move {
         while let Some(update) = updates.recv().await {
             match update {
-                fae_acp::AcpUpdate::Text(delta) => events.publish(
+                fae_acp::AcpUpdate::Text(delta) => events_drain.publish(
                     "agent.output",
                     Scope::AgentExecute,
                     serde_json::json!({
@@ -535,7 +548,7 @@ async fn agent_prompt(
                         "delta": delta,
                     }),
                 ),
-                fae_acp::AcpUpdate::ToolCall { id, title } => events.publish(
+                fae_acp::AcpUpdate::ToolCall { id, title } => events_drain.publish(
                     "agent.tool_call",
                     Scope::AgentExecute,
                     serde_json::json!({
@@ -549,6 +562,26 @@ async fn agent_prompt(
         }
     });
 
+    // Drain mid-turn server requests (gap A3). With a `ServerRequester` each
+    // permission request is driven to the client (→ Fae's approval card) and the
+    // decision flows back; without one (diagnostic path), approve the first
+    // option so the agent can proceed.
+    let mut requests = handle.requests;
+    let requests_drain = tokio::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            match request {
+                fae_acp::AcpServerRequest::Permission {
+                    title,
+                    options,
+                    reply,
+                } => {
+                    let decision = resolve_permission(&requester, &title, &options).await;
+                    let _ = reply.send(decision);
+                }
+            }
+        }
+    });
+
     let outcome = handle
         .reply
         .await
@@ -557,7 +590,8 @@ async fn agent_prompt(
             eprintln!("fae-daemon: agent.prompt turn failed: {error}");
             "agent_error"
         })?;
-    let _ = drain.await;
+    let _ = updates_drain.await;
+    let _ = requests_drain.await;
 
     let tool_calls: Vec<serde_json::Value> = outcome
         .tool_calls
@@ -569,6 +603,92 @@ async fn agent_prompt(
         "stop_reason": outcome.stop_reason,
         "tool_calls": tool_calls,
     }))
+}
+
+/// Resolve one agent permission request: round-trip to the client via
+/// `requester` (gap A3) or, with no requester (diagnostic path), approve the
+/// first option. A disconnected/declined client cancels (fail-safe).
+async fn resolve_permission(
+    requester: &Option<ServerRequester>,
+    title: &str,
+    options: &[fae_acp::AcpPermissionOption],
+) -> fae_acp::AcpPermissionDecision {
+    let Some(requester) = requester else {
+        return options
+            .first()
+            .map(|opt| fae_acp::AcpPermissionDecision::Selected(opt.id.clone()))
+            .unwrap_or(fae_acp::AcpPermissionDecision::Cancelled);
+    };
+    let params = serde_json::json!({
+        "title": title,
+        "options": options
+            .iter()
+            .map(|opt| serde_json::json!({ "id": opt.id, "name": opt.name, "kind": opt.kind }))
+            .collect::<Vec<_>>(),
+    });
+    match requester.request("permission.request", params).await {
+        Ok(reply) => permission_decision_from_reply(&reply),
+        Err(_) => fae_acp::AcpPermissionDecision::Cancelled,
+    }
+}
+
+/// Map the client's `permission.request` reply payload to a decision:
+/// `{cancelled:true}` declines, `{option_id:"…"}` approves that option,
+/// anything else declines (fail-safe).
+fn permission_decision_from_reply(reply: &serde_json::Value) -> fae_acp::AcpPermissionDecision {
+    if reply.get("cancelled").and_then(serde_json::Value::as_bool) == Some(true) {
+        fae_acp::AcpPermissionDecision::Cancelled
+    } else if let Some(option_id) = reply.get("option_id").and_then(serde_json::Value::as_str) {
+        fae_acp::AcpPermissionDecision::Selected(option_id.to_owned())
+    } else {
+        fae_acp::AcpPermissionDecision::Cancelled
+    }
+}
+
+/// Authorize + audit + run an `agent.prompt` frame with a live `ServerRequester`
+/// (gap A3 transport spawn path). The transport runs this on a spawned task so
+/// the connection read loop keeps reading the client's server-request replies
+/// while the turn is in flight.
+pub async fn run_authorized_agent_prompt(
+    record: &ClientRecord,
+    cmd: &Command,
+    agents: &AgentSessionRegistry,
+    events: &EventBus,
+    requester: ServerRequester,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => {
+            match agent_prompt_inner(agents, events, Some(requester), cmd).await {
+                Ok(result) => Response::ok(&cmd.request_id, result),
+                Err(code) => {
+                    Response::error(&cmd.request_id, code, "command could not be completed")
+                }
+            }
+        }
+        AuthzDecision::ConfirmRequired => Response::error(
+            &cmd.request_id,
+            "confirm_required",
+            "owner confirmation required for this action",
+        ),
+        AuthzDecision::Deny(reason) => {
+            Response::error(&cmd.request_id, reason.code(), "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
 }
 
 /// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).
@@ -1243,6 +1363,30 @@ mod tests {
         let agents = value["agents"].as_array().expect("agents array");
         assert!(agents.iter().any(|a| a == "codex"));
         assert!(agents.iter().any(|a| a == "claude"));
+    }
+
+    #[test]
+    fn permission_reply_maps_to_decision() {
+        use fae_acp::AcpPermissionDecision;
+        // Approve → Selected(option_id).
+        assert_eq!(
+            super::permission_decision_from_reply(
+                &serde_json::json!({ "option_id": "allow-once" })
+            ),
+            AcpPermissionDecision::Selected("allow-once".to_owned())
+        );
+        // Explicit cancel → Cancelled (even if an option_id is somehow present).
+        assert_eq!(
+            super::permission_decision_from_reply(
+                &serde_json::json!({ "cancelled": true, "option_id": "allow" })
+            ),
+            AcpPermissionDecision::Cancelled
+        );
+        // Empty / malformed reply → Cancelled (fail-safe).
+        assert_eq!(
+            super::permission_decision_from_reply(&serde_json::json!({})),
+            AcpPermissionDecision::Cancelled
+        );
     }
 
     #[tokio::test]

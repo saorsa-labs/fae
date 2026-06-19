@@ -108,11 +108,109 @@ enum DaemonAgentClient {
     /// Submit a prompt to a live session (`agent.prompt`). The agent's streamed
     /// output is republished by the daemon as `agent.output` / `agent.tool_call`
     /// events for the orb; this call returns the final assembled turn.
+    ///
+    /// Mid-turn, the agent may ask the daemon for permission, which the daemon
+    /// forwards here as a `permission.request` server-request (gap A3). Each is
+    /// surfaced on Fae's approval card; the user's decision flows back into the
+    /// agent's turn on this same connection.
     static func sessionPrompt(sessionId: String, prompt: String) async throws -> Outcome {
-        let response = try await call(
+        let response = try await callHandlingServerRequests(
             command: "agent.prompt",
-            payload: ["session_id": sessionId, "prompt": prompt])
+            payload: ["session_id": sessionId, "prompt": prompt],
+            onServerRequest: { _, method, params in
+                await handleServerRequest(method: method, params: params)
+            })
         return parseOutcome(response)
+    }
+
+    /// Answer a daemon server-request. Today only `permission.request` (gap A3a);
+    /// `fs.*` mediation is A3b.
+    private static func handleServerRequest(
+        method: String, params: [String: Any]
+    ) async -> [String: Any] {
+        guard method == "permission.request" else {
+            return ["cancelled": true]
+        }
+        let title = (params["title"] as? String) ?? "Agent action"
+        let options = (params["options"] as? [[String: Any]]) ?? []
+        let approved = await requestApproval(
+            title: "Agent permission",
+            message: permissionMessage(title: title, options: options))
+        if approved, let optionID = firstAllowOption(options) {
+            return ["option_id": optionID]
+        }
+        return ["cancelled": true]
+    }
+
+    /// The id of the option that approves (kind/name contains "allow"), else the
+    /// first option — `nil` only when the agent offered none.
+    static func firstAllowOption(_ options: [[String: Any]]) -> String? {
+        let allow = options.first { option in
+            let kind = (option["kind"] as? String ?? "").lowercased()
+            let name = (option["name"] as? String ?? "").lowercased()
+            return kind.contains("allow") || name.contains("allow")
+        }
+        return (allow?["id"] as? String) ?? (options.first?["id"] as? String)
+    }
+
+    /// Human-readable approval-card body for a permission request.
+    static func permissionMessage(title: String, options: [[String: Any]]) -> String {
+        let label = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = label.isEmpty ? "an action" : "“\(label)”"
+        return "A delegated agent wants to \(action). Allow it?"
+    }
+
+    /// Present Fae's governance approval card and await the user's yes/no. Reuses
+    /// the existing `.faeGovernanceConfirmation*` round-trip (the same card tool
+    /// approvals use).
+    @MainActor
+    private static func requestApproval(title: String, message: String) async -> Bool {
+        let requestID = UUID().uuidString
+        return await withCheckedContinuation { continuation in
+            var observer: NSObjectProtocol?
+            observer = NotificationCenter.default.addObserver(
+                forName: .faeGovernanceConfirmationRespond,
+                object: nil,
+                queue: .main
+            ) { note in
+                guard let info = note.userInfo,
+                      (info["request_id"] as? String) == requestID
+                else { return }
+                if let observer { NotificationCenter.default.removeObserver(observer) }
+                continuation.resume(returning: (info["approved"] as? Bool) ?? false)
+            }
+            NotificationCenter.default.post(
+                name: .faeGovernanceConfirmationRequested,
+                object: nil,
+                userInfo: [
+                    "request_id": requestID,
+                    "title": title,
+                    "message": message,
+                    "confirm_label": "Allow",
+                ])
+        }
+    }
+
+    /// Like `call`, but server-request frames during the round trip are routed to
+    /// `onServerRequest` and answered on the same connection.
+    private static func callHandlingServerRequests(
+        command: String,
+        payload: [String: Any],
+        onServerRequest: @escaping (String, String, [String: Any]) async -> [String: Any]
+    ) async throws -> [String: Any] {
+        guard let endpoints = await DaemonEndpointStore.shared.current() else {
+            throw DaemonAgentClientError.daemonUnavailable
+        }
+        let connection = DaemonSocketConnection(queueLabel: "fae.daemon-agent.socket")
+        try connection.connect(to: endpoints.socketPath)
+        defer { connection.close() }
+        try await authenticate(connection: connection, tokenPath: endpoints.tokenPath)
+        let requestID = "a1"
+        let frame = try DaemonWire.encodeFrame(
+            requestID: requestID, command: command, payload: payload)
+        let raw = try await connection.roundTrip(
+            frame: frame, expectRequestID: requestID, onServerRequest: onServerRequest)
+        return try DaemonWire.unwrapResponse(raw)
     }
 
     /// Cancel a session's in-flight turn (`agent.cancel`).

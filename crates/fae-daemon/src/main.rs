@@ -35,6 +35,7 @@ use fae_engine::{
 mod agents;
 mod diagnostic;
 mod events;
+mod server_request;
 mod session;
 mod transport;
 

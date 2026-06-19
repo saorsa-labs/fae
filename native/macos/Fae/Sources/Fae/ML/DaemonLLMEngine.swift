@@ -151,6 +151,25 @@ enum DaemonWire {
         return data
     }
 
+    /// Encode a reply to a server-initiated request (gap A3):
+    /// `{v, server_request_id, result}` with a trailing newline.
+    static func encodeServerReply(
+        serverRequestID: String,
+        result: [String: Any]
+    ) throws -> Data {
+        let object: [String: Any] = [
+            "v": 2,
+            "server_request_id": serverRequestID,
+            "result": result,
+        ]
+        guard JSONSerialization.isValidJSONObject(object) else {
+            throw DaemonLLMEngineError.protocolError("server reply for \(serverRequestID) is not valid JSON")
+        }
+        var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        data.append(0x0A)
+        return data
+    }
+
     /// Parse one NDJSON line into a JSON object, or nil for non-object lines.
     static func parseObjectLine(_ line: String) -> [String: Any]? {
         guard let data = line.data(using: .utf8), !data.isEmpty else { return nil }
@@ -476,6 +495,62 @@ final class DaemonSocketConnection: @unchecked Sendable {
                     let response = try self.readMatchingResponseLocked(
                         requestID: expectRequestID, maxSkippedLines: 200)
                     continuation.resume(returning: response)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Send one frame, then read response lines until the matching `request_id`
+    /// arrives — but handle any server-initiated request frames
+    /// (`{server_request_id, method, params}`, gap A3) inline: `onServerRequest`
+    /// produces the reply payload, which is written back on this same connection
+    /// before reading continues. This is what lets `agent.prompt` answer the
+    /// agent's mid-turn permission requests without a second connection.
+    func roundTrip(
+        frame: Data,
+        expectRequestID: String,
+        onServerRequest: @escaping (_ serverRequestID: String, _ method: String, _ params: [String: Any]) async -> [String: Any]
+    ) async throws -> [String: Any] {
+        try await writeAsync(frame)
+        // A long agent turn can interleave many server-requests with skipped
+        // event lines; bound the loop generously against a wedged peer.
+        for _ in 0..<5_000 {
+            let line = try await readLineAsync()
+            guard let object = DaemonWire.parseObjectLine(line) else { continue }
+            if let serverRequestID = object["server_request_id"] as? String,
+               let method = object["method"] as? String
+            {
+                let params = (object["params"] as? [String: Any]) ?? [:]
+                let result = await onServerRequest(serverRequestID, method, params)
+                let reply = try DaemonWire.encodeServerReply(
+                    serverRequestID: serverRequestID, result: result)
+                try await writeAsync(reply)
+                continue
+            }
+            if (object["request_id"] as? String) == expectRequestID { return object }
+        }
+        throw DaemonLLMEngineError.responseTimedOut(expectRequestID)
+    }
+
+    /// Queue-confined async single-line read (used by the server-request loop).
+    private func readLineAsync() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do { continuation.resume(returning: try self.readLineLocked()) }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    /// Queue-confined async frame write (used by the server-request loop).
+    private func writeAsync(_ data: Data) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    try self.writeLocked(data)
+                    continuation.resume()
                 } catch {
                     continuation.resume(throwing: error)
                 }

@@ -78,4 +78,24 @@ final class AgentDelegateToolTests: XCTestCase {
                 AgentDelegateTool.shouldUseDaemon(model: nil, secretBindings: [:]))
         }
     }
+
+    // MARK: - A3 permission-card option selection
+
+    func testFirstAllowOptionPrefersAllowKind() {
+        let options: [[String: Any]] = [
+            ["id": "reject", "name": "Reject", "kind": "RejectOnce"],
+            ["id": "ok", "name": "Allow once", "kind": "AllowOnce"],
+        ]
+        XCTAssertEqual(DaemonAgentClient.firstAllowOption(options), "ok")
+    }
+
+    func testFirstAllowOptionFallsBackToFirst() {
+        // No "allow" option → fall back to the first offered option.
+        let options: [[String: Any]] = [
+            ["id": "a", "name": "Proceed", "kind": "Proceed"],
+            ["id": "b", "name": "Stop", "kind": "Stop"],
+        ]
+        XCTAssertEqual(DaemonAgentClient.firstAllowOption(options), "a")
+        XCTAssertNil(DaemonAgentClient.firstAllowOption([]))
+    }
 }
