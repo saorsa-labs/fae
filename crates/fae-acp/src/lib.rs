@@ -22,9 +22,11 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{
-    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
-    ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, TextContent,
+    CancelNotification, ClientCapabilities, ContentBlock, FileSystemCapabilities,
+    InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
+    StopReason, TextContent, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo};
 use tokio::sync::{mpsc, oneshot, Notify};
@@ -86,6 +88,15 @@ pub fn resolve_agent(name: &str) -> Result<AcpAgent, AcpError> {
         "pi" => AcpAgent::from_str("npx -y pi-acp@latest").map_err(launch_err)?,
         "copilot" => AcpAgent::from_str("copilot --acp").map_err(launch_err)?,
         "opencode" => AcpAgent::from_str("npx -y opencode-ai acp").map_err(launch_err)?,
+        // Deterministic A3 test fixture: only resolvable when
+        // `FAE_ACP_MOCK_AGENT_BIN` points at the `mock_acp_agent` binary (dev/
+        // test only — production never sets it, so `mock` stays unknown there).
+        "mock" => {
+            let bin = std::env::var("FAE_ACP_MOCK_AGENT_BIN").map_err(|_| {
+                AcpError::UnknownAgent("mock (FAE_ACP_MOCK_AGENT_BIN unset)".to_owned())
+            })?;
+            AcpAgent::from_str(&bin).map_err(launch_err)?
+        }
         other => return Err(AcpError::UnknownAgent(other.to_owned())),
     };
     Ok(agent)
@@ -224,6 +235,26 @@ pub enum AcpServerRequest {
         /// Channel for the client's decision.
         reply: oneshot::Sender<AcpPermissionDecision>,
     },
+    /// The agent asked the client to read a text file (`fs/read_text_file`,
+    /// gap A3b). The client mediates via its path/damage policy. Reply is the
+    /// file contents, or an error message (refused / unreadable).
+    ReadFile {
+        /// Absolute path the agent wants to read.
+        path: String,
+        /// Channel for the file contents or a refusal reason.
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// The agent asked the client to write a text file (`fs/write_text_file`,
+    /// gap A3b), mediated by the client's path/damage policy. Reply is `Ok` on a
+    /// successful write, or an error message (refused / unwritable).
+    WriteFile {
+        /// Absolute path the agent wants to write.
+        path: String,
+        /// Full new contents.
+        content: String,
+        /// Channel for the write result or a refusal reason.
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// In-flight handle for one prompt turn: a live stream of updates, a stream of
@@ -353,6 +384,8 @@ impl AcpSession {
         let turn_state = Arc::new(Mutex::new(TurnState::default()));
         let handler_state = Arc::clone(&turn_state);
         let handler_state_perm = Arc::clone(&turn_state);
+        let handler_state_read = Arc::clone(&turn_state);
+        let handler_state_write = Arc::clone(&turn_state);
         let (ready_tx, ready_rx) = oneshot::channel::<Result<(), AcpError>>();
 
         tokio::spawn(async move {
@@ -371,17 +404,67 @@ impl AcpSession {
                     agent_client_protocol::on_receive_notification!(),
                 )
                 .on_receive_request(
-                    async move |request: RequestPermissionRequest, responder, _connection| {
+                    async move |request: RequestPermissionRequest, responder, cx| {
                         // A3: route to the active turn's request sink so Fae's
                         // approval card decides; fall back to the static policy
                         // when no turn is routing (A1/A2 one-shot behavior).
+                        // Run on a spawned task: the routed decision awaits a
+                        // reverse round-trip, which would deadlock the dispatch
+                        // loop if awaited inline (see `concepts::ordering`).
                         let sink =
                             handler_state_perm.lock().ok().and_then(|turn| turn.requests.clone());
-                        let outcome = match sink {
-                            Some(sink) => Self::request_permission(&sink, &request).await,
-                            None => Self::fallback_permission(policy, &request),
-                        };
-                        responder.respond(RequestPermissionResponse::new(outcome))
+                        cx.clone().spawn(async move {
+                            let outcome = match sink {
+                                Some(sink) => Self::request_permission(&sink, &request).await,
+                                None => Self::fallback_permission(policy, &request),
+                            };
+                            let _ = responder.respond(RequestPermissionResponse::new(outcome));
+                            Ok(())
+                        })?;
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ReadTextFileRequest, responder, cx| {
+                        // A3b: delegate fs reads to the client (path/damage policy).
+                        let sink =
+                            handler_state_read.lock().ok().and_then(|turn| turn.requests.clone());
+                        let path = request.path.to_string_lossy().into_owned();
+                        cx.clone().spawn(async move {
+                            match Self::request_read_file(sink, path).await {
+                                Ok(content) => {
+                                    let _ = responder.respond(ReadTextFileResponse::new(content));
+                                }
+                                Err(reason) => {
+                                    let _ = responder.respond_with_internal_error(reason);
+                                }
+                            }
+                            Ok(())
+                        })?;
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: WriteTextFileRequest, responder, cx| {
+                        // A3b: delegate fs writes to the client (path/damage policy).
+                        let sink =
+                            handler_state_write.lock().ok().and_then(|turn| turn.requests.clone());
+                        let path = request.path.to_string_lossy().into_owned();
+                        let content = request.content;
+                        cx.clone().spawn(async move {
+                            match Self::request_write_file(sink, path, content).await {
+                                Ok(()) => {
+                                    let _ = responder.respond(WriteTextFileResponse::new());
+                                }
+                                Err(reason) => {
+                                    let _ = responder.respond_with_internal_error(reason);
+                                }
+                            }
+                            Ok(())
+                        })?;
+                        Ok(())
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -460,8 +543,15 @@ impl AcpSession {
         connection: &ConnectionTo<Agent>,
         cwd: std::path::PathBuf,
     ) -> Result<agent_client_protocol::schema::SessionId, AcpError> {
+        // Advertise client-side fs so the agent delegates reads/writes to us,
+        // where the path/damage policy mediates them (gap A3b).
+        let capabilities = ClientCapabilities::default().fs(FileSystemCapabilities::default()
+            .read_text_file(true)
+            .write_text_file(true));
         connection
-            .send_request(InitializeRequest::new(ProtocolVersion::V1))
+            .send_request(
+                InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities),
+            )
             .block_task()
             .await
             .map_err(|error| AcpError::Protocol(error.to_string()))?;
@@ -543,6 +633,58 @@ impl AcpSession {
                 })
                 .unwrap_or(RequestPermissionOutcome::Cancelled),
             _ => RequestPermissionOutcome::Cancelled,
+        }
+    }
+
+    /// Drive one `fs/read_text_file` to the client (gap A3b) and return the
+    /// contents or a refusal reason. No turn routing (e.g. one-shot) refuses.
+    async fn request_read_file(
+        sink: Option<mpsc::UnboundedSender<AcpServerRequest>>,
+        path: String,
+    ) -> Result<String, String> {
+        let Some(sink) = sink else {
+            return Err("filesystem mediation unavailable".to_owned());
+        };
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if sink
+            .send(AcpServerRequest::ReadFile {
+                path,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Err("filesystem channel closed".to_owned());
+        }
+        match reply_rx.await {
+            Ok(result) => result,
+            Err(_) => Err("no filesystem response".to_owned()),
+        }
+    }
+
+    /// Drive one `fs/write_text_file` to the client (gap A3b) and return `Ok` or
+    /// a refusal reason. No turn routing (e.g. one-shot) refuses.
+    async fn request_write_file(
+        sink: Option<mpsc::UnboundedSender<AcpServerRequest>>,
+        path: String,
+        content: String,
+    ) -> Result<(), String> {
+        let Some(sink) = sink else {
+            return Err("filesystem mediation unavailable".to_owned());
+        };
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if sink
+            .send(AcpServerRequest::WriteFile {
+                path,
+                content,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Err("filesystem channel closed".to_owned());
+        }
+        match reply_rx.await {
+            Ok(result) => result,
+            Err(_) => Err("no filesystem response".to_owned()),
         }
     }
 

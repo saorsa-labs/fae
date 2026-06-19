@@ -98,4 +98,29 @@ final class AgentDelegateToolTests: XCTestCase {
         XCTAssertEqual(DaemonAgentClient.firstAllowOption(options), "a")
         XCTAssertNil(DaemonAgentClient.firstAllowOption([]))
     }
+
+    // MARK: - A3b fs mediation (PathPolicy)
+
+    func testWriteFileBlocksProtectedPath() {
+        // PathPolicy blocks system paths — the agent's write is refused.
+        let result = DaemonAgentClient.writeFile(params: ["path": "/etc/hosts", "content": "x"])
+        XCTAssertNotNil(result["error"], "system path must be blocked")
+        XCTAssertNil(result["ok"])
+    }
+
+    func testWriteFileAllowsAndWritesTempPath() {
+        let tmp = NSTemporaryDirectory() + "fae_a3b_write_\(UUID().uuidString).txt"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let result = DaemonAgentClient.writeFile(params: ["path": tmp, "content": "pong"])
+        XCTAssertEqual(result["ok"] as? Bool, true)
+        XCTAssertEqual(try? String(contentsOfFile: tmp, encoding: .utf8), "pong")
+    }
+
+    func testReadFileReturnsContent() {
+        let tmp = NSTemporaryDirectory() + "fae_a3b_read_\(UUID().uuidString).txt"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        try? "hello".write(toFile: tmp, atomically: true, encoding: .utf8)
+        let result = DaemonAgentClient.readFile(params: ["path": tmp])
+        XCTAssertEqual(result["content"] as? String, "hello")
+    }
 }

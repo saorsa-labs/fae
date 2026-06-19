@@ -123,23 +123,67 @@ enum DaemonAgentClient {
         return parseOutcome(response)
     }
 
-    /// Answer a daemon server-request. Today only `permission.request` (gap A3a);
-    /// `fs.*` mediation is A3b.
+    /// Answer a daemon server-request: `permission.request` (gap A3a, approval
+    /// card) and `fs.read` / `fs.write` (gap A3b, mediated by PathPolicy).
     private static func handleServerRequest(
         method: String, params: [String: Any]
     ) async -> [String: Any] {
-        guard method == "permission.request" else {
+        switch method {
+        case "permission.request":
+            let title = (params["title"] as? String) ?? "Agent action"
+            let options = (params["options"] as? [[String: Any]]) ?? []
+            let approved = await requestApproval(
+                title: "Agent permission",
+                message: permissionMessage(title: title, options: options))
+            if approved, let optionID = firstAllowOption(options) {
+                return ["option_id": optionID]
+            }
             return ["cancelled": true]
+        case "fs.read":
+            return readFile(params: params)
+        case "fs.write":
+            return writeFile(params: params)
+        default:
+            return ["error": "unsupported server request: \(method)"]
         }
-        let title = (params["title"] as? String) ?? "Agent action"
-        let options = (params["options"] as? [[String: Any]]) ?? []
-        let approved = await requestApproval(
-            title: "Agent permission",
-            message: permissionMessage(title: title, options: options))
-        if approved, let optionID = firstAllowOption(options) {
-            return ["option_id": optionID]
+    }
+
+    /// `fs/read_text_file` mediation (gap A3b). Reads are local-only and never
+    /// path-restricted (Fae reads anything the user can); a read error refuses.
+    static func readFile(params: [String: Any]) -> [String: Any] {
+        guard let path = params["path"] as? String, !path.isEmpty else {
+            return ["error": "fs.read missing path"]
         }
-        return ["cancelled": true]
+        let expanded = NSString(string: path).expandingTildeInPath
+        do {
+            let content = try String(contentsOfFile: expanded, encoding: .utf8)
+            return ["content": content]
+        } catch {
+            return ["error": "could not read \(path): \(error.localizedDescription)"]
+        }
+    }
+
+    /// `fs/write_text_file` mediation (gap A3b) — gated by `PathPolicy`, which
+    /// blocks system paths, sensitive dotfiles, and Fae's own data files.
+    static func writeFile(params: [String: Any]) -> [String: Any] {
+        guard let path = params["path"] as? String, !path.isEmpty else {
+            return ["error": "fs.write missing path"]
+        }
+        guard let content = params["content"] as? String else {
+            return ["error": "fs.write missing content"]
+        }
+        switch PathPolicy.validateWritePath(path) {
+        case .blocked(let reason):
+            NSLog("DaemonAgentClient: fs.write blocked by PathPolicy: %@", reason)
+            return ["error": reason]
+        case .allowed(let canonicalPath):
+            do {
+                try content.write(toFile: canonicalPath, atomically: true, encoding: .utf8)
+                return ["ok": true]
+            } catch {
+                return ["error": "could not write \(path): \(error.localizedDescription)"]
+            }
+        }
     }
 
     /// The id of the option that approves (kind/name contains "allow"), else the

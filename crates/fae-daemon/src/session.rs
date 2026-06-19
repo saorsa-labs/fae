@@ -578,6 +578,24 @@ async fn agent_prompt_inner(
                     let decision = resolve_permission(&requester, &title, &options).await;
                     let _ = reply.send(decision);
                 }
+                fae_acp::AcpServerRequest::ReadFile { path, reply } => {
+                    let result = resolve_fs(&requester, "fs.read", &path, None).await;
+                    let _ = reply.send(result.map(|value| {
+                        value
+                            .get("content")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned()
+                    }));
+                }
+                fae_acp::AcpServerRequest::WriteFile {
+                    path,
+                    content,
+                    reply,
+                } => {
+                    let result = resolve_fs(&requester, "fs.write", &path, Some(content)).await;
+                    let _ = reply.send(result.map(|_| ()));
+                }
             }
         }
     });
@@ -629,6 +647,32 @@ async fn resolve_permission(
     match requester.request("permission.request", params).await {
         Ok(reply) => permission_decision_from_reply(&reply),
         Err(_) => fae_acp::AcpPermissionDecision::Cancelled,
+    }
+}
+
+/// Drive one fs request (`fs.read` / `fs.write`) to the client (gap A3b), which
+/// mediates it through PathPolicy/DamageControl. Returns the reply payload on
+/// success, or an error string when refused / unmediated. A `{ "error": … }`
+/// reply (a blocked path) becomes `Err`.
+async fn resolve_fs(
+    requester: &Option<ServerRequester>,
+    method: &str,
+    path: &str,
+    content: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let Some(requester) = requester else {
+        return Err("filesystem mediation unavailable".to_owned());
+    };
+    let mut params = serde_json::json!({ "path": path });
+    if let Some(content) = content {
+        params["content"] = serde_json::Value::String(content);
+    }
+    match requester.request(method, params).await {
+        Ok(reply) => match reply.get("error").and_then(serde_json::Value::as_str) {
+            Some(error) => Err(error.to_owned()),
+            None => Ok(reply),
+        },
+        Err(_) => Err("filesystem request failed".to_owned()),
     }
 }
 
