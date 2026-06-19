@@ -19,13 +19,21 @@ fabricated reports. The reviewer re-runs your evidence.
 >   Fae governance approval card. fmt/clippy `-D warnings`/73 tests (incl. parse-disambiguation); transport
 >   spawn live-proven (codex/pi). **Live gap: no available agent ASKS** (codex/pi full-auto; claude/gemini
 >   unavailable) — permission round-trip verified by unit tests + spawn path, not a live asking-agent.
-> - **NEXT = build a MOCK ACP asking-agent** (a tiny ACP server that issues `session/request_permission`
->   + an `fs/*` request) to LIVE-prove the full round-trip end-to-end (agent asks → card → approve →
->   proceeds). Reviewer decision: do this BEFORE/WITH A3b — it's security-critical and the SAME
->   server-request mechanism A3b's `fs/read_text_file`/`fs/write_text_file` (gated by DamageControl/
->   PathPolicy) will reuse, so one mock agent live-proves both. Keep the mock as a regression fixture.
->   Then **A3b** (fs mediation), then **A4** (conductor seam + cleanup). Follow-ons: orb rendering of
->   `agent.output` (separate orb lane), deterministic mid-turn cancel proof.
+> - **A3b + MOCK AGENT DONE** — committed `24492e8b` (reviewer-verified). The mock ACP asking-agent
+>   (`crates/fae-acp/src/bin/mock_acp_agent.rs` + `tests/mock_agent.rs`) LIVE-proves the round-trip
+>   (permission: PERMISSION_REQUESTS_SEEN:1; fs.write → temp file → approved → wrote) — closing the A3a
+>   live gap. fs/read+write route via the server-request mechanism; `fs.write` gated by
+>   `PathPolicy.validateWritePath`. Fixed a real ACP dispatch-loop deadlock (`cx.spawn`). 76 tests +
+>   3 Swift PathPolicy tests; clippy `-D warnings` clean.
+> - **⚠️ REQUIRED FIX before A4 (security): `fs.read` is UNRESTRICTED** (`readFile` reads any
+>   `expandingTildeInPath` with no check). An autonomous ACP agent (a delegate, NOT the owner) can
+>   `fs.read` `~/.ssh`, `speakers.json`, `~/.fae-vault`, `directive.md` through Fae = exfiltration. Add
+>   `PathPolicy.validateReadPath` using the EXISTING protected lists (`blockedDotfiles` +
+>   `protectedFaeRoots`/`protectedFaeFiles`) + credential dotfiles; block them on `fs.read`. (A3 spec
+>   required BOTH read+write gated.) Add a mock-agent regression test: `fs.read` of a protected path → blocked.
+> - **THEN A4** (conductor seam, error differentiation, delete dead `ACPProtocol.swift`). Follow-ons:
+>   orb rendering of `agent.output` (separate orb lane), deterministic mid-turn cancel proof, and the
+>   bundled run-dev surface (real LLM `delegate_agent` + real authed agent card) — unexercised headlessly.
 
 ---
 
