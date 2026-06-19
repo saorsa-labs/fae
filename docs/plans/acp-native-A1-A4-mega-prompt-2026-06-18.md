@@ -25,15 +25,20 @@ fabricated reports. The reviewer re-runs your evidence.
 >   live gap. fs/read+write route via the server-request mechanism; `fs.write` gated by
 >   `PathPolicy.validateWritePath`. Fixed a real ACP dispatch-loop deadlock (`cx.spawn`). 76 tests +
 >   3 Swift PathPolicy tests; clippy `-D warnings` clean.
-> - **⚠️ REQUIRED FIX before A4 (security): `fs.read` is UNRESTRICTED** (`readFile` reads any
->   `expandingTildeInPath` with no check). An autonomous ACP agent (a delegate, NOT the owner) can
->   `fs.read` `~/.ssh`, `speakers.json`, `~/.fae-vault`, `directive.md` through Fae = exfiltration. Add
->   `PathPolicy.validateReadPath` using the EXISTING protected lists (`blockedDotfiles` +
->   `protectedFaeRoots`/`protectedFaeFiles`) + credential dotfiles; block them on `fs.read`. (A3 spec
->   required BOTH read+write gated.) Add a mock-agent regression test: `fs.read` of a protected path → blocked.
-> - **THEN A4** (conductor seam, error differentiation, delete dead `ACPProtocol.swift`). Follow-ons:
->   orb rendering of `agent.output` (separate orb lane), deterministic mid-turn cancel proof, and the
->   bundled run-dev surface (real LLM `delegate_agent` + real authed agent card) — unexercised headlessly.
+> - **fs.read SECURITY GATE DONE** — committed `d1884f7f` (reviewer-implemented; the team had read the
+>   "REQUIRED fix" as a coverage gap and left `fs.read` unrestricted). Added `PathPolicy.validateReadPath`
+>   (reuses `blockedDotfiles` + `protectedFaeRoots`/`protectedFaeFiles` so read/write blocklists can't
+>   drift): blocks the secret/identity set on the delegated read path (`~/.ssh`, `speakers.json`,
+>   `~/.fae-vault`, …) while ALLOWING general project/system reads. `readFile` gates through it. 3 tests
+>   pass (block `~/.ssh`/`speakers.json`, allow `~/Documents`).
+> - **A4 DONE** — committed `d1884f7f` (reviewer-verified). Conductor seam (`AgentRunner` protocol +
+>   `DaemonAgentRunner`, injected into the tools); error differentiation (`classify_agent_error` →
+>   auth/rate/network/… + Swift `friendlyAgentError`); dead `ACPProtocol.swift` + tests deleted. 77 crate
+>   tests + 19/19 AgentDelegateToolTests; clippy `-D warnings`/swift build clean.
+> - **✅ NATIVE ACP TRACK A1→A4 COMPLETE + gate-green.** Deferred/follow-ons (with the conductor):
+>   attachments, config-driven agent discovery, orb rendering of `agent.output` (separate orb lane),
+>   deterministic mid-turn cancel proof, and the bundled run-dev surface (real LLM `delegate_agent` +
+>   real authed agent card) — that last is the one path the mock/headless proofs can't exercise.
 
 ---
 
