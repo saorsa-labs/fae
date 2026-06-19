@@ -1,5 +1,15 @@
 # Handoff — retire the legacy Swift conversation UI (orb host is the only product UI)
 
+> ## ✅ DONE — committed `4a482e35` on `retire-legacy-ui` (reviewer-verified, 2026-06-19)
+> ~2071 lines deleted (ContentView, ConversationScrollView, InputBarView, VoiceHintsView,
+> ThinkingTraceViews, old ConversationController/BridgeController); non-visual state split into
+> ConversationRuntimeController + ConversationEventBridgeController; main window = license/status chrome
+> only; "Ask Fae" fallback removed. KEPT (wired): Settings/About/Debug/MemoryImport/Receipts/InputOverlay.
+> Verified: clean deletions (no dangling refs — grep + build), `swift build` clean, 44 targeted tests,
+> live run-dev = orb active / main window hidden / orb-down→alert (no legacy window). **RESIDUAL before
+> merge: a human visual click-through of the kept windows.** Ready to merge `retire-legacy-ui` →
+> `llamacpp-serving-adapter` when the tracks integrate.
+
 > **HANDOFF (2026-06-19): this is yours now.** B5 (audio-in) is DONE + PASS, so the team that built it
 > picks up this track. **Your worktree already exists** — `/Users/davidirvine/Desktop/Devel/projects/
 > fae-ui` on branch `retire-legacy-ui` (off the latest `llamacpp-serving-adapter`, includes B5 + the
