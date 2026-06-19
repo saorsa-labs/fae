@@ -32,7 +32,7 @@ final class TestServer {
     private var listener: NWListener?
     private weak var faeCore: FaeCore?
     private weak var debugConsole: DebugConsoleController?
-    private weak var conversation: ConversationController?
+    private weak var conversation: ConversationRuntimeController?
     private weak var inputOverlay: InputOverlayController?
     private weak var auxiliaryWindows: AuxiliaryWindowManager?
     private var injectedTurnMuteDepth: Int = 0
@@ -43,7 +43,7 @@ final class TestServer {
     init(
         faeCore: FaeCore,
         debugConsole: DebugConsoleController,
-        conversation: ConversationController,
+        conversation: ConversationRuntimeController,
         inputOverlay: InputOverlayController,
         auxiliaryWindows: AuxiliaryWindowManager
     ) {
@@ -252,7 +252,7 @@ final class TestServer {
 
             await self.beginInjectedTurnIsolation()
 
-            // Add to conversation panel (mimics ConversationController.handleUserSent)
+            // Add to the runtime transcript (mimics ConversationRuntimeController.handleUserSent)
             self.conversation?.appendMessage(role: .user, content: text)
             faeCore.injectText(text)
 

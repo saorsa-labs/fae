@@ -48,17 +48,24 @@ final class OrbStateController: ObservableObject {
 
 // MARK: - Root View (reactive wrapper for NSHostingController)
 
-/// Wraps ContentView + license overlay so that `@ObservedObject` tracks
-/// changes to `faeCore.isLicenseAccepted` and triggers SwiftUI re-renders
-/// inside the AppKit-hosted NSWindow.
+/// Hosts only non-conversation app chrome for the hidden Swift main window.
+///
+/// The Rust orb/pill is the product conversation UI. This AppKit window remains
+/// available for the license gate and a small non-interactive status/failure
+/// surface, but it never renders a transcript, composer, or legacy fallback.
 private struct FaeRootView: View {
     @ObservedObject var faeCore: FaeCore
     @EnvironmentObject private var pipelineAux: PipelineAuxBridgeController
+    @EnvironmentObject private var subtitles: SubtitleStateController
     var onAcceptLicense: () -> Void
 
     var body: some View {
         ZStack {
-            ContentView()
+            MainWindowStatusView(
+                isPipelineReady: pipelineAux.isPipelineReady,
+                status: pipelineAux.status,
+                progressLabel: subtitles.progressLabel
+            )
 
             if !faeCore.isLicenseAccepted {
                 LicenseAcceptanceView(
@@ -73,6 +80,56 @@ private struct FaeRootView: View {
                 faeCore.markStartupIntroSeen()
             }
         }
+    }
+}
+
+private struct MainWindowStatusView: View {
+    let isPipelineReady: Bool
+    let status: String
+    let progressLabel: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer()
+
+            Image(systemName: isPipelineReady ? "sparkles" : "hourglass.bottomhalf.filled")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundColor(Color.primary.opacity(0.45))
+
+            Text(isPipelineReady ? "Fae is running" : "Fae is starting")
+                .font(.system(size: 18, weight: .semibold, design: .serif))
+                .foregroundColor(.primary.opacity(0.88))
+
+            Text(detailText)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.primary.opacity(0.55))
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .frame(maxWidth: 320)
+
+            Text("Use the orb and pill for conversation. This window no longer contains a transcript or input bar.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundColor(.primary.opacity(0.42))
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .frame(maxWidth: 360)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var detailText: String {
+        if !progressLabel.isEmpty { return progressLabel }
+        if !status.isEmpty { return status }
+        return isPipelineReady ? "Orb host owns the conversation surface." : "Loading local components…"
     }
 }
 
@@ -104,8 +161,8 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     let handoff = DeviceHandoffController()
     let orbState = OrbStateController()
     let orbBridge = OrbStateBridgeController()
-    let conversation = ConversationController()
-    let conversationBridge = ConversationBridgeController()
+    let conversation = ConversationRuntimeController()
+    let conversationBridge = ConversationEventBridgeController()
     let pipelineAux = PipelineAuxBridgeController()
     let subtitles = SubtitleStateController()
     let hostBridge = HostCommandBridge()
@@ -303,13 +360,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func prefillFaePrompt(_ text: String) {
-        windowState.showWindow()
-        NotificationCenter.default.post(
-            name: .faePrefillInput,
-            object: nil,
-            userInfo: ["text": text]
-        )
-        NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
+        // The legacy Swift composer is gone; route help prompts through the
+        // same typed-input path used by the orb host's Messages composer.
+        faeCore.injectText(text)
     }
 
     // MARK: - Window Creation
@@ -379,7 +432,6 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         aboutWindow.conversation = conversation
         aboutWindow.sparkleUpdater = sparkleUpdater
         aboutWindow.faeCore = faeCore
-        memoryImport.auxiliaryWindows = auxiliaryWindows
         memoryImport.memoryInboxServiceProvider = { [weak faeCore] in
             faeCore?.memoryInboxService
         }
@@ -422,7 +474,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         // Wire rescue mode reference to FaeCore.
         faeCore.rescueMode = rescueMode
 
-        // Create the main window with the full ContentView.
+        // Create the hidden Swift main window for license/status chrome only.
         let rootView = FaeRootView(
             faeCore: faeCore,
             onAcceptLicense: { [weak self] in
@@ -474,8 +526,9 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         window.contentViewController = hostingController
 
         // Orb-first product: when the Rust orb host is running, the orb IS the
-        // UI — the Swift main window stays hidden (reachable via dock reopen,
-        // "Ask Fae", and as automatic fallback if the orb host dies).
+        // conversation UI and the Swift main window stays hidden. If the host
+        // is unavailable at launch, show only this non-conversation status
+        // chrome — never resurrect a transcript/composer fallback.
         if rustUiShell.isActive {
             NSLog("FaeAppDelegate: orb host active — main window stays hidden")
         } else {
@@ -568,7 +621,7 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Global hotkey — summon Fae from anywhere (Ctrl+Shift+A).
+        // Global hotkey — show the non-conversation main window from anywhere (Ctrl+Shift+A).
         hotkeyManager.start { [weak self] in
             guard let self else { return }
             self.windowState.showWindow()
@@ -1053,14 +1106,6 @@ struct FaeApp: App {
                 .keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .help) {
-                Button("Ask Fae\u{2026}") {
-                    appDelegate.windowState.showWindow()
-                    NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
-                }
-                .keyboardShortcut("/", modifiers: [.command, .shift])
-
-                Divider()
-
                 Button("Ask About Shortcuts") {
                     askFae("What keyboard shortcuts and voice commands do you support?")
                 }
@@ -1091,17 +1136,11 @@ struct FaeApp: App {
         }
     }
 
-    // MARK: - Ask Fae Helper
+    // MARK: - Help Prompt Helper
 
-    /// Bring the main window to front and pre-fill the input bar with a topic question.
+    /// Route built-in help questions through the orb-owned typed-input path.
     private func askFae(_ question: String) {
-        appDelegate.windowState.showWindow()
-        NotificationCenter.default.post(
-            name: .faePrefillInput,
-            object: nil,
-            userInfo: ["text": question]
-        )
-        NotificationCenter.default.post(name: .faeWillFocusInputField, object: nil)
+        appDelegate.faeCore.injectText(question)
     }
 
     // MARK: - Static Orb Rendering

@@ -1,12 +1,12 @@
 import AppKit
 import Combine
 
-/// Manages the companion window (Ask Fae text surface + onboarding host).
+/// Manages the retained Swift main window for license/status chrome.
 ///
-/// The Rust orb host owns the product UI. This window stays hidden while the
-/// orb host runs and is surfaced only by explicit user actions (Ask Fae,
-/// global hotkey, menu items). The old collapsed/compact orb state machine
-/// was removed with the legacy orb UI (2026-06-11 cleanup).
+/// The Rust orb host owns the product conversation UI. This window stays
+/// hidden while the orb host runs and is surfaced only by explicit user
+/// actions (global hotkey, menu items) or when the orb host is unavailable.
+/// It no longer contains the legacy transcript or text composer.
 ///
 /// The window is fully frameless (`.borderless`) so there is no title bar to
 /// fight with. `isMovableByWindowBackground` allows drag-to-move.
@@ -14,7 +14,7 @@ import Combine
 /// ## Glass Architecture
 ///
 /// The frosted-glass effect uses SwiftUI's `.ultraThinMaterial` in dark mode
-/// applied via `ContentView`. The window is configured with:
+/// applied by the root status view. The window is configured with:
 /// - `.borderless` styleMask (no title bar)
 /// - `backgroundColor = .clear` + `isOpaque = false` for transparency
 /// - `.fullSizeContentView` so SwiftUI fills the entire frame

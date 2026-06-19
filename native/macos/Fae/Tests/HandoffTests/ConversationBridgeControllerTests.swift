@@ -2,11 +2,11 @@ import XCTest
 @testable import Fae
 
 @MainActor
-final class ConversationBridgeControllerTests: XCTestCase {
+final class ConversationEventBridgeControllerTests: XCTestCase {
     func testFinalTranscriptionAppendsToConversation() async throws {
-        let bridge = ConversationBridgeController()
+        let bridge = ConversationEventBridgeController()
         let subtitle = SubtitleStateController()
-        let mainConversation = ConversationController()
+        let mainConversation = ConversationRuntimeController()
         bridge.subtitleState = subtitle
         bridge.conversationController = mainConversation
 
@@ -22,8 +22,8 @@ final class ConversationBridgeControllerTests: XCTestCase {
     }
 
     func testGeneratingAndAssistantStreamingReachConversation() async throws {
-        let bridge = ConversationBridgeController()
-        let mainConversation = ConversationController()
+        let bridge = ConversationEventBridgeController()
+        let mainConversation = ConversationRuntimeController()
         bridge.conversationController = mainConversation
 
         NotificationCenter.default.post(
@@ -45,8 +45,8 @@ final class ConversationBridgeControllerTests: XCTestCase {
     }
 
     func testModelLoadedUpdatesLabel() async throws {
-        let bridge = ConversationBridgeController()
-        let mainConversation = ConversationController()
+        let bridge = ConversationEventBridgeController()
+        let mainConversation = ConversationRuntimeController()
         bridge.conversationController = mainConversation
 
         NotificationCenter.default.post(
@@ -60,8 +60,8 @@ final class ConversationBridgeControllerTests: XCTestCase {
     }
 
     func testThinkingTraceFinalizesWhenThinkingEnds() async throws {
-        let bridge = ConversationBridgeController()
-        let mainConversation = ConversationController()
+        let bridge = ConversationEventBridgeController()
+        let mainConversation = ConversationRuntimeController()
         bridge.conversationController = mainConversation
 
         NotificationCenter.default.post(
@@ -89,8 +89,8 @@ final class ConversationBridgeControllerTests: XCTestCase {
     }
 
     func testFirstAssistantTokenPromotesLiveThinkingTraceToReplayState() async throws {
-        let bridge = ConversationBridgeController()
-        let mainConversation = ConversationController()
+        let bridge = ConversationEventBridgeController()
+        let mainConversation = ConversationRuntimeController()
         bridge.conversationController = mainConversation
 
         NotificationCenter.default.post(
@@ -121,7 +121,7 @@ final class ConversationBridgeControllerTests: XCTestCase {
     }
 
     func testStartupWarmupStagesKeepProgressVisible() async throws {
-        let bridge = ConversationBridgeController()
+        let bridge = ConversationEventBridgeController()
         let subtitle = SubtitleStateController()
         bridge.subtitleState = subtitle
 

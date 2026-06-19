@@ -15,7 +15,7 @@ import Foundation
 @MainActor
 final class RustUiShellController {
     weak var orbState: OrbStateController?
-    weak var conversation: ConversationController?
+    weak var conversation: ConversationRuntimeController?
     weak var faeCore: FaeCore?
 
     var onSettings: (() -> Void)?

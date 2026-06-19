@@ -44,14 +44,14 @@ final class ThinkingLevelRuntimeParityTests: XCTestCase {
     func testThinkingLevelControlsRemainWired() throws {
         let settingsModels = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsTab.swift")
         let settingsPerformance = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsPerformanceTab.swift")
-        let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
+        let rustShellBridge = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/RustUiShellController.swift")
 
         XCTAssertTrue(settingsModels.contains("Picker(\"Thinking level\""))
         XCTAssertTrue(settingsModels.contains("payload: [\"key\": \"llm.thinking_level\""))
         XCTAssertTrue(settingsPerformance.contains("Picker(\"Thinking level\""))
         XCTAssertTrue(settingsPerformance.contains("patchConfig(\"llm.thinking_level\""))
-        XCTAssertTrue(inputBar.contains("faeCore.setThinkingLevel(level)"))
-        XCTAssertTrue(inputBar.contains("Text(faeCore.thinkingLevel.displayName)"))
+        XCTAssertTrue(rustShellBridge.contains("case \"set_thinking\":"))
+        XCTAssertTrue(rustShellBridge.contains("faeCore.setThinkingLevel(level)"))
     }
 
     private func loadRepositoryText(relativePath: String) throws -> String {

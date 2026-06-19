@@ -8,7 +8,7 @@ final class AboutWindowController {
     private var window: NSWindow?
 
     /// Dependencies — set by FaeAppDelegate before first use.
-    var conversation: ConversationController?
+    var conversation: ConversationRuntimeController?
     var sparkleUpdater: SparkleUpdaterController?
     var faeCore: FaeCore?
 

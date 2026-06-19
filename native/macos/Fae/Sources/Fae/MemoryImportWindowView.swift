@@ -3,7 +3,6 @@ import SwiftUI
 
 struct MemoryImportWindowView: View {
     let memoryInboxServiceProvider: () -> MemoryInboxService?
-    let focusMainWindow: () -> Void
     let dismissAction: () -> Void
 
     @State private var pastedTitle: String = ""
@@ -66,13 +65,13 @@ struct MemoryImportWindowView: View {
             Label("How to Import Memories", systemImage: "brain.head.profile.fill")
                 .font(.system(size: 16, weight: .semibold))
 
-            Text("The best way to give Fae your memories is to paste them directly into the conversation. Just expand Fae's window, type or paste your data into the input bar, and send it. Fae will read, understand, and remember everything in context.")
+            Text("Import text, URLs, or files here and Fae stores them in her memory inbox with proper metadata and embeddings. You can also tell Fae memories through the orb/pill conversation surface.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
                 .lineSpacing(3)
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Paste into the conversation — Fae remembers what you tell her", systemImage: "1.circle.fill")
+                Label("Paste text below or import files directly into the inbox", systemImage: "1.circle.fill")
                     .font(.system(size: 12, weight: .medium))
                 Label("Fae processes it in context and stores it with proper embeddings", systemImage: "2.circle.fill")
                     .font(.system(size: 12, weight: .medium))
@@ -82,13 +81,12 @@ struct MemoryImportWindowView: View {
             .foregroundColor(.primary.opacity(0.8))
             .padding(.vertical, 4)
 
-            Text("Tip: You can paste large blocks of text. Fae will break it down and store each fact. Say something like \"Remember all of this about me:\" followed by your data.")
+            Text("Tip: You can paste large blocks of text. Fae will break them down and store each fact for later recall.")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .italic()
 
-            Button("Open Fae") {
-                focusMainWindow()
+            Button("Close") {
                 dismissAction()
             }
             .buttonStyle(.borderedProminent)
@@ -296,7 +294,6 @@ struct MemoryImportWindowView: View {
             )
             pastedText = ""
             pastedTitle = ""
-            focusMainWindow()
             if result.wasDuplicate {
                 setStatus("All items were already in the memory inbox.", color: .secondary)
             } else if result.total == 1 {
@@ -319,7 +316,6 @@ struct MemoryImportWindowView: View {
             let service = try requireService()
             let result = try await service.importURL(trimmed)
             urlText = ""
-            focusMainWindow()
             setStatus(
                 result.wasDuplicate
                     ? "That URL was already imported."
@@ -340,7 +336,6 @@ struct MemoryImportWindowView: View {
             runImportTask {
                 let service = try requireService()
                 let results = try await service.importFiles(at: urls)
-                focusMainWindow()
                 let duplicates = results.filter(\.wasDuplicate).count
                 let imported = results.count - duplicates
                 if imported > 0 {
@@ -368,7 +363,6 @@ struct MemoryImportWindowView: View {
         runImportTask {
             let service = try requireService()
             let results = try await service.ingestPendingFiles()
-            focusMainWindow()
             if results.isEmpty {
                 setStatus("No new files were waiting in the pending inbox folder.", color: .secondary)
             } else {

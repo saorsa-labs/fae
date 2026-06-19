@@ -3,10 +3,8 @@ import SwiftUI
 /// Channels settings tab.
 ///
 /// Channel setup is skill-first: discovered channel skills surface here with
-/// current state, required fields, and direct "configure via chat" actions.
+/// current state, required fields, and direct "ask Fae to configure" actions.
 struct SettingsChannelsTab: View {
-    @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
-
     var commandSender: HostCommandSender?
 
     @AppStorage("fae.channels.enabled") private var channelsEnabled: Bool = true
@@ -98,19 +96,13 @@ struct SettingsChannelsTab: View {
             }
             .foregroundStyle(.secondary)
 
-            Button("Start guided setup in chat") {
-                auxiliaryWindows.focusMainWindow()
+            Button("Ask Fae to start guided setup") {
                 commandSender?.sendCommand(
                     name: "conversation.inject_text",
                     payload: ["text": "Help me set up a channel using the guided workflow."]
                 )
             }
             .buttonStyle(.borderedProminent)
-
-            Button("Open conversation") {
-                auxiliaryWindows.focusMainWindow()
-            }
-            .buttonStyle(.bordered)
         }
     }
 
@@ -131,8 +123,11 @@ struct SettingsChannelsTab: View {
             }
 
             HStack(spacing: 8) {
-                Button("Configure via Chat") {
-                    auxiliaryWindows.focusMainWindow()
+                Button("Ask Fae to Configure") {
+                    commandSender?.sendCommand(
+                        name: "conversation.inject_text",
+                        payload: ["text": "Help me configure \(channel.displayName)."]
+                    )
                 }
                 .buttonStyle(.bordered)
 

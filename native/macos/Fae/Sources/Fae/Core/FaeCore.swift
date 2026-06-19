@@ -637,9 +637,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         NSLog("FaeCore: owner profile cleared due to dimension mismatch (encoder=%d) — enrollment banner will appear", currentDim)
                         hasOwner = false
                         // Don't speakDirect here — it conflicts with the enrollment
-                        // flow (gate_set kills playback). The enrollment banner
-                        // appearing in ContentView is the user-facing prompt.
-                        // Expand the window so the banner is visible.
+                        // flow (gate_set kills playback). Notify the host bridge so
+                        // direct-address handling is reset without resurrecting the
+                        // retired Swift conversation window.
                         Task { @MainActor in
                             NotificationCenter.default.post(
                                 name: .faeConversationEngage,
@@ -2476,7 +2476,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
         }
     }
 
-    /// Observe the mic mute toggle posted by `ConversationController.toggleListening()`.
+    /// Observe the mic mute toggle posted by `ConversationRuntimeController.toggleListening()`.
     ///
     /// Routes the `faeConversationGateSet` notification directly to
     /// `PipelineCoordinator.setMicMuted()` so the audio capture is actually

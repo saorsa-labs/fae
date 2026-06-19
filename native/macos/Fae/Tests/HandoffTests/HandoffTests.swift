@@ -467,7 +467,7 @@ final class FaeDeviceTargetTests: XCTestCase {
 // 11. INCOMING HANDOFF:
 //     - On a second Mac (or simulator), publish NSUserActivity with snapshot
 //     - Verify FaeApp receives via onContinueUserActivity
-//     - Verify ConversationController.restoredSnapshot is set
+//     - Verify ConversationRuntimeController.restoredSnapshot is set
 //     - Verify orb flashes .listening/.rowanBerry for 2s
 //     - Verify orb mode/feeling restored from snapshot
 //
@@ -479,7 +479,7 @@ final class FaeDeviceTargetTests: XCTestCase {
 // 13. ICLOUD KV FALLBACK:
 //     - Write snapshot to iCloud KV from another device
 //     - Launch app — verify checkKVStoreForHandoff() loads it
-//     - Verify ConversationController is populated
+//     - Verify ConversationRuntimeController is populated
 //     - Verify KV store is cleared after consumption
 //
 // ## Orb Flash

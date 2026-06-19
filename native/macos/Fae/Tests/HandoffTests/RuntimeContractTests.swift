@@ -509,34 +509,27 @@ final class RuntimeContractTests: XCTestCase {
     func testThinkingLevelControlsRemainWired() throws {
         let settingsModels = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsTab.swift")
         let settingsPerformance = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/SettingsModelsPerformanceTab.swift")
-        let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
+        let rustShellBridge = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/RustUiShellController.swift")
 
         XCTAssertTrue(settingsModels.contains("Picker(\"Thinking level\""))
         XCTAssertTrue(settingsModels.contains("payload: [\"key\": \"llm.thinking_level\""))
         XCTAssertTrue(settingsPerformance.contains("Picker(\"Thinking level\""))
         XCTAssertTrue(settingsPerformance.contains("patchConfig(\"llm.thinking_level\""))
-        XCTAssertTrue(inputBar.contains("faeCore.setThinkingLevel(level)"))
-        XCTAssertTrue(inputBar.contains("Text(faeCore.thinkingLevel.displayName)"))
+        XCTAssertTrue(rustShellBridge.contains("case \"set_thinking\":"))
+        XCTAssertTrue(rustShellBridge.contains("faeCore.setThinkingLevel(level)"))
     }
 
-    func testMainInputKeepsTypingAvailableWhileListening() throws {
-        let inputBar = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/InputBarView.swift")
-
-        XCTAssertTrue(inputBar.contains("let shouldRestoreFocus = isTextFieldFocused || !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty"))
-        XCTAssertTrue(inputBar.contains("isTextFieldFocused = true"))
-        XCTAssertTrue(inputBar.contains("Voice capture and typing can stay active at the same time."))
-        XCTAssertTrue(inputBar.contains("Type a message for Fae while listening stays on"))
-    }
-
-    func testEnrollmentUIIsGoneFromContentView() throws {
-        // Voice-identity teardown Phase B: no enrollment UI may return to the
-        // companion window — identity is the deliberate physical act at the
-        // machine, not a voiceprint.
-        let contentView = try loadRepositoryText(relativePath: "native/macos/Fae/Sources/Fae/ContentView.swift")
-
-        XCTAssertFalse(contentView.contains("SpeakerEnrollmentView"))
-        XCTAssertFalse(contentView.contains("EnrollmentInvitationBanner"))
-        XCTAssertFalse(contentView.contains("OwnerPhotoCaptureView"))
+    func testLegacySwiftConversationSurfaceFilesAreRemoved() {
+        let removedFiles = [
+            "native/macos/Fae/Sources/Fae/ContentView.swift",
+            "native/macos/Fae/Sources/Fae/ConversationScrollView.swift",
+            "native/macos/Fae/Sources/Fae/InputBarView.swift",
+            "native/macos/Fae/Sources/Fae/VoiceHintsView.swift",
+            "native/macos/Fae/Sources/Fae/ThinkingTraceViews.swift",
+        ]
+        for relativePath in removedFiles {
+            XCTAssertFalse(repositoryFileExists(relativePath: relativePath), "\(relativePath) should stay deleted")
+        }
     }
 
     @MainActor
@@ -708,13 +701,21 @@ final class RuntimeContractTests: XCTestCase {
     }
 
     private func loadRepositoryText(relativePath: String) throws -> String {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let root = repositoryRoot()
         return try String(contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)
+    }
+
+    private func repositoryFileExists(relativePath: String) -> Bool {
+        FileManager.default.fileExists(atPath: repositoryRoot().appendingPathComponent(relativePath).path)
+    }
+
+    private func repositoryRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 }

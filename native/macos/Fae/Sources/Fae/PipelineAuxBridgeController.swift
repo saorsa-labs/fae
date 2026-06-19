@@ -3,7 +3,7 @@ import Foundation
 /// Bridges auxiliary pipeline events to native state and exposes pipeline
 /// diagnostic state for the settings UI.
 ///
-/// Handles events not covered by `ConversationBridgeController` or
+/// Handles events not covered by `ConversationEventBridgeController` or
 /// `OrbStateBridgeController`:
 ///
 /// | Notification / Event | Action |
@@ -267,7 +267,7 @@ final class PipelineAuxBridgeController: ObservableObject {
             status = "Downloading language model… \(pct)%"
 
         case "download_started", "download_progress", "download_complete", "cached":
-            // Download progress is handled by ConversationBridgeController
+            // Download progress is handled by ConversationEventBridgeController
             // for the subtitle/progress bar UI. We only track status string.
             if stage == "download_started" {
                 status = "Downloading models…"

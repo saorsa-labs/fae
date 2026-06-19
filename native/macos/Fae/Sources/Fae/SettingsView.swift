@@ -5,7 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var handoff: DeviceHandoffController
     @EnvironmentObject private var auxiliaryWindows: AuxiliaryWindowManager
     @EnvironmentObject private var onboarding: OnboardingController
-    @EnvironmentObject private var conversation: ConversationController
+    @EnvironmentObject private var conversation: ConversationRuntimeController
 
     /// Command sender for issuing backend commands (e.g. config.patch).
     /// Injected via the environment from FaeApp.
@@ -43,7 +43,6 @@ struct SettingsView: View {
                     }
 
                 SettingsChannelsTab(commandSender: commandSender)
-                    .environmentObject(auxiliaryWindows)
                     .tabItem {
                         Label("Channels", systemImage: "bubble.left.and.bubble.right")
                     }
@@ -126,7 +125,6 @@ struct SettingsView: View {
                     }
 
                 SettingsChannelsTab(commandSender: commandSender)
-                    .environmentObject(auxiliaryWindows)
                     .tabItem {
                         Label("Channels", systemImage: "bubble.left.and.bubble.right")
                     }

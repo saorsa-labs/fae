@@ -30,8 +30,8 @@ enum OnboardingPhase: String, CaseIterable {
 final class OnboardingController: ObservableObject {
 
     /// Whether the backend onboarding state has been queried.
-    /// `ContentView` shows a blank background until this is `true` to avoid
-    /// flashing onboarding content for users who already completed it.
+    /// The retained main-window status host observes this to avoid flashing
+    /// setup state for users who already completed onboarding.
     @Published var isStateRestored: Bool = false
 
     /// Whether onboarding has been completed by the user.

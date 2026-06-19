@@ -14,7 +14,7 @@ import Combine
 /// ## Integration
 ///
 /// Instantiated as a `@StateObject` in `FaeApp` and started in `.onAppear`.
-/// Subscribes to `OrbStateController`, `ConversationController`, and
+/// Subscribes to `OrbStateController`, `ConversationRuntimeController`, and
 /// `PipelineAuxBridgeController` to broadcast state changes.
 @MainActor
 final class FaeRelayServer: NSObject, ObservableObject {

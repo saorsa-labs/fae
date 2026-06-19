@@ -122,7 +122,7 @@ final class DeviceHandoffController: ObservableObject {
     private static let handoffEnabledKey = "fae.handoff.enabled"
 
     /// Inject a closure that produces the current conversation snapshot on demand.
-    /// The app layer wires this from ConversationController / OrbStateController
+    /// The app layer wires this from ConversationRuntimeController / OrbStateController
     /// without creating a tight coupling between the types.
     ///
     /// The closure is responsible for filtering entries to only "user" and
