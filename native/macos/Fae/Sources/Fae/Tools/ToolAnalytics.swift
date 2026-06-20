@@ -7,6 +7,11 @@ import GRDB
 /// Stored in a dedicated SQLite database alongside the memory store.
 actor ToolAnalytics {
     private let dbQueue: DatabaseQueue
+    /// Monotonic per-process counter so rapid records in the same second get
+    /// distinct primary keys. The old `tool-<sec>-<rand>` id collided when two
+    /// records landed in the same second with the same random draw, and the
+    /// `INSERT` (no OR REPLACE) then threw and silently dropped the row.
+    private var sequence: UInt64 = 0
 
     /// Open or create the analytics database at the given path.
     init(path: String) throws {
@@ -52,7 +57,10 @@ actor ToolAnalytics {
         error: String?
     ) {
         let now = UInt64(Date().timeIntervalSince1970)
-        let id = "tool-\(now)-\(Int.random(in: 1000 ... 9999))"
+        sequence += 1
+        // Monotonic sequence guarantees in-process uniqueness; the random suffix
+        // guards against same-second collisions across process restarts.
+        let id = "tool-\(now)-\(sequence)-\(Int.random(in: 1000 ... 9999))"
         let redactedError = SensitiveDataRedactor.redact(error)
 
         do {
