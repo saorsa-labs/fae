@@ -27,7 +27,9 @@ enum MemoryBackup {
         let escaped = backupPath.replacingOccurrences(of: "'", with: "''")
 
         let dbQueue = try DatabaseQueue(path: dbPath)
-        try dbQueue.write { db in
+        // VACUUM (and VACUUM INTO) cannot run inside a transaction; `write`
+        // opens one, so use `writeWithoutTransaction`.
+        try dbQueue.writeWithoutTransaction { db in
             try db.execute(sql: "VACUUM INTO '\(escaped)'")
         }
 

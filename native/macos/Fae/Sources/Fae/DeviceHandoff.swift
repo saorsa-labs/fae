@@ -58,6 +58,9 @@ struct DeviceCommandParser {
             .replacingOccurrences(of: "'", with: "")
             .replacingOccurrences(of: ".", with: " ")
             .replacingOccurrences(of: ",", with: " ")
+            // Punctuation→space can produce runs of whitespace (e.g. "move, to,
+            // watch"); collapse them so the `contains` checks below still match.
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !normalized.isEmpty else {

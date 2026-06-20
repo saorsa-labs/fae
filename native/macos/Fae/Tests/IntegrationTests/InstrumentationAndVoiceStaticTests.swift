@@ -65,6 +65,7 @@ final class InstrumentationAndVoiceStaticTests: XCTestCase {
     }
 
     func testSanitizeNameReplacesNonAlphanumericWithDash() {
+        // Runs of disallowed chars collapse to a single dash.
         XCTAssertEqual(VoiceLibrary.sanitizeName("a!@#b$%^c"), "a-b-c")
     }
 

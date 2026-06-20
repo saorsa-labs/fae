@@ -68,7 +68,8 @@ final class FaeCoreBuilderStaticTests: XCTestCase {
 
     func testDecimalFormatsTwoPlaces() {
         XCTAssertEqual(FaeCore.decimal(0.1), "0.10")
-        XCTAssertEqual(FaeCore.decimal(1.005), "1.01") // banker's/printf rounding
+        // Float(1.005) is 1.00499…, so %.2f rounds down to "1.00".
+        XCTAssertEqual(FaeCore.decimal(1.005), "1.00")
         XCTAssertEqual(FaeCore.decimal(123.456), "123.46")
         XCTAssertEqual(FaeCore.decimal(0), "0.00")
     }

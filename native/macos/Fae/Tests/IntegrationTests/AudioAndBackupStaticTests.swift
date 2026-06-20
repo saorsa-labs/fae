@@ -72,6 +72,7 @@ final class AudioAndBackupStaticTests: XCTestCase {
     }
 
     func testBackupCreatesBackupDirIfMissing() throws {
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let dbPath = tempDir.appendingPathComponent("src.db").path
         let dbQueue = try DatabaseQueue(path: dbPath)
         try dbQueue.write { db in try db.execute(sql: "CREATE TABLE t (id INTEGER)") }

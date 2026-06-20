@@ -958,9 +958,11 @@ actor InputRequestBridge {
         guard let raw = userInfo?["form_values"] else { return nil }
 
         if let typed = raw as? [String: String] {
-            return typed
+            let cleaned = typed
                 .mapValues { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.value.isEmpty }
+            // Match the [String: Any] branch: all-empty values collapse to nil.
+            return cleaned.isEmpty ? nil : cleaned
         }
 
         if let anyMap = raw as? [String: Any] {

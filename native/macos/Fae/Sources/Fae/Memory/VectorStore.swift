@@ -65,8 +65,14 @@ actor VectorStore {
         guard embeddingDim > 0, embedding.count == embeddingDim else { return }
         let blob = floatsToBlob(embedding)
         try dbQueue.write { db in
+            // vec0 virtual tables reject INSERT OR REPLACE on the primary key
+            // (UNIQUE constraint), so delete any existing row first.
             try db.execute(
-                sql: "INSERT OR REPLACE INTO memory_vec(record_id, embedding) VALUES (?, ?)",
+                sql: "DELETE FROM memory_vec WHERE record_id = ?",
+                arguments: [recordId]
+            )
+            try db.execute(
+                sql: "INSERT INTO memory_vec(record_id, embedding) VALUES (?, ?)",
                 arguments: [recordId, blob]
             )
         }
@@ -102,8 +108,14 @@ actor VectorStore {
         guard embeddingDim > 0, embedding.count == embeddingDim else { return }
         let blob = floatsToBlob(embedding)
         try dbQueue.write { db in
+            // vec0 virtual tables reject INSERT OR REPLACE on the primary key
+            // (UNIQUE constraint), so delete any existing row first.
             try db.execute(
-                sql: "INSERT OR REPLACE INTO fact_vec(fact_id, embedding) VALUES (?, ?)",
+                sql: "DELETE FROM fact_vec WHERE fact_id = ?",
+                arguments: [factId]
+            )
+            try db.execute(
+                sql: "INSERT INTO fact_vec(fact_id, embedding) VALUES (?, ?)",
                 arguments: [factId, blob]
             )
         }

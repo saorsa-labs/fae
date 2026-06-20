@@ -49,11 +49,14 @@ struct BraveEngine: SearchEngineProtocol {
 
         for match in matches {
             guard results.count < maxResults else { break }
-            guard let range = Range(match.range(at: 1), in: html) else { continue }
+            guard let fullRange = Range(match.range, in: html),
+                  let range = Range(match.range(at: 1), in: html) else { continue }
             let block = String(html[range])
 
-            // Skip standalone/featured snippets.
-            if block.contains("standalone") { continue }
+            // Skip standalone/featured snippets. The `standalone` class lives on
+            // the outer wrapper tag (outside capture group 1), so check the full
+            // match, not just the inner block.
+            if String(html[fullRange]).contains("standalone") { continue }
 
             // Extract title from .snippet-title.
             let title = extractByClass(from: block, className: "snippet-title")

@@ -25,8 +25,8 @@ final class AgentAndMetaOptStaticTests: XCTestCase {
     func testEncodeScoresAllNilStillValid() {
         let scores = DimensionScores(toolCalling: nil, faeCapability: nil, assistantFit: nil, serialization: nil)
         let json = MetaOptimizer.encodeScores(scores)
-        // Encodes to a JSON object with null values, not "{}".
-        XCTAssertFalse(json.isEmpty)
-        XCTAssertTrue(json.contains("null") || json.contains("toolCalling"))
+        // Swift's synthesized Codable omits nil optionals (encodeIfPresent),
+        // so all-nil scores encode to an empty JSON object.
+        XCTAssertEqual(json, "{}")
     }
 }

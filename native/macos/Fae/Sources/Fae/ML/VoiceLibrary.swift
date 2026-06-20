@@ -146,8 +146,12 @@ actor VoiceLibrary {
 
     /// Sanitize a voice name for use as a filename (lowercase, alphanumeric + hyphens).
     static func sanitizeName(_ name: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "-_"))
+        // Drop empty segments so runs of disallowed chars collapse to a single
+        // dash ("a!@#b" -> "a-b") and all-symbol input collapses to "unnamed".
         let cleaned = name.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.union(.init(charactersIn: "-_")).inverted)
+            .components(separatedBy: allowed.inverted)
+            .filter { !$0.isEmpty }
             .joined(separator: "-")
         return cleaned.isEmpty ? "unnamed" : cleaned
     }
