@@ -36,6 +36,7 @@ use fae_engine::{
 mod agents;
 mod diagnostic;
 mod events;
+mod offline_turn;
 mod server_request;
 mod session;
 mod transport;
@@ -51,6 +52,35 @@ async fn main() -> DaemonResult<()> {
             "fae-daemon {} — protocol v{PROTOCOL_VERSION}",
             env!("CARGO_PKG_VERSION")
         );
+        return Ok(());
+    }
+
+    // Headless offline voice-turn driver (P5/D2-V5, Stage 3): clip → STT → LLM →
+    // Piper TTS → spoken-answer WAV, with NO socket and NO audio device. This is
+    // the CI-verifiable proof of the full Linux spine. It builds the same real
+    // backends the server uses, then exits.
+    let mut args = std::env::args().skip(1);
+    if let Some(pos) = args.position(|arg| arg == "--offline-turn") {
+        // Re-derive the args after the flag (position() consumed up to it).
+        let rest = std::env::args().skip(1 + pos + 1);
+        let parsed = offline_turn::OfflineTurnArgs::parse(rest)?;
+        let tts = build_tts_engine();
+        // Backend selection by mode:
+        // - tts-only WITHOUT round-trip: no STT engine (cheapest Piper gate).
+        // - tts-only WITH round-trip: build ONLY the Qwen3-ASR fallback (~2.5GB,
+        //   no Gemma) — the round-trip transcribes the synth WAV to prove Piper
+        //   intelligibility; re-proving the full LLM isn't the point.
+        // - full turn: build all three real backends, as the server does.
+        let (engine, asr_fallback) = if parsed.tts_text.is_some() {
+            if parsed.roundtrip {
+                (None, build_asr_fallback_engine())
+            } else {
+                (None, None)
+            }
+        } else {
+            (Some(build_engine().await), build_asr_fallback_engine())
+        };
+        offline_turn::run(parsed, engine, asr_fallback, tts).await?;
         return Ok(());
     }
 
@@ -162,8 +192,8 @@ async fn main() -> DaemonResult<()> {
 
 /// Build the TTS backend (S19). On macOS: Kokoro via voice-tts/mlx-rs, with
 /// weights loading lazily on the first `tts.synthesize`. `FAE_TTS_MODEL_ID`
-/// overrides the repo; `FAE_TTS=mock` forces the mock. Elsewhere: mock until
-/// the candle port lands.
+/// overrides the repo. On Linux: the SHA-pinned Piper sidecar (P5/D2-V5).
+/// `FAE_TTS=mock` forces the mock on any platform (test/CI override).
 fn build_tts_engine() -> Arc<dyn TtsAdapter> {
     if std::env::var("FAE_TTS").is_ok_and(|value| value == "mock") {
         return Arc::new(MockTtsAdapter::new("mock-tts"));
@@ -184,8 +214,167 @@ fn build_tts_engine() -> Arc<dyn TtsAdapter> {
                 eprintln!("fae-daemon: tts worker spawn failed ({error}); using mock tts");
             }
         }
+        Arc::new(MockTtsAdapter::new("mock-tts"))
     }
-    Arc::new(MockTtsAdapter::new("mock-tts"))
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Linux TTS = Piper sidecar, integrity-gated like the llama-server
+        // runtime. A missing/unverified sidecar is FATAL in production (we never
+        // silently emit silence). `FAE_MODELS_LOCK=off` under FAE_DEV is the only
+        // escape hatch; it also lets the mock path be selected via `FAE_TTS=mock`.
+        match build_piper_tts_engine() {
+            Ok(adapter) => Arc::new(adapter),
+            Err(detail) => {
+                if models_lock_disabled_for_dev() {
+                    eprintln!(
+                        "fae-daemon: WARNING: FAE_DEV allows FAE_MODELS_LOCK=off; piper unavailable ({detail}); using mock tts"
+                    );
+                    return Arc::new(MockTtsAdapter::new("mock-tts"));
+                }
+                exit_fatal("piper_tts", &detail)
+            }
+        }
+    }
+}
+
+/// Resolve + integrity-verify the Piper sidecar (binary + voice model), then
+/// build the adapter. Mirrors the llama-server gate: confinement to the Fae-owned
+/// install dir, existence, and SHA-256 against `models.lock`. The voice files
+/// live under `<install>/voices/` (installed by `install-piper-runtime.py`).
+#[cfg(not(target_os = "macos"))]
+fn build_piper_tts_engine() -> Result<fae_engine::PiperTtsAdapter, String> {
+    let install_dir = resolve_piper_install_dir()?;
+    let binary = install_dir.join("piper");
+    let binary = executable_path(binary, "Piper runtime")?;
+    let voices_dir = install_dir.join("voices");
+    let model_onnx = voices_dir.join(format!("{PIPER_VOICE_NAME}.onnx"));
+    let model_config = voices_dir.join(format!("{PIPER_VOICE_NAME}.onnx.json"));
+    let espeak_data = install_dir.join("espeak-ng-data");
+
+    verify_piper_artifacts(&binary, &model_onnx, &model_config)?;
+
+    let espeak = espeak_data.is_dir().then_some(espeak_data);
+    println!(
+        "tts     : piper sidecar {} (voice {PIPER_VOICE_NAME})",
+        binary.display()
+    );
+    Ok(fae_engine::PiperTtsAdapter::new(
+        binary,
+        model_onnx,
+        model_config,
+        espeak,
+        PIPER_VOICE_NAME,
+    ))
+}
+
+/// Resolution order for the Piper install dir, mirroring `resolve_llama_server_binary`:
+/// 1. `FAE_PIPER_DIR` explicit override (dev/test/staging)
+/// 2. bundled sibling of the daemon exe (`../piper` or `../lib/fae/piper`, FHS)
+/// 3. owner app-support install (`<data>/runtimes/piper`)
+#[cfg(not(target_os = "macos"))]
+fn resolve_piper_install_dir() -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("FAE_PIPER_DIR") {
+        let path = PathBuf::from(dir);
+        if path.join("piper").is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "FAE_PIPER_DIR set but {}/piper does not exist",
+            path.display()
+        ));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            for rel in ["../piper", "../lib/fae/piper"] {
+                let candidate = exe_dir.join(rel);
+                if candidate.join("piper").is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+    let install = data_directory()
+        .map_err(|e| e.to_string())?
+        .join("runtimes/piper");
+    if install.join("piper").is_file() {
+        return Ok(install);
+    }
+    Err(format!(
+        "Piper TTS runtime not installed. Run \
+         `python3 scripts/install-piper-runtime.py --install-dir {}`.",
+        install.display()
+    ))
+}
+
+/// Verify the Piper binary + voice files against `models.lock` (size + SHA-256).
+/// Fail-closed: any miss aborts and the caller treats it as fatal in production.
+#[cfg(not(target_os = "macos"))]
+fn verify_piper_artifacts(
+    binary: &Path,
+    model_onnx: &Path,
+    model_config: &Path,
+) -> Result<(), String> {
+    if models_lock_disabled_for_dev() {
+        eprintln!(
+            "fae-daemon: WARNING: FAE_DEV allows FAE_MODELS_LOCK=off; skipping Piper artifact verification"
+        );
+        return Ok(());
+    }
+    let lock = load_installed_models_lock()?;
+    verify_locked_file(&lock, PIPER_BINARY_ARTIFACT_ID, "tts_binary", binary)?;
+    verify_locked_file(&lock, PIPER_VOICE_ONNX_ARTIFACT_ID, "tts_model", model_onnx)?;
+    verify_locked_file(
+        &lock,
+        PIPER_VOICE_CONFIG_ARTIFACT_ID,
+        "tts_model",
+        model_config,
+    )?;
+    Ok(())
+}
+
+/// Look up `id` in the lock, confirm its role + the `piper-sidecar` loader, then
+/// verify the on-disk file's size + SHA-256 match the pinned artifact.
+#[cfg(not(target_os = "macos"))]
+fn verify_locked_file(
+    lock: &ModelsLock,
+    id: &str,
+    expected_role: &str,
+    path: &Path,
+) -> Result<(), String> {
+    let artifact = lock
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.id == id)
+        .ok_or_else(|| format!("missing required artifact {id}"))?;
+    if artifact.role != expected_role || artifact.loader != "piper-sidecar" {
+        return Err(format!(
+            "artifact {id} must be role={expected_role} loader=piper-sidecar (got role={}, loader={})",
+            artifact.role, artifact.loader
+        ));
+    }
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("stat {} ({id}): {error}", path.display()))?;
+    if artifact.size_bytes != 0 && metadata.len() != artifact.size_bytes {
+        return Err(format!(
+            "{id} size mismatch for {}: expected {}, got {}",
+            path.display(),
+            artifact.size_bytes,
+            metadata.len()
+        ));
+    }
+    let expected = artifact.sha256.trim().to_ascii_lowercase();
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("artifact {id} must pin a 64-hex sha256"));
+    }
+    let actual =
+        sha256_file(path).map_err(|error| format!("hash {} ({id}): {error}", path.display()))?;
+    if actual != expected {
+        return Err(format!(
+            "{id} sha256 mismatch for {}: expected {expected}, got {actual}",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 /// Directory holding custom voice embeddings (`{voice}.safetensors`) checked
@@ -232,6 +421,22 @@ const LLAMA_SERVER_BINARY_ARTIFACT_ID: &str = "llamacpp-b9692-llama-server-linux
 const LLAMA_SERVER_SIGNED_CDHASH: &str = "3d5c9574d44b155e1d2551cc082cbff8c5d9d0c8";
 #[cfg(target_os = "macos")]
 const LLAMA_SERVER_SIGNED_TEAM_ID: &str = "MEGSB2GXGZ";
+
+/// `models.lock` artifact ids for the Piper TTS sidecar (Linux-only TTS lane,
+/// P5/D2-V5). Each Linux target ships its own prebuilt `piper` binary from the
+/// same rhasspy/piper release, so the integrity gate looks up the entry matching
+/// the binary it actually runs. macOS uses Kokoro/voice-tts and never reads these.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const PIPER_BINARY_ARTIFACT_ID: &str = "rhasspy-piper-2023-11-14-2-linux-x86_64";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const PIPER_BINARY_ARTIFACT_ID: &str = "rhasspy-piper-2023-11-14-2-linux-aarch64";
+#[cfg(not(target_os = "macos"))]
+const PIPER_VOICE_ONNX_ARTIFACT_ID: &str = "rhasspy-piper-voices-en-us-lessac-medium-onnx";
+#[cfg(not(target_os = "macos"))]
+const PIPER_VOICE_CONFIG_ARTIFACT_ID: &str = "rhasspy-piper-voices-en-us-lessac-medium-onnx-json";
+/// The pinned voice's display id (status + audit only).
+#[cfg(not(target_os = "macos"))]
+const PIPER_VOICE_NAME: &str = "en_US-lessac-medium";
 
 /// Build the inference backend. llama.cpp is now the only runtime path: the
 /// daemon owns a `llama-server` sidecar and uses llama.cpp's `-hf` downloader to

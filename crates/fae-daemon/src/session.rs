@@ -1354,7 +1354,7 @@ async fn transcribe_fallback(
     Ok(serde_json::json!({ "transcript": transcript }))
 }
 
-fn normalize_asr_transcript(raw: &str) -> String {
+pub(crate) fn normalize_asr_transcript(raw: &str) -> String {
     let mut text = raw.trim();
     if let Some((_, after)) = text.rsplit_once("<asr_text>") {
         text = after.trim();
@@ -1399,7 +1399,9 @@ fn is_nan_logits_failure(detail: &str) -> bool {
 
 /// Run one turn through the engine, collecting the streamed events into the
 /// wire result. Errors return the full failure text for diagnosis upstream.
-async fn run_turn(
+/// `pub(crate)` so the headless `--offline-turn` driver (P5/D2-V5) reuses the
+/// exact production turn loop instead of duplicating the streaming logic.
+pub(crate) async fn run_turn(
     engine: &dyn ProviderAdapter,
     request: ChatRequest,
 ) -> Result<serde_json::Value, String> {
