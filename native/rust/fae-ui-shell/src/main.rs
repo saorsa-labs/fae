@@ -1,3 +1,9 @@
+// Tests may use `.expect()`/`.unwrap()` per the project convention (production
+// code stays panic-free). The orb-shell CI lints `--all-targets` with
+// `-D clippy::expect_used`/`unwrap_used`, which also covers `#[cfg(test)]` code,
+// so scope those two allows to test builds only.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 /// Orb-host-owns-state: direct daemon subscription (own connection, drives the
 /// orb mode + voice ride via the grace-hold state machine). Unix-only (the orb
 /// host is a Unix GUI app; there is no non-Unix target). Default ON at runtime
