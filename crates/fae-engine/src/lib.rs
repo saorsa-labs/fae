@@ -25,6 +25,8 @@ mod llamacpp_adapter;
 mod mistralrs_adapter;
 mod mock;
 mod models_lock;
+#[cfg(not(target_os = "macos"))]
+mod piper_tts_adapter;
 mod provider;
 mod tts;
 #[cfg(target_os = "macos")]
@@ -37,6 +39,8 @@ pub use llamacpp_adapter::{
 pub use mistralrs_adapter::LocalMistralrsAdapter;
 pub use mock::MockAdapter;
 pub use models_lock::{Artifact, LockError, ModelsLock, SUPPORTED_SCHEMA_VERSION};
+#[cfg(not(target_os = "macos"))]
+pub use piper_tts_adapter::PiperTtsAdapter;
 pub use provider::{
     AdapterInfo, ChatEvent, ChatMessage, ChatRequest, ChatStream, EngineError, LoadedAdapter,
     ProviderAdapter, Role, ToolSpec,

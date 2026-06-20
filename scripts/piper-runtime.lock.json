@@ -1,0 +1,55 @@
+{
+  "schema_version": 2,
+  "created_at": "2026-06-20T00:00:00Z",
+  "source": "https://api.github.com/repos/rhasspy/piper/releases/tags/2023.11.14-2 (binary) + https://huggingface.co/rhasspy/piper-voices revision e21c7de8d4eab79b902f0d61e662b3f21664b8d2 (voice) — downloaded + SHA-verified on 2026-06-20",
+  "note": "Linux-only TTS sidecar (ADR-010). macOS keeps Kokoro/voice-tts and never reads this lock. The rhasspy/piper prebuilt tarball bundles ONNX Runtime 1.14.1 + espeak-ng phonemization next to the `piper` executable; the whole payload must stay together (RUNPATH siblings), so the installer strips only the archive's top `piper/` dir, exactly like the llama.cpp runtime.",
+  "runtimes": {
+    "linux-x86_64": {
+      "name": "rhasspy piper TTS",
+      "release_tag": "2023.11.14-2",
+      "platform": "linux-x86_64",
+      "archive_format": "tar.gz",
+      "asset_name": "piper_linux_x86_64.tar.gz",
+      "url": "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz",
+      "size_bytes": 26460462,
+      "sha256": "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992",
+      "binary": "piper",
+      "binary_size_bytes": 4999768,
+      "binary_sha256": "12672a94ca6716e5a8f335cfa68bf43bd9a33284960e3f9d16b85090bf7aab6b"
+    },
+    "linux-aarch64": {
+      "name": "rhasspy piper TTS",
+      "release_tag": "2023.11.14-2",
+      "platform": "linux-aarch64",
+      "archive_format": "tar.gz",
+      "asset_name": "piper_linux_aarch64.tar.gz",
+      "url": "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz",
+      "size_bytes": 26004717,
+      "sha256": "fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb",
+      "binary": "piper",
+      "binary_size_bytes": 5283040,
+      "binary_sha256": "0c44a6360a21367b5d03b8656c3e274f4de715f6533245d8c1f17c242631912b"
+    }
+  },
+  "voice": {
+    "name": "en_US-lessac-medium",
+    "repo": "rhasspy/piper-voices",
+    "revision": "e21c7de8d4eab79b902f0d61e662b3f21664b8d2",
+    "sample_rate": 22050,
+    "license": "MIT (CC0/MIT per voice card; lessac is public-domain LJSpeech-derived)",
+    "files": [
+      {
+        "filename": "en_US-lessac-medium.onnx",
+        "url": "https://huggingface.co/rhasspy/piper-voices/resolve/e21c7de8d4eab79b902f0d61e662b3f21664b8d2/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+        "size_bytes": 63201294,
+        "sha256": "5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f"
+      },
+      {
+        "filename": "en_US-lessac-medium.onnx.json",
+        "url": "https://huggingface.co/rhasspy/piper-voices/resolve/e21c7de8d4eab79b902f0d61e662b3f21664b8d2/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+        "size_bytes": 4885,
+        "sha256": "efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0"
+      }
+    ]
+  }
+}

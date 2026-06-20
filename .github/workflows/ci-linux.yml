@@ -13,8 +13,10 @@ on:
       - "crates/**"
       - "native/rust/fae-ui-shell/**"
       - "scripts/install-llamacpp-runtime.py"
+      - "scripts/install-piper-runtime.py"
       - "scripts/build-linux-package.py"
       - "scripts/llamacpp-runtime.lock.json"
+      - "scripts/piper-runtime.lock.json"
       - ".github/workflows/ci-linux.yml"
   pull_request:
     branches: [main]
@@ -22,8 +24,10 @@ on:
       - "crates/**"
       - "native/rust/fae-ui-shell/**"
       - "scripts/install-llamacpp-runtime.py"
+      - "scripts/install-piper-runtime.py"
       - "scripts/build-linux-package.py"
       - "scripts/llamacpp-runtime.lock.json"
+      - "scripts/piper-runtime.lock.json"
       - ".github/workflows/ci-linux.yml"
 
 concurrency:
@@ -69,14 +73,23 @@ jobs:
           components: clippy, rustfmt
           targets: ${{ matrix.triple }}
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Crate gate (fmt, clippy -D warnings, tests)
         working-directory: crates
         run: |
           set -euo pipefail
-          env -u RUSTFLAGS cargo fmt -p fae-daemon -- --check
-          env -u RUSTFLAGS cargo clippy -p fae-daemon --bin fae-daemon --all-features \
+          # fae-engine is gated too: its PiperTtsAdapter is cfg(not(macos)), so
+          # CI is the ONLY place its unit tests (incl. the integrity-rejection
+          # test) compile + run. macOS ci.yml never sees them.
+          env -u RUSTFLAGS cargo fmt -p fae-daemon -p fae-engine -- --check
+          env -u RUSTFLAGS cargo clippy -p fae-daemon --bin fae-daemon -p fae-engine --all-targets --all-features \
             -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
-          env -u RUSTFLAGS cargo test -p fae-daemon
+          # nextest (process-per-test isolation): some fae-engine tests mutate
+          # env (FAE_MODELS_LOCK) or touch app-support paths and only pass when
+          # isolated — the same reason release-linux.yml prefers nextest.
+          env -u RUSTFLAGS cargo nextest run -p fae-daemon -p fae-engine
 
       - name: Build fae-daemon (native)
         working-directory: crates
@@ -93,3 +106,175 @@ jobs:
             --install-dir build/linux/LlamaCpp-${{ matrix.arch }} --force
           test -x build/linux/LlamaCpp-${{ matrix.arch }}/llama-server
           file build/linux/LlamaCpp-${{ matrix.arch }}/llama-server
+
+      - name: Install + SHA-verify Piper TTS sidecar
+        run: |
+          set -euo pipefail
+          python3 scripts/install-piper-runtime.py \
+            --platform ${{ matrix.runtime_platform }} \
+            --install-dir build/linux/Piper-${{ matrix.arch }} --force
+          # The installer fails closed on any SHA mismatch; assert the payload.
+          test -x build/linux/Piper-${{ matrix.arch }}/piper
+          test -f build/linux/Piper-${{ matrix.arch }}/voices/en_US-lessac-medium.onnx
+          test -f build/linux/Piper-${{ matrix.arch }}/voices/en_US-lessac-medium.onnx.json
+          file build/linux/Piper-${{ matrix.arch }}/piper
+
+      - name: Piper TTS leg — offline-turn (CPU-only, headless, no LLM download)
+        run: |
+          set -euo pipefail
+          # The daemon's fail-closed gate reads models.lock from its data dir.
+          export XDG_DATA_HOME="$PWD/build/linux/data"
+          mkdir -p "$XDG_DATA_HOME/fae"
+          cp native/macos/Fae/Sources/Fae/Resources/Models/models.lock "$XDG_DATA_HOME/fae/models.lock"
+          export FAE_PIPER_DIR="$PWD/build/linux/Piper-${{ matrix.arch }}"
+          OUT="$PWD/build/linux/spoken-${{ matrix.arch }}.wav"
+          # --tts-only synthesizes the text directly through the integrity-gated
+          # Piper adapter (binary + voice SHA-verified against models.lock). No
+          # FAE_TTS=mock here → a real Piper synthesis must occur.
+          crates/target/debug/fae-daemon --offline-turn --tts-only \
+            --text "Hello from Fae. The quick brown fox jumps over the lazy dog." \
+            --out "$OUT"
+          # Assert a non-empty, plausibly-correct-duration WAV was produced.
+          test -s "$OUT"
+          python3 - "$OUT" <<'PY'
+          import struct, sys, wave
+          path = sys.argv[1]
+          with wave.open(path, "rb") as w:
+              rate, n = w.getframerate(), w.getnframes()
+          dur = n / rate if rate else 0
+          print(f"spoken WAV: {rate} Hz, {n} samples, {dur:.2f}s")
+          assert rate == 24000, f"expected 24 kHz contract, got {rate}"
+          assert n > rate * 0.5, f"WAV too short ({dur:.2f}s) to be real speech"
+          PY
+
+      - name: Piper integrity gate fires on a tampered binary
+        run: |
+          set -euo pipefail
+          export XDG_DATA_HOME="$PWD/build/linux/data"
+          # Corrupt the installed piper binary; the SHA gate must refuse to start.
+          TAMPER="$PWD/build/linux/Piper-tamper-${{ matrix.arch }}"
+          rm -rf "$TAMPER"; cp -r "$PWD/build/linux/Piper-${{ matrix.arch }}" "$TAMPER"
+          printf 'corrupt' >> "$TAMPER/piper"
+          export FAE_PIPER_DIR="$TAMPER"
+          set +e
+          crates/target/debug/fae-daemon --offline-turn --tts-only \
+            --text "should never synthesize" --out /tmp/should-not-exist.wav
+          code=$?
+          set -e
+          test "$code" -ne 0
+          test ! -f /tmp/should-not-exist.wav
+          echo "✓ tampered Piper binary rejected (exit $code), no WAV emitted"
+
+      # Cache the Qwen3-ASR GGUF + mmproj (~2.5GB) used by the round-trip
+      # intelligibility gate. Keyed on models.lock so a model bump invalidates it.
+      - name: Cache Qwen3-ASR model (round-trip STT)
+        uses: actions/cache@v4
+        with:
+          path: build/linux/data/fae/models/llamacpp/asr
+          key: qwen3-asr-${{ matrix.arch }}-${{ hashFiles('native/macos/Fae/Sources/Fae/Resources/Models/models.lock') }}
+
+      - name: Piper INTELLIGIBILITY gate — synth → Qwen3-ASR round-trip (HARD)
+        run: |
+          set -euo pipefail
+          # DONE criterion #1: "Piper synthesizes INTELLIGIBLE speech." Synthesize
+          # a known sentence through real Piper, transcribe the synth WAV back
+          # through the Qwen3-ASR fallback (NO Gemma — STT+LLM are inherited), and
+          # HARD-assert the recovered words overlap the input (else the turn exits
+          # non-zero). This is the SOLE intelligibility proof (macOS smoke waived).
+          export XDG_DATA_HOME="$PWD/build/linux/data"
+          mkdir -p "$XDG_DATA_HOME/fae"
+          cp native/macos/Fae/Sources/Fae/Resources/Models/models.lock "$XDG_DATA_HOME/fae/models.lock"
+          export FAE_PIPER_DIR="$PWD/build/linux/Piper-${{ matrix.arch }}"
+          # The ASR round-trip needs the llama.cpp runtime + the Qwen3-ASR model.
+          export FAE_LLAMACPP_RUNTIME_DIR="$PWD/build/linux/LlamaCpp-${{ matrix.arch }}"
+          OUT="$PWD/build/linux/intelligible-${{ matrix.arch }}.wav"
+          # --roundtrip in tts-only mode transcribes via the ASR engine only.
+          # --min-overlap 2: >= 2 content words must survive Piper → Qwen3-ASR,
+          # so a single chance match can't pass the gate.
+          crates/target/debug/fae-daemon --offline-turn --tts-only \
+            --text "The quick brown fox jumps over the lazy dog." \
+            --expect-words "quick brown fox lazy dog" \
+            --min-overlap 2 \
+            --roundtrip --out "$OUT"
+          test -s "$OUT"
+
+  # OPTIONAL full voice spine: clip → STT → LLM → Piper TTS → spoken WAV → STT
+  # round-trip (the literal DONE-#1 full chain). Piper intelligibility is already
+  # HARD-gated cheaply per-PR by the Qwen3-ASR round-trip in build-linux, and
+  # STT+LLM are inherited (B5/B1.5), so this heavy lane (pulls Gemma-4 E4B ~5GB)
+  # runs on workflow_dispatch only — completeness, not a per-PR gate.
+  linux-voice-turn:
+    name: Full voice turn + round-trip (amd64, dispatch-only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev file
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build fae-daemon (native)
+        working-directory: crates
+        run: env -u RUSTFLAGS cargo build -p fae-daemon
+
+      - name: Install + SHA-verify llama.cpp + Piper runtimes
+        run: |
+          set -euo pipefail
+          python3 scripts/install-llamacpp-runtime.py \
+            --platform linux-x86_64 --install-dir build/linux/LlamaCpp --force
+          python3 scripts/install-piper-runtime.py \
+            --platform linux-x86_64 --install-dir build/linux/Piper --force
+
+      # Cache the on-demand Gemma-4 E4B QAT GGUF (~4.2 GB) + mmproj (~0.95 GB).
+      # Keyed on models.lock so a model bump invalidates the cache. First run
+      # downloads; subsequent runs reuse — keeps the heavy lane affordable.
+      - name: Cache Gemma-4 E4B GGUF + mmproj
+        uses: actions/cache@v4
+        with:
+          path: build/linux/data/fae/models/llamacpp
+          key: gemma4-e4b-qat-${{ hashFiles('native/macos/Fae/Sources/Fae/Resources/Models/models.lock') }}
+
+      - name: Full voice turn + HARD round-trip intelligibility gate
+        env:
+          # llama.cpp runtime resolution (the daemon owns the sidecar).
+          FAE_LLAMACPP_RUNTIME_DIR: ${{ github.workspace }}/build/linux/LlamaCpp
+          FAE_PIPER_DIR: ${{ github.workspace }}/build/linux/Piper
+        run: |
+          set -euo pipefail
+          export XDG_DATA_HOME="$PWD/build/linux/data"
+          mkdir -p "$XDG_DATA_HOME/fae"
+          cp native/macos/Fae/Sources/Fae/Resources/Models/models.lock "$XDG_DATA_HOME/fae/models.lock"
+          # Reuse a committed B5-corpus clip (16 kHz mono); known words below.
+          CLIP="native/macos/Fae/autoresearch/asr_corpus/command_01.wav"
+          test -f "$CLIP"
+          OUT="$PWD/build/linux/spoken-turn.wav"
+          # Full STT → LLM → Piper TTS → STT round-trip (DONE-#1 completeness).
+          # --roundtrip asserts SELF-CONSISTENCY: the round-trip transcript must
+          # recover ~half the LLM's ANSWER words (the answer is nondeterministic,
+          # so NO --expect-words here — the daemon compares round-trip vs the
+          # answer it synthesized). The deterministic intelligibility proof is the
+          # tts-only Qwen3-ASR gate in build-linux.
+          crates/target/debug/fae-daemon --offline-turn \
+            --in "$CLIP" --out "$OUT" --roundtrip
+          test -s "$OUT"
+          python3 - "$OUT" <<'PY'
+          import sys, wave
+          with wave.open(sys.argv[1], "rb") as w:
+              rate, n = w.getframerate(), w.getnframes()
+          dur = n / rate if rate else 0
+          print(f"spoken WAV: {rate} Hz, {n} samples, {dur:.2f}s")
+          assert rate == 24000, f"expected 24 kHz contract, got {rate}"
+          assert n > rate * 0.3, f"WAV too short ({dur:.2f}s) to be real speech"
+          PY

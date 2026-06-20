@@ -107,6 +107,10 @@ on Linux is deferred (headless CI has no audio device; cpal is portable by const
   live mic→speaker turn is an owner/real-Linux-box smoke. DOCUMENT the exact device path
   (`FAE_AUDIO_INPUT_DEVICE`/`_OUTPUT_DEVICE`, ALSA/Pulse/PipeWire) and how to run the live turn on a Linux
   desktop. Do NOT block the phase on hardware you don't have.
+- **DONE (2026-06-20):** runbook at
+  [`docs/architecture/linux-live-audio-smoke-2026-06-20.md`](../architecture/linux-live-audio-smoke-2026-06-20.md)
+  — device override env, ALSA/Pulse/PipeWire mapping, the live-turn recipe (full-app PTT or the daemon
+  socket commands), and how it relates to the headless `--offline-turn` harness + `install-piper-runtime.py`.
 
 ## DONE criteria
 1. Linux build: clip → STT → LLM → **Piper synthesizes intelligible speech to a WAV**, proven in
