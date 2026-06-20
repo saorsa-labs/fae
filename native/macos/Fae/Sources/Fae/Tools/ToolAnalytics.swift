@@ -122,10 +122,9 @@ actor ToolAnalytics {
     func totalRecords() -> Int {
         do {
             return try dbQueue.read { db in
-                let row = try Row.fetchOne(
-                    db, sql: "SELECT COUNT(*) FROM tool_usage"
-                )
-                return row?[0] as? Int ?? 0
+                // COUNT(*) is an Int64; `row[0] as? Int` fails the dynamic cast
+                // and silently returns 0. Use GRDB's typed fetch instead.
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tool_usage") ?? 0
             }
         } catch {
             return 0

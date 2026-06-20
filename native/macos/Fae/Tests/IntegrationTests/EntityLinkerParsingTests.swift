@@ -115,10 +115,11 @@ final class EntityLinkerParsingTests: XCTestCase {
         XCTAssertNil(name)
     }
 
-    func testExtractFirstNameLowercaseReturnsNil() async throws {
+    func testExtractFirstNameLowercaseTakesLeadingWord() async throws {
         let linker = try makeLinker()
-        // All-lowercase, no leading capital -> no name parts.
+        // The first word is accepted even when lowercase (nameParts.isEmpty &&
+        // first.isLetter); the next non-capitalised word stops extraction.
         let name = await linker.extractFirstName(from: "just some words here")
-        XCTAssertNil(name)
+        XCTAssertEqual(name, "just")
     }
 }
