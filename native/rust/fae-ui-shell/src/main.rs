@@ -27,7 +27,7 @@ use protocol::{
     SettingsSection, ShellCommand, SkillSummary,
 };
 use tao::{
-    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
     event::{ElementState, Event, KeyEvent, MouseButton, StartCause, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
     keyboard::KeyCode,
@@ -201,6 +201,20 @@ impl OrbUiModel {
     }
 }
 
+/// How the orb surface composites with whatever is behind its window.
+///
+/// `Floating` is the product look on every platform today: a transparent window
+/// with an alpha-capable surface so the orb floats on the desktop (needs a
+/// compositor). `Opaque` is the Linux headless render-proof path (and a safe
+/// degrade for uncomposited Linux): a `CompositeAlphaMode::Opaque` surface with
+/// an opaque dark clear, so the orb reliably renders real pixels under Xvfb where
+/// transparent X11 present is unreliable. macOS always uses `Floating`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderMode {
+    Floating,
+    Opaque,
+}
+
 struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -219,6 +233,9 @@ struct State {
     /// Latest voice level from the Swift bridge; None means no live audio,
     /// so the orb falls back to a slow synthetic breath.
     bridge_audio: Option<f32>,
+    /// Clear color for the orb pass. Transparent for `Floating`, opaque dark for
+    /// `Opaque` so the orb shows against a solid background under Xvfb.
+    clear_color: wgpu::Color,
 }
 
 /// Voice spine V4: map a raw TTS RMS (`state.audio`) into the orb's expressive
@@ -247,7 +264,7 @@ fn apply_audio_patch(patch: AudioPatch, bridge_audio: &mut Option<f32>) {
 }
 
 impl State {
-    async fn new(window: &'static Window) -> Result<Self, Box<dyn Error>> {
+    async fn new(window: &'static Window, mode: RenderMode) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -291,20 +308,47 @@ impl State {
         } else {
             wgpu::PresentMode::Fifo
         };
-        let alpha_mode = surface_caps
-            .alpha_modes
-            .iter()
-            .copied()
-            .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
-            .or_else(|| {
-                surface_caps
-                    .alpha_modes
-                    .iter()
-                    .copied()
-                    .find(|mode| *mode == wgpu::CompositeAlphaMode::PostMultiplied)
-            })
-            .or_else(|| surface_caps.alpha_modes.first().copied())
-            .ok_or("surface has no supported alpha modes")?;
+        // Floating wants alpha compositing (orb floats on the desktop); Opaque
+        // forces a non-alpha surface so headless X11/Xvfb present is reliable.
+        let alpha_mode = match mode {
+            RenderMode::Opaque => surface_caps
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|m| *m == wgpu::CompositeAlphaMode::Opaque)
+                .or_else(|| surface_caps.alpha_modes.first().copied())
+                .ok_or("surface has no supported alpha modes")?,
+            RenderMode::Floating => surface_caps
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|m| *m == wgpu::CompositeAlphaMode::PreMultiplied)
+                .or_else(|| {
+                    surface_caps
+                        .alpha_modes
+                        .iter()
+                        .copied()
+                        .find(|m| *m == wgpu::CompositeAlphaMode::PostMultiplied)
+                })
+                .or_else(|| surface_caps.alpha_modes.first().copied())
+                .ok_or("surface has no supported alpha modes")?,
+        };
+        // Transparent clear lets the desktop show through (Floating); an opaque
+        // dark tone (~#16141C) backs the orb when compositing is unavailable.
+        let clear_color = match mode {
+            RenderMode::Floating => wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            RenderMode::Opaque => wgpu::Color {
+                r: 0.012,
+                g: 0.011,
+                b: 0.018,
+                a: 1.0,
+            },
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -396,6 +440,7 @@ impl State {
             target_warmth: 0.5,
             target_energy: 0.4,
             bridge_audio: None,
+            clear_color,
         })
     }
 
@@ -491,12 +536,7 @@ impl State {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 0.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(self.clear_color),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -518,6 +558,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     if std::env::args().any(|arg| arg == "--smoke-settings-panel") {
         return run_settings_panel_smoke();
+    }
+    if std::env::args().any(|arg| arg == "--smoke-pill") {
+        return run_pill_smoke();
     }
 
     let mut event_loop_builder = EventLoopBuilder::<UserEvent>::with_user_event();
@@ -559,7 +602,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // and avoids unsafe lifetime juggling around the OS window handle.
     let window: &'static Window = Box::leak(Box::new(window));
     let orb_menu = OrbMenu::new()?;
-    let mut state = pollster::block_on(State::new(window))?;
+    let mut state = pollster::block_on(State::new(window, RenderMode::Floating))?;
     let mut orb_ui = OrbUiModel::new();
     let mut cursor_position = PhysicalPosition::new(210.0, 210.0);
     let mut web_panels: Vec<WebPanel> = Vec::new();
@@ -916,6 +959,110 @@ fn run_settings_panel_smoke() -> Result<(), Box<dyn Error>> {
             }
             Event::UserEvent(UserEvent::Bridge(ShellCommand::Quit)) => {
                 log::info!("smoke settings panel exit");
+                *control_flow = ControlFlow::Exit;
+            }
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                *control_flow = ControlFlow::Exit;
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Headless render proof for the orb + pill (P6/D1). Opens the wgpu orb in
+/// `RenderMode::Opaque` and the (Linux-opaque) pill at fixed, non-overlapping
+/// positions, seeds sample messages so the pill paints, renders orb frames, then
+/// exits 0. CI captures the Xvfb root and asserts each surface region rendered
+/// real pixels (per-surface crop color counts). Exits cleanly on macOS too.
+fn run_pill_smoke() -> Result<(), Box<dyn Error>> {
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let panel_proxy = proxy.clone();
+    let exit_proxy = proxy.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(10));
+        let _ = exit_proxy.send_event(UserEvent::Bridge(ShellCommand::Quit));
+    });
+
+    let mut orb_ui = OrbUiModel::new();
+    orb_ui.push_message("you".to_string(), "Good morning, Fae.".to_string());
+    orb_ui.push_message(
+        "fae".to_string(),
+        "Good morning — your 9am moved to 10.".to_string(),
+    );
+    orb_ui.push_message("you".to_string(), "Thanks.".to_string());
+
+    let mut state: Option<State> = None;
+    // Held in a Vec (like the settings smoke) purely to keep the pill window +
+    // webview alive for the run without tripping unused-assignment lints.
+    let mut pills: Vec<PillPanel> = Vec::new();
+    let mut opened = false;
+
+    event_loop.run(move |event, target, control_flow| {
+        *control_flow = ControlFlow::Poll;
+        match event {
+            Event::NewEvents(StartCause::Init) if !opened => {
+                opened = true;
+                // Orb at a fixed top-left rect; pill clear of it — so CI can crop
+                // and assert each surface independently.
+                let window = match WindowBuilder::new()
+                    .with_title("Fae Orb")
+                    .with_inner_size(PhysicalSize::new(420, 420))
+                    .with_position(LogicalPosition::new(40.0, 40.0))
+                    .with_resizable(false)
+                    .with_decorations(false)
+                    .with_transparent(false)
+                    .build(target)
+                {
+                    Ok(w) => w,
+                    Err(error) => {
+                        log::error!("smoke orb window failed: {error}");
+                        *control_flow = ControlFlow::Exit;
+                        return;
+                    }
+                };
+                let window: &'static Window = Box::leak(Box::new(window));
+                match pollster::block_on(State::new(window, RenderMode::Opaque)) {
+                    Ok(mut s) => {
+                        s.set_active(true);
+                        state = Some(s);
+                        log::info!("smoke orb opened (opaque)");
+                    }
+                    Err(error) => {
+                        log::error!("smoke orb state failed: {error}");
+                        *control_flow = ControlFlow::Exit;
+                        return;
+                    }
+                }
+                match open_pill_panel(target, &panel_proxy) {
+                    Ok(p) => {
+                        p.window
+                            .set_outer_position(LogicalPosition::new(500.0, 120.0));
+                        // __faeSetMessages adds `.show`, so this also makes the
+                        // collapsed pill visible (paints the caption + accent dot).
+                        push_pill_messages(&p, &orb_ui);
+                        pills.push(p);
+                        log::info!("smoke pill opened");
+                    }
+                    Err(error) => {
+                        log::error!("smoke pill failed: {error}");
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
+            }
+            Event::MainEventsCleared => {
+                if let Some(s) = state.as_mut() {
+                    s.update();
+                    if let Err(error) = s.render() {
+                        log::warn!("smoke orb render: {error}");
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::Bridge(ShellCommand::Quit)) => {
+                log::info!("smoke pill exit");
                 *control_flow = ControlFlow::Exit;
             }
             Event::WindowEvent {
@@ -1385,29 +1532,44 @@ fn build_webview_for_window<'a>(
 }
 
 fn open_pill_panel(
-    target: &tao::event_loop::EventLoop<UserEvent>,
+    target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
     panel_proxy: &tao::event_loop::EventLoopProxy<UserEvent>,
 ) -> Result<PillPanel, Box<dyn Error>> {
     // The pill is now the conversation surface: it must accept clicks and
     // keyboard focus (for the composer), so unlike the old caption window it is
     // neither click-through nor unfocused.
+    //
+    // Linux opaque frosted fallback: WebKitGTK cannot blur the desktop behind a
+    // transparent webview (tauri#12800/#9220), so on Linux the pill renders as a
+    // self-contained opaque frosted panel — solid window, solid webview
+    // background, and the `.fae-opaque` HTML class baked onto <html> at build
+    // time (first-paint-safe, no JS flash). macOS keeps the real frosted glass.
+    let opaque = cfg!(target_os = "linux");
     let window = WindowBuilder::new()
         .with_title("Fae Conversation")
         .with_inner_size(COLLAPSED_PILL)
         .with_resizable(false)
         .with_decorations(false)
-        .with_transparent(true)
+        .with_transparent(!opaque)
         .with_always_on_top(true)
         .build(target)?;
     let proxy = panel_proxy.clone();
+    let (web_bg, html): ((u8, u8, u8, u8), String) = if opaque {
+        (
+            (22, 20, 28, 255),
+            PILL_HTML.replace("<html class=\"\">", "<html class=\"fae-opaque\">"),
+        )
+    } else {
+        ((0, 0, 0, 0), PILL_HTML.to_string())
+    };
     let webview = build_webview_for_window(
         &window,
         WebViewBuilder::new()
-            .with_transparent(true)
+            .with_transparent(!opaque)
             // Belt-and-braces: WKWebView paints a white canvas in light mode even
             // with a transparent body unless the background colour is cleared too.
-            .with_background_color((0, 0, 0, 0))
-            .with_html(PILL_HTML)
+            .with_background_color(web_bg)
+            .with_html(html)
             .with_ipc_handler(move |request| {
                 if let Err(error) = proxy.send_event(UserEvent::PanelAction(request.body().clone()))
                 {
@@ -1471,7 +1633,7 @@ fn push_pill_messages(pill: &PillPanel, orb_ui: &OrbUiModel) {
     }
 }
 
-const PILL_HTML: &str = r#"<!doctype html><html><head><meta charset='utf-8'><style>
+const PILL_HTML: &str = r#"<!doctype html><html class=""><head><meta charset='utf-8'><style>
 :root{color-scheme:dark;
  --bg:rgba(22,20,28,.78);--border:rgba(180,168,196,.22);
  --text:rgba(255,255,255,.92);--muted:#9A90A8;--you:#B4A8C4;--fae:#D4A934;
@@ -1480,6 +1642,11 @@ const PILL_HTML: &str = r#"<!doctype html><html><head><meta charset='utf-8'><sty
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:transparent;overflow:hidden;
  font-family:var(--sans);color:var(--text)}
+/* Linux opaque frosted fallback (class baked onto <html> on Linux only):
+   WebKitGTK cannot blur the desktop, so paint a solid frosted panel instead. */
+html.fae-opaque,html.fae-opaque body{background:#16141C}
+html.fae-opaque #shell{background:#16141C;-webkit-backdrop-filter:none;
+ backdrop-filter:none;box-shadow:none;border-color:rgba(180,168,196,.28)}
 #shell{position:absolute;inset:8px;display:flex;flex-direction:column;
  background:var(--bg);border:1px solid var(--border);border-radius:9999px;
  box-shadow:0 10px 34px rgba(0,0,0,.42);

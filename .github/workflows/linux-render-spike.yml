@@ -106,6 +106,42 @@ jobs:
           path: linux-settings-panel.png
           if-no-files-found: error
 
+      - name: Smoke render orb + pill under Xvfb (P6, per-surface)
+        working-directory: native/rust/fae-ui-shell
+        run: |
+          set -euo pipefail
+          xvfb-run -a --server-args='-screen 0 1280x900x24' bash -c '
+            ./target/debug/fae-ui-shell --smoke-pill &
+            app_pid=$!
+            sleep 7
+            import -window root "$GITHUB_WORKSPACE/linux-orb-pill.png"
+            wait "$app_pid"
+          '
+          test -s "$GITHUB_WORKSPACE/linux-orb-pill.png"
+          file "$GITHUB_WORKSPACE/linux-orb-pill.png"
+          cd "$GITHUB_WORKSPACE"
+          # Per-surface proof (codex): a whole-root color count can pass with only
+          # one surface drawn. Crop each window's fixed rect and assert each
+          # rendered real pixels. A flat clear yields ~1-2 colors; a rendered orb
+          # gradient is dozens+, rendered pill text/accents 8+.
+          convert linux-orb-pill.png -crop 420x420+40+40 +repage orb-region.png
+          convert linux-orb-pill.png -crop 360x52+500+120 +repage pill-region.png
+          orb_colors=$(identify -format '%k' orb-region.png)
+          pill_colors=$(identify -format '%k' pill-region.png)
+          echo "orb region colors=$orb_colors  pill region colors=$pill_colors"
+          test "$orb_colors" -ge 16
+          test "$pill_colors" -ge 8
+
+      - name: Upload Linux orb + pill screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-orb-pill
+          path: |
+            linux-orb-pill.png
+            orb-region.png
+            pill-region.png
+          if-no-files-found: error
+
       - name: Check daemon workspace formatting
         working-directory: crates
         run: cargo fmt --all -- --check
