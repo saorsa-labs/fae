@@ -206,34 +206,32 @@ actor ExternalReviewGate {
 
     /// Run the internal self-review heuristic (no external dependency).
     ///
-    /// Rules:
-    /// - Any eval metric regresses by > 5% → FAIL
-    /// - All metrics are neutral or improved → PASS
-    /// - Minor regression (≤ 5%) on any metric → CONCERN
+    /// Delegates to the fail-closed `AdapterGate.decide` rule so the internal
+    /// reviewer can never certify an un-measured (all-nil) or unimproved
+    /// (all-flat) candidate. The coordinator is expected to short-circuit a
+    /// `.blockedNoMeasurement` candidate before calling the gate at all; this is
+    /// the defence-in-depth path if it ever reaches here.
     private func runInternalReview(
         evalDelta: EvalDelta,
         reviewedAt: String
     ) -> ReviewResult {
-        let allDeltas = [
-            evalDelta.toolCallingDelta,
-            evalDelta.faeCapabilityDelta,
-            evalDelta.assistantFitDelta,
-            evalDelta.serializationDelta,
-        ].compactMap { $0 }
-
-        let minDelta = allDeltas.min() ?? 0.0
         let verdict: ReviewVerdict
         let summary: String
 
-        if minDelta < -5.0 {
-            verdict = .fail
-            summary = "Internal review: regression detected (\(String(format: "%.1f", minDelta))%). Deployment blocked."
-        } else if minDelta < 0.0 {
-            verdict = .concern
-            summary = "Internal review: minor regression (\(String(format: "%.1f", minDelta))%). Human review recommended."
-        } else {
+        switch AdapterGate.decide(evalDelta.measuredDeltas) {
+        case .pass:
             verdict = .pass
-            summary = "Internal review: all metrics stable or improved (min delta: +\(String(format: "%.1f", minDelta))%)."
+            summary = "Internal review: measured improvement with no regression. Deployment permitted."
+        case .concern:
+            verdict = .concern
+            summary = "Internal review: minor regression on a measured metric. Human review recommended."
+        case .fail:
+            verdict = .fail
+            summary = "Internal review: regression > 5% on a measured metric. Deployment blocked."
+        case .blockedNoMeasurement:
+            // Fail-closed: no real measurement (or nothing improved) ⇒ never pass.
+            verdict = .fail
+            summary = "Internal review: no measured improvement — cannot certify. Deployment blocked."
         }
 
         return ReviewResult(
@@ -328,4 +326,93 @@ struct EvalDelta: Sendable {
     let serializationDelta: Double?
     /// Delta in average throughput (tokens per second).
     let throughputDelta: Double?
+}
+
+// MARK: - Gate decision (P9/C4)
+
+/// The correctness dimensions that gate a deploy.
+///
+/// Throughput is deliberately NOT a gate dimension — it is a performance signal,
+/// not a correctness one, and must never make an adapter deployable on its own.
+enum GateDimension: String, Sendable, CaseIterable {
+    case toolCalling
+    case faeCapability
+    case assistantFit
+    case serialization
+}
+
+/// The dimensions actually MEASURED in an evaluation, with their deltas
+/// (percentage points; positive = improvement).
+///
+/// An empty `measured` means **nothing was measured** — which is categorically
+/// different from "measured, and the result was zero". The gate fails closed on
+/// the former (see ``AdapterGate/decide(_:)``).
+struct MeasuredDeltas: Sendable {
+    let measured: [GateDimension: Double]
+    /// Advisory only; never gates.
+    let throughputDelta: Double?
+
+    var isEmpty: Bool { measured.isEmpty }
+}
+
+/// The P9/C4 gate decision over measured correctness deltas.
+enum GateDecision: String, Sendable, Equatable {
+    case pass
+    case concern
+    case fail
+    /// Nothing measurably improved — either no dimension was measured at all, or
+    /// every measured dimension was flat. Fail-closed: never deployable.
+    case blockedNoMeasurement
+}
+
+/// The fail-closed gate rule for P9/C4 adapter deploys.
+///
+/// Replaces the previous `compactMap`/`min() ?? 0.0` heuristic, which passed
+/// both all-nil and all-zero deltas — letting an un-evaluated adapter deploy.
+enum AdapterGate {
+    /// Decide whether a candidate's measured deltas permit deployment.
+    ///
+    /// Rules (fail-closed):
+    /// - **Incomplete measurement** — any of the four correctness dimensions
+    ///   unmeasured (`nil`) ⇒ `.blockedNoMeasurement`. A real evaluator scores
+    ///   every dimension; a partial result means the evaluator malfunctioned and
+    ///   cannot certify a deploy.
+    /// - any measured dimension regressed > 5% ⇒ `.fail`
+    /// - any measured dimension regressed (≤ 5%) ⇒ `.concern`
+    /// - at least one improvement and no regression ⇒ `.pass`
+    /// - all dimensions flat (nothing strictly improved) ⇒ `.blockedNoMeasurement`
+    ///   (an all-flat result is indistinguishable from a non-measurement and must
+    ///   not auto-deploy).
+    static func decide(_ deltas: MeasuredDeltas) -> GateDecision {
+        // Require a COMPLETE measurement: every correctness dimension present.
+        let values = GateDimension.allCases.compactMap { deltas.measured[$0] }
+        guard values.count == GateDimension.allCases.count else { return .blockedNoMeasurement }
+        if values.contains(where: { $0 < -5.0 }) { return .fail }
+        if values.contains(where: { $0 < 0.0 }) { return .concern }
+        if values.contains(where: { $0 > 0.0 }) { return .pass }
+        return .blockedNoMeasurement
+    }
+}
+
+extension EvalDelta {
+    /// The MEASURED correctness deltas. A `nil` field means the dimension was not
+    /// measured this cycle and is therefore excluded (NOT folded in as zero).
+    /// Throughput is carried for annotation but never gates.
+    var measuredDeltas: MeasuredDeltas {
+        var measured: [GateDimension: Double] = [:]
+        if let v = toolCallingDelta { measured[.toolCalling] = v }
+        if let v = faeCapabilityDelta { measured[.faeCapability] = v }
+        if let v = assistantFitDelta { measured[.assistantFit] = v }
+        if let v = serializationDelta { measured[.serialization] = v }
+        return MeasuredDeltas(measured: measured, throughputDelta: throughputDelta)
+    }
+
+    /// An `EvalDelta` carrying NO measured dimensions (all `nil`) — the fail-closed
+    /// "nothing was measured" signal. Distinct from a measured all-zero result.
+    static var unmeasured: EvalDelta {
+        EvalDelta(
+            toolCallingDelta: nil, faeCapabilityDelta: nil,
+            assistantFitDelta: nil, serializationDelta: nil, throughputDelta: nil
+        )
+    }
 }

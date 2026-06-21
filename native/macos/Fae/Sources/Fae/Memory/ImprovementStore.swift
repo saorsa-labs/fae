@@ -76,6 +76,19 @@ struct ImprovementState: Sendable {
     var metaOptLastRunAt: String?
     /// Consecutive cycles with zero kept changes (plateau detection).
     var metaOptConsecutiveNoImprovement: Int
+
+    // P9/C4 (W3) — candidate state, kept SEPARATE from the deployed pointer.
+
+    /// The candidate adapter under evaluation. Written by the training step; it is
+    /// NEVER the deployed pointer. Promoted to `currentAdapterPath` only by a gated
+    /// deploy, and cleared on any terminal non-deploy outcome (block / reject /
+    /// abort). This keeps an un-evaluated candidate from ever polluting the live
+    /// `currentAdapterPath`, on any path or after a crash.
+    var pendingAdapterPath: String? = nil
+
+    /// The candidate's artifact kind ("gguf" | "mlxDir"), for the W4 evaluator and
+    /// deploy routing.
+    var pendingAdapterKind: String? = nil
 }
 
 /// A detected gap between current Fae capabilities and desired behaviour.
@@ -216,7 +229,9 @@ actor ImprovementStore {
                 training_started_at   TEXT,
                 last_cycle_error      TEXT,
                 deferral_count        INTEGER NOT NULL DEFAULT 0,
-                previous_directive    TEXT
+                previous_directive    TEXT,
+                pending_adapter_path  TEXT,
+                pending_adapter_kind  TEXT
             )
         """)
         // Migration: add columns to existing databases that lack them.
@@ -240,6 +255,14 @@ actor ImprovementStore {
         }
         if !columnNames.contains("meta_opt_consecutive_no_improvement") {
             try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN meta_opt_consecutive_no_improvement INTEGER NOT NULL DEFAULT 0")
+        }
+        // Migration: candidate (pending) adapter columns, kept separate from the
+        // deployed pointer (P9/C4 W3).
+        if !columnNames.contains("pending_adapter_path") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_adapter_path TEXT")
+        }
+        if !columnNames.contains("pending_adapter_kind") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_adapter_kind TEXT")
         }
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS capability_gaps (
@@ -444,7 +467,8 @@ actor ImprovementStore {
                        previous_adapter_path, training_started_at, last_cycle_error,
                        deferral_count, previous_directive,
                        meta_opt_kept_total, meta_opt_tested_total,
-                       meta_opt_last_run_at, meta_opt_consecutive_no_improvement
+                       meta_opt_last_run_at, meta_opt_consecutive_no_improvement,
+                       pending_adapter_path, pending_adapter_kind
                 FROM improvement_state LIMIT 1
             """) else {
                 throw ImprovementStoreError.stateNotInitialised
@@ -467,7 +491,8 @@ actor ImprovementStore {
                             last_cycle_error = ?, deferral_count = ?,
                             previous_directive = ?,
                             meta_opt_kept_total = ?, meta_opt_tested_total = ?,
-                            meta_opt_last_run_at = ?, meta_opt_consecutive_no_improvement = ?
+                            meta_opt_last_run_at = ?, meta_opt_consecutive_no_improvement = ?,
+                            pending_adapter_path = ?, pending_adapter_kind = ?
                         WHERE id = ?
                     """,
                     arguments: [
@@ -478,6 +503,7 @@ actor ImprovementStore {
                         state.deferralCount, state.previousDirective,
                         state.metaOptKeptTotal, state.metaOptTestedTotal,
                         state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
+                        state.pendingAdapterPath, state.pendingAdapterKind,
                         id,
                     ]
                 )
@@ -490,8 +516,9 @@ actor ImprovementStore {
                              previous_adapter_path, training_started_at, last_cycle_error,
                              deferral_count, previous_directive,
                              meta_opt_kept_total, meta_opt_tested_total,
-                             meta_opt_last_run_at, meta_opt_consecutive_no_improvement)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             meta_opt_last_run_at, meta_opt_consecutive_no_improvement,
+                             pending_adapter_path, pending_adapter_kind)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         state.cycleState, state.lastCycleAt,
@@ -501,6 +528,7 @@ actor ImprovementStore {
                         state.deferralCount, state.previousDirective,
                         state.metaOptKeptTotal, state.metaOptTestedTotal,
                         state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
+                        state.pendingAdapterPath, state.pendingAdapterKind,
                     ]
                 )
             }
@@ -762,7 +790,9 @@ actor ImprovementStore {
             metaOptKeptTotal: Int(row["meta_opt_kept_total"] as? Int64 ?? 0),
             metaOptTestedTotal: Int(row["meta_opt_tested_total"] as? Int64 ?? 0),
             metaOptLastRunAt: row["meta_opt_last_run_at"],
-            metaOptConsecutiveNoImprovement: Int(row["meta_opt_consecutive_no_improvement"] as? Int64 ?? 0)
+            metaOptConsecutiveNoImprovement: Int(row["meta_opt_consecutive_no_improvement"] as? Int64 ?? 0),
+            pendingAdapterPath: row["pending_adapter_path"],
+            pendingAdapterKind: row["pending_adapter_kind"]
         )
     }
 

@@ -47,6 +47,8 @@ enum ImprovementCycleError: Error, Sendable {
     case insufficientData(feedbackCount: Int, correctionCount: Int)
     /// The training cycle appears stuck (started more than maxDuration ago).
     case stuckDetected(startedAt: String)
+    /// A deploy was attempted with no pending candidate to promote (P9/C4 W3).
+    case noPendingCandidate
 }
 
 // MARK: - ImprovementCycleCoordinator
@@ -137,6 +139,14 @@ actor ImprovementCycleCoordinator {
     /// layout matches at reload.
     private var daemonTrainingBaseModel: String?
 
+    /// Interim evaluation seam (P9/C4). When set, supplies the **measured**
+    /// `EvalDelta` for the evaluating phase in place of the FaeBenchmark bridge.
+    /// W7's `AdapterEvaluator` becomes the production implementation behind this
+    /// seam; until then it lets the gate + verdict handling be exercised with a
+    /// real measured delta without a FaeBenchmark binary. `nil` ⇒ fall through to
+    /// the bridge benchmark, else `.unmeasured` (fail-closed).
+    private var injectedMeasuredDelta: EvalDelta?
+
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
 
@@ -184,6 +194,13 @@ actor ImprovementCycleCoordinator {
     /// Passing `nil` reverts to the legacy mlx-tune (`.safetensors`) path.
     func setDaemonTrainingBaseModel(_ baseModel: String?) {
         daemonTrainingBaseModel = baseModel
+    }
+
+    /// Inject a measured `EvalDelta` for the evaluating phase (P9/C4 interim seam;
+    /// see `injectedMeasuredDelta`). Used by tests until W7 wires the real
+    /// `AdapterEvaluator`. Passing `nil` clears it (fall through to the bridge).
+    func setInjectedMeasuredDelta(_ delta: EvalDelta?) {
+        injectedMeasuredDelta = delta
     }
 
     /// Set the meta-optimizer. Called by FaeScheduler after wiring.
@@ -372,6 +389,11 @@ actor ImprovementCycleCoordinator {
             resetState.cycleState = CycleState.idle.rawValue
             resetState.trainingStartedAt = nil
             resetState.lastCycleError = "stuck_detected"
+            // P9/C4 (W3): discard any candidate from the wedged cycle. The deployed
+            // `currentAdapterPath` is untouched (training only writes pending), so a
+            // crash/stuck mid-cycle can never leave an un-evaluated candidate live.
+            resetState.pendingAdapterPath = nil
+            resetState.pendingAdapterKind = nil
             try await store.writeState(resetState)
         }
 
@@ -383,6 +405,19 @@ actor ImprovementCycleCoordinator {
                 current.rawValue
             )
             return
+        }
+
+        // P9/C4 (W3): a fresh cycle starts from idle, which must never carry a stale
+        // pending candidate (invariant: idle ⇒ pendingAdapterPath == nil). Discard any
+        // leftover from a prior interrupted cycle BEFORE proceeding, so every early
+        // exit below (insufficient data, meta-opt-only) preserves the invariant.
+        let startState = try await store.readState()
+        if startState.pendingAdapterPath != nil || startState.pendingAdapterKind != nil {
+            var cleared = startState
+            cleared.pendingAdapterPath = nil
+            cleared.pendingAdapterKind = nil
+            try await store.writeState(cleared)
+            NSLog("ImprovementCycleCoordinator: cleared stale pending candidate at cycle start")
         }
 
         // Step 3: Check minimum data thresholds.
@@ -512,10 +547,15 @@ actor ImprovementCycleCoordinator {
                 "ImprovementCycleCoordinator: training complete — adapter at %@ (kind=%@)",
                 adapterPath, candidate.kind.rawValue)
 
-            // 5d. Store adapter path in improvement state.
+            // 5d. Store the candidate as the PENDING adapter (P9/C4 W3).
+            // Training NEVER writes the deployed `currentAdapterPath`; the candidate
+            // lives in `pendingAdapterPath` until a gated deploy promotes it. This is
+            // what keeps an un-evaluated candidate from ever polluting the live
+            // adapter — on the block/reject/abort paths, or after a crash mid-cycle.
             try await store.ensureStateRow()
             var state = try await store.readState()
-            state.currentAdapterPath = adapterPath
+            state.pendingAdapterPath = adapterPath
+            state.pendingAdapterKind = candidate.kind.rawValue
             try await store.writeState(state)
         } catch let error as ImprovementCycleError {
             // Rethrown from the bridge-nil path above — not a real failure.
@@ -552,41 +592,61 @@ actor ImprovementCycleCoordinator {
             }
             NSLog("ImprovementCycleCoordinator: evaluating phase")
 
-            // Build EvalDelta: prefer FaeBenchmark (real accuracy), fall back to loss-based proxy.
-            // When no adapter was produced, deltas are zero (neutral — no regression, no gain).
+            // P9/C4 (W1): the gate certifies ONLY real, measured deltas. A
+            // non-measurement (no FaeBenchmark evaluator configured, or a
+            // benchmark failure) is fail-closed — it yields `.unmeasured`, never a
+            // synthetic zero-delta "pass". The loss-based proxy is advisory only
+            // and never gates (it cannot populate measured dimensions).
             let evalDelta: EvalDelta
-            if let bridge = trainingBridge, let adapterPath = producedAdapterPath {
-                // Try real benchmark evaluation first (if FaeBenchmark binary is configured).
-                if await bridge.isBenchmarkAvailable {
-                    do {
-                        NSLog("ImprovementCycleCoordinator: running FaeBenchmark baseline")
-                        let baseline = try await bridge.runBenchmark(adapterPath: nil)
-                        // Store baseline for historical comparison.
-                        let pendingCount = (try? await store.pendingFeedbackEvents().count) ?? 0
-                        try? await store.insertBaseline(baseline.toBaseline(feedbackEventCount: pendingCount))
+            if let injected = injectedMeasuredDelta {
+                NSLog("ImprovementCycleCoordinator: using injected measured eval delta (P9/C4 interim seam)")
+                evalDelta = injected
+            } else if let bridge = trainingBridge, let adapterPath = producedAdapterPath,
+               await bridge.isBenchmarkAvailable {
+                do {
+                    NSLog("ImprovementCycleCoordinator: running FaeBenchmark baseline")
+                    let baseline = try await bridge.runBenchmark(adapterPath: nil)
+                    // Store baseline for historical comparison.
+                    let pendingCount = (try? await store.pendingFeedbackEvents().count) ?? 0
+                    try? await store.insertBaseline(baseline.toBaseline(feedbackEventCount: pendingCount))
 
-                        NSLog("ImprovementCycleCoordinator: running FaeBenchmark with adapter")
-                        let adapterResult = try await bridge.runBenchmark(adapterPath: adapterPath)
+                    NSLog("ImprovementCycleCoordinator: running FaeBenchmark with adapter")
+                    let adapterResult = try await bridge.runBenchmark(adapterPath: adapterPath)
 
-                        evalDelta = adapterResult.delta(from: baseline)
+                    evalDelta = adapterResult.delta(from: baseline)
+                    NSLog(
+                        "ImprovementCycleCoordinator: benchmark delta — tools=%.1f%% fae=%.1f%% fit=%.1f%% ser=%.1f%%",
+                        evalDelta.toolCallingDelta ?? 0, evalDelta.faeCapabilityDelta ?? 0,
+                        evalDelta.assistantFitDelta ?? 0, evalDelta.serializationDelta ?? 0
+                    )
+                } catch {
+                    // Loss-proxy is advisory-only (logged, never gates). Eval is unmeasured.
+                    if let advisory = try? await lossBasedEvalDelta(bridge: bridge, adapterPath: adapterPath) {
                         NSLog(
-                            "ImprovementCycleCoordinator: benchmark delta — tools=%.1f%% fae=%.1f%% fit=%.1f%% ser=%.1f%%",
-                            evalDelta.toolCallingDelta ?? 0, evalDelta.faeCapabilityDelta ?? 0,
-                            evalDelta.assistantFitDelta ?? 0, evalDelta.serializationDelta ?? 0
+                            "ImprovementCycleCoordinator: benchmark failed (%@); loss-proxy advisory only (does NOT gate): tools=%.1f%%",
+                            error.localizedDescription, advisory.toolCallingDelta ?? 0
                         )
-                    } catch {
-                        NSLog("ImprovementCycleCoordinator: benchmark failed (%@), falling back to loss-based eval", error.localizedDescription)
-                        evalDelta = try await lossBasedEvalDelta(bridge: bridge, adapterPath: adapterPath)
+                    } else {
+                        NSLog("ImprovementCycleCoordinator: benchmark failed (%@); eval unmeasured", error.localizedDescription)
                     }
-                } else {
-                    // No benchmark binary — use loss-based proxy.
-                    evalDelta = try await lossBasedEvalDelta(bridge: bridge, adapterPath: adapterPath)
+                    evalDelta = .unmeasured
                 }
             } else {
-                evalDelta = EvalDelta(
-                    toolCallingDelta: 0.0, faeCapabilityDelta: 0.0,
-                    assistantFitDelta: 0.0, serializationDelta: 0.0, throughputDelta: nil
-                )
+                NSLog("ImprovementCycleCoordinator: no FaeBenchmark evaluator available — eval unmeasured (fail-closed)")
+                evalDelta = .unmeasured
+            }
+
+            // P9/C4 (W1, F1/F2/F16): fail-closed gate. A candidate with no COMPLETE
+            // measurement (any correctness dimension unmeasured, or nothing
+            // improved) is blocked BEFORE the external review gate — the external
+            // providers must never get a chance to PASS an un-evaluated candidate.
+            // `failClosed` discards the pending candidate; the deployed
+            // `currentAdapterPath` is untouched (W3). (The audited `candidate_blocked`
+            // security event + the receipt deploy gate land in W4.)
+            if AdapterGate.decide(evalDelta.measuredDeltas) == .blockedNoMeasurement {
+                NSLog("ImprovementCycleCoordinator: candidate_blocked — no measured improvement; fail-closed (no review, no deploy)")
+                await failClosed(reason: "candidate_blocked: no_measured_improvement")
+                return
             }
 
             // Run external review gate.
@@ -601,7 +661,7 @@ actor ImprovementCycleCoordinator {
                 if case .maxDeferralsReached = error {
                     NSLog("ImprovementCycleCoordinator: max deferrals reached, aborting cycle")
                     try await store.resetDeferrals()
-                    try? await forceIdle(error: "max_deferrals_reached")
+                    await failClosed(reason: "max_deferrals_reached")
                     return
                 }
                 throw error
@@ -622,7 +682,7 @@ actor ImprovementCycleCoordinator {
                                 "ImprovementCycleCoordinator: shadow eval gate FAILED (%.1f%% win rate)",
                                 evalResult.adapterWinRate * 100
                             )
-                            try? await forceIdle(error: "shadow_eval_gate_failed")
+                            await failClosed(reason: "shadow_eval_gate_failed")
                             return
                         }
                         NSLog(
@@ -648,17 +708,17 @@ actor ImprovementCycleCoordinator {
                 NSLog("ImprovementCycleCoordinator: review CONCERN — deferring cycle")
                 let newCount = try await store.incrementDeferral()
                 NSLog("ImprovementCycleCoordinator: deferral count now %d", newCount)
-                try? await forceIdle(error: "review_concern_deferred")
+                await failClosed(reason: "review_concern_deferred")
                 return
             case .fail:
                 NSLog("ImprovementCycleCoordinator: review FAIL — aborting cycle")
                 try await store.resetDeferrals()
-                try? await forceIdle(error: "review_failed: \(reviewResult.summary)")
+                await failClosed(reason: "review_failed: \(reviewResult.summary)")
                 return
             }
         } catch {
             NSLog("ImprovementCycleCoordinator: evaluating failed: %@", error.localizedDescription)
-            try? await forceIdle(error: "evaluating_failed: \(error.localizedDescription)")
+            await failClosed(reason: "evaluating_failed: \(error.localizedDescription)")
             return
         }
 
@@ -688,7 +748,7 @@ actor ImprovementCycleCoordinator {
                 try await performDeploy(approved: true)
             } catch {
                 NSLog("ImprovementCycleCoordinator: auto-deploy failed: %@", error.localizedDescription)
-                try? await forceIdle(error: "auto_deploy_failed: \(error.localizedDescription)")
+                await failClosed(reason: "auto_deploy_failed: \(error.localizedDescription)")
                 return
             }
         } else {
@@ -699,7 +759,7 @@ actor ImprovementCycleCoordinator {
                 // runCycle() returns here. approveDeployment() / rejectDeployment() resume it.
             } catch {
                 NSLog("ImprovementCycleCoordinator: proposing failed: %@", error.localizedDescription)
-                try? await forceIdle(error: "proposing_failed: \(error.localizedDescription)")
+                await failClosed(reason: "proposing_failed: \(error.localizedDescription)")
             }
             return
         }
@@ -723,6 +783,12 @@ actor ImprovementCycleCoordinator {
         guard current == .proposing else {
             throw ImprovementCycleError.invalidTransition(from: current, to: .deploying)
         }
+        // P9/C4 (W3): validate the candidate BEFORE moving to .deploying, so a
+        // missing candidate leaves the machine in .proposing (recoverable by a later
+        // approve/reject) rather than stuck in .deploying.
+        guard try await store.readState().pendingAdapterPath != nil else {
+            throw ImprovementCycleError.noPendingCandidate
+        }
         try await transition(to: .deploying)
         try await performDeploy(approved: true)
         try await transition(to: .idle)
@@ -742,12 +808,17 @@ actor ImprovementCycleCoordinator {
         }
         try await store.ensureStateRow()
         var state = try await store.readState()
+        // P9/C4 (W3): discard the candidate. `currentAdapterPath` (the deployed
+        // adapter) is untouched — training only ever wrote `pendingAdapterPath` — so
+        // a rejected candidate simply never deploys.
+        state.pendingAdapterPath = nil
+        state.pendingAdapterKind = nil
         state.cycleState = CycleState.idle.rawValue
         state.completedCycles += 1
         state.lastCycleAt = ISO8601DateFormatter().string(from: Date())
         state.trainingStartedAt = nil
         try await store.writeState(state)
-        NSLog("ImprovementCycleCoordinator: deployment rejected — returned to idle")
+        NSLog("ImprovementCycleCoordinator: deployment rejected — discarded pending candidate, returned to idle")
     }
 
     /// Roll back the current adapter to the previous one.
@@ -782,9 +853,21 @@ actor ImprovementCycleCoordinator {
         try await store.ensureStateRow()
         var state = try await store.readState()
 
-        // Track rollback path: current → previous before updating.
-        // currentAdapterPath was set during the training step with the real adapter directory.
+        // P9/C4 (W3): promote the gated candidate. The candidate lives in
+        // `pendingAdapterPath`; deploy is the ONLY place `currentAdapterPath` is
+        // written. current → previous (the real rollback target), pending → current,
+        // then clear pending. This also fixes the prior rollback-lineage bug where
+        // `previousAdapterPath` was set to the candidate itself.
+        guard let candidate = state.pendingAdapterPath else {
+            // Fail-closed: a deploy with no gated candidate is an error, not a silent
+            // no-op — surfacing it prevents a caller from treating it as a success.
+            NSLog("ImprovementCycleCoordinator: performDeploy called with no pending candidate — refusing")
+            throw ImprovementCycleError.noPendingCandidate
+        }
         state.previousAdapterPath = state.currentAdapterPath
+        state.currentAdapterPath = candidate
+        state.pendingAdapterPath = nil
+        state.pendingAdapterKind = nil
         state.userApprovedCycles += 1
         try await store.writeState(state)
 
@@ -835,6 +918,33 @@ actor ImprovementCycleCoordinator {
         state.cycleState = CycleState.idle.rawValue
         state.trainingStartedAt = nil
         state.lastCycleError = message
+        // P9/C4 (W3): returning to idle always discards any pending candidate, so an
+        // idle state can never coexist with a stale candidate that a later path
+        // might deploy. (Invariant: idle ⇒ pendingAdapterPath == nil.)
+        state.pendingAdapterPath = nil
+        state.pendingAdapterKind = nil
         try await store.writeState(state)
+    }
+
+    /// Persist a terminal "blocked / not deployed" outcome for this cycle (P9/C4 W3).
+    ///
+    /// Discards the un-deployed candidate by clearing `pendingAdapterPath`. Because
+    /// the training step writes the candidate ONLY to the pending pointer (never the
+    /// deployed `currentAdapterPath`), clearing it is sufficient — no path or crash
+    /// can leave an un-evaluated candidate advertised as the live adapter. Preserves
+    /// all other state fields (e.g. a just-incremented/just-reset `deferralCount`).
+    private func failClosed(reason: String) async {
+        do {
+            try await store.ensureStateRow()
+            var state = try await store.readState()
+            state.pendingAdapterPath = nil
+            state.pendingAdapterKind = nil
+            state.cycleState = CycleState.idle.rawValue
+            state.trainingStartedAt = nil
+            state.lastCycleError = reason
+            try await store.writeState(state)
+        } catch {
+            NSLog("ImprovementCycleCoordinator: failClosed persist failed: %@", error.localizedDescription)
+        }
     }
 }

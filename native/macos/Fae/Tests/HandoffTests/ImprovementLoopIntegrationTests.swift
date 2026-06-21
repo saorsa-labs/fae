@@ -80,14 +80,13 @@ final class ImprovementLoopIntegrationTests: XCTestCase {
 
         let coordinator = ImprovementCycleCoordinator(store: store)
 
-        // Observe that state machine passed through at least collecting.
-        // After runCycle with 0 approved cycles: ends in .proposing.
+        // P9/C4 (W1): with no evaluator wired, the cycle is fail-closed (unmeasured
+        // ⇒ blocked before review) and ends in .idle — NOT proposing. This exact
+        // assertion would catch a regression where an unmeasured cycle reaches
+        // proposing again.
         try await coordinator.runCycle()
         let finalState = try await coordinator.currentState()
-        XCTAssertTrue(
-            finalState == .proposing || finalState == .idle,
-            "Cycle should end in proposing or idle, got \(finalState)"
-        )
+        XCTAssertEqual(finalState, .idle, "Unmeasured cycle must fail closed to idle, not proposing")
     }
 
     // MARK: - Directive Tuning Round-Trip
@@ -216,30 +215,40 @@ final class ImprovementLoopIntegrationTests: XCTestCase {
 
     func testAdapterPathPersistedThroughApproveAndRollback() async throws {
         let store = try await makeTempStore()
-        try await seedEvents(store: store, corrections: 8, reasksAndOthers: 15)
+        try await store.ensureStateRow()
+
+        // Post-training proposing state (P9/C4 W3): a deployed adapter in
+        // currentAdapterPath + the candidate in pendingAdapterPath. A real cycle can
+        // only produce a pending via the training bridge (W7/W8), so set it up
+        // directly here and exercise the approve → rollback lineage.
+        var state = try await store.readState()
+        state.currentAdapterPath = "/tmp/old_adapter"
+        state.pendingAdapterPath = "/tmp/new_candidate"
+        try await store.writeState(state)
 
         var patchedPath: String? = "not-called"
         let coordinator = ImprovementCycleCoordinator(store: store)
         await coordinator.setAdapterPatchCallback { path in patchedPath = path }
-
-        // Seed current adapter path.
-        var state = try await store.readState()
-        state.currentAdapterPath = "/tmp/old_adapter"
-        try await store.writeState(state)
-
-        // Run cycle → should pause in proposing.
-        try await coordinator.runCycle()
-        let cycleState = try await coordinator.currentState()
-        guard cycleState == .proposing else {
-            // Cycle may have gone to idle (insufficient data in some edge cases) — skip.
-            return
+        for s in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: s)
         }
 
         try await coordinator.approveDeployment()
 
-        // After approval, state should be idle.
-        let postApproveState = try await coordinator.currentState()
-        XCTAssertEqual(postApproveState, .idle, "After approval, should return to idle")
+        // After approval: candidate promoted to current, prior is the rollback target,
+        // pending cleared, pipeline notified.
+        let deployed = try await store.readState()
+        XCTAssertEqual(deployed.currentAdapterPath, "/tmp/new_candidate", "Candidate promoted on deploy")
+        XCTAssertEqual(deployed.previousAdapterPath, "/tmp/old_adapter", "Prior is the rollback target")
+        XCTAssertNil(deployed.pendingAdapterPath, "Pending cleared after deploy")
+        XCTAssertEqual(patchedPath, "/tmp/new_candidate", "Pipeline notified of the deployed adapter")
+
+        // Rollback returns to the prior deployed adapter (lineage preserved — the W3
+        // split fixed the bug where previous was set to the candidate itself).
+        try await coordinator.rollback()
+        let rolledBack = try await store.readState()
+        XCTAssertEqual(rolledBack.currentAdapterPath, "/tmp/old_adapter", "Rollback restores the prior deployed adapter")
+        XCTAssertEqual(rolledBack.previousAdapterPath, "/tmp/new_candidate", "Swap is symmetric")
     }
 
     // MARK: - isDirectiveTuningCycle Logic

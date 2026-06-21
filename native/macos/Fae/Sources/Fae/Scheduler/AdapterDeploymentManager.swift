@@ -113,6 +113,13 @@ enum AdapterDeploymentManager {
     /// caller (ImprovementCycleCoordinator) is responsible for signaling
     /// the pipeline to swap adapters via SelfConfigTool.
     ///
+    /// > ⚠️ P9/C4 (W4 — pending): this writes an ARBITRARY path straight to
+    /// > `currentAdapterPath` with no gate. It is currently called only from tests;
+    /// > the autonomous loop deploys via `ImprovementCycleCoordinator.performDeploy`
+    /// > (which promotes a gated `pendingAdapterPath`). W4 fences this entry point
+    /// > to consume only a receipt-bearing candidate (F4). Do NOT wire it into the
+    /// > production loop before then.
+    ///
     /// - Parameters:
     ///   - adapterPath: Path to the adapter to deploy.
     ///   - store: The improvement store to update.

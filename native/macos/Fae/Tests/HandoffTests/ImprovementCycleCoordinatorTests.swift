@@ -19,6 +19,16 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         ImprovementCycleCoordinator(store: store)
     }
 
+    /// A measured improvement delta (all +5pp). Drives the P9/C4 gate to PASS in
+    /// tests that exercise the proposing/deploy path, standing in for a real
+    /// FaeBenchmark result until W7 wires the `AdapterEvaluator`.
+    private func measuredImprovement() -> EvalDelta {
+        EvalDelta(
+            toolCallingDelta: 5.0, faeCapabilityDelta: 5.0,
+            assistantFitDelta: 5.0, serializationDelta: 5.0, throughputDelta: 1.0
+        )
+    }
+
     private func makeEvent(
         signalType: String = "correction",
         fingerprint: String? = nil
@@ -171,6 +181,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
     func testRunCycleCompletesWithSufficientData() async throws {
         let store = try await makeTempStore()
         let coordinator = makeCoordinator(store: store)
+        // P9/C4: a real measured improvement is required to pass the gate.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
         try await seedSufficientData(store: store)
 
         try await coordinator.runCycle()
@@ -259,6 +271,12 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
     func testApproveDeploymentIncrementsApprovedCycles() async throws {
         let store = try await makeTempStore()
         try await store.ensureStateRow()
+        // P9/C4 (W3): seed a pending candidate (as the training step would) so the
+        // approve path has something to promote to currentAdapterPath.
+        var seed = try await store.readState()
+        seed.currentAdapterPath = "/tmp/prior_deployed"
+        seed.pendingAdapterPath = "/tmp/candidate_adapter"
+        try await store.writeState(seed)
         let coordinator = makeCoordinator(store: store)
 
         // Manually drive to proposing state (simulates end of runCycle).
@@ -277,6 +295,10 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(storeState.userApprovedCycles, 1)
         XCTAssertEqual(storeState.completedCycles, 1)
         XCTAssertNotNil(storeState.lastCycleAt)
+        // The candidate is promoted; the prior becomes the rollback target; pending cleared.
+        XCTAssertEqual(storeState.currentAdapterPath, "/tmp/candidate_adapter", "Candidate promoted to deployed")
+        XCTAssertEqual(storeState.previousAdapterPath, "/tmp/prior_deployed", "Prior becomes rollback target")
+        XCTAssertNil(storeState.pendingAdapterPath, "Pending cleared after deploy")
     }
 
     /// rejectDeployment() returns to idle without incrementing userApprovedCycles.
@@ -297,6 +319,86 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let storeState = try await store.readState()
         XCTAssertEqual(storeState.userApprovedCycles, 0, "Rejection must not increment userApprovedCycles")
         XCTAssertEqual(storeState.completedCycles, 1, "completedCycles should still increment")
+    }
+
+    /// rejectDeployment() discards the pending candidate and leaves the deployed
+    /// adapter untouched — a rejected candidate never becomes current (P9/C4 W3).
+    func testRejectDeploymentDiscardsPendingKeepsDeployed() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        // Post-training proposing state: candidate is PENDING; the deployed adapter
+        // is in currentAdapterPath (training never touched it).
+        var state = try await store.readState()
+        state.currentAdapterPath = "/tmp/deployed"
+        state.pendingAdapterPath = "/tmp/rejected_candidate"
+        try await store.writeState(state)
+
+        let coordinator = makeCoordinator(store: store)
+        for s in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: s)
+        }
+
+        try await coordinator.rejectDeployment()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle")
+        XCTAssertEqual(
+            after.currentAdapterPath, "/tmp/deployed",
+            "Deployed adapter must be untouched by a rejection"
+        )
+        XCTAssertNil(after.pendingAdapterPath, "Rejected candidate must be discarded")
+        XCTAssertEqual(after.userApprovedCycles, 0, "Reject must not earn auto-deploy")
+    }
+
+    /// approveDeployment with no pending candidate fails closed (throws) rather than
+    /// silently "succeeding" with nothing deployed (P9/C4 W3).
+    func testApproveWithNoPendingCandidateThrows() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let coordinator = makeCoordinator(store: store)
+        // Drive to proposing WITHOUT seeding a pending candidate.
+        for s in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: s)
+        }
+
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("approveDeployment must throw when there is no pending candidate")
+        } catch ImprovementCycleError.noPendingCandidate {
+            // expected
+        } catch {
+            XCTFail("expected noPendingCandidate, got \(error)")
+        }
+
+        // The failed approve leaves the machine in proposing (recoverable), NOT stuck
+        // in deploying, and has no side effects.
+        let stateAfter = try await coordinator.currentState()
+        XCTAssertEqual(stateAfter, .proposing)
+        let after = try await store.readState()
+        XCTAssertNil(after.currentAdapterPath, "Nothing should be deployed")
+        XCTAssertEqual(after.userApprovedCycles, 0, "Failed approve must not earn auto-deploy")
+    }
+
+    /// A fail-closed cycle clears any (stale) pending candidate — idle never
+    /// coexists with a candidate a later path could deploy (P9/C4 W3).
+    func testFailClosedCycleClearsPendingCandidate() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        // Seed a stale pending candidate (e.g. left from an earlier interrupted run).
+        var seed = try await store.readState()
+        seed.pendingAdapterPath = "/tmp/stale_candidate"
+        seed.pendingAdapterKind = "gguf"
+        try await store.writeState(seed)
+
+        let coordinator = makeCoordinator(store: store)
+        try await seedSufficientData(store: store)
+        // No bridge + no injected delta ⇒ unmeasured ⇒ fail-closed block.
+        try await coordinator.runCycle()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle")
+        XCTAssertNil(after.pendingAdapterPath, "Fail-closed must clear the stale pending candidate")
+        XCTAssertNil(after.currentAdapterPath, "Nothing deployed")
     }
 
     /// approveDeployment() throws invalidTransition when not in proposing state.
@@ -398,26 +500,39 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
 
     // MARK: - Auto-Deploy After 5 Approved Cycles (Phase 2.3)
 
-    /// runCycle() pauses in proposing when userApprovedCycles < 5.
-    func testRunCyclePausesInProposingBeforeEarningAutoDeploy() async throws {
+    // P9/C4 (W1): with no benchmark evaluator wired, a cycle cannot produce a
+    // MEASURED improvement, so the fail-closed gate rule (`AdapterGate.decide`)
+    // makes the internal review FAIL — the candidate can never reach `.proposing`
+    // or deploy. WHY: an un-evaluated adapter must never be proposed or deployed —
+    // the previous all-zero/all-nil "pass" was the hole C4 closes. The
+    // proposing-pause and auto-deploy happy paths are re-covered in W8 with a stub
+    // evaluator that returns a real measured improvement. (External-review
+    // short-circuit on unmeasured deltas — F16 — lands in W4.)
+
+    /// runCycle() with no evaluator fails closed instead of proposing.
+    func testRunCycleBlocksWhenNoEvaluatorConfigured() async throws {
         let store = try await makeTempStore()
         let coordinator = makeCoordinator(store: store)
         try await seedSufficientData(store: store)
 
         try await coordinator.runCycle()
 
-        // Should be paused in proposing (needs user approval).
+        // Fail-closed: no measured improvement ⇒ blocked BEFORE review ⇒ idle, NOT proposing.
         let state = try await coordinator.currentState()
-        XCTAssertEqual(state, .proposing, "Cycle should pause in proposing until 5 approvals earned")
+        XCTAssertEqual(state, .idle, "No evaluator ⇒ candidate is blocked, never proposed")
+        let persisted = try await store.readState()
+        XCTAssertEqual(persisted.lastCycleError, "candidate_blocked: no_measured_improvement")
+        XCTAssertNil(persisted.currentAdapterPath, "Blocked candidate must not be deployed")
     }
 
-    /// runCycle() auto-deploys when userApprovedCycles >= 5.
-    func testRunCycleAutoDeploysAfterFiveApprovedCycles() async throws {
+    /// Earned auto-deploy does NOT bypass the gate: with no measurement the
+    /// candidate is blocked before review and nothing is deployed.
+    func testRunCycleBlocksAutoDeployWhenNoMeasurement() async throws {
         let store = try await makeTempStore()
         try await store.ensureStateRow()
         let coordinator = makeCoordinator(store: store)
 
-        // Seed 5 prior approved cycles to earn auto-deploy.
+        // Seed 5 prior approved cycles to "earn" auto-deploy.
         var state = try await store.readState()
         state.userApprovedCycles = 5
         try await store.writeState(state)
@@ -425,9 +540,12 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
-        // Should complete without pausing in proposing.
+        // Earned autonomy must not deploy an un-evaluated candidate.
         let finalState = try await coordinator.currentState()
-        XCTAssertEqual(finalState, .idle, "Auto-deploy should return to idle without user input")
+        XCTAssertEqual(finalState, .idle, "Blocked candidate returns to idle")
+        let persisted = try await store.readState()
+        XCTAssertEqual(persisted.lastCycleError, "candidate_blocked: no_measured_improvement")
+        XCTAssertNil(persisted.currentAdapterPath, "Auto-deploy must not ship an un-evaluated adapter")
     }
 
     // MARK: - External Review Gate Integration
@@ -441,6 +559,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "CONCERN: Minor regression in tool calling. Recommend human review."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // P9/C4 (W1): a measured delta is required to reach the external review gate
+        // (an unmeasured candidate is blocked before review).
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -462,6 +583,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "FAIL: Significant regression in tool calling (-15%)."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // P9/C4 (W1): reach the external review gate with a measured delta.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -485,6 +608,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "PASS: All metrics improved, no regressions detected."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // P9/C4 (W1): reach the external review gate with a measured delta.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -505,6 +630,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "CONCERN: Minor issue detected."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // P9/C4 (W1): reach the external review gate with a measured delta.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
 
         // Run 3 cycles, each should defer.
         for i in 1...3 {
@@ -522,13 +649,15 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let store = try await makeTempStore()
         try await store.ensureStateRow()
         let gate = ExternalReviewGate()
-        // No delegate runner → falls through to internal review with neutral deltas → PASS.
-        // But first we set deferralCount to 3 (the max) to trigger maxDeferralsReached.
+        // Set deferralCount to the max so review() throws maxDeferralsReached.
         var storeState = try await store.readState()
         storeState.deferralCount = ExternalReviewGate.maxDeferrals
         try await store.writeState(storeState)
 
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // P9/C4 (W1): a measured delta is required to reach the review gate, where
+        // the max-deferrals check then fires.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -721,6 +850,10 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
+        // P9/C4 (W1): a real measured improvement is required to pass the review
+        // gate and reach the shadow-eval step — where the baseWins scorer then
+        // blocks the deployment.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -755,6 +888,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
+        // P9/C4: a real measured improvement is required to pass the gate and
+        // reach the shadow-eval step.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -778,6 +914,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
+        // P9/C4: a real measured improvement is required to pass the gate.
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -813,6 +951,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             logCalled = true
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // P9/C4 (W1): a measured delta is required to reach the review gate (where
+        // the security-log closure fires).
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -822,20 +963,23 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
 
     // MARK: - TrainingBridge Integration
 
-    func testRunCycleSkipsTrainingGracefullyWhenBridgeNil() async throws {
-        // When no TrainingBridge is set, the coordinator should still complete a cycle
-        // (training step logs a skip, eval uses zero deltas, cycle ends normally).
+    func testRunCycleFailsClosedWhenBridgeNil() async throws {
+        // P9/C4 (W1): when no TrainingBridge is set, the cycle still runs but the
+        // evaluation is UNMEASURED — the fail-closed gate makes review FAIL so the
+        // cycle returns to idle WITHOUT proposing or deploying. WHY: a missing
+        // training/eval path must never be treated as a passing (zero-delta) result.
         let store = try await makeTempStore()
         let coordinator = makeCoordinator(store: store)
-        // Do NOT set trainingBridge.
+        // Do NOT set trainingBridge and do NOT inject a measured delta.
         try await seedSufficientData(store: store)
 
         try await coordinator.runCycle()
 
-        // Should reach proposing (paused for approval since 0 approved cycles).
         let state = try await coordinator.currentState()
-        XCTAssertEqual(state, .proposing,
-                       "Cycle should reach proposing even without a training bridge")
+        XCTAssertEqual(state, .idle, "No bridge ⇒ unmeasured ⇒ fail-closed to idle, not proposing")
+        let persisted = try await store.readState()
+        XCTAssertEqual(persisted.lastCycleError, "candidate_blocked: no_measured_improvement")
+        XCTAssertNil(persisted.currentAdapterPath, "Nothing should be deployed")
     }
 
     func testTrainingBridgeSetterWorks() async throws {
@@ -888,9 +1032,11 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(delta.throughputDelta ?? 0, 2.0, accuracy: 0.01)
     }
 
-    func testNilBridgeCycleReachesProposingWithZeroDeltas() async throws {
-        // Full cycle without bridge: training is skipped, eval uses zero deltas,
-        // review passes (all zeros ≥ 0), cycle pauses in proposing.
+    func testNilBridgeCycleFailsClosedWithNoMeasurement() async throws {
+        // P9/C4 (W1): the previous "zero deltas ⇒ review passes ⇒ proposing ⇒
+        // approve ⇒ deploy" path was the unsafe hole. With no bridge the eval is
+        // UNMEASURED and the gate fails closed: the cycle returns to idle, there is
+        // no proposal, and an approve attempt is refused (no un-gated deploy).
         let store = try await makeTempStore()
         let coordinator = makeCoordinator(store: store)
         try await seedSufficientData(store: store)
@@ -898,16 +1044,17 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         try await coordinator.runCycle()
 
         let state = try await coordinator.currentState()
-        XCTAssertEqual(state, .proposing)
+        XCTAssertEqual(state, .idle, "Unmeasured cycle fails closed to idle, never proposing")
 
-        // Approve deployment to verify the full path works.
-        try await coordinator.approveDeployment()
-        let afterApproval = try await coordinator.currentState()
-        XCTAssertEqual(afterApproval, .idle)
+        // Not in proposing ⇒ approveDeployment must refuse (no un-gated deploy).
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("approveDeployment should throw when the cycle is not in proposing")
+        } catch {
+            // expected: invalidTransition
+        }
 
-        // Check userApprovedCycles incremented.
         let storedState = try await store.readState()
-        XCTAssertEqual(storedState.userApprovedCycles, 1)
-        XCTAssertEqual(storedState.completedCycles, 1)
+        XCTAssertNil(storedState.currentAdapterPath, "Nothing should be deployed")
     }
 }
