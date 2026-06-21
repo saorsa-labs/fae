@@ -493,40 +493,24 @@ actor ImprovementCycleCoordinator {
                 return
             }
 
-            // 5b–5c. Produce a deployable adapter. On the daemon lane, train a
-            // portable PEFT adapter and convert it to a GGUF the llama.cpp daemon
-            // loads via engine.reload (P3/C3); otherwise use the legacy detached
-            // mlx-tune path (`.safetensors`, MLX-only).
-            let adapterPath: String
+            // 5b–5c. Produce a deployable adapter via the selected TrainingBackend
+            // (P9/C1 seam). Daemon lane → PEFT adapter converted to a GGUF the
+            // llama.cpp daemon loads (P3/C3); otherwise the legacy detached
+            // mlx-tune dir lane (`.safetensors`, MLX-only). The candidate's `kind`
+            // drives the lane-appropriate eval gate + deploy path (P9/C4).
+            let backend: TrainingBackend
             if let daemonBase = daemonTrainingBaseModel {
-                guard let sftPath = exportResult.outputFiles["sft_export"] else {
-                    NSLog("ImprovementCycleCoordinator: no sft_export path in export result")
-                    try? await forceIdle(error: "missing_sft_export")
-                    return
-                }
-                NSLog(
-                    "ImprovementCycleCoordinator: daemon lane — train_peft + GGUF convert (base=%@)",
-                    daemonBase)
-                let peft = try await bridge.trainPeftAndConvert(
-                    sftPath: sftPath, baseModel: daemonBase)
-                // The GGUF (not the PEFT dir) is what the daemon loads.
-                adapterPath = peft.ggufPath
-                NSLog(
-                    "ImprovementCycleCoordinator: daemon training complete — gguf=%@ loss=%.4g",
-                    peft.ggufPath, peft.finalLoss)
+                backend = PeftDaemonBackend(bridge: bridge, baseModel: daemonBase)
             } else {
-                let mode: TrainingMode = exportResult.dpoPairs >= 5 ? .dpo : .sft
-                NSLog("ImprovementCycleCoordinator: launching %@ training (mlx-tune)", mode.rawValue)
-                let launchResult = try await bridge.launchTraining(mode: mode)
-                NSLog(
-                    "ImprovementCycleCoordinator: training started (pid=%d, model=%@, adapter=%@)",
-                    launchResult.pid, launchResult.modelId, launchResult.adapterPath
-                )
-                // Poll until the detached training worker completes.
-                adapterPath = try await bridge.pollUntilComplete()
+                backend = MlxTuneBackend(bridge: bridge)
             }
+            NSLog("ImprovementCycleCoordinator: training via %@ backend", backend.id)
+            let candidate = try await backend.trainAdapter(export: exportResult)
+            let adapterPath = candidate.path
             producedAdapterPath = adapterPath
-            NSLog("ImprovementCycleCoordinator: training complete — adapter at %@", adapterPath)
+            NSLog(
+                "ImprovementCycleCoordinator: training complete — adapter at %@ (kind=%@)",
+                adapterPath, candidate.kind.rawValue)
 
             // 5d. Store adapter path in improvement state.
             try await store.ensureStateRow()
@@ -542,6 +526,17 @@ actor ImprovementCycleCoordinator {
                 try? await forceIdle(error: "training_failed: \(error.localizedDescription)")
                 return
             }
+        } catch let error as TrainingBackendError {
+            // Preserve the pre-P9 diagnostic for the daemon-lane missing dataset
+            // case (surfaced via health reporting as `lastCycleError`).
+            if case .missingDataset("sft_export") = error {
+                NSLog("ImprovementCycleCoordinator: no sft_export path in export result")
+                try? await forceIdle(error: "missing_sft_export")
+            } else {
+                NSLog("ImprovementCycleCoordinator: training failed: %@", error.description)
+                try? await forceIdle(error: "training_failed: \(error.description)")
+            }
+            return
         } catch {
             NSLog("ImprovementCycleCoordinator: training failed: %@", error.localizedDescription)
             try? await forceIdle(error: "training_failed: \(error.localizedDescription)")
