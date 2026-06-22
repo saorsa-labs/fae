@@ -1,8 +1,8 @@
-# M2 Decisions — pre G-M2-spec agenda
+# M2 Decisions
 
-- **Status:** DRAFT agenda for the G-M2-spec review gate. These are *decisions*, not implementation details — each must be resolved (plan-reviewer; privacy-sensitive ones arguably oracle) before any M2 code is written.
-- **Date:** 2026-06-22
-- **Context:** M1 shipped static-direct (on-device only, byte-identical). Carried-forward review findings + the chain release-validation gaps land here before M2 opens.
+- **Status:** D-M2-4 (port-vs-bridge) **RATIFIED 2026-06-22 by owner** — membrane port implementation authorized and proceeding. D-M2-1 (cloud routing through the PII membrane) remains a G-M2-spec design item now that its port-vs-bridge sub-decision is settled. D-M2-2/D-M2-3 recorded. These are *decisions*, not implementation details.
+- **Date:** 2026-06-22 (decisions ratified same day)
+- **Context:** M1 shipped static-direct (on-device only, byte-identical). Carried-forward review findings + the chain release-validation gaps + the port-vs-bridge resolution land here before M2 opens.
 
 ---
 
@@ -75,7 +75,7 @@ These are NOT M2 blockers (chain stays off) but ARE release-validation blockers.
 
 ---
 
-## D-M2-4 — Port-vs-bridge principle (RESOLVED recommendation; ratify at G-M2-spec)
+## D-M2-4 — Port-vs-bridge principle (RATIFIED 2026-06-22 by owner)
 
 **Resolves:** D-M2-1 item 1 (PII membrane) **and** the D-M3 MetaOpt port-vs-bridge question — *once, together*, as the advisor flagged. Not a blanket "port everything": it's a principle that splits the two by what actually matters.
 
@@ -92,12 +92,12 @@ Bridge a Swift capability **transiently** (then port, time-boxed) when **all** o
 - it is **not egress/ingress-critical**;
 - it is **cold-path** (scheduled / batched, not per-turn).
 
-### Application — the asymmetry the advisor asked to resolve once
+### Application — both capabilities resolve to PORT (owner ratified 2026-06-22)
 
 | Capability | Verdict | Why |
 |---|---|---|
-| **PII membrane** (`SensitiveContentPolicy`) | **PORT — no bridge, ever** | Egress-critical ✓ + per-turn hot-path ✓ (every cloud-bound turn) + must outlive Swift ✓ + small (106 lines, 12 regex rules, all portable to Rust `regex` — no lookbehind/backrefs) ✓. Plus two decisive structural points below. |
-| **MetaOpt** (`Scheduler/MetaOpt*.swift`) | **bridge-now → port-later (lean); decide at G-M2-spec** | Large existing subsystem ✓, non-critical ✓, cold-path ✓ (scheduler-cycle, not per-turn). ADR-011 itself offers both ("ported (or bridged)"). Bridge unblocks M3; port retires it. Time-box the bridge with an explicit retirement date. |
+| **PII membrane** (`SensitiveContentPolicy`) | **PORT — no bridge, ever** | Egress-critical ✓ + per-turn hot-path ✓ (every cloud-bound turn) + must outlive Swift ✓ + small (106 lines, 12 regex rules, all portable to Rust `regex` — no lookbehind/backrefs) ✓. Plus four decisive structural points below. |
+| **MetaOpt** (`Scheduler/MetaOpt*.swift`) | **PORT NOW — no bridge** *(owner override of the bridge-lean, 2026-06-22)* | Large existing subsystem, non-critical, cold-path — so a transient bridge was *defensible* on pure pragmatism. But the owner chose consistency with ADR-011 over pragmatism: no bridge to tear out later, no legacy coupling into M3. More work up front; cleaner exit. The principle's "bridge transiently" branch is retained for *future* Swift capabilities but is **not applied** to either current capability. |
 
 ### Why the membrane is PORT (not a close call once ADR-011 is read carefully)
 
@@ -106,17 +106,17 @@ Bridge a Swift capability **transiently** (then port, time-boxed) when **all** o
 3. **Dependency direction.** The Swift app is a *client* of the daemon (control-plane client), not a server the daemon calls into. A daemon→Swift bridge for a security decision inverts that: the server would depend on a client. Architecturally wrong under ADR-002 v2 / ADR-011.
 4. **Symmetry with the already-Rust ingress gate.** `fae-envelope-gate` (`peer_envelope_ingress`, signature-checked, audited, already a `fae-daemon` dep) is the **ingress** membrane — untrusted peer→Fae input is gated before use. The PII membrane is its **egress** mirror — Fae→cloud output is gated before egress. Having ingress validation in Rust and egress in Swift is an inconsistent split of one trust boundary; both belong in the canonical core.
 
-### Concrete asks for G-M2-spec (ratify or override)
+### Decisions (ratified by owner, 2026-06-22)
 
-1. **Ratify PORT for the PII membrane** (expected non-controversial given the four points above).
-2. **Home for the Rust membrane.** Lean: a small new crate `crates/fae-pii-membrane/` — egress counterpart to `fae-envelope-gate`, independently testable, reusable by `fae-acp` if a worker needs a pre-flight check. Alternative: a `fae-daemon/src/pii/` module (less ceremony, less reuse). Decide at the gate.
-3. **Rule-source.** Port the 12 regex rules as Rust constants first (fastest); promote to a shared data file (TOML/JSON) later *only if* drift between the Swift legacy impl and the Rust canonical impl becomes a maintenance risk. Don't pre-build the shared-file abstraction — it's a YAML/regex config layer with no current second consumer.
-4. **MetaOpt: bridge-now-port-later vs port-now.** Lean bridge-now-port-later (pragmatic, unblocks M3 on a cold path). Decide at G-M2-spec with a porting-effort estimate + an explicit bridge-retirement date (e.g. "bridge retired by M4").
-5. **Membrane wiring point.** The conductor executor calls the membrane *before* constructing any cloud-bound `ChatRequest` (per-role-call for chain, not just the outer prompt — see D-M2-2). A `shouldBlockRemoteEgress` block returns `RouteFailure::PrivacyBlocked` (new variant?) → fail-closed-to-direct. Decide the exact failure shape at the gate.
+1. **PII membrane → PORT to Rust.** ✅ Ratified (no bridge, ever).
+2. **Home → new crate `crates/fae-pii-membrane/`.** ✅ Agreed — egress counterpart to `fae-envelope-gate`, independently testable, reusable by `fae-acp` for worker pre-flight.
+3. **Rule-source → Rust constants first.** ✅ Agreed — port the 12 regex rules as Rust constants; promote to a shared data file (TOML/JSON) later *only if* drift between the Swift legacy impl and the Rust canonical impl becomes a maintenance risk. No premature shared-file abstraction.
+4. **MetaOpt → PORT NOW (no bridge).** ✅ Owner override of the bridge-lean. Port directly to Rust; no transient bridge to retire later. (Sequencing: the membrane port is the immediate M2-critical work; the MetaOpt port follows as M3 approaches — both are PORT, the timing differs by critical path, not by decision.)
+5. **Membrane wiring → `RouteFailure::PrivacyBlocked` + per-role-call for chain.** ✅ Agreed — conductor executor calls the membrane *before* constructing any cloud-bound `ChatRequest`; for chain topology the check runs per-role-call (a Thinker→Worker→Verifier chain to a cloud model egresses three times, not once — see D-M2-2). A block returns `RouteFailure::PrivacyBlocked` → fail-closed-to-direct.
 
 ### Why this is front-loaded (independent of D2/D7)
 
-The port-vs-bridge *decision* needs nothing from the team's budget-governance (D2) or eval-corpus (D7) WPs — it's an ADR-011 + architecture question. The membrane *port itself* (the Rust code) is similarly independent: it's a privacy primitive, not routing logic, and M1's on-device-only conductor doesn't need it yet but M2's first cloud route does. So the decision + the port can both land before D2/D7, exactly like the corrupt-key fix did. (Implementation of the port stays gated behind G-M2-spec ratification — this doc is the *decision*, not authorization to write the crate yet.)
+The port-vs-bridge *decision* needs nothing from the team's budget-governance (D2) or eval-corpus (D7) WPs — it's an ADR-011 + architecture question. The membrane *port itself* (the Rust code) is similarly independent: it's a privacy primitive, not routing logic, and M1's on-device-only conductor doesn't need it yet but M2's first cloud route does. **Ratified 2026-06-22 → implementation authorized.** The membrane port proceeds now (independent of D2/D7); MetaOpt porting follows as M3 approaches.
 
 ---
 
