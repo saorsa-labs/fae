@@ -475,6 +475,10 @@ fn route_failure_display(f: &RouteFailure) -> String {
         RouteFailure::UnexpectedApproval { approval } => {
             format!("unexpected approval class {approval:?}")
         }
+        RouteFailure::PrivacyBlocked { level, labels } => {
+            // Structured fields only — never user text (see the variant doc).
+            format!("privacy membrane blocked (level={level}, labels={labels:?})")
+        }
     }
 }
 

@@ -1,0 +1,11 @@
+[package]
+name = "fae-pii-membrane"
+version = "0.1.0"
+description = "PII egress membrane: canonical Rust port of the Swift SensitiveContentPolicy. Detects and redacts secret-shaped content before it egresses to a cloud-backed model/provider, and governs local persistence of sensitive observations. The egress counterpart to fae-envelope-gate (ingress)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+regex.workspace = true

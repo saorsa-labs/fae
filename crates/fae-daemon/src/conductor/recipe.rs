@@ -497,6 +497,14 @@ pub enum RouteFailure {
     /// A non-`None` approval class reached the executor in M1 (defense-in-depth;
     /// unreachable, since the static policy emits `None`).
     UnexpectedApproval { approval: ApprovalClass },
+    /// A cloud-bound route was blocked by the PII egress membrane
+    /// (`crates/fae-pii-membrane`). Carries **structured labels only — never user
+    /// text** — so the failure is safe to surface in telemetry/receipts without
+    /// leaking the secret it detected. Dead in M1 (no cloud-bound path exists:
+    /// `StaticDirectPolicy` emits `LocalModel` only); constructed when M2
+    /// cloud-routing + the membrane wiring land (see D-M2-1 / D-M2-4).
+    #[allow(dead_code)] // TODO(M2): constructed when cloud egress membrane wiring lands
+    PrivacyBlocked { level: String, labels: Vec<String> },
 }
 
 /// The loaded recipe set, keyed by id. The executor looks up `recipe_id`
