@@ -140,7 +140,12 @@ final class DaemonABEvaluatorTests: XCTestCase {
             case "expectJSONArray":
                 text[ex.id] = "[\"red\",\"yellow\",\"blue\"]"
             case "expectKeywords":
-                text[ex.id] = (ex.scoring.anyOf?.first) ?? "ok"
+                // Satisfy allOf (every token) + an anyOf token if present.
+                let parts = (ex.scoring.allOf ?? []) + [(ex.scoring.anyOf?.first) ?? "ok"]
+                text[ex.id] = parts.joined(separator: " ")
+            case "expectConcise":
+                let parts = (ex.scoring.allOf ?? []) + (ex.scoring.anyOf.map { Array($0.prefix(1)) } ?? [])
+                text[ex.id] = parts.isEmpty ? "ok" : parts.joined(separator: " ")
             case "expectNonEmpty":
                 text[ex.id] = "Here is a reply."
             default:
@@ -155,7 +160,8 @@ final class DaemonABEvaluatorTests: XCTestCase {
     func testScorerExpectToolCall() {
         let scoring = DaemonEvalExample.Scoring(
             type: "expectToolCall", name: "get_weather", requiredArgs: ["location"],
-            prefix: nil, minLines: nil, keys: nil, minCount: nil, anyOf: nil, forbidden: nil)
+            prefix: nil, minLines: nil, keys: nil, minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: nil, maxLines: nil)
         let hit = DaemonABInference(text: "", toolCalls: [.init(name: "get_weather", argKeys: ["location"])])
         let wrongName = DaemonABInference(text: "", toolCalls: [.init(name: "set_timer", argKeys: ["seconds"])])
         let missingArg = DaemonABInference(text: "", toolCalls: [.init(name: "get_weather", argKeys: [])])
@@ -168,7 +174,8 @@ final class DaemonABEvaluatorTests: XCTestCase {
     func testScorerExpectNoToolCall() {
         let scoring = DaemonEvalExample.Scoring(
             type: "expectNoToolCall", name: nil, requiredArgs: nil, prefix: nil,
-            minLines: nil, keys: nil, minCount: nil, anyOf: nil, forbidden: nil)
+            minLines: nil, keys: nil, minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: nil, maxLines: nil)
         let answered = DaemonABInference(text: "My favourite colour is teal.", toolCalls: [])
         let calledTool = DaemonABInference(text: "", toolCalls: [.init(name: "get_weather", argKeys: ["location"])])
         let empty = DaemonABInference(text: "", toolCalls: [])
@@ -182,7 +189,8 @@ final class DaemonABEvaluatorTests: XCTestCase {
     func testScorerExpectLinesPrefixed() {
         let scoring = DaemonEvalExample.Scoring(
             type: "expectLinesPrefixed", name: nil, requiredArgs: nil, prefix: "STORE:",
-            minLines: 1, keys: nil, minCount: nil, anyOf: nil, forbidden: nil)
+            minLines: 1, keys: nil, minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: nil, maxLines: nil)
         let ok = DaemonABInference(text: "STORE: name = Ada\nSTORE: born = 1815", toolCalls: [])
         let prose = DaemonABInference(text: "Ada Lovelace was born in 1815.", toolCalls: [])
         XCTAssertTrue(DaemonEvalScorer.isCorrect(ok, scoring: scoring))
@@ -192,7 +200,8 @@ final class DaemonABEvaluatorTests: XCTestCase {
     func testScorerExpectJSONKeysAndArray() {
         let keysScoring = DaemonEvalExample.Scoring(
             type: "expectJSONKeys", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
-            keys: ["name", "age"], minCount: nil, anyOf: nil, forbidden: nil)
+            keys: ["name", "age"], minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: nil, maxLines: nil)
         let okObj = DaemonABInference(text: "Here: {\"name\":\"Mira\",\"age\":34}", toolCalls: [])
         let badObj = DaemonABInference(text: "{\"name\":\"Mira\"}", toolCalls: [])
         XCTAssertTrue(DaemonEvalScorer.isCorrect(okObj, scoring: keysScoring),
@@ -201,7 +210,8 @@ final class DaemonABEvaluatorTests: XCTestCase {
 
         let arrScoring = DaemonEvalExample.Scoring(
             type: "expectJSONArray", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
-            keys: nil, minCount: 3, anyOf: nil, forbidden: nil)
+            keys: nil, minCount: 3, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: nil, maxLines: nil)
         let okArr = DaemonABInference(text: "[\"red\",\"yellow\",\"blue\"]", toolCalls: [])
         let shortArr = DaemonABInference(text: "[\"red\",\"blue\"]", toolCalls: [])
         XCTAssertTrue(DaemonEvalScorer.isCorrect(okArr, scoring: arrScoring))
@@ -211,7 +221,8 @@ final class DaemonABEvaluatorTests: XCTestCase {
     func testScorerExpectKeywordsWithForbidden() {
         let scoring = DaemonEvalExample.Scoring(
             type: "expectKeywords", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
-            keys: nil, minCount: nil, anyOf: ["tokyo"], forbidden: ["as an ai"])
+            keys: nil, minCount: nil, anyOf: ["tokyo"], forbidden: ["as an ai"],
+            allOf: nil, maxChars: nil, maxLines: nil)
         let right = DaemonABInference(text: "The capital is Tokyo.", toolCalls: [])
         let forbidden = DaemonABInference(text: "As an AI, the capital is Tokyo.", toolCalls: [])
         let wrong = DaemonABInference(text: "The capital is Kyoto.", toolCalls: [])
@@ -249,12 +260,102 @@ final class DaemonABEvaluatorTests: XCTestCase {
 
     // MARK: - Eval-suite loading (SHA lock + coverage)
 
+    /// The PRODUCTION bundle is v2 (`loadBundled()` SHA-locked): 64 examples, 16 per
+    /// dimension, covering all four gate dimensions. v2 replaced v1 as the live gate.
     func testBundledSuiteLoadsAndCoversAllDimensions() throws {
         let suite = try loadRealSuite()
-        XCTAssertEqual(suite.suiteVersion, "daemon-ab-v1")
+        XCTAssertEqual(suite.suiteVersion, "daemon-ab-v2")
+        XCTAssertEqual(suite.examples.count, 64, "v2 is 16 items × 4 dimensions")
         let covered = Set(suite.examples.compactMap { $0.gateDimension })
         XCTAssertEqual(covered, Set(GateDimension.allCases),
                        "The held-out suite must cover every gate dimension")
+        var perDim: [GateDimension: Int] = [:]
+        for ex in suite.examples {
+            if let d = ex.gateDimension { perDim[d, default: 0] += 1 }
+        }
+        for dim in GateDimension.allCases {
+            XCTAssertEqual(perDim[dim], 16, "Each dimension carries 16 items (\(dim.rawValue))")
+        }
+    }
+
+    // MARK: - v2 scorer arms (expectConcise + allOf)
+
+    /// `expectConcise` passes only for a non-empty answer within the char/line bounds.
+    /// This is the deterministic "concise" check v2 leans on — a rambling answer fails.
+    func testScorerExpectConciseCharAndLineBounds() {
+        let chars = DaemonEvalExample.Scoring(
+            type: "expectConcise", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
+            keys: nil, minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: 20, maxLines: nil)
+        XCTAssertTrue(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "Ready.", toolCalls: []), scoring: chars),
+            "Short answer within maxChars passes")
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: String(repeating: "x", count: 21), toolCalls: []), scoring: chars),
+            "Over maxChars fails")
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "", toolCalls: []), scoring: chars),
+            "Empty answer is never concise-correct")
+
+        let lines = DaemonEvalExample.Scoring(
+            type: "expectConcise", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
+            keys: nil, minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: nil, maxChars: nil, maxLines: 1)
+        XCTAssertTrue(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "One concise line.", toolCalls: []), scoring: lines),
+            "Single non-empty line within maxLines passes")
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "Line one.\nLine two.", toolCalls: []), scoring: lines),
+            "Two lines exceeds maxLines:1")
+    }
+
+    /// `expectConcise` still hard-fails a forbidden phrase and a keyword miss, so a
+    /// brief-but-broken or brief-but-wrong answer cannot pass on length alone.
+    func testScorerExpectConciseForbiddenAndKeyword() {
+        let scoring = DaemonEvalExample.Scoring(
+            type: "expectConcise", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
+            keys: nil, minCount: nil, anyOf: ["ready"], forbidden: ["as an ai"],
+            allOf: nil, maxChars: 40, maxLines: nil)
+        XCTAssertTrue(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "Ready.", toolCalls: []), scoring: scoring))
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "As an AI, ready.", toolCalls: []), scoring: scoring),
+            "Forbidden phrase fails even when short + keyword present")
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "Sure.", toolCalls: []), scoring: scoring),
+            "Concise but missing the required keyword fails")
+    }
+
+    /// `allOf` requires EVERY listed substring co-present (distinct from `anyOf`'s OR).
+    /// This is how v2 forces a discriminating multi-token answer.
+    func testScorerExpectKeywordsAllOf() {
+        let scoring = DaemonEvalExample.Scoring(
+            type: "expectKeywords", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
+            keys: nil, minCount: nil, anyOf: nil, forbidden: nil,
+            allOf: ["100", "21", "2"], maxChars: nil, maxLines: nil)
+        XCTAssertTrue(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "100, 21, 11, 9, 2", toolCalls: []), scoring: scoring),
+            "All required tokens present ⇒ pass")
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "100, 11, 9", toolCalls: []), scoring: scoring),
+            "One required token missing (21, 2) ⇒ fail")
+    }
+
+    /// When both `allOf` and `anyOf` are given, an answer passes only with every
+    /// allOf token AND at least one anyOf token.
+    func testScorerExpectKeywordsAllOfAndAnyOf() {
+        let scoring = DaemonEvalExample.Scoring(
+            type: "expectKeywords", name: nil, requiredArgs: nil, prefix: nil, minLines: nil,
+            keys: nil, minCount: nil, anyOf: ["yes", "sure"], forbidden: nil,
+            allOf: ["plan"], maxChars: nil, maxLines: nil)
+        XCTAssertTrue(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "Yes, let's plan it.", toolCalls: []), scoring: scoring))
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "Yes, absolutely.", toolCalls: []), scoring: scoring),
+            "Missing the allOf token 'plan' ⇒ fail even with an anyOf hit")
+        XCTAssertFalse(DaemonEvalScorer.isCorrect(
+            DaemonABInference(text: "I'll plan it.", toolCalls: []), scoring: scoring),
+            "Has allOf but no anyOf token ⇒ fail")
     }
 
     func testSuiteShaMismatchFailsClosed() throws {
@@ -298,7 +399,7 @@ final class DaemonABEvaluatorTests: XCTestCase {
         // Candidate beat baseline on every dimension ⇒ a measured pass.
         XCTAssertEqual(AdapterGate.decide(outcome.delta.measuredDeltas), .pass)
         XCTAssertEqual(outcome.baseModelId, "/deployed/adapter.gguf")
-        XCTAssertEqual(outcome.evalSuiteVersion, "daemon-ab-v1")
+        XCTAssertEqual(outcome.evalSuiteVersion, "daemon-ab-v2")
     }
 
     /// With nothing deployed the baseline is the base model (`reload(nil)`); restore

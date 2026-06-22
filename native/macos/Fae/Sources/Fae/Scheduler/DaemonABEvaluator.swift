@@ -122,6 +122,9 @@ struct DaemonEvalExample: Sendable, Codable {
     }
 
     /// The deterministic scoring rule for an example.
+    ///
+    /// Every field is `Optional` so older suites (which omit the v2 additions)
+    /// still decode — only the fields a given `type` consults are read.
     struct Scoring: Sendable, Codable {
         let type: String
         let name: String?
@@ -132,6 +135,15 @@ struct DaemonEvalExample: Sendable, Codable {
         let minCount: Int?
         let anyOf: [String]?
         let forbidden: [String]?
+        /// v2: ALL of these substrings must be present (case-insensitive). Distinct
+        /// from `anyOf`'s OR-semantics — used to require multiple discriminating
+        /// tokens co-present. If both `allOf` and `anyOf` are given, an answer
+        /// passes only when every `allOf` token AND at least one `anyOf` token hit.
+        let allOf: [String]?
+        /// v2: `expectConcise` upper bound on character count (inclusive).
+        let maxChars: Int?
+        /// v2: `expectConcise` upper bound on non-empty line count (inclusive).
+        let maxLines: Int?
     }
 
     /// Tools in the MLX/daemon ToolSpec wire shape (`{type, function:{...}}`) the
@@ -211,8 +223,8 @@ struct DaemonEvalSuite: Sendable {
 
     /// Resource name + SHA-256 lock of the bundled eval set. A mismatch fails
     /// closed (the evaluator reports unavailable, leaving the lane blocked).
-    static let resourceName = "daemon-ab-eval-v1"
-    static let lockedSHA256 = "49f9bec4bd9a42eb3624d9032e7e21a07000e3d2cf25106dd64291ba8def06c4"
+    static let resourceName = "daemon-ab-eval-v2"
+    static let lockedSHA256 = "6cfc1140a82bc0e4c618ccfb0259663e011ad809460bee5b9800cb886a25b32b"
 
     private struct Wire: Codable {
         let suiteVersion: String
@@ -294,9 +306,38 @@ enum DaemonEvalScorer {
             return array.count >= (scoring.minCount ?? 1)
         case "expectKeywords":
             if containsForbidden(lower, scoring.forbidden) { return false }
+            // v2 `allOf`: EVERY listed substring must be present. When both `allOf`
+            // and `anyOf` are given, require all-of AND at least one any-of.
+            if let allOf = scoring.allOf, !allOf.isEmpty {
+                guard allOf.allSatisfy({ lower.contains($0.lowercased()) }) else { return false }
+            }
             let anyOf = scoring.anyOf ?? []
-            guard !anyOf.isEmpty else { return !text.isEmpty }
+            guard !anyOf.isEmpty else {
+                // No anyOf: pass on a satisfied allOf (above) or a non-empty answer.
+                return !text.isEmpty
+            }
             return anyOf.contains { lower.contains($0.lowercased()) }
+        case "expectConcise":
+            // Deterministic brevity check: a forbidden phrase still hard-fails, then
+            // the answer must be non-empty and within the char/line bounds given.
+            if containsForbidden(lower, scoring.forbidden) { return false }
+            guard !text.isEmpty else { return false }
+            if let maxChars = scoring.maxChars, text.count > maxChars { return false }
+            if let maxLines = scoring.maxLines {
+                let lines = text.split(whereSeparator: \.isNewline)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                if lines.count > maxLines { return false }
+            }
+            // v2: `expectConcise` may also assert keyword presence (anyOf/allOf) so a
+            // concise-but-wrong answer fails — brevity alone is not correctness.
+            if let allOf = scoring.allOf, !allOf.isEmpty {
+                guard allOf.allSatisfy({ lower.contains($0.lowercased()) }) else { return false }
+            }
+            if let anyOf = scoring.anyOf, !anyOf.isEmpty {
+                guard anyOf.contains(where: { lower.contains($0.lowercased()) }) else { return false }
+            }
+            return true
         case "expectNonEmpty":
             if containsForbidden(lower, scoring.forbidden) { return false }
             return !text.isEmpty
