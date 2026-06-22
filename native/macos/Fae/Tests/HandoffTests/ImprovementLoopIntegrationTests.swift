@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Fae
 
@@ -217,18 +218,35 @@ final class ImprovementLoopIntegrationTests: XCTestCase {
         let store = try await makeTempStore()
         try await store.ensureStateRow()
 
-        // Post-training proposing state (P9/C4 W3): a deployed adapter in
-        // currentAdapterPath + the candidate in pendingAdapterPath. A real cycle can
-        // only produce a pending via the training bridge (W7/W8), so set it up
-        // directly here and exercise the approve → rollback lineage.
+        // Post-training proposing state (P9/C4): a deployed adapter in currentAdapterPath
+        // + a candidate in pendingAdapterPath. A deploy now REQUIRES a verifying gate
+        // receipt (W4), so mint one for a real candidate file. A real cycle produces the
+        // pending + receipt via the training bridge + evaluator (W7/W8).
+        let gateTestKey = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fae-int-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let candidate = dir.appendingPathComponent("adapter.gguf").path
+        try "weights".write(toFile: candidate, atomically: true, encoding: .utf8)
+        let receipt = try GateMinter.mint(
+            cycleId: "int-cyc", candidatePath: candidate, kind: .gguf,
+            measured: [.toolCalling: 3.0, .faeCapability: 1.0, .assistantFit: 2.0, .serialization: 0.0],
+            evaluatorId: "DaemonABEvaluator", baseModelId: "gemma-test",
+            evalSuiteVersion: "v1", mintedAt: "2026-06-22T00:00:00Z", using: gateTestKey
+        )
+        try await store.insertGateReceipt(receipt)
+
         var state = try await store.readState()
         state.currentAdapterPath = "/tmp/old_adapter"
-        state.pendingAdapterPath = "/tmp/new_candidate"
+        state.pendingAdapterPath = candidate
+        state.pendingAdapterKind = "gguf"
+        state.pendingCycleId = "int-cyc"
         try await store.writeState(state)
 
         var patchedPath: String? = "not-called"
         let coordinator = ImprovementCycleCoordinator(store: store)
         await coordinator.setAdapterPatchCallback { path in patchedPath = path }
+        await coordinator.setInjectedGateKey(gateTestKey)
+        await coordinator.setDaemonTrainingBaseModel("gemma-test") // gguf lane
         for s in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
             try await coordinator.transition(to: s)
         }
@@ -236,19 +254,21 @@ final class ImprovementLoopIntegrationTests: XCTestCase {
         try await coordinator.approveDeployment()
 
         // After approval: candidate promoted to current, prior is the rollback target,
-        // pending cleared, pipeline notified.
+        // pending cleared, pipeline notified, receipt consumed.
         let deployed = try await store.readState()
-        XCTAssertEqual(deployed.currentAdapterPath, "/tmp/new_candidate", "Candidate promoted on deploy")
+        XCTAssertEqual(deployed.currentAdapterPath, candidate, "Candidate promoted on deploy")
         XCTAssertEqual(deployed.previousAdapterPath, "/tmp/old_adapter", "Prior is the rollback target")
         XCTAssertNil(deployed.pendingAdapterPath, "Pending cleared after deploy")
-        XCTAssertEqual(patchedPath, "/tmp/new_candidate", "Pipeline notified of the deployed adapter")
+        XCTAssertEqual(patchedPath, candidate, "Pipeline notified of the deployed adapter")
+        let consumed = try await store.isGateReceiptConsumed(cycleId: "int-cyc")
+        XCTAssertTrue(consumed, "Receipt consumed after deploy")
 
         // Rollback returns to the prior deployed adapter (lineage preserved — the W3
         // split fixed the bug where previous was set to the candidate itself).
         try await coordinator.rollback()
         let rolledBack = try await store.readState()
         XCTAssertEqual(rolledBack.currentAdapterPath, "/tmp/old_adapter", "Rollback restores the prior deployed adapter")
-        XCTAssertEqual(rolledBack.previousAdapterPath, "/tmp/new_candidate", "Swap is symmetric")
+        XCTAssertEqual(rolledBack.previousAdapterPath, candidate, "Swap is symmetric")
     }
 
     // MARK: - isDirectiveTuningCycle Logic

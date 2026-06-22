@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Fae
 
@@ -116,28 +117,71 @@ final class AdapterDeploymentManagerTests: XCTestCase {
 
     // MARK: - Deploy
 
-    func testDeployUpdatesAdapterPaths() async throws {
-        let store = try await makeTempStore()
+    /// P9/C4 (W4): deploy now requires a verifying gate receipt — mint one for a real
+    /// candidate file and deploy that.
+    private func makeReceiptCandidate(cycleId: String, key: SymmetricKey) throws -> (String, GateReceipt) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-adm-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appendingPathComponent("adapter.gguf").path
+        try "weights".write(toFile: path, atomically: true, encoding: .utf8)
+        let receipt = try GateMinter.mint(
+            cycleId: cycleId, candidatePath: path, kind: .gguf,
+            measured: [.toolCalling: 3.0, .faeCapability: 1.0, .assistantFit: 2.0, .serialization: 0.0],
+            evaluatorId: "DaemonABEvaluator", baseModelId: "gemma-test",
+            evalSuiteVersion: "v1", mintedAt: "2026-06-22T00:00:00Z", using: key
+        )
+        return (path, receipt)
+    }
 
+    func testDeployPromotesReceiptCandidateAndConsumes() async throws {
+        let store = try await makeTempStore()
+        let key = SymmetricKey(data: Data(repeating: 0x42, count: 32))
         var state = try await store.readState()
         state.currentAdapterPath = "/old/adapter"
         try await store.writeState(state)
 
-        try await AdapterDeploymentManager.deploy(adapterPath: "/new/adapter", store: store)
+        let (path, receipt) = try makeReceiptCandidate(cycleId: "adm-1", key: key)
+        try await store.insertGateReceipt(receipt)
+        try await AdapterDeploymentManager.deploy(receipt: receipt, store: store, verifyingWith: key)
 
         let updated = try await store.readState()
-        XCTAssertEqual(updated.currentAdapterPath, "/new/adapter")
+        XCTAssertEqual(updated.currentAdapterPath, path)
         XCTAssertEqual(updated.previousAdapterPath, "/old/adapter")
+        let consumed = try await store.isGateReceiptConsumed(cycleId: "adm-1")
+        XCTAssertTrue(consumed, "receipt consumed after deploy")
     }
 
-    func testDeployFromBaseModel() async throws {
+    func testDeployRejectsConsumedReceipt() async throws {
         let store = try await makeTempStore()
+        let key = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+        let (_, receipt) = try makeReceiptCandidate(cycleId: "adm-2", key: key)
+        try await store.insertGateReceipt(receipt)
+        try await store.consumeGateReceipt(cycleId: "adm-2", at: "2026-06-22T00:00:00Z")
 
-        try await AdapterDeploymentManager.deploy(adapterPath: "/first/adapter", store: store)
+        do {
+            try await AdapterDeploymentManager.deploy(receipt: receipt, store: store, verifyingWith: key)
+            XCTFail("deploy must reject an already-consumed receipt")
+        } catch ImprovementStoreError.receiptNotConsumable {
+            // expected — atomic consume affected 0 rows (already consumed)
+        }
+    }
 
-        let updated = try await store.readState()
-        XCTAssertEqual(updated.currentAdapterPath, "/first/adapter")
-        XCTAssertNil(updated.previousAdapterPath)
+    /// A validly-signed receipt that was never STORED cannot deploy (closes the
+    /// "signed offline, never evaluated" loophole) — P9/C4 W4.
+    func testDeployRejectsUnstoredReceipt() async throws {
+        let store = try await makeTempStore()
+        let key = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+        let (_, receipt) = try makeReceiptCandidate(cycleId: "adm-3", key: key)
+        // Do NOT insert the receipt into the store.
+        do {
+            try await AdapterDeploymentManager.deploy(receipt: receipt, store: store, verifyingWith: key)
+            XCTFail("deploy must reject a receipt that was never stored")
+        } catch ImprovementStoreError.receiptNotConsumable {
+            // expected — atomic consume found no row to consume
+        }
+        let after = try await store.readState()
+        XCTAssertNil(after.currentAdapterPath, "Nothing deployed")
     }
 
     // MARK: - Rollback

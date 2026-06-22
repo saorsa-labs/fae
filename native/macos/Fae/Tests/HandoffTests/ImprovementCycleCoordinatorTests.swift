@@ -1,9 +1,13 @@
+import CryptoKit
 import XCTest
 @testable import Fae
 
 final class ImprovementCycleCoordinatorTests: XCTestCase {
 
     // MARK: - Helpers
+
+    /// Fixed HMAC key for gate-receipt tests (avoids Keychain access).
+    private let gateTestKey = SymmetricKey(data: Data(repeating: 0x42, count: 32))
 
     private func makeTempStore() async throws -> ImprovementStore {
         let dir = FileManager.default.temporaryDirectory
@@ -13,6 +17,49 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let store = ImprovementStore()
         try await store.open(at: url)
         return store
+    }
+
+    /// Create a temp GGUF candidate file and a valid gate receipt for it (signed with
+    /// `gateTestKey`). The file must exist on disk because verify recomputes the digest.
+    private func makeCandidateWithReceipt(cycleId: String) throws -> (path: String, receipt: GateReceipt) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-cand-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appendingPathComponent("adapter.gguf").path
+        try "candidate weights".write(toFile: path, atomically: true, encoding: .utf8)
+        let receipt = try GateMinter.mint(
+            cycleId: cycleId, candidatePath: path, kind: .gguf,
+            measured: [.toolCalling: 3.0, .faeCapability: 1.0, .assistantFit: 2.0, .serialization: 0.0],
+            evaluatorId: "DaemonABEvaluator", baseModelId: "gemma-test",
+            evalSuiteVersion: "v1", mintedAt: "2026-06-22T00:00:00Z", using: gateTestKey
+        )
+        return (path, receipt)
+    }
+
+    /// Drive a coordinator (daemon/gguf lane) to `.proposing` with a valid pending
+    /// candidate + an inserted gate receipt. Returns the candidate path.
+    @discardableResult
+    private func setupProposingWithValidReceipt(
+        _ coordinator: ImprovementCycleCoordinator,
+        store: ImprovementStore,
+        cycleId: String = "cyc-1",
+        priorDeployed: String? = "/tmp/prior_deployed"
+    ) async throws -> String {
+        let (path, receipt) = try makeCandidateWithReceipt(cycleId: cycleId)
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.currentAdapterPath = priorDeployed
+        s.pendingAdapterPath = path
+        s.pendingAdapterKind = "gguf"
+        s.pendingCycleId = cycleId
+        try await store.writeState(s)
+        try await store.insertGateReceipt(receipt)
+        await coordinator.setInjectedGateKey(gateTestKey)
+        await coordinator.setDaemonTrainingBaseModel("gemma-test") // gguf lane ⇒ expectedKind == .gguf
+        for st in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: st)
+        }
+        return path
     }
 
     private func makeCoordinator(store: ImprovementStore) -> ImprovementCycleCoordinator {
@@ -270,19 +317,10 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
     /// approveDeployment() increments userApprovedCycles and returns to idle.
     func testApproveDeploymentIncrementsApprovedCycles() async throws {
         let store = try await makeTempStore()
-        try await store.ensureStateRow()
-        // P9/C4 (W3): seed a pending candidate (as the training step would) so the
-        // approve path has something to promote to currentAdapterPath.
-        var seed = try await store.readState()
-        seed.currentAdapterPath = "/tmp/prior_deployed"
-        seed.pendingAdapterPath = "/tmp/candidate_adapter"
-        try await store.writeState(seed)
         let coordinator = makeCoordinator(store: store)
+        // P9/C4 (W4): a deploy now REQUIRES a verifying gate receipt for the candidate.
+        let candidate = try await setupProposingWithValidReceipt(coordinator, store: store)
 
-        // Manually drive to proposing state (simulates end of runCycle).
-        for state in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
-            try await coordinator.transition(to: state)
-        }
         let preApproveState = try await coordinator.currentState()
         XCTAssertEqual(preApproveState, .proposing)
 
@@ -296,9 +334,117 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(storeState.completedCycles, 1)
         XCTAssertNotNil(storeState.lastCycleAt)
         // The candidate is promoted; the prior becomes the rollback target; pending cleared.
-        XCTAssertEqual(storeState.currentAdapterPath, "/tmp/candidate_adapter", "Candidate promoted to deployed")
+        XCTAssertEqual(storeState.currentAdapterPath, candidate, "Candidate promoted to deployed")
         XCTAssertEqual(storeState.previousAdapterPath, "/tmp/prior_deployed", "Prior becomes rollback target")
         XCTAssertNil(storeState.pendingAdapterPath, "Pending cleared after deploy")
+        // The receipt is consumed (single-use).
+        let consumed = try await store.isGateReceiptConsumed(cycleId: "cyc-1")
+        XCTAssertTrue(consumed, "Receipt consumed after deploy")
+    }
+
+    // MARK: - W4: deploy requires a verifying gate receipt
+
+    /// Approve with no gate receipt for the candidate ⇒ fail closed (no deploy).
+    func testApproveWithoutReceiptIsBlocked() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        // Pending candidate present, but NO receipt inserted.
+        let (path, _) = try makeCandidateWithReceipt(cycleId: "cyc-x")
+        var s = try await store.readState()
+        s.currentAdapterPath = "/tmp/prior"
+        s.pendingAdapterPath = path
+        s.pendingAdapterKind = "gguf"
+        s.pendingCycleId = "cyc-x"
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+        await coordinator.setInjectedGateKey(gateTestKey)
+        await coordinator.setDaemonTrainingBaseModel("gemma-test")
+        for st in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: st)
+        }
+
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("approve must throw without a gate receipt")
+        } catch ImprovementCycleError.gateReceiptRejected {
+            // expected
+        }
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle", "Fail-closed back to idle")
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/prior", "Deployed pointer untouched")
+        XCTAssertNil(after.pendingAdapterPath, "Rejected candidate discarded")
+        XCTAssertEqual(after.userApprovedCycles, 0, "No deploy earned")
+    }
+
+    /// A consumed (replayed) receipt cannot deploy again.
+    func testApproveWithConsumedReceiptIsBlocked() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        try await setupProposingWithValidReceipt(coordinator, store: store, cycleId: "cyc-r")
+        // Pre-consume the receipt.
+        try await store.consumeGateReceipt(cycleId: "cyc-r", at: "2026-06-22T00:00:00Z")
+
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("approve must throw on an already-consumed receipt")
+        } catch ImprovementCycleError.gateReceiptRejected {
+            // expected
+        }
+        let after = try await store.readState()
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/prior_deployed", "Deployed pointer untouched")
+        XCTAssertNil(after.pendingAdapterPath, "Rejected candidate discarded")
+    }
+
+    /// A receipt minted for a DIFFERENT candidate path cannot deploy this candidate.
+    func testApproveWithMismatchedCandidateReceiptIsBlocked() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        let (path, _) = try makeCandidateWithReceipt(cycleId: "cyc-m")
+        // Insert a receipt for a DIFFERENT candidate path under the same cycle id.
+        let (otherPath, otherReceiptForOtherPath) = try makeCandidateWithReceipt(cycleId: "cyc-m")
+        _ = otherPath
+        try await store.insertGateReceipt(otherReceiptForOtherPath)
+        var s = try await store.readState()
+        s.pendingAdapterPath = path  // candidate is `path`, but the receipt is for `otherPath`
+        s.pendingAdapterKind = "gguf"
+        s.pendingCycleId = "cyc-m"
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+        await coordinator.setInjectedGateKey(gateTestKey)
+        await coordinator.setDaemonTrainingBaseModel("gemma-test")
+        for st in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: st)
+        }
+
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("approve must throw when the receipt is for a different candidate")
+        } catch ImprovementCycleError.gateReceiptRejected {
+            // expected (candidateMismatch inside verify)
+        }
+        let after = try await store.readState()
+        XCTAssertNil(after.currentAdapterPath)
+    }
+
+    /// A receipt whose kind does not match the active engine lane is blocked.
+    func testApproveWithKindEngineMismatchIsBlocked() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        // setup uses the gguf/daemon lane (expectedKind == .gguf) and a .gguf receipt...
+        try await setupProposingWithValidReceipt(coordinator, store: store, cycleId: "cyc-k")
+        // ...but flip the engine lane to MLX (expectedKind becomes .mlxDir) so the
+        // .gguf receipt now mismatches the engine.
+        await coordinator.setDaemonTrainingBaseModel(nil)
+
+        do {
+            try await coordinator.approveDeployment()
+            XCTFail("approve must throw on a kind↔engine mismatch")
+        } catch ImprovementCycleError.gateReceiptRejected {
+            // expected (kind_engine_mismatch)
+        }
+        let after = try await store.readState()
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/prior_deployed", "Mismatched-kind candidate must not deploy")
     }
 
     /// rejectDeployment() returns to idle without incrementing userApprovedCycles.

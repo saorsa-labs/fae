@@ -64,6 +64,7 @@ enum GateReceiptError: Error, Equatable, CustomStringConvertible {
     case candidateMismatch
     case stalePolicyVersion(found: Int, expected: Int)
     case wrongDecision(String)
+    case alreadyConsumed(String)
 
     var description: String {
         switch self {
@@ -77,6 +78,7 @@ enum GateReceiptError: Error, Equatable, CustomStringConvertible {
         case .candidateMismatch: return "receipt is for a different candidate path"
         case .stalePolicyVersion(let f, let e): return "receipt gatePolicyVersion \(f) != \(e)"
         case .wrongDecision(let d): return "receipt decision is not pass: \(d)"
+        case .alreadyConsumed(let c): return "gate receipt already consumed for cycle \(c)"
         }
     }
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - CycleState
@@ -49,6 +50,9 @@ enum ImprovementCycleError: Error, Sendable {
     case stuckDetected(startedAt: String)
     /// A deploy was attempted with no pending candidate to promote (P9/C4 W3).
     case noPendingCandidate
+    /// A deploy was attempted with no verifying gate receipt for the candidate (P9/C4 W4).
+    /// Carries a short reason for the audit trail.
+    case gateReceiptRejected(String)
 }
 
 // MARK: - ImprovementCycleCoordinator
@@ -147,6 +151,11 @@ actor ImprovementCycleCoordinator {
     /// the bridge benchmark, else `.unmeasured` (fail-closed).
     private var injectedMeasuredDelta: EvalDelta?
 
+    /// Test override of the gate-receipt HMAC key (P9/C4 W4). When set, the deploy gate
+    /// verifies receipts with this key instead of the per-install Keychain key, so unit
+    /// tests can mint + verify receipts without Keychain access. `nil` in production.
+    private var injectedGateKey: SymmetricKey?
+
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
 
@@ -201,6 +210,11 @@ actor ImprovementCycleCoordinator {
     /// `AdapterEvaluator`. Passing `nil` clears it (fall through to the bridge).
     func setInjectedMeasuredDelta(_ delta: EvalDelta?) {
         injectedMeasuredDelta = delta
+    }
+
+    /// Inject the gate-receipt HMAC key for tests (P9/C4 W4; see `injectedGateKey`).
+    func setInjectedGateKey(_ key: SymmetricKey?) {
+        injectedGateKey = key
     }
 
     /// Set the meta-optimizer. Called by FaeScheduler after wiring.
@@ -394,6 +408,7 @@ actor ImprovementCycleCoordinator {
             // crash/stuck mid-cycle can never leave an un-evaluated candidate live.
             resetState.pendingAdapterPath = nil
             resetState.pendingAdapterKind = nil
+            resetState.pendingCycleId = nil
             try await store.writeState(resetState)
         }
 
@@ -416,6 +431,7 @@ actor ImprovementCycleCoordinator {
             var cleared = startState
             cleared.pendingAdapterPath = nil
             cleared.pendingAdapterKind = nil
+            cleared.pendingCycleId = nil
             try await store.writeState(cleared)
             NSLog("ImprovementCycleCoordinator: cleared stale pending candidate at cycle start")
         }
@@ -556,6 +572,9 @@ actor ImprovementCycleCoordinator {
             var state = try await store.readState()
             state.pendingAdapterPath = adapterPath
             state.pendingAdapterKind = candidate.kind.rawValue
+            // P9/C4 (W4): bind this candidate to a cycle id. The evaluator (W7) mints a
+            // gate receipt keyed by this id; the deploy gate requires that receipt.
+            state.pendingCycleId = UUID().uuidString
             try await store.writeState(state)
         } catch let error as ImprovementCycleError {
             // Rethrown from the bridge-nil path above — not a real failure.
@@ -790,7 +809,15 @@ actor ImprovementCycleCoordinator {
             throw ImprovementCycleError.noPendingCandidate
         }
         try await transition(to: .deploying)
-        try await performDeploy(approved: true)
+        do {
+            try await performDeploy(approved: true)
+        } catch {
+            // P9/C4 (W4): the deploy was refused (e.g. no/invalid gate receipt). Fail
+            // closed — discard the candidate and return to idle, then surface the error
+            // to the caller (UI) rather than leaving the machine stuck in .deploying.
+            await failClosed(reason: "deploy_rejected: \(error)")
+            throw error
+        }
         try await transition(to: .idle)
         NSLog("ImprovementCycleCoordinator: deployment approved — cycle complete")
     }
@@ -813,6 +840,7 @@ actor ImprovementCycleCoordinator {
         // a rejected candidate simply never deploys.
         state.pendingAdapterPath = nil
         state.pendingAdapterKind = nil
+        state.pendingCycleId = nil
         state.cycleState = CycleState.idle.rawValue
         state.completedCycles += 1
         state.lastCycleAt = ISO8601DateFormatter().string(from: Date())
@@ -864,12 +892,47 @@ actor ImprovementCycleCoordinator {
             NSLog("ImprovementCycleCoordinator: performDeploy called with no pending candidate — refusing")
             throw ImprovementCycleError.noPendingCandidate
         }
+
+        // P9/C4 (W4): REQUIRE a verifying, unconsumed gate receipt for THIS exact
+        // candidate before promoting it. No receipt ⇒ no deploy (fail-closed). Receipts
+        // are minted by the evaluator (W7); without an evaluator the loop blocks here,
+        // which is the intended conservative behaviour (no auto-deploy until a real eval
+        // gate exists).
+        let receipt = try await requireGateReceipt(for: state, candidate: candidate)
+
+        // Receipt ↔ candidate consistency: the receipt's kind must match what the training
+        // step recorded for this pending candidate.
+        if let pendingKind = state.pendingAdapterKind, receipt.kind.rawValue != pendingKind {
+            throw ImprovementCycleError.gateReceiptRejected(
+                "receipt_kind_mismatch: receipt=\(receipt.kind.rawValue) pending=\(pendingKind)"
+            )
+        }
+        // Kind ↔ engine consistency: the daemon lane loads a GGUF; the MLX lane loads an
+        // adapter directory. A mismatch means the candidate cannot load on the active
+        // engine — block rather than ship a dead adapter.
+        let expectedKind: AdapterKind = daemonTrainingBaseModel != nil ? .gguf : .mlxDir
+        guard receipt.kind == expectedKind else {
+            throw ImprovementCycleError.gateReceiptRejected(
+                "kind_engine_mismatch: receipt=\(receipt.kind.rawValue) expected=\(expectedKind.rawValue)"
+            )
+        }
+
+        guard let cycleId = state.pendingCycleId else {
+            throw ImprovementCycleError.gateReceiptRejected("no_pending_cycle_id")
+        }
         state.previousAdapterPath = state.currentAdapterPath
         state.currentAdapterPath = candidate
         state.pendingAdapterPath = nil
         state.pendingAdapterKind = nil
+        state.pendingCycleId = nil
         state.userApprovedCycles += 1
-        try await store.writeState(state)
+        // P9/C4 (W4): promote + consume ATOMICALLY. The consume requires a stored,
+        // unconsumed receipt (UPDATE … WHERE consumed_at IS NULL, exactly one row) or the
+        // whole transaction rolls back — so the deploy can never commit without spending a
+        // real receipt, and the receipt can never be double-spent.
+        try await store.promoteAndConsumeReceipt(
+            state: state, cycleId: cycleId, at: ISO8601DateFormatter().string(from: Date())
+        )
 
         // Notify pipeline — nil until FaeCore wires it in.
         adapterPatchCallback?(state.currentAdapterPath)
@@ -877,6 +940,33 @@ actor ImprovementCycleCoordinator {
             "ImprovementCycleCoordinator: adapter deployed (userApprovedCycles=%d)",
             state.userApprovedCycles
         )
+    }
+
+    /// Fetch + verify the gate receipt that authorizes deploying `candidate` (P9/C4 W4).
+    /// Fail-closed: throws `gateReceiptRejected` if there is no bound cycle id, no receipt,
+    /// the receipt is already consumed, or it fails cryptographic/digest verification.
+    private func requireGateReceipt(
+        for state: ImprovementState, candidate: String
+    ) async throws -> GateReceipt {
+        guard let cycleId = state.pendingCycleId else {
+            throw ImprovementCycleError.gateReceiptRejected("no_pending_cycle_id")
+        }
+        guard let receipt = try await store.gateReceipt(forCycleId: cycleId) else {
+            throw ImprovementCycleError.gateReceiptRejected("no_receipt")
+        }
+        if try await store.isGateReceiptConsumed(cycleId: cycleId) {
+            throw ImprovementCycleError.gateReceiptRejected("receipt_already_consumed")
+        }
+        do {
+            if let key = injectedGateKey {
+                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: candidate, using: key)
+            } else {
+                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: candidate)
+            }
+        } catch {
+            throw ImprovementCycleError.gateReceiptRejected("verify_failed: \(error)")
+        }
+        return receipt
     }
 
     // MARK: - Loss-Based Eval Fallback
@@ -923,6 +1013,7 @@ actor ImprovementCycleCoordinator {
         // might deploy. (Invariant: idle ⇒ pendingAdapterPath == nil.)
         state.pendingAdapterPath = nil
         state.pendingAdapterKind = nil
+        state.pendingCycleId = nil
         try await store.writeState(state)
     }
 
@@ -939,6 +1030,7 @@ actor ImprovementCycleCoordinator {
             var state = try await store.readState()
             state.pendingAdapterPath = nil
             state.pendingAdapterKind = nil
+            state.pendingCycleId = nil
             state.cycleState = CycleState.idle.rawValue
             state.trainingStartedAt = nil
             state.lastCycleError = reason

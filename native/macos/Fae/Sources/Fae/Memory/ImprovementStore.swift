@@ -89,6 +89,11 @@ struct ImprovementState: Sendable {
     /// The candidate's artifact kind ("gguf" | "mlxDir"), for the W4 evaluator and
     /// deploy routing.
     var pendingAdapterKind: String? = nil
+
+    /// The cycle id that produced the pending candidate (P9/C4 W4). Binds the candidate
+    /// to its `gate_receipts` row so the deploy gate can require a verifying receipt for
+    /// this exact cycle.
+    var pendingCycleId: String? = nil
 }
 
 /// A detected gap between current Fae capabilities and desired behaviour.
@@ -122,6 +127,9 @@ enum ImprovementStoreError: Error, Sendable {
     case notOpen
     /// No singleton improvement state row exists. Call `ensureStateRow()` first.
     case stateNotInitialised
+    /// The gate receipt to consume was missing or already consumed (P9/C4 W4) — the
+    /// atomic promote+consume transaction was rolled back.
+    case receiptNotConsumable
 }
 
 // MARK: - ImprovementStore
@@ -231,7 +239,8 @@ actor ImprovementStore {
                 deferral_count        INTEGER NOT NULL DEFAULT 0,
                 previous_directive    TEXT,
                 pending_adapter_path  TEXT,
-                pending_adapter_kind  TEXT
+                pending_adapter_kind  TEXT,
+                pending_cycle_id      TEXT
             )
         """)
         // Migration: add columns to existing databases that lack them.
@@ -263,6 +272,9 @@ actor ImprovementStore {
         }
         if !columnNames.contains("pending_adapter_kind") {
             try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_adapter_kind TEXT")
+        }
+        if !columnNames.contains("pending_cycle_id") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_cycle_id TEXT")
         }
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS capability_gaps (
@@ -488,7 +500,7 @@ actor ImprovementStore {
                        deferral_count, previous_directive,
                        meta_opt_kept_total, meta_opt_tested_total,
                        meta_opt_last_run_at, meta_opt_consecutive_no_improvement,
-                       pending_adapter_path, pending_adapter_kind
+                       pending_adapter_path, pending_adapter_kind, pending_cycle_id
                 FROM improvement_state LIMIT 1
             """) else {
                 throw ImprovementStoreError.stateNotInitialised
@@ -500,7 +512,33 @@ actor ImprovementStore {
     /// Overwrite the singleton improvement state.
     func writeState(_ state: ImprovementState) throws {
         guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in try Self.upsertState(db, state) }
+    }
+
+    /// Atomically promote (write `state`) AND consume the gate receipt for `cycleId` in
+    /// ONE transaction (P9/C4 W4). The consume is `UPDATE … WHERE consumed_at IS NULL`;
+    /// it must affect exactly one row — otherwise the receipt is missing or already
+    /// consumed, the whole transaction rolls back, and this throws. This makes deploy +
+    /// single-use atomic: a deploy can never commit without consuming a STORED, unconsumed
+    /// receipt, and a receipt can never be double-spent (closes the missing-row bypass,
+    /// the promote-then-consume window, and the check/consume TOCTOU together).
+    func promoteAndConsumeReceipt(
+        state: ImprovementState, cycleId: String, at timestamp: String
+    ) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
         try db.write { db in
+            try db.execute(
+                sql: "UPDATE gate_receipts SET consumed_at = ? WHERE cycle_id = ? AND consumed_at IS NULL",
+                arguments: [timestamp, cycleId]
+            )
+            guard db.changesCount == 1 else {
+                throw ImprovementStoreError.receiptNotConsumable
+            }
+            try Self.upsertState(db, state)
+        }
+    }
+
+    private static func upsertState(_ db: GRDB.Database, _ state: ImprovementState) throws {
             if let id = state.id {
                 try db.execute(
                     sql: """
@@ -512,7 +550,7 @@ actor ImprovementStore {
                             previous_directive = ?,
                             meta_opt_kept_total = ?, meta_opt_tested_total = ?,
                             meta_opt_last_run_at = ?, meta_opt_consecutive_no_improvement = ?,
-                            pending_adapter_path = ?, pending_adapter_kind = ?
+                            pending_adapter_path = ?, pending_adapter_kind = ?, pending_cycle_id = ?
                         WHERE id = ?
                     """,
                     arguments: [
@@ -523,7 +561,7 @@ actor ImprovementStore {
                         state.deferralCount, state.previousDirective,
                         state.metaOptKeptTotal, state.metaOptTestedTotal,
                         state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
-                        state.pendingAdapterPath, state.pendingAdapterKind,
+                        state.pendingAdapterPath, state.pendingAdapterKind, state.pendingCycleId,
                         id,
                     ]
                 )
@@ -537,8 +575,8 @@ actor ImprovementStore {
                              deferral_count, previous_directive,
                              meta_opt_kept_total, meta_opt_tested_total,
                              meta_opt_last_run_at, meta_opt_consecutive_no_improvement,
-                             pending_adapter_path, pending_adapter_kind)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             pending_adapter_path, pending_adapter_kind, pending_cycle_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         state.cycleState, state.lastCycleAt,
@@ -548,11 +586,10 @@ actor ImprovementStore {
                         state.deferralCount, state.previousDirective,
                         state.metaOptKeptTotal, state.metaOptTestedTotal,
                         state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
-                        state.pendingAdapterPath, state.pendingAdapterKind,
+                        state.pendingAdapterPath, state.pendingAdapterKind, state.pendingCycleId,
                     ]
                 )
             }
-        }
     }
 
     /// Increment the deferral counter by 1 and return the new value.
@@ -812,7 +849,8 @@ actor ImprovementStore {
             metaOptLastRunAt: row["meta_opt_last_run_at"],
             metaOptConsecutiveNoImprovement: Int(row["meta_opt_consecutive_no_improvement"] as? Int64 ?? 0),
             pendingAdapterPath: row["pending_adapter_path"],
-            pendingAdapterKind: row["pending_adapter_kind"]
+            pendingAdapterKind: row["pending_adapter_kind"],
+            pendingCycleId: row["pending_cycle_id"]
         )
     }
 
@@ -851,9 +889,12 @@ actor ImprovementStore {
             data: try JSONEncoder().encode(receipt.measured), encoding: .utf8
         ) ?? "{}"
         try db.write { db in
+            // Plain INSERT (not OR REPLACE): re-inserting a cycle id is a programming
+            // error and must fail loudly rather than silently reset `consumed_at` and
+            // un-consume a spent receipt.
             try db.execute(
                 sql: """
-                    INSERT OR REPLACE INTO gate_receipts
+                    INSERT INTO gate_receipts
                         (cycle_id, candidate_path, kind, artifact_digest, measured_json,
                          decision, evaluator_id, base_model_id, eval_suite_version,
                          gate_policy_version, receipt_version, minted_at, hmac, consumed_at)

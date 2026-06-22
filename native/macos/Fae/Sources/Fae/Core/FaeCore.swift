@@ -2387,8 +2387,22 @@ final class FaeCore: ObservableObject, HostCommandSender {
             }
             config.training.personalAdapterPath = newPath
             persistConfig(reason: "config.patch.training.personal_adapter_path")
-            // Hot-swap adapter on the running pipeline (no restart required).
+            // P9/C4 (W4, F7): this is the OWNER MANUAL OVERRIDE — it deploys an adapter
+            // OUTSIDE the autonomous loop's receipt gate, by design. Audit it loudly so
+            // an out-of-gate adapter swap is always attributable. (The gated path is
+            // ImprovementCycleCoordinator.performDeploy, which requires a GateReceipt.)
+            // Audit BEFORE the swap (awaited, in the same task) so the out-of-gate
+            // override is always recorded before the adapter changes — not racing it.
             Task { [weak self] in
+                await SecurityEventLogger.shared.log(
+                    event: "manual_adapter_override",
+                    toolName: "self_config",
+                    decision: "allow",
+                    reasonCode: "owner_out_of_gate",
+                    approved: true,
+                    success: true,
+                    arguments: ["personal_adapter_path": newPath ?? "(unload)"]
+                )
                 await self?.pipelineCoordinator?.applyAdapterChange(path: newPath)
             }
             NSLog("FaeCore: adapter path patched → %@", newPath ?? "<unload>")
