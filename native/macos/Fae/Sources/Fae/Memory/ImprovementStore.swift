@@ -76,6 +76,24 @@ struct ImprovementState: Sendable {
     var metaOptLastRunAt: String?
     /// Consecutive cycles with zero kept changes (plateau detection).
     var metaOptConsecutiveNoImprovement: Int
+
+    // P9/C4 (W3) — candidate state, kept SEPARATE from the deployed pointer.
+
+    /// The candidate adapter under evaluation. Written by the training step; it is
+    /// NEVER the deployed pointer. Promoted to `currentAdapterPath` only by a gated
+    /// deploy, and cleared on any terminal non-deploy outcome (block / reject /
+    /// abort). This keeps an un-evaluated candidate from ever polluting the live
+    /// `currentAdapterPath`, on any path or after a crash.
+    var pendingAdapterPath: String? = nil
+
+    /// The candidate's artifact kind ("gguf" | "mlxDir"), for the W4 evaluator and
+    /// deploy routing.
+    var pendingAdapterKind: String? = nil
+
+    /// The cycle id that produced the pending candidate (P9/C4 W4). Binds the candidate
+    /// to its `gate_receipts` row so the deploy gate can require a verifying receipt for
+    /// this exact cycle.
+    var pendingCycleId: String? = nil
 }
 
 /// A detected gap between current Fae capabilities and desired behaviour.
@@ -109,6 +127,9 @@ enum ImprovementStoreError: Error, Sendable {
     case notOpen
     /// No singleton improvement state row exists. Call `ensureStateRow()` first.
     case stateNotInitialised
+    /// The gate receipt to consume was missing or already consumed (P9/C4 W4) — the
+    /// atomic promote+consume transaction was rolled back.
+    case receiptNotConsumable
 }
 
 // MARK: - ImprovementStore
@@ -216,7 +237,10 @@ actor ImprovementStore {
                 training_started_at   TEXT,
                 last_cycle_error      TEXT,
                 deferral_count        INTEGER NOT NULL DEFAULT 0,
-                previous_directive    TEXT
+                previous_directive    TEXT,
+                pending_adapter_path  TEXT,
+                pending_adapter_kind  TEXT,
+                pending_cycle_id      TEXT
             )
         """)
         // Migration: add columns to existing databases that lack them.
@@ -240,6 +264,17 @@ actor ImprovementStore {
         }
         if !columnNames.contains("meta_opt_consecutive_no_improvement") {
             try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN meta_opt_consecutive_no_improvement INTEGER NOT NULL DEFAULT 0")
+        }
+        // Migration: candidate (pending) adapter columns, kept separate from the
+        // deployed pointer (P9/C4 W3).
+        if !columnNames.contains("pending_adapter_path") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_adapter_path TEXT")
+        }
+        if !columnNames.contains("pending_adapter_kind") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_adapter_kind TEXT")
+        }
+        if !columnNames.contains("pending_cycle_id") {
+            try db.execute(sql: "ALTER TABLE improvement_state ADD COLUMN pending_cycle_id TEXT")
         }
         try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS capability_gaps (
@@ -283,6 +318,26 @@ actor ImprovementStore {
         try db.execute(sql: """
             CREATE INDEX IF NOT EXISTS idx_mol_cycle
             ON meta_optimization_log (cycle_number, kept)
+        """)
+        // P9/C4 (W2): persisted gate receipts — tamper-evident proof a candidate passed
+        // a real eval. W4 requires a verifying, unconsumed receipt before any deploy.
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS gate_receipts (
+                cycle_id            TEXT    PRIMARY KEY,
+                candidate_path      TEXT    NOT NULL,
+                kind                TEXT    NOT NULL,
+                artifact_digest     TEXT    NOT NULL,
+                measured_json       TEXT    NOT NULL,
+                decision            TEXT    NOT NULL,
+                evaluator_id        TEXT    NOT NULL,
+                base_model_id       TEXT    NOT NULL,
+                eval_suite_version  TEXT    NOT NULL,
+                gate_policy_version INTEGER NOT NULL,
+                receipt_version     INTEGER NOT NULL,
+                minted_at           TEXT    NOT NULL,
+                hmac                TEXT    NOT NULL,
+                consumed_at         TEXT
+            )
         """)
     }
 
@@ -444,7 +499,8 @@ actor ImprovementStore {
                        previous_adapter_path, training_started_at, last_cycle_error,
                        deferral_count, previous_directive,
                        meta_opt_kept_total, meta_opt_tested_total,
-                       meta_opt_last_run_at, meta_opt_consecutive_no_improvement
+                       meta_opt_last_run_at, meta_opt_consecutive_no_improvement,
+                       pending_adapter_path, pending_adapter_kind, pending_cycle_id
                 FROM improvement_state LIMIT 1
             """) else {
                 throw ImprovementStoreError.stateNotInitialised
@@ -456,7 +512,33 @@ actor ImprovementStore {
     /// Overwrite the singleton improvement state.
     func writeState(_ state: ImprovementState) throws {
         guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in try Self.upsertState(db, state) }
+    }
+
+    /// Atomically promote (write `state`) AND consume the gate receipt for `cycleId` in
+    /// ONE transaction (P9/C4 W4). The consume is `UPDATE … WHERE consumed_at IS NULL`;
+    /// it must affect exactly one row — otherwise the receipt is missing or already
+    /// consumed, the whole transaction rolls back, and this throws. This makes deploy +
+    /// single-use atomic: a deploy can never commit without consuming a STORED, unconsumed
+    /// receipt, and a receipt can never be double-spent (closes the missing-row bypass,
+    /// the promote-then-consume window, and the check/consume TOCTOU together).
+    func promoteAndConsumeReceipt(
+        state: ImprovementState, cycleId: String, at timestamp: String
+    ) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
         try db.write { db in
+            try db.execute(
+                sql: "UPDATE gate_receipts SET consumed_at = ? WHERE cycle_id = ? AND consumed_at IS NULL",
+                arguments: [timestamp, cycleId]
+            )
+            guard db.changesCount == 1 else {
+                throw ImprovementStoreError.receiptNotConsumable
+            }
+            try Self.upsertState(db, state)
+        }
+    }
+
+    private static func upsertState(_ db: GRDB.Database, _ state: ImprovementState) throws {
             if let id = state.id {
                 try db.execute(
                     sql: """
@@ -467,7 +549,8 @@ actor ImprovementStore {
                             last_cycle_error = ?, deferral_count = ?,
                             previous_directive = ?,
                             meta_opt_kept_total = ?, meta_opt_tested_total = ?,
-                            meta_opt_last_run_at = ?, meta_opt_consecutive_no_improvement = ?
+                            meta_opt_last_run_at = ?, meta_opt_consecutive_no_improvement = ?,
+                            pending_adapter_path = ?, pending_adapter_kind = ?, pending_cycle_id = ?
                         WHERE id = ?
                     """,
                     arguments: [
@@ -478,6 +561,7 @@ actor ImprovementStore {
                         state.deferralCount, state.previousDirective,
                         state.metaOptKeptTotal, state.metaOptTestedTotal,
                         state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
+                        state.pendingAdapterPath, state.pendingAdapterKind, state.pendingCycleId,
                         id,
                     ]
                 )
@@ -490,8 +574,9 @@ actor ImprovementStore {
                              previous_adapter_path, training_started_at, last_cycle_error,
                              deferral_count, previous_directive,
                              meta_opt_kept_total, meta_opt_tested_total,
-                             meta_opt_last_run_at, meta_opt_consecutive_no_improvement)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             meta_opt_last_run_at, meta_opt_consecutive_no_improvement,
+                             pending_adapter_path, pending_adapter_kind, pending_cycle_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         state.cycleState, state.lastCycleAt,
@@ -501,10 +586,10 @@ actor ImprovementStore {
                         state.deferralCount, state.previousDirective,
                         state.metaOptKeptTotal, state.metaOptTestedTotal,
                         state.metaOptLastRunAt, state.metaOptConsecutiveNoImprovement,
+                        state.pendingAdapterPath, state.pendingAdapterKind, state.pendingCycleId,
                     ]
                 )
             }
-        }
     }
 
     /// Increment the deferral counter by 1 and return the new value.
@@ -762,7 +847,10 @@ actor ImprovementStore {
             metaOptKeptTotal: Int(row["meta_opt_kept_total"] as? Int64 ?? 0),
             metaOptTestedTotal: Int(row["meta_opt_tested_total"] as? Int64 ?? 0),
             metaOptLastRunAt: row["meta_opt_last_run_at"],
-            metaOptConsecutiveNoImprovement: Int(row["meta_opt_consecutive_no_improvement"] as? Int64 ?? 0)
+            metaOptConsecutiveNoImprovement: Int(row["meta_opt_consecutive_no_improvement"] as? Int64 ?? 0),
+            pendingAdapterPath: row["pending_adapter_path"],
+            pendingAdapterKind: row["pending_adapter_kind"],
+            pendingCycleId: row["pending_cycle_id"]
         )
     }
 
@@ -787,6 +875,126 @@ actor ImprovementStore {
             receptionScore: row["reception_score"],
             evaluated: (row["evaluated"] as? Int64 ?? 0) != 0,
             evalOutcome: row["eval_outcome"]
+        )
+    }
+
+    // MARK: - Gate Receipts (P9/C4 W2)
+
+    /// Persist a minted gate receipt (one per cycle). Replaces any prior receipt for the
+    /// same cycle id. Failures surface (Rule 12) — a swallowed receipt write followed by
+    /// a deploy that requires a receipt must not silently mis-gate.
+    func insertGateReceipt(_ receipt: GateReceipt) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        let measuredJSON = String(
+            data: try JSONEncoder().encode(receipt.measured), encoding: .utf8
+        ) ?? "{}"
+        try db.write { db in
+            // Plain INSERT (not OR REPLACE): re-inserting a cycle id is a programming
+            // error and must fail loudly rather than silently reset `consumed_at` and
+            // un-consume a spent receipt.
+            try db.execute(
+                sql: """
+                    INSERT INTO gate_receipts
+                        (cycle_id, candidate_path, kind, artifact_digest, measured_json,
+                         decision, evaluator_id, base_model_id, eval_suite_version,
+                         gate_policy_version, receipt_version, minted_at, hmac, consumed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                arguments: [
+                    receipt.cycleId, receipt.candidatePath, receipt.kind.rawValue,
+                    receipt.artifactDigest, measuredJSON, receipt.decision,
+                    receipt.evaluatorId, receipt.baseModelId, receipt.evalSuiteVersion,
+                    receipt.gatePolicyVersion, receipt.receiptVersion,
+                    receipt.mintedAt, receipt.hmac,
+                ]
+            )
+        }
+    }
+
+    /// Fetch the gate receipt for a cycle, if present.
+    func gateReceipt(forCycleId cycleId: String) throws -> GateReceipt? {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM gate_receipts WHERE cycle_id = ? LIMIT 1",
+                arguments: [cycleId]
+            ) else { return nil }
+            return Self.gateReceipt(from: row)
+        }
+    }
+
+    /// Whether ANY consumed gate receipt exists for a given candidate/adapter path
+    /// (P9/C4 W5). Used by recovery to tell a genuinely-deployed `currentAdapterPath`
+    /// (which always has a consumed receipt from its deploy) apart from a pre-P9 un-gated
+    /// candidate (which has none).
+    func hasConsumedReceipt(forCandidatePath path: String) throws -> Bool {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            let count = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM gate_receipts WHERE candidate_path = ? AND consumed_at IS NOT NULL",
+                arguments: [path]
+            ) ?? 0
+            return count > 0
+        }
+    }
+
+    /// Whether the receipt for a cycle has already been consumed (single-use gate).
+    func isGateReceiptConsumed(cycleId: String) throws -> Bool {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT consumed_at FROM gate_receipts WHERE cycle_id = ? LIMIT 1",
+                arguments: [cycleId]
+            ) else { return false }
+            let consumed: String? = row["consumed_at"]
+            return consumed != nil
+        }
+    }
+
+    /// Mark a receipt consumed (single-use). Sets `consumed_at` only if still null, so a
+    /// replayed deploy of the same receipt cannot re-consume it.
+    func consumeGateReceipt(cycleId: String, at timestamp: String) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE gate_receipts SET consumed_at = ?
+                    WHERE cycle_id = ? AND consumed_at IS NULL
+                """,
+                arguments: [timestamp, cycleId]
+            )
+        }
+    }
+
+    private static func gateReceipt(from row: Row) -> GateReceipt? {
+        let measuredJSON: String = row["measured_json"] ?? "{}"
+        let decoded = try? JSONDecoder().decode([String: Double].self, from: Data(measuredJSON.utf8))
+        if decoded == nil {
+            // Surface (don't silently swallow) a corrupt measured payload — the receipt's
+            // HMAC will fail verification anyway, but a logged decode failure flags DB damage.
+            NSLog("ImprovementStore: gate_receipts.measured_json failed to decode (db damage?)")
+        }
+        let measured = decoded ?? [:]
+        guard let kindRaw: String = row["kind"], let kind = AdapterKind(rawValue: kindRaw) else {
+            return nil
+        }
+        return GateReceipt(
+            cycleId: row["cycle_id"] ?? "",
+            candidatePath: row["candidate_path"] ?? "",
+            kind: kind,
+            artifactDigest: row["artifact_digest"] ?? "",
+            measured: measured,
+            decision: row["decision"] ?? "",
+            evaluatorId: row["evaluator_id"] ?? "",
+            baseModelId: row["base_model_id"] ?? "",
+            evalSuiteVersion: row["eval_suite_version"] ?? "",
+            gatePolicyVersion: Int(row["gate_policy_version"] as? Int64 ?? 0),
+            receiptVersion: Int(row["receipt_version"] as? Int64 ?? 0),
+            mintedAt: row["minted_at"] ?? "",
+            hmac: row["hmac"] ?? ""
         )
     }
 }

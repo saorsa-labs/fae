@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - DeploymentProposal
@@ -106,23 +107,39 @@ enum AdapterDeploymentManager {
 
     // MARK: - Deploy
 
-    /// Deploy a candidate adapter by updating the improvement state.
+    /// Deploy a **receipt-gated** candidate by updating the improvement state.
     ///
-    /// Moves the current adapter to `previousAdapterPath` and sets the new
-    /// adapter as `currentAdapterPath`. Does NOT trigger model reload — the
-    /// caller (ImprovementCycleCoordinator) is responsible for signaling
-    /// the pipeline to swap adapters via SelfConfigTool.
+    /// Moves the current adapter to `previousAdapterPath` and promotes the receipt's
+    /// candidate to `currentAdapterPath`. Does NOT trigger model reload — the caller is
+    /// responsible for signalling the pipeline to swap adapters.
+    ///
+    /// P9/C4 (W4, F4): the previous `deploy(adapterPath:)` wrote an ARBITRARY path with
+    /// no gate. It now requires a verifying, unconsumed `GateReceipt` — there is no longer
+    /// any path in the codebase that deploys an un-gated adapter. The autonomous loop
+    /// deploys via `ImprovementCycleCoordinator.performDeploy`; this util mirrors that
+    /// gate for out-of-loop/manual use.
     ///
     /// - Parameters:
-    ///   - adapterPath: Path to the adapter to deploy.
+    ///   - receipt: A receipt that passed the eval gate for its `candidatePath`.
     ///   - store: The improvement store to update.
-    static func deploy(adapterPath: String, store: ImprovementStore) async throws {
+    ///   - key: HMAC key to verify the receipt (production: the Keychain key).
+    static func deploy(
+        receipt: GateReceipt, store: ImprovementStore, verifyingWith key: SymmetricKey
+    ) async throws {
+        try GateReceiptVerifier.verify(
+            receipt, expectedCandidatePath: receipt.candidatePath, using: key
+        )
         try await store.ensureStateRow()
         var state = try await store.readState()
         state.previousAdapterPath = state.currentAdapterPath
-        state.currentAdapterPath = adapterPath
-        try await store.writeState(state)
-        NSLog("AdapterDeploymentManager: deployed adapter at %@", adapterPath)
+        state.currentAdapterPath = receipt.candidatePath
+        // Atomic promote + consume: requires a STORED, unconsumed receipt row or the whole
+        // transaction rolls back (throws `receiptNotConsumable`). A merely signed receipt
+        // object that was never persisted by an evaluator cannot deploy.
+        try await store.promoteAndConsumeReceipt(
+            state: state, cycleId: receipt.cycleId, at: ISO8601DateFormatter().string(from: Date())
+        )
+        NSLog("AdapterDeploymentManager: deployed receipt-gated adapter at %@", receipt.candidatePath)
     }
 
     // MARK: - Rollback

@@ -3,6 +3,21 @@
 Branch: `feat/p9-training-seam-gates`. Reviewer-gated (codex on design + code; codex already gave a second
 opinion that shaped this scope). macOS-testable; no Linux host needed.
 
+> **⚠️ AUTHORITATIVE PLAN: `p9-c4-consolidated-plan-2026-06-21.md`** — implement from that doc; its §2
+> matrix tracks every review finding and is the Definition-of-Done checklist. This doc is the original
+> design narrative, kept for provenance.
+>
+> **⚠️ Superseded in part by `p9-c4-gate-integrity-addendum-2026-06-21.md`.** Three design reviews
+> (Claude code-reviewer, Codex, a third reviewer) found that this doc, as written, does **not**
+> provably close the hole. Read the addendum first — it carries the load-bearing C4 fixes. Corrections
+> to this doc: (1) **C1 is DONE** (`Scheduler/TrainingBackend.swift`, PR #20 `11735755`) — treat the C1
+> section below as as-built, not proposed. (2) The `ImprovementStore` **migration mechanism exists**
+> (`PRAGMA table_info` + guarded `ALTER TABLE ADD COLUMN`, `:222-243`); the additive-column plan
+> matches it. (3) The real gate is `runInternalReview`'s `compactMap`/`min() ?? 0.0` over **optional**
+> `EvalDelta` fields (`ExternalReviewGate.swift:213-245,320-331`) — **all-nil OR all-zero deltas score
+> PASS**, the crack Codex's "remove zero-delta fallback" does not close. The addendum's
+> `decide(MeasuredDeltas)` + un-forgeable `GateReceipt` + `deploy(receipt:)` are required.
+
 ## Objective (roadmap)
 
 > Formalize the `TrainingBackend` seam (`prepareDataset/trainAdapter/convertAdapter/…`) across MLX/Unsloth/PEFT,

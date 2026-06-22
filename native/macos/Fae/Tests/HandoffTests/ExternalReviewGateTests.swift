@@ -40,13 +40,15 @@ final class ExternalReviewGateTests: XCTestCase {
         XCTAssertEqual(result.verdict, .pass)
     }
 
-    func testInternalReviewPassesWhenNeutral() async throws {
+    func testInternalReviewBlocksWhenNeutralNoImprovement() async throws {
+        // P9/C4 (W1): an all-flat (all-zero) measured result is indistinguishable
+        // from a non-measurement and must NOT certify a deploy. Fail-closed.
         let gate = makeGate()
         let result = try await gate.review(
             evalDelta: makeEvalDelta(toolCalling: 0.0, faeCapability: 0.0, assistantFit: 0.0, serialization: 0.0),
             currentDeferralCount: 0
         )
-        XCTAssertEqual(result.verdict, .pass, "Zero delta = stable = PASS")
+        XCTAssertEqual(result.verdict, .fail, "Zero delta = no measured improvement = fail-closed")
     }
 
     func testInternalReviewConcernForMinorRegression() async throws {
@@ -67,14 +69,15 @@ final class ExternalReviewGateTests: XCTestCase {
         XCTAssertEqual(result.verdict, .fail, "Regression > 5% should yield FAIL")
     }
 
-    func testInternalReviewHandlesNilMetrics() async throws {
+    func testInternalReviewFailsWhenNoMetricsMeasured() async throws {
+        // P9/C4 (W1): all-nil deltas mean nothing was measured. The previous
+        // behaviour folded nils into zero and PASSED — the F1 crack. Fail-closed now.
         let gate = makeGate()
-        // All deltas nil → treated as 0 → PASS.
         let result = try await gate.review(
             evalDelta: makeEvalDelta(toolCalling: nil, faeCapability: nil, assistantFit: nil, serialization: nil),
             currentDeferralCount: 0
         )
-        XCTAssertEqual(result.verdict, .pass, "Nil metrics → no regression → PASS")
+        XCTAssertEqual(result.verdict, .fail, "Nil metrics → nothing measured → fail-closed")
     }
 
     // MARK: - Deferral Counting
@@ -276,7 +279,8 @@ final class ExternalReviewGateTests: XCTestCase {
 
     // MARK: - EvalDelta
 
-    func testEvalDeltaAllNilNoRegression() async throws {
+    func testEvalDeltaAllNilFailsClosed() async throws {
+        // P9/C4 (W1): all-nil = nothing measured ⇒ fail-closed (was the F1 crack).
         let gate = makeGate()
         let delta = EvalDelta(
             toolCallingDelta: nil, faeCapabilityDelta: nil,
@@ -284,7 +288,7 @@ final class ExternalReviewGateTests: XCTestCase {
             throughputDelta: nil
         )
         let result = try await gate.review(evalDelta: delta, currentDeferralCount: 0)
-        XCTAssertEqual(result.verdict, .pass)
+        XCTAssertEqual(result.verdict, .fail)
     }
 
     func testEvalDeltaExactly5PercentRegressionIsConcernNotFail() async throws {
