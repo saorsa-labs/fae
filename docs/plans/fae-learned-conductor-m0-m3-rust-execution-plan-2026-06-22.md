@@ -73,7 +73,7 @@
 
 ---
 
-## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ⏳ G-M1-spec PASSED → implement
+## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ✅ DONE 2026-06-22
 
 **Prereq (RESOLVED 2026-06-22):**
 - [x] F-7 standing-autonomy policy decided — **tiered model, Tier A only in M1:**
@@ -88,9 +88,12 @@
 - Key design locks: injection seam = `inject_text` only; **direct arm runs `inject_text_core` verbatim** (B1 byte-identity fix); `OwnedRouteDecision` carries `request_id` (fingerprint in executor, M2 panic-safety fix); `FAE_CONDUCTOR_CHAIN` env var gates chain (M3 fix); telemetry via `spawn_blocking`, best-effort, isolated JSONL
 
 **Impl:**
-- [ ] Wire `ConductorRoutingPolicy` into `inject_text` (extract `inject_text_core` first)
-- [ ] Passive route telemetry capture per role (no behavior change beyond routing)
-- [ ] **G-M1 review: `reviewer`** — byte-identical direct (events + NaN-retry), local/ACP-only enforcement, telemetry correctness, no leakage
+- [x] Extract `inject_text_core` from `inject_text` (step A, behavior-preserving — `e4da1bf2`)
+- [x] Steps B/C/D: owned types + policy/executor/telemetry modules (behavior-free)
+- [x] Step E: wire conductor into `inject_text` via `SessionBackends`; `main.rs` constructs `ConductorRuntime` + reads `FAE_CONDUCTOR_CHAIN`; conductor-routed `direct` is byte-identical to legacy path
+- [x] Step F: removed blanket `#![allow(dead_code)]` (G-M1 BLOCKER fix); every staged M2/M3 item carries a scoped `#[allow(dead_code)]` + TODO(<milestone>)
+- [x] Passive route telemetry capture per role (fire-and-forget `spawn_blocking`, isolated JSONL store, F-4 fingerprint)
+- [x] **G-M1 review: PASSED** (v1 FAIL on self-referential §13.7 BLOCKER + 3 MINORs; v2 PASS — all fixed). Byte-identity proven (text + `assistant.generating` event pair + telemetry-written + no-prompt-leak), static-direct recipe resolves (not fail-closed), 85/85 tests.
 
 ---
 
