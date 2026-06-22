@@ -172,6 +172,47 @@ the app mid-eval, confirm `runtime.status` afterwards: it must report the deploy
 adapter, never the candidate. If it reports the candidate, that is a safety
 regression and the `restore-on-every-exit` design did not hold — stop and surface it.
 
+## Live de-risk run — 2026-06-22 (results)
+
+First live run on real hardware (Apple M5 Max), driven headlessly by
+`crates/fae-engine/examples/daemon_ab_derisk.rs` (a manual, non-CI harness that
+spawns the real `llama-server` sidecar and exercises the *actual* `fae-engine`
+`set_adapter_scale` / `reload_adapter` / `loaded_adapter` primitives — the same
+mechanism `DaemonABEvaluator` drives — bypassing only the Swift/NDJSON layer, which
+is already unit-proven). Base model `gemma-4-E4B-it-Q4_K_M.gguf`; adapters
+`~/llama-spike/personal-metric.gguf` and `personal-c2.gguf` (P3/C3 bench probes).
+Run it with `env -u RUSTFLAGS cargo run --release --manifest-path crates/Cargo.toml -p fae-engine --example daemon_ab_derisk`.
+
+Per-dimension accuracy:
+
+| dimension      | base (s0) | personal-metric (s1) | personal-c2 (s1) |
+|----------------|-----------|----------------------|------------------|
+| assistantFit   | 100%      | 88%                  | 88%              |
+| faeCapability  | 88%       | 88%                  | 88%              |
+| serialization  | 100%      | 100%                 | 100%             |
+| toolCalling    | 100%      | 100%                 | 100%             |
+
+**Legs proven (mechanism + safety):**
+- ✅ Real sidecar spawn, scale-0/scale-1 A/B, `reload_adapter` to a *different* adapter
+  (SHA-confined), and `loaded_adapter` status all work end-to-end on real GGUF adapters.
+- ✅ **Restore-on-exit holds live** — after the A/B the harness logged
+  `loaded_adapter after restore: None (base only)`; the daemon was left on the base
+  model, never the candidate.
+
+**Leg NOT proven — discrimination (`daemon-ab-eval-v1` is too weak):**
+- 3 of 4 dimensions (`faeCapability`, `serialization`, `toolCalling`) are **identical**
+  across base and both adapters → zero delta; the suite cannot tell these adapters apart.
+- `assistantFit` moved −12pp, but **identically for both adapters** — a single-example
+  artifact (1 of 8 fit items), not signal that separates good from bad.
+- This is on probe adapters (not necessarily "good" personal adapters), but it confirms
+  the static review on real hardware: **v1 does not meaningfully discriminate.** The
+  gguf lane's *safety* is intact (a zero/negative delta fails closed — the gate blocks,
+  never deploys), but its *usefulness as an improvement filter is low until a
+  `daemon-ab-eval-v2`* hardens the weak dimensions (see the weaknesses section above).
+- Follow-up: investigate which `assistantFit` example drives the uniform −12pp (likely a
+  keyword/forbidden phrasing difference), and build v2 before relying on the gguf lane
+  to *promote* (as opposed to merely *block*) adapters.
+
 ## Scope notes
 
 - This is **dev-only** (`FAE_DEV=1` / `FAE_MODELS_LOCK=off`) because runtime LoRA
