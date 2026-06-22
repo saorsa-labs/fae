@@ -156,6 +156,13 @@ actor ImprovementCycleCoordinator {
     /// tests can mint + verify receipts without Keychain access. `nil` in production.
     private var injectedGateKey: SymmetricKey?
 
+    /// The adapter kinds for which a real evaluator is available (P9/C4 W6). The training
+    /// step refuses to train a lane whose kind is absent here — without an evaluator the
+    /// candidate could never pass the deploy gate (W4), so training would only burn a run.
+    /// Populated by W7 when the `AdapterEvaluator`s are wired; empty until then (so the loop
+    /// refuses to train, the intended conservative state).
+    private var availableEvaluatorKinds: Set<AdapterKind> = []
+
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
 
@@ -215,6 +222,12 @@ actor ImprovementCycleCoordinator {
     /// Inject the gate-receipt HMAC key for tests (P9/C4 W4; see `injectedGateKey`).
     func setInjectedGateKey(_ key: SymmetricKey?) {
         injectedGateKey = key
+    }
+
+    /// Declare which adapter kinds have a real evaluator available (P9/C4 W6). Called by
+    /// FaeScheduler/W7 when the evaluators are wired. Empty ⇒ refuse to train any lane.
+    func setAvailableEvaluatorKinds(_ kinds: Set<AdapterKind>) {
+        availableEvaluatorKinds = kinds
     }
 
     /// Set the meta-optimizer. Called by FaeScheduler after wiring.
@@ -525,6 +538,27 @@ actor ImprovementCycleCoordinator {
                 try await transition(to: .evaluating)
                 // Jump past the training block.
                 throw ImprovementCycleError.storeNotAvailable // caught below, triggers eval-only path
+            }
+
+            // P9/C4 (W6, F14): refuse to train a lane that has no available evaluator —
+            // without one the candidate could never pass the deploy gate (W4), so training
+            // would only burn a run. (Q4: refuse-to-train, not train-then-block.) The lane
+            // is the daemon/gguf lane when a daemon base model is set, else the mlx-dir lane.
+            // availableEvaluatorKinds is populated by W7; empty ⇒ refuse (conservative).
+            let laneKind: AdapterKind = daemonTrainingBaseModel != nil ? .gguf : .mlxDir
+            guard availableEvaluatorKinds.contains(laneKind) else {
+                NSLog(
+                    "ImprovementCycleCoordinator: no evaluator for %@ lane — refusing to train (lane_no_evaluator)",
+                    laneKind.rawValue
+                )
+                // Surface the refusal in the morning briefing (companion language), in
+                // addition to the audited lastCycleError that health reporting reads.
+                let refuseNote = "I held off on training this time — I don't have an evaluator for " +
+                    "the \(laneKind.rawValue) model lane yet, so I couldn't safely check a new version."
+                pendingMetaOptNarrative = [pendingMetaOptNarrative, refuseNote]
+                    .compactMap { $0 }.joined(separator: " ")
+                try? await forceIdle(error: "lane_no_evaluator:\(laneKind.rawValue)")
+                return
             }
 
             // 5a. Export training data from fae.db.

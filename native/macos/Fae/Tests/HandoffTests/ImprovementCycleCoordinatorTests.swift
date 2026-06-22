@@ -670,6 +670,73 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         )
     }
 
+    // MARK: - W6: refuse to train a lane with no evaluator
+
+    private func makeFakeBridge() throws -> TrainingBridge {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-w6-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        return TrainingBridge(
+            uvPath: "/usr/bin/false", orchestratorScriptsDir: tmpDir, dataBridgeScriptsDir: tmpDir
+        )
+    }
+
+    /// With a training bridge present but NO evaluator available for the lane, the cycle
+    /// refuses to train (it would only burn a run — the candidate could never pass the gate).
+    func testRefuseToTrainWhenNoEvaluatorForLane() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        await coordinator.setTrainingBridge(try makeFakeBridge())
+        // availableEvaluatorKinds left empty ⇒ refuse.
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let state = try await store.readState()
+        XCTAssertEqual(state.cycleState, "idle")
+        XCTAssertEqual(state.lastCycleError, "lane_no_evaluator:mlxDir",
+                       "mlx lane must refuse to train without an evaluator")
+        // F14: the refusal is also surfaced in the morning-briefing narrative.
+        let narrative = await coordinator.pendingMetaOptNarrative
+        XCTAssertTrue(narrative?.contains("mlxDir") ?? false, "Refusal surfaced in the briefing narrative")
+    }
+
+    /// The daemon (gguf) lane also refuses to train without a gguf evaluator.
+    func testRefuseToTrainGgufLaneWhenNoEvaluator() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        await coordinator.setTrainingBridge(try makeFakeBridge())
+        await coordinator.setDaemonTrainingBaseModel("gemma-test") // gguf lane
+        // Only an mlxDir evaluator available — the gguf lane still refuses.
+        await coordinator.setAvailableEvaluatorKinds([.mlxDir])
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let state = try await store.readState()
+        XCTAssertEqual(state.cycleState, "idle")
+        XCTAssertEqual(state.lastCycleError, "lane_no_evaluator:gguf",
+                       "gguf lane must refuse without a gguf evaluator")
+    }
+
+    /// With an evaluator available for the lane, the cycle gets PAST the refuse-to-train
+    /// gate (and then fails downstream on the fake bridge — not at the gate).
+    func testTrainsPastGateWhenEvaluatorAvailable() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        await coordinator.setTrainingBridge(try makeFakeBridge())
+        await coordinator.setAvailableEvaluatorKinds([.mlxDir])
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let state = try await store.readState()
+        XCTAssertFalse(
+            state.lastCycleError?.starts(with: "lane_no_evaluator") ?? false,
+            "With an evaluator available the cycle must pass the refuse-to-train gate, got: \(state.lastCycleError ?? "nil")"
+        )
+    }
+
     /// rejectDeployment() returns to idle without incrementing userApprovedCycles.
     func testRejectDeploymentReturnsToIdleWithoutApproval() async throws {
         let store = try await makeTempStore()
