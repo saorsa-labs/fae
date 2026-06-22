@@ -447,6 +447,229 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(after.currentAdapterPath, "/tmp/prior_deployed", "Mismatched-kind candidate must not deploy")
     }
 
+    // MARK: - W5: stale-state recovery + shadow-eval source guard
+
+    /// A crashed/stale `.proposing` with no valid receipt is reset to idle, the candidate
+    /// discarded, and the deployed pointer left untouched (fail-closed).
+    func testRecoveryResetsStaleProposingWithoutReceipt() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "proposing"
+        s.currentAdapterPath = "/tmp/deployed"
+        s.pendingAdapterPath = "/tmp/candidate"
+        s.pendingAdapterKind = "gguf"
+        s.pendingCycleId = "stale-cyc"
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle", "Stale proposing without a receipt is reset")
+        XCTAssertNil(after.pendingAdapterPath, "Pending candidate discarded")
+        XCTAssertEqual(after.lastCycleError, "recovered_stale_proposing")
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/deployed", "Deployed pointer untouched")
+    }
+
+    /// A `.proposing` whose pending candidate still has a valid, unconsumed receipt is
+    /// legitimately resumable after a restart — recovery keeps it.
+    func testRecoveryKeepsResumableProposingWithValidReceipt() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        let cycleId = "resumable-cyc"
+        let (path, receipt) = try makeCandidateWithReceipt(cycleId: cycleId)
+        try await store.insertGateReceipt(receipt)
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "proposing"
+        s.pendingAdapterPath = path
+        s.pendingAdapterKind = "gguf"
+        s.pendingCycleId = cycleId
+        try await store.writeState(s)
+        await coordinator.setInjectedGateKey(gateTestKey)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "proposing", "Resumable proposing with a valid receipt is kept")
+        XCTAssertEqual(after.pendingAdapterPath, path, "Pending candidate preserved")
+    }
+
+    /// A crashed `.training`/`.evaluating` cycle is reset to idle with its half-baked
+    /// candidate discarded.
+    func testRecoveryResetsInterruptedTraining() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "training"
+        s.pendingAdapterPath = "/tmp/halfbaked"
+        s.pendingCycleId = "t-cyc"
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle")
+        XCTAssertNil(after.pendingAdapterPath, "Half-baked candidate discarded")
+        XCTAssertEqual(after.lastCycleError, "recovered_stale_training")
+    }
+
+    /// Recovery is a no-op when already idle.
+    func testRecoveryNoOpWhenIdle() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.currentAdapterPath = "/tmp/deployed"
+        s.lastCycleError = "previous_thing"
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle")
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/deployed")
+        XCTAssertEqual(after.lastCycleError, "previous_thing", "Idle state untouched")
+    }
+
+    /// Shadow eval A/Bs the DEPLOYED adapter, never the pending candidate (F5): the
+    /// coordinator pins the evaluator's adapter path to currentAdapterPath before running.
+    func testShadowEvalUsesDeployedAdapterNotPending() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 1 // odd ⇒ shadow eval night
+        state.currentAdapterPath = "/tmp/deployed_adapter"
+        state.pendingAdapterPath = "/tmp/pending_candidate"
+        try await store.writeState(state)
+
+        let evaluator = ShadowEvaluator(store: store)
+        await evaluator.setResponseGenerator { _, _ in "response" }
+        await evaluator.setScorer { _, _, _ in .adapterWins }
+        for i in 0..<5 {
+            _ = try await store.appendShadowEpisode(ShadowEvalEpisode(
+                id: nil, recordedAt: ISO8601DateFormatter().string(from: Date()),
+                conversationJSON: "[{\"role\":\"user\",\"content\":\"test\"}]",
+                actualResponse: "response \(i)",
+                receptionScore: nil, evaluated: false, evalOutcome: nil
+            ))
+        }
+
+        let coordinator = ImprovementCycleCoordinator(
+            store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
+        )
+        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        try await seedSufficientData(store: store)
+        try await coordinator.runCycle()
+
+        // The coordinator pinned the evaluator to the DEPLOYED adapter, not the pending one.
+        let pinned = await evaluator.currentAdapterPath
+        XCTAssertEqual(pinned, "/tmp/deployed_adapter", "Shadow eval must A/B the deployed adapter")
+        XCTAssertNotEqual(pinned, "/tmp/pending_candidate", "Shadow eval must never use the pending candidate")
+    }
+
+    /// A `.deploying` state is NOT resumable (no path advances it) — recovery resets it
+    /// even with a valid receipt.
+    func testRecoveryResetsDeployingEvenWithValidReceipt() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        let cycleId = "deploy-cyc"
+        let (path, receipt) = try makeCandidateWithReceipt(cycleId: cycleId)
+        try await store.insertGateReceipt(receipt)
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "deploying"
+        s.currentAdapterPath = "/tmp/deployed"
+        s.pendingAdapterPath = path
+        s.pendingAdapterKind = "gguf"
+        s.pendingCycleId = cycleId
+        try await store.writeState(s)
+        await coordinator.setInjectedGateKey(gateTestKey)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle", ".deploying is not resumable — reset")
+        XCTAssertNil(after.pendingAdapterPath, "Pending discarded")
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/deployed", "Genuine deployed pointer (pending recorded) kept")
+    }
+
+    /// A `.proposing` with a CONSUMED receipt is not resumable — reset.
+    func testRecoveryResetsProposingWithConsumedReceipt() async throws {
+        let store = try await makeTempStore()
+        let coordinator = makeCoordinator(store: store)
+        let cycleId = "consumed-cyc"
+        let (path, receipt) = try makeCandidateWithReceipt(cycleId: cycleId)
+        try await store.insertGateReceipt(receipt)
+        try await store.consumeGateReceipt(cycleId: cycleId, at: "2026-06-22T00:00:00Z")
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "proposing"
+        s.pendingAdapterPath = path
+        s.pendingCycleId = cycleId
+        try await store.writeState(s)
+        await coordinator.setInjectedGateKey(gateTestKey)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle", "Consumed receipt ⇒ not resumable ⇒ reset")
+        XCTAssertNil(after.pendingAdapterPath)
+    }
+
+    /// A PRE-P9-shaped post-eval state (candidate written to currentAdapterPath, no pending
+    /// fields) has its ungated current rolled back to the previous adapter (fail-closed).
+    func testRecoveryRollsBackPreP9UngatedCurrentAdapter() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "evaluating"                       // post-(old)-eval state
+        s.currentAdapterPath = "/tmp/ungated_candidate"   // pre-P9: candidate sat in current
+        s.previousAdapterPath = "/tmp/last_good"
+        s.pendingAdapterPath = nil                        // pre-P9 shape: no pending fields
+        s.pendingCycleId = nil
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle")
+        XCTAssertEqual(after.currentAdapterPath, "/tmp/last_good", "Pre-P9 ungated current rolled back to previous")
+        XCTAssertEqual(after.lastCycleError, "recovered_stale_evaluating")
+    }
+
+    /// The crash window AFTER promote commits (current = just-promoted, receipt-gated
+    /// candidate; pending cleared) but BEFORE the .idle transition: recovery must KEEP the
+    /// promoted current (it has a consumed-receipt provenance), not mistake it for pre-P9.
+    func testRecoveryKeepsPromotedCurrentOnCrashAfterPromote() async throws {
+        let store = try await makeTempStore()
+        let cycleId = "promote-cyc"
+        let (path, receipt) = try makeCandidateWithReceipt(cycleId: cycleId)
+        try await store.insertGateReceipt(receipt)
+        try await store.consumeGateReceipt(cycleId: cycleId, at: "2026-06-22T00:00:00Z")
+        try await store.ensureStateRow()
+        var s = try await store.readState()
+        s.cycleState = "deploying"        // promote committed; .idle transition not yet run
+        s.currentAdapterPath = path       // the just-promoted candidate
+        s.previousAdapterPath = "/tmp/old"
+        s.pendingAdapterPath = nil        // pending was cleared by the promote
+        s.pendingCycleId = nil
+        try await store.writeState(s)
+        let coordinator = makeCoordinator(store: store)
+
+        await coordinator.recoverStaleStateIfNeeded()
+
+        let after = try await store.readState()
+        XCTAssertEqual(after.cycleState, "idle")
+        XCTAssertEqual(
+            after.currentAdapterPath, path,
+            "A promoted, receipt-gated current must NOT be rolled back"
+        )
+    }
+
     /// rejectDeployment() returns to idle without incrementing userApprovedCycles.
     func testRejectDeploymentReturnsToIdleWithoutApproval() async throws {
         let store = try await makeTempStore()

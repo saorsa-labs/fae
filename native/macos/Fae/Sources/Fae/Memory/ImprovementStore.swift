@@ -924,6 +924,22 @@ actor ImprovementStore {
         }
     }
 
+    /// Whether ANY consumed gate receipt exists for a given candidate/adapter path
+    /// (P9/C4 W5). Used by recovery to tell a genuinely-deployed `currentAdapterPath`
+    /// (which always has a consumed receipt from its deploy) apart from a pre-P9 un-gated
+    /// candidate (which has none).
+    func hasConsumedReceipt(forCandidatePath path: String) throws -> Bool {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            let count = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM gate_receipts WHERE candidate_path = ? AND consumed_at IS NOT NULL",
+                arguments: [path]
+            ) ?? 0
+            return count > 0
+        }
+    }
+
     /// Whether the receipt for a cycle has already been consumed (single-use gate).
     func isGateReceiptConsumed(cycleId: String) throws -> Bool {
         guard let db else { throw ImprovementStoreError.notOpen }

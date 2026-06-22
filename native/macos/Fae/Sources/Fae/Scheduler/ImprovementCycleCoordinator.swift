@@ -694,6 +694,11 @@ actor ImprovementCycleCoordinator {
                 // Run shadow evaluation if this is a shadow eval night.
                 if try await isShadowEvalNight() {
                     NSLog("ImprovementCycleCoordinator: running shadow evaluation")
+                    // P9/C4 (W5, F5): shadow eval A/Bs the DEPLOYED adapter vs base — never
+                    // the pending candidate. Pin it to the deployed `currentAdapterPath`
+                    // explicitly so the state split can never re-point it at pending.
+                    let deployedForShadow = (try? await store.readState())?.currentAdapterPath
+                    await shadowEvaluator.setCurrentAdapterPath(deployedForShadow)
                     do {
                         let evalResult = try await shadowEvaluator.runEvaluation(ignoreWindow: true)
                         if !evalResult.promotionGatePassed {
@@ -1037,6 +1042,92 @@ actor ImprovementCycleCoordinator {
             try await store.writeState(state)
         } catch {
             NSLog("ImprovementCycleCoordinator: failClosed persist failed: %@", error.localizedDescription)
+        }
+    }
+
+    /// P9/C4 (W5, F11): repair a stale non-idle state left by a crash or a pre-P9 upgrade.
+    ///
+    /// A `.proposing`/`.deploying` state whose pending candidate still has a STORED,
+    /// unconsumed, verifying gate receipt is legitimately resumable (the user can still
+    /// approve/reject it) and is kept. Any other non-idle state — an interrupted
+    /// collecting/training/evaluating cycle, or a proposing/deploying state WITHOUT a valid
+    /// receipt (incl. pre-P9 rows where the candidate was written to currentAdapterPath
+    /// pre-eval) — is reset to idle, its pending candidate discarded, and the event audited.
+    /// Fail-closed: an ungated in-flight candidate never survives a restart as deployable.
+    func recoverStaleStateIfNeeded() async {
+        do {
+            try await store.ensureStateRow()
+            let state = try await store.readState()
+            guard let cycle = CycleState(rawValue: state.cycleState), cycle != .idle else { return }
+
+            // Only a `.proposing` state is resumable after a restart — the user can still
+            // approve/reject it. A `.deploying` state is NOT resumable (no path advances it),
+            // so it falls through to a fail-closed reset. Resumable requires a stored,
+            // unconsumed, verifying receipt for the pending candidate.
+            if cycle == .proposing,
+               let candidate = state.pendingAdapterPath,
+               let cycleId = state.pendingCycleId,
+               await hasResumableReceipt(cycleId: cycleId, candidate: candidate) {
+                NSLog("ImprovementCycleCoordinator: recovered resumable proposing (valid receipt) — keeping")
+                return
+            }
+
+            var repaired = state
+            repaired.cycleState = CycleState.idle.rawValue
+            repaired.trainingStartedAt = nil
+            repaired.pendingAdapterPath = nil
+            repaired.pendingAdapterKind = nil
+            repaired.pendingCycleId = nil
+            // A pre-P9 row wrote the candidate to currentAdapterPath BEFORE eval and has no
+            // gate receipt at all. A post-P9 deployed currentAdapterPath ALWAYS has a
+            // consumed receipt (from promoteAndConsumeReceipt) — including the crash window
+            // after a promote commits but before the .idle transition, where current is the
+            // just-promoted (legit) candidate and pending is already cleared. So roll the
+            // current pointer back ONLY when it has NO consumed-receipt provenance (the
+            // pre-P9 un-gated case); a deployed/promoted current is always kept.
+            // Only when NO pending candidate is recorded (so currentAdapterPath might itself
+            // be a candidate, not the deployed adapter) AND current has no consumed-receipt
+            // provenance (⇒ pre-P9 un-gated, not a just-promoted post-P9 candidate).
+            // INTENDED TRADEOFF: a pre-P9 LEGITIMATELY-deployed current also has no receipt,
+            // so a crash mid-cycle on the first post-upgrade run rolls it back to the previous
+            // adapter. That is fail-closed (we cannot distinguish a pre-P9 deployed adapter
+            // from a pre-P9 un-gated candidate — neither has a receipt — so we prefer the
+            // known-prior adapter). The user keeps a working personalized adapter; the next
+            // cycle re-evaluates. This only affects the narrow first-upgrade crash window.
+            if state.pendingAdapterPath == nil,
+               let current = state.currentAdapterPath,
+               cycle == .evaluating || cycle == .proposing || cycle == .deploying,
+               (try? await store.hasConsumedReceipt(forCandidatePath: current)) != true {
+                repaired.currentAdapterPath = state.previousAdapterPath
+            }
+            repaired.lastCycleError = "recovered_stale_\(cycle.rawValue)"
+            try await store.writeState(repaired)
+            NSLog(
+                "ImprovementCycleCoordinator: recovered stale %@ → idle (discarded pending candidate)",
+                cycle.rawValue
+            )
+        } catch {
+            NSLog("ImprovementCycleCoordinator: recoverStaleStateIfNeeded failed: %@", error.localizedDescription)
+        }
+    }
+
+    /// Whether the pending candidate for `cycleId` has a stored, unconsumed, verifying
+    /// receipt (i.e. a `.proposing` state is safe to resume after a restart).
+    private func hasResumableReceipt(cycleId: String, candidate: String) async -> Bool {
+        guard let receipt = try? await store.gateReceipt(forCycleId: cycleId) else { return false }
+        // Fail-closed: any store error reading the consumed flag ⇒ not resumable.
+        guard let consumed = try? await store.isGateReceiptConsumed(cycleId: cycleId), !consumed else {
+            return false
+        }
+        do {
+            if let key = injectedGateKey {
+                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: candidate, using: key)
+            } else {
+                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: candidate)
+            }
+            return true
+        } catch {
+            return false
         }
     }
 }

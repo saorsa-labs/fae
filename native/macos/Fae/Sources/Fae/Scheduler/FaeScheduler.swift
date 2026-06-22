@@ -73,6 +73,11 @@ actor FaeScheduler {
     /// Coordinator for the nightly self-improvement cycle.
     private var improvementCycleCoordinator: ImprovementCycleCoordinator?
 
+    /// The P9/C4 (W5) startup stale-state recovery task, created on first use. All callers
+    /// await the SAME task, so recovery runs exactly once and every caller waits for it to
+    /// COMPLETE before proceeding (no skip-while-suspended race).
+    private var recoveryTask: Task<Void, Never>?
+
     /// Daily proactive interjection counter, reset at midnight.
     var proactiveInterjectionCount: Int = 0
     var proactiveDigestEligibleCounts: [String: Int] = [:]
@@ -168,6 +173,28 @@ actor FaeScheduler {
         let coordinator = ImprovementCycleCoordinator(store: store)
         improvementCycleCoordinator = coordinator
         wireAdapterPatchCallback(on: coordinator)
+        // P9/C4 (W5): stale-state recovery is performed (awaited) before the first cycle
+        // runs — see `recoverImprovementStateOnce`. It is NOT a fire-and-forget Task here,
+        // so it can never race a triggered cycle or a user approval.
+    }
+
+    /// Run the P9/C4 stale-state recovery exactly once, awaited, before the first
+    /// improvement cycle of this process. Repairs a non-idle improvement state left by a
+    /// crash or a pre-P9 upgrade so an ungated in-flight candidate never survives a restart
+    /// as deployable. Guarded by `didRecoverImprovementState` so it runs once and never
+    /// clobbers a legitimately in-progress / awaiting-approval state.
+    private func recoverImprovementStateOnce() async {
+        // Already started (or done): await the SAME task so we never proceed before recovery
+        // completes, and never run it twice. (FaeScheduler is an actor, so the check + assign
+        // below is atomic — no two callers can both create a task.)
+        if let existing = recoveryTask {
+            await existing.value
+            return
+        }
+        guard let coordinator = improvementCycleCoordinator else { return }
+        let task = Task { await coordinator.recoverStaleStateIfNeeded() }
+        recoveryTask = task
+        await task.value
     }
 
     /// Connect the cycle coordinator's adapter-deploy callback to the live
@@ -1647,6 +1674,11 @@ actor FaeScheduler {
             NSLog("FaeScheduler: improvement_cycle — coordinator not available")
             return
         }
+        // P9/C4 (W5): repair any stale non-idle state ONCE, awaited, as the FIRST thing
+        // after the coordinator exists — before bridge/meta-opt wiring and the cycle — so
+        // recovery always precedes any cycle work and never races it or a user approval.
+        await recoverImprovementStateOnce()
+
         // Wire training bridge if not already set.
         var bridge: TrainingBridge?
         do {
