@@ -28,8 +28,8 @@ jobs:
           submodules: recursive
           lfs: true
 
-      - name: "Guard: no Rust reintroduction in active CI/default recipes"
-        run: ./scripts/ci/guard-no-rust-reintro.sh
+      - name: "Guard: (stale under ADR-011) removed — headless Rust core is canonical"
+        run: echo 'guard-no-rust retired by ADR-011 (2026-06-22); headless Rust core is the canonical runtime'
 
   # ── Build (debug) ────────────────────────────────────────────────
   build:

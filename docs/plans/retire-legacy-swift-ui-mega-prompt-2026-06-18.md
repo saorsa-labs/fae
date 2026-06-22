@@ -90,7 +90,7 @@ commit/push (the reviewer commits onto `retire-legacy-ui`). If you want a fresh 
 - The build recipes already embed the orb (dc67d90d) — `just run-dev`/`test-serve` are the right harness.
 - Don't regress orb-host-owns-state (`OrbStateBridgeController` mode logic already retired) or the
   approval/input overlay (`InputOverlayView` is needed).
-- `env -u RUSTFLAGS` if you touch any crate (you shouldn't — this is Swift-only).
+- `env -u RUSTFLAGS` if you touch any crate. *(Note: this doc predates [ADR-011](../../adr/011-headless-rust-core-runtime.md) (2026-06-22), which makes the headless Rust core canonical. The "you shouldn't touch crates" guidance was specific to this Swift-UI-retirement worktree and is NOT a general prohibition on Rust work.)*
 - **autoresearch.jsonl** stays out of your diff.
 - If a "delete" candidate turns out to be load-bearing for a kept window, KEEP it and note why.
 

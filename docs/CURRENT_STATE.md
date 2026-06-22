@@ -1,16 +1,27 @@
 # Fae — Current State
 
 > What fae actually is today, not what was planned.
-> Last updated: 2026-06-13
+> Last updated: 2026-06-22
 
 ## Tech Stack (v0.8.189)
 
-- **Primary runtime language**: Swift macOS app (no embedded Rust core / C ABI in the active runtime path)
+> **Architecture (authoritative):** headless **Rust core (daemon)** is the canonical
+> runtime per [ADR-011](adr/011-headless-rust-core-runtime.md) (owner decision
+> 2026-06-22). The Swift macOS app is a migration/legacy/thin-client surface;
+> new intelligence surfaces target the Rust core under `crates/`. The migration
+> is mid-flight — the daemon is already embedded in release builds (model-lock
+> gate); the Swift app remains the currently-shipping runtime until retired.
+
+- **Canonical runtime**: headless Rust daemon — `crates/fae-daemon` (+ `fae-engine`,
+  `fae-control-plane`, `fae-acp`, `fae-envelope-gate`, `fae-audio`). Phase 1 of the
+  headless-core migration is authorized and in progress
+  (`docs/architecture/headless-core-impl-plan-2026-06-01.md`).
+- **Migration/legacy runtime**: Swift macOS app (`native/macos/Fae/`) — currently
+  shipping, being superseded by the Rust daemon.
 - **Portable UI shell**: Rust `fae-ui-shell` for the canonical orb, whisper pill, Messages/Scheduler/Skills panels, and the new orb-owned Settings panel; Ubuntu WebKitGTK CI now proves the opaque Settings panel renders under Xvfb
 - **Daemon ship gate**: Release builds embed `fae-daemon` next to the Swift host and enforce a generated `models.lock` (size + SHA-256, pinned HF revision) before Gemma loads
-- **UI**: Rust orb host for new product surfaces; SwiftUI + AppKit remain as migration/legacy surfaces including Settings (legacy)
-- **ML Framework**: MLX (Apple Silicon, on-device only)
-- **Database**: SQLite via GRDB + sqlite-vec (ANN) + FTS5
+- **ML Framework**: MLX (Apple Silicon, on-device only); mistral.rs in the Rust engine crate as the cross-platform path
+- **Database**: SQLite via GRDB + sqlite-vec (ANN) + FTS5 (Swift); Rust-side storage TBD per the headless-core migration
 - **Update**: Sparkle 2 (EdDSA signed)
 
 ## Voice Pipeline

@@ -26,9 +26,11 @@ test-verbose:
 clean:
     rm -rf native/macos/Fae/.build
 
-# Guard against Rust/cargo reintroduction in active CI/default dev paths
+# RETIRED by ADR-011 (2026-06-22): headless Rust core is canonical. This guard
+# (which blocked Rust reintroduction) is the opposite of the current architecture.
+# Kept as a no-op for any external callers; the CI step that invoked it was removed.
 guard-no-rust:
-    ./scripts/ci/guard-no-rust-reintro.sh
+    @echo 'guard-no-rust retired by ADR-011 (2026-06-22); headless Rust core is canonical'
 
 # Full validation (build + test)
 check: build test
@@ -518,7 +520,7 @@ _verify-bundle:
             echo "  ✓ Rust UI shell present"
         fi
     else
-        echo "  ℹ Rust UI shell not bundled (default Swift-only bundle)"
+        echo "  ℹ Rust UI shell not bundled (Swift-legacy migration bundle)"
     fi
     if [ ! -x "$BUNDLE/Contents/Resources/LlamaCpp/llama-server" ]; then
         echo "  ✗ FAIL: Missing bundled llama.cpp runtime (Contents/Resources/LlamaCpp/llama-server)"

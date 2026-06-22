@@ -4,13 +4,36 @@ This file defines implementation guardrails for agents modifying Fae.
 
 ## Current architecture (authoritative)
 
-Fae's production runtime is the **Swift macOS app** in `native/macos/Fae`; the new canonical visual shell is the explicit Rust orb UI shell in `native/rust/fae-ui-shell`.
+Fae's canonical runtime is a **headless Rust core (daemon)** — see
+[ADR-011](docs/adr/011-headless-rust-core-runtime.md) (owner decision 2026-06-22).
+New intelligence surfaces (conductor, routing, memory, scheduler, tools, MetaOpt,
+the engine, and x0x integration) are built **in the Rust core**. The Swift macOS
+app in `native/macos/Fae/` is a **migration / legacy / thin-client surface**, not
+the authoritative runtime; touch it only for migration, bridging, or legacy
+maintenance. The Rust orb UI shell in `native/rust/fae-ui-shell` (ADR-009)
+remains the canonical UI.
 
-- No embedded Rust core in production
-- No C ABI / `libfae` dependency in active runtime path
-- Rust is allowed only for the orb UI shell/bridge unless a new ADR updates this policy
-- Default Swift build/test/check recipes must remain Rust-free until release packaging intentionally promotes the shell
-- Swift validation:
+- The active Rust workspace is under `crates/`: `fae-daemon`, `fae-engine`,
+  `fae-control-plane`, `fae-acp`, `fae-envelope-gate`, `fae-audio`. The
+  headless-core migration is mid-flight (Phase 1 authorized; see
+  `docs/architecture/headless-core-impl-plan-2026-06-01.md`).
+- No C ABI / `libfae` is required: the daemon/control-plane protocol
+  (WebSocket + Unix socket, ADR-002 v2, loopback auth via `fae-control-plane`)
+  is the integration boundary.
+- **x0x may be integrated directly in the Rust core** as a crate dependency.
+- `scripts/ci/guard-no-rust-reintro.sh` is **stale** (it guards *against* Rust
+  reintroduction — the opposite of this decision) and must be retired or inverted.
+
+Rust validation (canonical):
+
+```bash
+cargo fmt --all
+cargo clippy --all-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
+cargo check --workspace --all-targets
+cargo test --workspace
+```
+
+Swift validation (legacy / migration surfaces only):
 
 ```bash
 cd native/macos/Fae
@@ -18,13 +41,16 @@ swift build
 swift test
 ```
 
-- Rust shell validation:
+Rust orb UI shell validation:
 
 ```bash
 just check-ui-shell
 ```
 
-Historical Rust-era core docs under `legacy/rust-core/` are archival context only. Current Rust UI shell decisions live under `docs/adr/009-rust-orb-ui-shell.md` and `docs/architecture/fae-rust-orb-ui-shell.md`.
+Historical Swift-era guardrails ("no embedded Rust core", "Rust only for the orb
+shell") are **superseded by ADR-011**. Historical Rust-era core docs under
+`legacy/rust-core/` are archival context; current Rust-core decisions live under
+`docs/adr/009`, `docs/adr/011`, and `docs/architecture/`.
 
 ---
 

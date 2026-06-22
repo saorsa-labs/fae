@@ -1,6 +1,7 @@
 # Fae Conductor — Tier 1: Own-Fleet Sync Delegation
 
 > Status: **Design draft** (2026-06-05) · Owner: David Irvine · Layer: headless Rust core
+> **Reaffirmed 2026-06-22** by [ADR-011](../../adr/011-headless-rust-core-runtime.md): headless Rust core is the canonical runtime; this doc's "Layer: headless Rust core" was correct, not a conflict. Earlier Swift-only guardrail language in `AGENTS.md` was stale and is reconciled.
 > Scope: **Tier 1 only** — Fae coordinating *one human's own* agents across *their own* machines (single `UserId`).
 > Companion: cross-owner delegation is **Tier 2**, designed separately in
 > [`conductor-capability-grants-2026-06-05.md`](./conductor-capability-grants-2026-06-05.md).

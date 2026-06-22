@@ -1,0 +1,139 @@
+# Fae Learned Conductor — M0→M3 Rust Execution Plan
+
+> Status: **Execution tracker** · 2026-06-22 · Owner: David Irvine
+> Plan: [`../research/fae-learned-conductor-d1-d7-plan-2026-06-22.md`](../research/fae-learned-conductor-d1-d7-plan-2026-06-22.md) (v3, Rust-core, post-ADR-011).
+> Architecture: headless Rust core canonical ([ADR-011](../adr/011-headless-rust-core-runtime.md)).
+> Process rule: **every milestone has a review gate before the next begins.** Do not start a milestone's implementation until the prior milestone's review passes.
+
+## Review-gate discipline
+
+| Gate | When | Reviewer | Focus | Pass criteria |
+|---|---|---|---|---|
+| G-M0a | after M0a docs | `reviewer` | stale-Swift-reference sweep, ADR consistency, Rust architecture coherence | zero BLOCKER/MAJOR |
+| G-M0b | after M0b scaffold | `reviewer` + `oracle` | type design, telemetry privacy (F-4 fingerprint), store isolation, zero behavior change | zero BLOCKER/MAJOR |
+| G-M1-spec | before M1 impl | `plan-reviewer` | static-recipe spec, direct-default (F-3), approval matrix (F-7 resolved) | spec approved |
+| G-M1 | after M1 impl | `reviewer` | local/ACP-only enforcement, telemetry correctness, no mesh/peer/remote leakage | zero BLOCKER/MAJOR |
+| G-M2-spec | before M2 impl | `plan-reviewer` | reward design, eval methodology (F-11/12), shadow-router deps (F-8) | spec approved |
+| G-M2 | after M2 impl | `reviewer` | reward-signal weakness, privacy leakage in shadow path, threshold enforcement | zero BLOCKER/MAJOR |
+| G-M3-spec | before M3 impl | `oracle` | ADR-008 amendment (F-5), MetaOpt Rust-port vs bridge decision, protected-kernel boundaries | ADR accepted + spec approved |
+| G-M3 | after M3 impl | `oracle` + `reviewer` | autonomous-mutation rollback, runtime asserts (F-15), SOUL-drift metric (F-16) | zero BLOCKER/MAJOR |
+
+---
+
+## M0a — Architecture doc reconciliation  ✅ DONE 2026-06-22
+
+- [x] Create [ADR-011](../adr/011-headless-rust-core-runtime.md) — headless Rust core canonical
+- [x] Update `docs/adr/README.md` — add row 011, fix "ADR-002 only superseded" note
+- [x] Update `AGENTS.md` "Current architecture" section — Rust-headless canonical, Swift = migration/legacy
+- [x] Update `docs/CURRENT_STATE.md` tech stack — Rust daemon canonical, Swift = migration/legacy
+- [x] Reaffirm `docs/architecture/conductor-tier1-own-fleet-2026-06-05.md` (Rust core, ADR-011)
+- [x] Update `docs/research/sakana-fugu-vs-fae-conductor-2026-06-22.md` ADR triggers (Rust core → ADR-011)
+- [x] Rewrite plan to v3 Rust-core: `docs/research/fae-learned-conductor-d1-d7-plan-2026-06-22.md`
+- [x] **G-M0a review: `reviewer` on the doc reconciliation** — PASSED after 1 BLOCKER fix (CI guard contradiction)
+- [x] Retire stale Rust guard: `scripts/ci/guard-no-rust-reintro.sh` removed from `.github/workflows/ci.yml` (preflight → no-op echo); `justfile guard-no-rust` recipe → no-op echo. *(Script file itself left in place as inert; delete in a later cleanup.)*
+- [x] Fix MAJOR: misleading "default Swift-only bundle" justfile comment → "Swift-legacy migration bundle"
+- [x] Fix MINOR: AGENTS.md memory touchpoints now scoped "Swift migration/legacy surface"
+- [x] Fix MINOR: `docs/plans/retire-legacy-swift-ui-mega-prompt-2026-06-18.md` stale "you shouldn't touch crates" note → annotated with ADR-011
+
+---
+
+## M0b — Rust conductor scaffolding (behavior-free)  ✅ DONE 2026-06-22
+
+*G-M0a passed; M0b implemented; G-M0b review PASSED (zero BLOCKER/MAJOR); 4 MINORs addressed.*
+
+**Orientation (done):**
+- [x] Confirmed Rust storage convention — JSONL + serde JSON files (mirrors the daemon audit log); no sqlite dep in the workspace yet. Conductor store lives under the daemon run dir (path wired in M1).
+- [x] Crate location: `crates/fae-daemon/src/conductor/` (promotable to `crates/fae-conductor` later).
+
+**Types (`crates/fae-daemon/src/conductor/`):**
+- [x] `FaeConductorRecipe`, `ConductorRole` (Thinker/Worker/Verifier), `ConductorTopology` (Direct/Chain only — F-15 compile-time + serde fail-closed), `WorkerSelector`, `PrivacyLane` (+ monotone `permits`), `BudgetPolicy`, `EscalationPolicy`, `AggregationPolicy`, `StopPolicy`
+- [x] `ConductorTurnContext`, `ConductorRouteDecision`
+- [x] `recipe.validate()` — chain role ordering, non-positive budget, v1-safe locality+lane
+
+**Telemetry + storage (Rust-side, isolated):**
+- [x] `ConductorRouteEvent` + `RouteReceipt` types (no raw prompt/memory/secrets)
+- [x] `ConductorStore`: append-only JSONL (`conductor_route_events.jsonl`, `conductor_receipts.jsonl`) + recipe JSON files (`recipes/<id>.v<ver>.json`, temp+rename atomic)
+- [x] **F-4:** `RequestFingerprint` = HMAC-SHA-256 of opaque `request_id` with per-install `InstallKey` (0600, idempotent, corrupt-file recovery logged); **no user text is ever hashed**
+- [x] `sanitize_id` blocks path escape + reserved names (`.`/`..`)
+
+**Review fixes applied (G-M0b MINORs):**
+- [x] F-4b: corrupt-key regeneration now logs (telemetry-discontinuity warning)
+- [x] S-1: `sanitize_id` rejects bare `.`/`..`
+- [x] S-3: JSONL append single-`write_all` (smaller truncation window)
+- [x] FC-3: doc invariant on `eval_delta`/`user_signal` (M2 must not encode query content)
+
+**Validation gate (all clean):**
+- [x] `cargo fmt --all`
+- [x] `cargo check --workspace --all-targets`
+- [x] `cargo clippy -p fae-daemon --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used` (strict, panic-free)
+- [x] `cargo test -p fae-daemon conductor::` — 18/18 pass
+- [x] **G-M0b review PASSED** (zero BLOCKER/MAJOR; 4 MINORs addressed)
+
+**Did NOT do (correct):** any runtime routing change, any memory-store write, any Swift surface, any wiring into `offline_turn`/`session`/main flow.
+
+---
+
+## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ⏳ blocked on G-M0b + F-7
+
+**Prereq (open Q for David):**
+- [ ] F-7 standing-autonomy policy decided (default proposal: always-approve non-local in v1)
+
+**Spec (review before impl):**
+- [ ] `ConductorRoutingPolicy` trait + static impl (local/ACP only; denies `OwnerFleet`/`TrustedPeer`/`RemoteAllowed`)
+- [ ] `direct` + `chain` executor with role-conditioned prompts (Thinker decompose → Worker solve → Verifier check)
+- [ ] **F-3:** `direct` is DEFAULT for all task classes; `chain` opt-in (feature flag) until M2 proves it
+- [ ] Progressive-disclosure copy (L0 invisible / L1 "I'm asking your Mac" / L4 opt-in team view)
+- [ ] Approval matrix (local/ACP auto; everything heavier gated)
+- [ ] **G-M1-spec review: `plan-reviewer`**
+
+**Impl:**
+- [ ] Wire `ConductorRoutingPolicy` into the Rust daemon agent loop
+- [ ] Passive route telemetry capture per role (no behavior change beyond routing)
+- [ ] **G-M1 review: `reviewer`** — local/ACP-only enforcement, telemetry correctness, no leakage
+
+---
+
+## M2 — Reward & eval + shadow routing  ⏳ blocked on G-M1
+
+**Spec:**
+- [ ] `routing_accuracy` eval dimension + reward aggregator (reject self-judgment-only — F-10)
+- [ ] **F-8:** shadow router depends on budget-governance + audit-logging WPs from M0b/M1
+- [ ] Shadow router: route-decision-only by default; local-only execution under strict budget; **never** remote/paid/cross-owner
+- [ ] **F-11:** eval corpus methodology documented (single-annotator = David, versioned, known limitation)
+- [ ] **F-12:** "measured improvement" = statistical significance + ≥5% relative + no regression on any measured dimension
+- [ ] **G-M2-spec review: `plan-reviewer`**
+
+**Impl:**
+- [ ] Reward aggregator; shadow router; cost/latency budget governance
+- [ ] **No auto-deploy yet** — candidates compare against deployed baseline only
+- [ ] **G-M2 review: `reviewer`** — reward weakness, shadow-path privacy, threshold enforcement
+
+---
+
+## M3 — MetaOpt learning  ⏳ blocked on G-M2 + ADR-008 amendment + MetaOpt-port decision
+
+**Prereqs (open Qs for David):**
+- [ ] F-5: file **ADR-008 amendment** authorizing Rust-side `conductorRecipe` surface (enforceable constraints: no privacy-lane widening, no budget-cap override w/o approval, no trustedPeer/remoteProvider/star/debate)
+- [ ] MetaOpt-split decision: Rust-native port (recommended) vs temporary control-plane bridge
+
+**Spec:**
+- [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (swap worker, direct↔chain, add/remove Verifier, mutate role prompt, adjust budget)
+- [ ] Apply/rollback transactional; narrator copy (no router jargon)
+- [ ] **F-15:** `FaeConductorRecipe` runtime-asserts against `star`/`debate`
+- [ ] **F-16:** SOUL-drift proxy metric + periodic review trigger
+- [ ] **G-M3-spec review: `oracle`** — ADR-008 amendment, rollback, protected-kernel
+
+**Impl:**
+- [ ] MetaOpt recipe mutation (Rust-native or bridged per decision)
+- [ ] Deploy only on measured improvement + zero regression across quality/cost/latency/privacy/personality-drift
+- [ ] "Undo last change" works
+- [ ] **G-M3 review: `oracle` + `reviewer`** — autonomous-mutation rollback, asserts, SOUL-drift metric
+
+---
+
+## After M3 — remaining work (captured, ADR-gated)
+
+- **M4** Tier-1 same-owner x0x sync (`delegate_to_mesh`) — Rust x0x crate; **F-2 egress membrane (named WP `ConductorEgressMembrane`) must close first**; **F-13** server↔pipeline contract; **F-14** x0x crate API confirmed.
+- **M5** Hardening + enforced release-validation CI gate (F-6); doc-drift fix (F-9).
+- **M6** Async own-fleet (x0x-symphony) + shared intelligence (signed candidate priors; never raw memory).
+- **ADR-gated:** cross-owner grants; MLS group sharing; trained coordinator model; peer-memory ingestion; auto-paid providers; async beyond same-owner spike.
