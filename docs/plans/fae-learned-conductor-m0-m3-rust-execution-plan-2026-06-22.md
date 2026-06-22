@@ -77,7 +77,7 @@
 
 **Prereq (RESOLVED 2026-06-22):**
 - [x] F-7 standing-autonomy policy decided — **tiered model, Tier A only in M1:**
-  - **Tier A — Autonomous (`ApprovalClass::None`):** local models + local ACP agents; zero egress. *All of M1* — no approval surface needed.
+  - **Tier A — Autonomous (`ApprovalClass::None`):** **on-device models only** (mistral.rs / llama.cpp) — genuinely zero egress. *All of M1* — no approval surface needed. (ACP agents are NOT Tier A — they are cloud-backed; their lane + tier is a **G-M2-spec decision**, D-M2-1. "Local process ≠ local data.")
   - **Tier B — Standing-grantable:** remote API / x0x peers; per-class grant + budget cap, revocable. *M2 spec* (budget-governance WP lives there).
   - **Tier C — Always per-turn:** sensitive-data / cross-owner / PII / outside-a-grant. *M2 spec.*
   - **Seam added in M0b:** `ApprovalClass` enum + `approval` field on `AgentRun` variant of `ConductorRouteDecision`. M1 always emits `None`; M2 wires Tier B/C into the existing seam (no routing-call-site retrofit).

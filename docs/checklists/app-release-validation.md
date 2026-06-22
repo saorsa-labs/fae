@@ -199,6 +199,33 @@ CoWork was removed from the product in the Great Cleanup (2026-06-11). The histo
 - [ ] Small targets, truncation, and low-contrast areas have been reviewed live.
 - [ ] A live VoiceOver pass has been completed before release.
 
+## Learned conductor (chain) release-validation blockers
+
+The learned conductor ships with `direct` topology byte-identical to the legacy
+path (proven in M1). `chain` topology (Thinker → Worker → Verifier) is
+**triple-gated dormant** in M1: the `FAE_CONDUCTOR_CHAIN` env flag + a vetted
+chain recipe must be loaded + `chain_enabled` must be true. Before
+`FAE_CONDUCTOR_CHAIN` is ever enabled for real users, ALL of the following must
+be fixed and re-validated (see `docs/research/fae-learned-conductor-m2-decisions-2026-06-22.md` D-M2-2):
+
+- [ ] **Generating-event pair.** `run_chain` calls `run_turn` directly, not
+  `inject_text_core`, so the `assistant.generating {active:true/false}` pair is
+  never published — the orb host's generating indicator breaks. Chain must
+  publish the paired signal exactly like the direct path.
+- [ ] **NaN-logits retry.** Same root cause: the Metal NaN retry loop lives in
+  `inject_text_core`. A NaN-triggering chain turn fails where direct recovers.
+- [ ] **Verifier FAIL-branch leaks the verdict.** On FAIL the full verifier
+  body (`FAIL\n<reason>\n<corrected answer>`) is surfaced; strip the leading
+  verdict line so the user sees only the corrected answer.
+- [ ] **`max_tokens` hardcoded at 1024** per chain role-call — must be
+  recipe/budget-governed.
+- [ ] **ACP egress classification resolved** (D-M2-1): no ACP worker may be
+  routed as Tier A / `LocalOnly`; cloud-backed ACP maps to a non-local lane and
+  Tier B/C with budget governance. "Local process ≠ local data."
+
+Until these pass, `FAE_CONDUCTOR_CHAIN` stays unset and no chain recipe is
+loaded.
+
 ## Release gate
 
 Do not claim production readiness unless all of the following are true:

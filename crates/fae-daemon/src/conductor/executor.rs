@@ -226,6 +226,23 @@ impl ConductorRuntime {
     /// `run_turn` calls with role-conditioned prompts; on Verifier FAIL the
     /// corrected answer is used if present, else the Worker's answer.
     ///
+    /// # Known release-validation blockers (must fix before `FAE_CONDUCTOR_CHAIN`
+    /// is ever enabled for real users)
+    ///
+    /// 1. **No `assistant.generating` event pair.** Chain calls `run_turn`
+    ///    directly (not `inject_text_core`), so the orb host's generating
+    ///    indicator is never published. Enabling chain today changes user-visible
+    ///    event behavior vs the direct path.
+    /// 2. **No NaN-logits retry.** Same reason — the Metal NaN retry loop lives
+    ///    in `inject_text_core`. A NaN-triggering chain turn would fail where
+    ///    the direct path recovers.
+    /// 3. **Verifier FAIL-branch leaks the verdict** (see the FIXME below).
+    /// 4. **Hardcoded `max_tokens: 1024`.**
+    ///
+    /// All four are acceptable while chain is triple-gated (env flag + a vetted
+    /// chain recipe must be loaded + chain_enabled). Tracked in
+    /// `docs/checklists/app-release-validation.md`.
+    ///
     /// Marked `#[allow(dead_code)]` because M1 ships with chain disabled by
     /// default; the dead-code gate (spec §13.7) allows this single scoped
     /// suppression, documented and removed when chain becomes default-curated.
@@ -327,7 +344,12 @@ impl ConductorRuntime {
         let final_text = if passed {
             worker_text.clone()
         } else if !verifier_text.is_empty() {
-            // FAIL with a corrected answer: prefer the verifier's body.
+            // FIXME(release-validation): on FAIL the verifier's full body
+            // ("FAIL\n<reason>\n<corrected answer>") is surfaced verbatim, so
+            // the user would SEE the "FAIL" token + reason, not just the
+            // corrected answer. Must strip the leading verdict line before this
+            // path ships behind FAE_CONDUCTOR_CHAIN. Tracked in
+            // docs/checklists/app-release-validation.md (chain blockers).
             verifier_text
         } else {
             worker_text.clone()

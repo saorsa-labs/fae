@@ -68,8 +68,16 @@ pub enum ConductorTopology {
 #[serde(rename_all = "snake_case")]
 pub enum WorkerLocality {
     /// On-device model via the Rust engine (mistral.rs / llama.cpp sidecar).
+    /// Genuinely zero egress — prompts never leave the device.
     LocalModel,
-    /// Local ACP agent (Codex/Claude/Pi/Gemini/Copilot) via `fae-acp`.
+    /// ACP agent (Codex/Claude/Pi/Gemini/Copilot) driven via `fae-acp`. **The
+    /// "local" here is the *process* (a local subprocess), NOT the *data*:**
+    /// these are cloud-backed providers, so the prompt egresses to OpenAI /
+    /// Anthropic / Google. Mapping this locality to a privacy lane + approval
+    /// tier is a **G-M2-spec decision** (see
+    /// `docs/research/fae-learned-conductor-m2-decisions-2026-06-22.md`);
+    /// the current `locality_to_lane(LocalAcp) → LocalOnly` mapping is a
+    /// known placeholder that MUST NOT be relied upon. *Local process ≠ local data.*
     LocalAcp,
     /// Same-owner x0x peer (`delegate_to_mesh`, Tier 1). M4+.
     OwnerFleet,
@@ -330,6 +338,12 @@ impl FaeConductorRecipe {
         // v1 safe profile: worker locality + privacy lane.
         if profile == RecipeProfile::V1Safe {
             for w in &self.allowed_workers {
+                // FIXME(G-M2-spec): `LocalAcp` is currently permitted in the
+                // v1-safe profile, but ACP agents are cloud-backed (prompt
+                // egresses to OpenAI/Anthropic/Google). Whether an ACP worker
+                // is "v1-safe" is exactly the G-M2-spec ACP-egress decision —
+                // do not rely on this permissivity until that lands. (Dead in
+                // M1: static-direct is hardcoded LocalModel; validate() is M2.)
                 if !matches!(
                     w.locality,
                     WorkerLocality::LocalModel | WorkerLocality::LocalAcp
@@ -370,6 +384,14 @@ impl FaeConductorRecipe {
 
 #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
 fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
+    // FIXME(G-M2-spec): this is a KNOWN-INCORRECT placeholder for LocalAcp.
+    // `LocalAcp` agents (Codex/Claude/Pi/Gemini/Copilot) are cloud-backed — the
+    // prompt egresses to OpenAI/Anthropic/Google — so they do NOT belong in
+    // `LocalOnly`. The correct lane + approval tier for ACP is a named M2
+    // decision (see `fae-learned-conductor-m2-decisions-2026-06-22.md`).
+    // Unchanged at runtime in M1: static-direct is hardcoded `LocalModel`;
+    // this mapping is only reached by `validate()` (dead, M2). Do NOT ship an
+    // ACP recipe against this mapping — fix it first.
     match l {
         WorkerLocality::LocalModel | WorkerLocality::LocalAcp => PrivacyLane::LocalOnly,
         WorkerLocality::OwnerFleet => PrivacyLane::OwnerFleet,
@@ -407,22 +429,25 @@ pub struct ConductorTurnContext {
 
 /// What approval gate, if any, a route decision must pass before execution.
 ///
-/// This is the **F-7 autonomy seam**. M1 (local + local-ACP only) always
-/// emits [`ApprovalClass::None`] — there is no egress to gate. Keeping the
+/// This is the **F-7 autonomy seam**. M1 (on-device models only) always emits
+/// [`ApprovalClass::None`] — there is genuinely no egress to gate. Keeping the
 /// field in the decision type now means M2 wires approval into an existing
 /// seam rather than retrofitting one onto every routing call site.
 ///
 /// Tiering (F-7):
 ///
-/// - **Tier A — Autonomous (`None`):** local models + local ACP agents; zero
-///   egress, zero cost. *This is all of M1* — no approval surface needed.
-/// - **Tier B — Standing-grantable:** remote API / x0x peers; per-class grant
-///   plus budget cap, revocable, auditable. *M2 spec.*
+/// - **Tier A — Autonomous (`None`):** **on-device models only** (mistral.rs /
+///   llama.cpp). Genuinely zero egress. *This is all of M1* — no approval surface
+///   needed. (ACP agents are cloud-backed; cloud routing is INTENDED and
+///   governed by the PII model, not prohibited — their tier is a G-M2-spec
+///   decision, D-M2-1. "Local process ≠ local data.")
+/// - **Tier B — Standing-grantable:** remote API / x0x peers / cloud-backed
+///   ACP; per-class grant plus budget cap, revocable, auditable. *M2 spec.*
 /// - **Tier C — Always per-turn:** sensitive-data lane, cross-owner, PII, or
 ///   anything outside a standing grant. *M2 spec.*
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ApprovalClass {
-    /// No approval needed (Tier A: local / local-ACP, zero egress).
+    /// No approval needed (Tier A: on-device model only, genuinely zero egress).
     #[default]
     None,
     /// Per-turn approval required (Tier C: sensitive / cross-owner / PII, or

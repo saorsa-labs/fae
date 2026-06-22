@@ -35,38 +35,52 @@ pub struct InstallKey([u8; 32]);
 impl InstallKey {
     /// Load the key from `path`, or generate + persist it (`0600`) if absent.
     /// The parent directory must already exist with restrictive permissions.
+    ///
+    /// A corrupt/truncated key file is **regenerated AND re-persisted** so the
+    /// next load is stable — otherwise a truncated file would regenerate a
+    /// different key on every daemon restart, breaking telemetry correlation
+    /// repeatedly (M2's reward aggregator reads this telemetry, so silently-
+    /// discontinuous fingerprints would corrupt the eval signal). The
+    /// discontinuity is logged once.
     pub fn load_or_create(path: &Path) -> Result<Self, ConductorError> {
         if path.exists() {
             let bytes = std::fs::read(path)?;
-            let arr: [u8; 32] = if bytes.len() == 32 {
+            if bytes.len() == 32 {
                 let mut tmp = [0u8; 32];
                 tmp.copy_from_slice(&bytes);
-                tmp
-            } else {
-                // Corrupt/truncated key file — regenerate rather than fail
-                // closed (a bad key just means new fingerprints; no data loss).
-                // NOTE: this is a telemetry-discontinuity event — all prior
-                // fingerprints become uncorrelated. There is no user data in
-                // the conductor store, so nothing is lost but longitudinal
-                // correlation. We log to stderr (the daemon has no tracing
-                // crate yet); replace with `tracing::warn!` when it lands.
-                eprintln!(
-                    "fae-daemon: conductor install key at {} was corrupt \
-                     ({} bytes, expected 32) — regenerating; route telemetry \
-                     prior to this point will no longer correlate",
-                    path.display(),
-                    bytes.len()
-                );
-                Self::generate()?.0
-            };
-            // Re-lock permissions defensively.
-            Self::chmod_0600(path)?;
-            return Ok(Self(arr));
+                // Re-lock permissions defensively.
+                Self::chmod_0600(path)?;
+                return Ok(Self(tmp));
+            }
+            // Corrupt/truncated key file (no user data is at stake; the
+            // conductor store is telemetry-only). Regenerate AND re-persist so
+            // the discontinuity happens exactly once, not on every restart.
+            eprintln!(
+                "fae-daemon: conductor install key at {} was corrupt \
+                 ({} bytes, expected 32) — regenerating and re-persisting; \
+                 route telemetry prior to this point will no longer correlate",
+                path.display(),
+                bytes.len()
+            );
+            let key = Self::generate()?;
+            Self::persist(path, &key.0)?;
+            return Ok(key);
         }
         let key = Self::generate()?;
-        std::fs::write(path, key.0)?;
-        Self::chmod_0600(path)?;
+        Self::persist(path, &key.0)?;
         Ok(key)
+    }
+
+    /// Atomically persist the key to `path` (temp sibling + rename on POSIX) and
+    /// lock it `0600`. The parent directory must already exist with restrictive
+    /// permissions; the temp file is created inside it, so the write→chmod
+    /// window is owner-only regardless of umask.
+    fn persist(path: &Path, arr: &[u8; 32]) -> Result<(), ConductorError> {
+        let tmp: std::path::PathBuf = format!("{}.tmp", path.display()).into();
+        std::fs::write(&tmp, arr)?;
+        Self::chmod_0600(&tmp)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     fn generate() -> Result<Self, ConductorError> {
@@ -171,5 +185,31 @@ mod tests {
             .map(|m| m.permissions().mode())
             .expect("stat in test");
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn corrupt_key_is_regenerated_and_repersisted() {
+        // The live-path fix (M2 telemetry depends on it): a truncated key file
+        // must be regenerated AND re-persisted, so the discontinuity happens
+        // exactly once. Before the fix, a corrupt file regenerated a different
+        // key on every restart and stayed corrupt on disk forever.
+        let dir = tempfile::tempdir().expect("tempdir in test");
+        let path = dir.path().join("conductor.key");
+        // Seed a corrupt (truncated) key.
+        std::fs::write(&path, b"only-a-few-bytes").expect("seed corrupt key");
+        let first = InstallKey::load_or_create(&path).expect("regen in test");
+        // The file is now a valid 32-byte key on disk (re-persisted).
+        assert_eq!(
+            std::fs::read(&path).expect("read re-persisted").len(),
+            32,
+            "corrupt key re-persisted at 32 bytes"
+        );
+        // A second load yields the SAME key (stable, not another regeneration).
+        let second = InstallKey::load_or_create(&path).expect("reload in test");
+        assert_eq!(
+            first.fingerprint("x").expect("fp1 in test"),
+            second.fingerprint("x").expect("fp2 in test"),
+            "re-persisted key is stable across loads"
+        );
     }
 }
