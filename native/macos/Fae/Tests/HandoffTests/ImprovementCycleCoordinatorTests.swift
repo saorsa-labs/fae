@@ -68,12 +68,28 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
 
     /// A measured improvement delta (all +5pp). Drives the P9/C4 gate to PASS in
     /// tests that exercise the proposing/deploy path, standing in for a real
-    /// FaeBenchmark result until W7 wires the `AdapterEvaluator`.
+    /// FaeBenchmark result.
     private func measuredImprovement() -> EvalDelta {
         EvalDelta(
             toolCallingDelta: 5.0, faeCapabilityDelta: 5.0,
             assistantFitDelta: 5.0, serializationDelta: 5.0, throughputDelta: 1.0
         )
+    }
+
+    /// Arm the injected measured-delta seam so a `runCycle()` can pass the W7 fail-closed
+    /// gate. The seam stands in for a real `AdapterEvaluator`: it provisions its own
+    /// synthetic on-disk candidate during the eval phase (a real cycle's candidate, like
+    /// this one, can only exist AFTER the cycle-start `idle ⇒ no pending` clear), then
+    /// mints a receipt for it. The injected HMAC key lets that mint + the later deploy
+    /// verify without Keychain access. Call this INSTEAD of a bare
+    /// `setInjectedMeasuredDelta` whenever a `runCycle()` must reach the review gate.
+    private func armInjectedPass(
+        _ coordinator: ImprovementCycleCoordinator,
+        store: ImprovementStore,
+        delta: EvalDelta? = nil
+    ) async {
+        await coordinator.setInjectedGateKey(gateTestKey)
+        await coordinator.setInjectedMeasuredDelta(delta ?? measuredImprovement())
     }
 
     private func makeEvent(
@@ -228,8 +244,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
     func testRunCycleCompletesWithSufficientData() async throws {
         let store = try await makeTempStore()
         let coordinator = makeCoordinator(store: store)
-        // P9/C4: a real measured improvement is required to pass the gate.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W7): a real measured improvement is required to pass the gate, AND a gate
+        // pass must be backed by a minted receipt — so stage a mintable pending candidate.
+        await armInjectedPass(coordinator, store: store)
         try await seedSufficientData(store: store)
 
         try await coordinator.runCycle()
@@ -538,12 +555,6 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
     /// coordinator pins the evaluator's adapter path to currentAdapterPath before running.
     func testShadowEvalUsesDeployedAdapterNotPending() async throws {
         let store = try await makeTempStore()
-        try await store.ensureStateRow()
-        var state = try await store.readState()
-        state.completedCycles = 1 // odd ⇒ shadow eval night
-        state.currentAdapterPath = "/tmp/deployed_adapter"
-        state.pendingAdapterPath = "/tmp/pending_candidate"
-        try await store.writeState(state)
 
         let evaluator = ShadowEvaluator(store: store)
         await evaluator.setResponseGenerator { _, _ in "response" }
@@ -560,14 +571,26 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // Arm the injected seam (it self-provisions a pending candidate during eval, W7),
+        // then pin the deployed adapter that shadow eval must A/B against.
+        await armInjectedPass(coordinator, store: store)
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.completedCycles = 1 // odd ⇒ shadow eval night
+        state.currentAdapterPath = "/tmp/deployed_adapter"
+        try await store.writeState(state)
+
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
-        // The coordinator pinned the evaluator to the DEPLOYED adapter, not the pending one.
+        // The coordinator pinned the evaluator to the DEPLOYED adapter, never the (self-
+        // provisioned) pending candidate.
         let pinned = await evaluator.currentAdapterPath
         XCTAssertEqual(pinned, "/tmp/deployed_adapter", "Shadow eval must A/B the deployed adapter")
-        XCTAssertNotEqual(pinned, "/tmp/pending_candidate", "Shadow eval must never use the pending candidate")
+        XCTAssertFalse(
+            pinned?.contains("injected-seam") ?? false,
+            "Shadow eval must never use the pending candidate"
+        )
     }
 
     /// A `.deploying` state is NOT resumable (no path advances it) — recovery resets it
@@ -995,9 +1018,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "CONCERN: Minor regression in tool calling. Recommend human review."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
-        // P9/C4 (W1): a measured delta is required to reach the external review gate
-        // (an unmeasured candidate is blocked before review).
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W1/W7): a measured delta is required to reach the external review gate,
+        // and the gate pass must be backed by a minted receipt — stage a candidate.
+        await armInjectedPass(coordinator, store: store)
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -1019,8 +1042,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "FAIL: Significant regression in tool calling (-15%)."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
-        // P9/C4 (W1): reach the external review gate with a measured delta.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W1/W7): reach the review gate with a measured delta backed by a receipt.
+        await armInjectedPass(coordinator, store: store)
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -1044,8 +1067,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "PASS: All metrics improved, no regressions detected."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
-        // P9/C4 (W1): reach the external review gate with a measured delta.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W1/W7): reach the review gate with a measured delta backed by a receipt.
+        await armInjectedPass(coordinator, store: store)
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
@@ -1058,6 +1081,43 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(storeState.deferralCount, 0, "Deferrals should be reset on PASS")
     }
 
+    /// P9/C4 (W7, Codex FIX 2): a measured delta that PASSES the gate but came through the
+    /// legacy bridge-benchmark / loss-proxy branch (no real evaluator ⇒ no minted receipt)
+    /// must FAIL CLOSED immediately — it must NOT reach external review, must NOT enter
+    /// `.proposing`/`.deploying`, and must NOT touch `currentAdapterPath`. Why: only a real
+    /// `AdapterEvaluator` (which mints a receipt) may pass the gate; relying on the late W4
+    /// deploy fence would let a non-evaluator pass run external review first.
+    func testGatePassWithoutReceiptFailsClosed() async throws {
+        let store = try await makeTempStore()
+        try await store.ensureStateRow()
+        var seed = try await store.readState()
+        seed.currentAdapterPath = "/tmp/live_adapter"
+        try await store.writeState(seed)
+
+        // A reviewer that would PASS if it were ever consulted — it must NOT be.
+        let gate = ExternalReviewGate()
+        var reviewWasConsulted = false
+        await gate.setDelegateAgentRunner { _ in
+            reviewWasConsulted = true
+            return "PASS: looks great."
+        }
+        let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
+        // Drive the legacy no-receipt path with a clean +5pp pass.
+        await coordinator.setInjectedLegacyMeasuredDelta(measuredImprovement())
+        try await seedSufficientData(store: store)
+
+        try await coordinator.runCycle()
+
+        let finalState = try await coordinator.currentState()
+        XCTAssertEqual(finalState, .idle, "A gate pass with no receipt must end fail-closed at idle")
+        let persisted = try await store.readState()
+        XCTAssertEqual(persisted.lastCycleError, "gate_pass_but_no_receipt")
+        XCTAssertEqual(persisted.currentAdapterPath, "/tmp/live_adapter",
+                       "The live adapter must be untouched")
+        XCTAssertNil(persisted.pendingAdapterPath, "Pending candidate discarded")
+        XCTAssertFalse(reviewWasConsulted, "External review must NOT be consulted for a no-receipt pass")
+    }
+
     /// Multiple CONCERN deferrals accumulate until max is reached.
     func testDeferralsAccumulateAcrossCycles() async throws {
         let store = try await makeTempStore()
@@ -1066,8 +1126,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             "CONCERN: Minor issue detected."
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
-        // P9/C4 (W1): reach the external review gate with a measured delta.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // The injected seam self-provisions a fresh candidate + receipt each cycle (a CONCERN
+        // fail-closes and clears the pending candidate), so arming once suffices (W7).
+        await armInjectedPass(coordinator, store: store)
 
         // Run 3 cycles, each should defer.
         for i in 1...3 {
@@ -1091,9 +1152,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         try await store.writeState(storeState)
 
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
-        // P9/C4 (W1): a measured delta is required to reach the review gate, where
-        // the max-deferrals check then fires.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W1/W7): a measured delta backed by a receipt is required to reach the
+        // review gate, where the max-deferrals check then fires.
+        await armInjectedPass(coordinator, store: store)
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -1286,10 +1347,10 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
-        // P9/C4 (W1): a real measured improvement is required to pass the review
-        // gate and reach the shadow-eval step — where the baseWins scorer then
+        // P9/C4 (W1/W7): a measured improvement backed by a receipt is required to pass
+        // the review gate and reach the shadow-eval step — where the baseWins scorer then
         // blocks the deployment.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        await armInjectedPass(coordinator, store: store)
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -1324,9 +1385,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
-        // P9/C4: a real measured improvement is required to pass the gate and
-        // reach the shadow-eval step.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W7): a measured improvement backed by a receipt is required to pass the
+        // gate and reach the shadow-eval step.
+        await armInjectedPass(coordinator, store: store)
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -1350,8 +1411,8 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
         let coordinator = ImprovementCycleCoordinator(
             store: store, reviewGate: ExternalReviewGate(), shadowEvaluator: evaluator
         )
-        // P9/C4: a real measured improvement is required to pass the gate.
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W7): a measured improvement backed by a receipt is required to pass the gate.
+        await armInjectedPass(coordinator, store: store)
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()
 
@@ -1387,9 +1448,9 @@ final class ImprovementCycleCoordinatorTests: XCTestCase {
             logCalled = true
         }
         let coordinator = ImprovementCycleCoordinator(store: store, reviewGate: gate)
-        // P9/C4 (W1): a measured delta is required to reach the review gate (where
-        // the security-log closure fires).
-        await coordinator.setInjectedMeasuredDelta(measuredImprovement())
+        // P9/C4 (W1/W7): a measured delta backed by a receipt is required to reach the
+        // review gate (where the security-log closure fires).
+        await armInjectedPass(coordinator, store: store)
 
         try await seedSufficientData(store: store)
         try await coordinator.runCycle()

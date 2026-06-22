@@ -1687,6 +1687,20 @@ actor FaeScheduler {
             // P3/C3: when the daemon LLM lane is active, the cycle must produce a
             // GGUF the daemon can load (not an mlx-tune `.safetensors` adapter).
             await coordinator.setDaemonTrainingBaseModel(daemonTrainingBaseModel)
+            // P9/C4 (W7a): register the MLX-lane evaluator and un-block the `.mlxDir`
+            // lane — but ONLY when its FaeBenchmark harness is actually configured.
+            // Without a benchmark binary the evaluator can't measure, so leaving the lane
+            // blocked (W6) is correct: it avoids burning a training run on a candidate that
+            // could never produce a gate receipt. The `.gguf` daemon lane stays blocked
+            // until its DaemonABEvaluator lands (W7b).
+            if let bridge {
+                let mlxEvaluator = FaeBenchmarkEvaluator(bridge: bridge)
+                if await mlxEvaluator.isAvailable() {
+                    await coordinator.setAdapterEvaluator(mlxEvaluator)
+                } else {
+                    NSLog("FaeScheduler: FaeBenchmark not configured — mlxDir lane stays blocked (no evaluator)")
+                }
+            }
         } catch {
             NSLog("FaeScheduler: improvement_cycle — training bridge unavailable (%@), cycle will skip training", error.localizedDescription)
         }

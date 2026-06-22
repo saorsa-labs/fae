@@ -252,6 +252,22 @@ func systemRAMGB() -> Int {
     Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
 }
 
+/// Resolve `--model auto` to a RAM-appropriate registry entry, mirroring the app's
+/// `voiceModelPreset: "auto"` fallback (Qwen3.5 lane: 9B ≥16 GB, 4B ≥8 GB, 2B below).
+/// Returns nil only if the expected short name is missing from `models` (it isn't).
+func autoSelectedModel() -> ModelEntry? {
+    let ram = systemRAMGB()
+    let shortName: String
+    if ram >= 16 {
+        shortName = "qwen3.5-9b"
+    } else if ram >= 8 {
+        shortName = "qwen3.5-4b"
+    } else {
+        shortName = "qwen3.5-2b"
+    }
+    return models.first(where: { $0.shortName == shortName })
+}
+
 func buildFillerText(targetWords: Int) -> String {
     let sentences = [
         "The history of artificial intelligence is a fascinating journey through decades of research and development.",
@@ -1616,7 +1632,21 @@ func run() async throws {
     // Determine models to benchmark
     let modelList: [ModelEntry]
     if let shortName = args.modelShortName {
-        if let entry = models.first(where: { $0.shortName == shortName }) {
+        if shortName == "auto" {
+            // Resolve `--model auto` to a RAM-appropriate default so the training
+            // bridge can ask for the same preset the app's auto path would pick,
+            // without hardcoding a model name at the call site (P9/C4 W7a). If the
+            // expected Qwen3.5 short name is somehow absent from the registry, fail
+            // LOUD (matching the file's print + exit convention) — never silently fall
+            // through to a wrong model or the generic "unknown model" path.
+            guard let entry = autoSelectedModel() else {
+                print("Error: --model auto could not resolve — expected Qwen3.5 short name not in registry (\(systemRAMGB()) GB RAM)")
+                print("Available: \(models.map(\.shortName).joined(separator: ", "))")
+                exit(1)
+            }
+            print("Auto-selected model: \(entry.shortName) (\(systemRAMGB()) GB RAM)")
+            modelList = [entry]
+        } else if let entry = models.first(where: { $0.shortName == shortName }) {
             modelList = [entry]
         } else if let entry = models.first(where: { $0.modelID == shortName }) {
             modelList = [entry]

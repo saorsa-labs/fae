@@ -271,6 +271,111 @@ final class ImprovementLoopIntegrationTests: XCTestCase {
         XCTAssertEqual(rolledBack.previousAdapterPath, candidate, "Swap is symmetric")
     }
 
+    // MARK: - W7a: evaluator-minted receipt deploys end to end (mlxDir lane)
+
+    /// The receipt the eval phase mints (via the REAL `mintAndStoreGateReceipt`) for an
+    /// mlxDir candidate must be accepted end to end by the W4 deploy gate's REAL
+    /// `GateReceiptVerifier` — proving the W7a evaluator and the W4 fence agree on path,
+    /// digest, kind, and evaluator allowlist. Why this matters: before W7 NO production
+    /// path minted a receipt, so every gated deploy blocked; W7a is the link that lets a
+    /// genuinely-evaluated mlx adapter deploy (and only such an adapter).
+    func testMlxEvaluatorMintedReceiptDeploysThroughRealGate() async throws {
+        let store = try await makeTempStore()
+        let gateTestKey = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+
+        // A real on-disk mlxDir candidate (directory + file) so the digest verifies later.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fae-w7-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "weights".write(
+            toFile: dir.appendingPathComponent("adapters.safetensors").path,
+            atomically: true, encoding: .utf8
+        )
+        let candidate = dir.path
+
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.currentAdapterPath = "/tmp/deployed_mlx"   // the live baseline
+        state.pendingAdapterPath = candidate
+        state.pendingAdapterKind = "mlxDir"
+        state.pendingCycleId = "w7-cyc"
+        try await store.writeState(state)
+
+        var patchedPath: String? = "not-called"
+        let coordinator = ImprovementCycleCoordinator(store: store)
+        await coordinator.setAdapterPatchCallback { path in patchedPath = path }
+        await coordinator.setInjectedGateKey(gateTestKey)
+        // mlx lane ⇒ no daemon base model ⇒ performDeploy expects kind == .mlxDir.
+
+        // Drive the REAL mint the eval phase uses (FaeBenchmarkEvaluator id, mlxDir kind),
+        // binding the receipt to the live pending candidate + digest.
+        let measured = MeasuredDeltas(
+            measured: [.toolCalling: 4.0, .faeCapability: 2.0, .assistantFit: 3.0, .serialization: 1.0],
+            throughputDelta: 5.0
+        )
+        try await coordinator.mintAndStoreGateReceipt(
+            context: ImprovementCycleCoordinator.ReceiptMintContext(
+                kind: .mlxDir, evaluatorId: "FaeBenchmarkEvaluator",
+                baseModelId: "/tmp/deployed_mlx", evalSuiteVersion: "faebench-v1"
+            ),
+            measured: measured
+        )
+
+        // Walk to proposing, then approve — performDeploy verifies the minted receipt
+        // through the REAL GateReceiptVerifier (no bypass).
+        for s in [CycleState.collecting, .metaOptimizing, .training, .evaluating, .proposing] {
+            try await coordinator.transition(to: s)
+        }
+        try await coordinator.approveDeployment()
+
+        let deployed = try await store.readState()
+        XCTAssertEqual(deployed.currentAdapterPath, candidate, "mlx candidate promoted through the real gate")
+        XCTAssertEqual(deployed.previousAdapterPath, "/tmp/deployed_mlx", "Prior deployed adapter is the rollback target")
+        XCTAssertNil(deployed.pendingAdapterPath, "Pending cleared after deploy")
+        XCTAssertEqual(patchedPath, candidate, "Pipeline notified of the deployed adapter")
+        let consumed = try await store.isGateReceiptConsumed(cycleId: "w7-cyc")
+        XCTAssertTrue(consumed, "Evaluator-minted receipt consumed exactly once on deploy")
+    }
+
+    /// A receipt minted with a NON-allowlisted evaluator id can never verify — the deploy
+    /// gate rejects it. Guards the privilege boundary: the loss-proxy (or any future
+    /// non-evaluator) cannot forge a deployable receipt.
+    func testReceiptFromNonAllowlistedEvaluatorIsRejected() async throws {
+        let store = try await makeTempStore()
+        let coordinator = ImprovementCycleCoordinator(store: store)
+        let gateTestKey = SymmetricKey(data: Data(repeating: 0x42, count: 32))
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fae-w7r-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "weights".write(
+            toFile: dir.appendingPathComponent("adapters.safetensors").path,
+            atomically: true, encoding: .utf8
+        )
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        state.pendingAdapterPath = dir.path
+        state.pendingAdapterKind = "mlxDir"
+        state.pendingCycleId = "w7r-cyc"
+        try await store.writeState(state)
+        await coordinator.setInjectedGateKey(gateTestKey)
+
+        do {
+            _ = try await coordinator.mintAndStoreGateReceipt(
+                context: ImprovementCycleCoordinator.ReceiptMintContext(
+                    kind: .mlxDir, evaluatorId: "loss-proxy",   // NOT on the allowlist
+                    baseModelId: "x", evalSuiteVersion: "v1"
+                ),
+                measured: MeasuredDeltas(
+                    measured: [.toolCalling: 1.0, .faeCapability: 1.0, .assistantFit: 1.0, .serialization: 1.0],
+                    throughputDelta: nil
+                )
+            )
+            XCTFail("Minting with a non-allowlisted evaluator must throw")
+        } catch let error as GateReceiptError {
+            if case .evaluatorNotAllowed = error { return }
+            XCTFail("Expected .evaluatorNotAllowed, got \(error)")
+        }
+    }
+
     // MARK: - isDirectiveTuningCycle Logic
 
     func testDirectiveTuningCycleIntervalIsCorrect() {

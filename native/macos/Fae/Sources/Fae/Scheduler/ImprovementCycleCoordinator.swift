@@ -151,6 +151,13 @@ actor ImprovementCycleCoordinator {
     /// the bridge benchmark, else `.unmeasured` (fail-closed).
     private var injectedMeasuredDelta: EvalDelta?
 
+    /// Test seam (P9/C4 W7) reproducing the LEGACY no-receipt eval path: a measured delta
+    /// from the bridge-benchmark / loss-proxy branch, which never sets `receiptMint`. Lets
+    /// a test prove the fail-closed "gate pass ⇒ minted receipt" invariant — a passing delta
+    /// with no receipt must NOT reach review/deploy. Never set in production. Takes priority
+    /// over `injectedMeasuredDelta` when both are set (it models the path being guarded).
+    private var injectedLegacyMeasuredDelta: EvalDelta?
+
     /// Test override of the gate-receipt HMAC key (P9/C4 W4). When set, the deploy gate
     /// verifies receipts with this key instead of the per-install Keychain key, so unit
     /// tests can mint + verify receipts without Keychain access. `nil` in production.
@@ -162,6 +169,13 @@ actor ImprovementCycleCoordinator {
     /// Populated by W7 when the `AdapterEvaluator`s are wired; empty until then (so the loop
     /// refuses to train, the intended conservative state).
     private var availableEvaluatorKinds: Set<AdapterKind> = []
+
+    /// The real `AdapterEvaluator`s, keyed by the adapter kind they score (P9/C4 W7).
+    /// The eval phase picks the evaluator for the trained lane, scores the candidate
+    /// against the DEPLOYED adapter, and (on a measured pass) mints the gate receipt the
+    /// deploy gate (W4) requires. Empty until FaeScheduler/W7 wires an evaluator; absence
+    /// for a lane keeps that lane's eval fail-closed (`.unmeasured`).
+    private var adapterEvaluators: [AdapterKind: AdapterEvaluator] = [:]
 
     /// Minimum SFT examples required before training proceeds.
     static let minSFTExamples = 10
@@ -215,6 +229,13 @@ actor ImprovementCycleCoordinator {
     /// Inject a measured `EvalDelta` for the evaluating phase (P9/C4 interim seam;
     /// see `injectedMeasuredDelta`). Used by tests until W7 wires the real
     /// `AdapterEvaluator`. Passing `nil` clears it (fall through to the bridge).
+    /// Inject a LEGACY-path measured delta (no receipt) for tests (P9/C4 W7; see
+    /// `injectedLegacyMeasuredDelta`). Models the bridge-benchmark / loss-proxy branch
+    /// to exercise the fail-closed "gate pass ⇒ minted receipt" guard.
+    func setInjectedLegacyMeasuredDelta(_ delta: EvalDelta?) {
+        injectedLegacyMeasuredDelta = delta
+    }
+
     func setInjectedMeasuredDelta(_ delta: EvalDelta?) {
         injectedMeasuredDelta = delta
     }
@@ -229,6 +250,18 @@ actor ImprovementCycleCoordinator {
     func setAvailableEvaluatorKinds(_ kinds: Set<AdapterKind>) {
         availableEvaluatorKinds = kinds
     }
+
+    /// Register the real `AdapterEvaluator` for a lane (P9/C4 W7). Called by
+    /// FaeScheduler when an evaluator with a working backing harness is configured.
+    /// Registering also un-blocks the lane (mirrors `setAvailableEvaluatorKinds`) so the
+    /// two can never drift apart — a lane with an evaluator is trainable, one without is not.
+    func setAdapterEvaluator(_ evaluator: AdapterEvaluator) {
+        adapterEvaluators[evaluator.kind] = evaluator
+        availableEvaluatorKinds.insert(evaluator.kind)
+    }
+
+    /// Read-only view of the un-blocked lanes, for tests (P9/C4 W7).
+    var availableEvaluatorKindsForTest: Set<AdapterKind> { availableEvaluatorKinds }
 
     /// Set the meta-optimizer. Called by FaeScheduler after wiring.
     ///
@@ -651,9 +684,39 @@ actor ImprovementCycleCoordinator {
             // synthetic zero-delta "pass". The loss-based proxy is advisory only
             // and never gates (it cannot populate measured dimensions).
             let evalDelta: EvalDelta
-            if let injected = injectedMeasuredDelta {
+            // The provenance for the gate receipt minted on a measured pass (P9/C4 W7).
+            // Set ONLY by a real `AdapterEvaluator`; the injected/inline paths leave it nil
+            // (the injected path is a pure test seam, the inline path predates the evaluator
+            // seam and is fail-closed without a receipt at deploy).
+            var receiptMint: ReceiptMintContext?
+            if let legacy = injectedLegacyMeasuredDelta {
+                // Test seam modelling the LEGACY bridge-benchmark / loss-proxy branch: a
+                // measured delta that does NOT mint a receipt. The fail-closed guard below
+                // must reject it even when it would otherwise pass the gate (W7 invariant).
+                NSLog("ImprovementCycleCoordinator: using injected LEGACY measured delta (no receipt; P9/C4 W7 guard test)")
+                evalDelta = legacy
+            } else if let injected = injectedMeasuredDelta {
+                // The injected seam STANDS IN for a real `AdapterEvaluator` (see
+                // `injectedMeasuredDelta`, a test-only seam never set in production): it must
+                // therefore behave exactly as a real evaluator — produce the measured delta
+                // AND back a gate pass with a minted receipt — or it would trip the W7
+                // fail-closed "gate pass ⇒ minted receipt" invariant below. Since training
+                // produced no real candidate on this seam's path, provision a synthetic
+                // pending candidate (gated entirely behind `injectedMeasuredDelta`) so the
+                // mint has a real artifact + cycle id to bind to.
                 NSLog("ImprovementCycleCoordinator: using injected measured eval delta (P9/C4 interim seam)")
                 evalDelta = injected
+                receiptMint = try await provisionInjectedSeamCandidate()
+            } else if let adapterPath = producedAdapterPath,
+                      let pendingKind = (try? await store.readState())?.pendingAdapterKind
+                          .flatMap(AdapterKind.init(rawValue:)),
+                      adapterEvaluators[pendingKind] != nil {
+                // P9/C4 (W7): a real evaluator scores the candidate against the DEPLOYED
+                // adapter (not the base model). A measured pass mints the gate receipt the
+                // deploy gate (W4) requires; a throw / non-measurement is fail-closed.
+                let result = await evaluateViaAdapterEvaluator(adapterPath: adapterPath, kind: pendingKind)
+                evalDelta = result.delta
+                receiptMint = result.mint
             } else if let bridge = trainingBridge, let adapterPath = producedAdapterPath,
                await bridge.isBenchmarkAvailable {
                 do {
@@ -699,6 +762,30 @@ actor ImprovementCycleCoordinator {
             if AdapterGate.decide(evalDelta.measuredDeltas) == .blockedNoMeasurement {
                 NSLog("ImprovementCycleCoordinator: candidate_blocked — no measured improvement; fail-closed (no review, no deploy)")
                 await failClosed(reason: "candidate_blocked: no_measured_improvement")
+                return
+            }
+
+            // P9/C4 (W7): ONLY a real `AdapterEvaluator` may pass the gate. It is the sole
+            // producer of `receiptMint` AND the only path that can mint a receipt. A delta
+            // that cleared the gate but carries NO mint context came through the legacy
+            // bridge-benchmark / loss-proxy branch (which never mints) or the injected test
+            // seam — neither is a real evaluator, so it must FAIL CLOSED here, immediately,
+            // rather than proceed to external review and rely on the W4 deploy gate blocking
+            // it late. Invariant: a gate pass ⇒ a minted receipt, or no review/deploy at all.
+            guard let mint = receiptMint else {
+                NSLog("ImprovementCycleCoordinator: gate passed but no real-evaluator receipt — fail-closed (no review, no deploy)")
+                await failClosed(reason: "gate_pass_but_no_receipt")
+                return
+            }
+            // Mint + persist the gate receipt NOW (bound to this cycle's pending candidate +
+            // digest), so the deploy gate (W4) has a verifying, unconsumed receipt to spend.
+            // A mint/persist failure is fail-closed — a passing eval that cannot produce a
+            // receipt must not slip into review/deploy.
+            do {
+                try await mintAndStoreGateReceipt(context: mint, measured: evalDelta.measuredDeltas)
+            } catch {
+                NSLog("ImprovementCycleCoordinator: gate receipt mint failed (%@) — fail-closed", error.localizedDescription)
+                await failClosed(reason: "gate_receipt_mint_failed: \(error.localizedDescription)")
                 return
             }
 
@@ -908,6 +995,44 @@ actor ImprovementCycleCoordinator {
         )
     }
 
+    /// Provision a synthetic pending candidate for the injected-delta TEST seam (P9/C4 W7).
+    ///
+    /// Only ever reached when `injectedMeasuredDelta` is set (a test-only seam never set in
+    /// production), so this writes no files on any real run. The candidate must be created
+    /// HERE in the eval phase — not pre-staged by the test — because a fresh `runCycle`
+    /// clears any pending candidate at cycle start (the W3 `idle ⇒ no pending` invariant),
+    /// and a real cycle's candidate is likewise produced only after that, during training.
+    /// Returns the receipt-mint context so the injected seam mints a receipt exactly like a
+    /// real evaluator (preserving the W7 "gate pass ⇒ minted receipt" invariant).
+    private func provisionInjectedSeamCandidate() async throws -> ReceiptMintContext {
+        try await store.ensureStateRow()
+        var state = try await store.readState()
+        // Reuse an already-present pending candidate (a test may have produced a real one);
+        // otherwise synthesise a minimal on-disk mlxDir artifact so the receipt digests.
+        if state.pendingAdapterPath == nil {
+            let dir = FaeDirectories.trainingDirectory
+                .appendingPathComponent("injected-seam-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data("injected-seam".utf8).write(
+                to: dir.appendingPathComponent("adapters.safetensors")
+            )
+            state.pendingAdapterPath = dir.path
+            state.pendingAdapterKind = "mlxDir"
+            state.pendingCycleId = UUID().uuidString
+            try await store.writeState(state)
+        } else if state.pendingCycleId == nil {
+            state.pendingCycleId = UUID().uuidString
+            if state.pendingAdapterKind == nil { state.pendingAdapterKind = "mlxDir" }
+            try await store.writeState(state)
+        }
+        let kind = state.pendingAdapterKind.flatMap(AdapterKind.init(rawValue:)) ?? .mlxDir
+        return ReceiptMintContext(
+            kind: kind, evaluatorId: "FaeBenchmarkEvaluator",
+            baseModelId: state.currentAdapterPath ?? "injected-baseline",
+            evalSuiteVersion: "injected-seam"
+        )
+    }
+
     // MARK: - Internal Deploy Helper
 
     /// Perform the actual adapter deployment: track rollback path, increment approved counter,
@@ -978,6 +1103,103 @@ actor ImprovementCycleCoordinator {
         NSLog(
             "ImprovementCycleCoordinator: adapter deployed (userApprovedCycles=%d)",
             state.userApprovedCycles
+        )
+    }
+
+    /// Provenance the eval phase carries from a real `AdapterEvaluator` to the receipt
+    /// mint (P9/C4 W7) — everything `GateMinter.mint` needs beyond the candidate path,
+    /// cycle id, and measured deltas (those come from current state + the gate result).
+    struct ReceiptMintContext {
+        let kind: AdapterKind
+        let evaluatorId: String
+        let baseModelId: String
+        let evalSuiteVersion: String
+    }
+
+    /// Score `adapterPath` (the pending candidate) for lane `kind` via its registered
+    /// `AdapterEvaluator`, against the DEPLOYED adapter as baseline (P9/C4 W7).
+    ///
+    /// Returns the measured `EvalDelta` plus the receipt provenance to mint on a pass.
+    /// Fail-closed: a missing evaluator or any evaluation error yields `.unmeasured` with
+    /// no mint context, so the gate blocks the candidate (it can never reach deploy).
+    /// `internal` so the loop integration test can drive it after staging pending state.
+    func evaluateViaAdapterEvaluator(
+        adapterPath: String, kind: AdapterKind
+    ) async -> (delta: EvalDelta, mint: ReceiptMintContext?) {
+        guard let evaluator = adapterEvaluators[kind] else {
+            NSLog("ImprovementCycleCoordinator: no evaluator for %@ lane — eval unmeasured", kind.rawValue)
+            return (.unmeasured, nil)
+        }
+        // Baseline = the DEPLOYED adapter (or base model when none deployed). This makes
+        // the delta measure improvement over WHAT IS LIVE, not over the untrained base —
+        // a candidate that beats base but regresses against the deployed adapter must fail.
+        let deployedBaseline = (try? await store.readState())?.currentAdapterPath
+        do {
+            NSLog(
+                "ImprovementCycleCoordinator: evaluating candidate via %@ (baseline=%@)",
+                evaluator.evaluatorId, deployedBaseline ?? "<base model>"
+            )
+            let outcome = try await evaluator.evaluate(
+                candidatePath: adapterPath, baselinePath: deployedBaseline
+            )
+            NSLog(
+                "ImprovementCycleCoordinator: evaluator delta — tools=%.1f%% fae=%.1f%% fit=%.1f%% ser=%.1f%%",
+                outcome.delta.toolCallingDelta ?? 0, outcome.delta.faeCapabilityDelta ?? 0,
+                outcome.delta.assistantFitDelta ?? 0, outcome.delta.serializationDelta ?? 0
+            )
+            return (
+                outcome.delta,
+                ReceiptMintContext(
+                    kind: kind, evaluatorId: evaluator.evaluatorId,
+                    baseModelId: outcome.baseModelId, evalSuiteVersion: outcome.evalSuiteVersion
+                )
+            )
+        } catch {
+            NSLog(
+                "ImprovementCycleCoordinator: evaluator %@ failed (%@) — eval unmeasured (fail-closed)",
+                evaluator.evaluatorId, error.localizedDescription
+            )
+            return (.unmeasured, nil)
+        }
+    }
+
+    /// Mint a gate receipt for the current pending candidate and persist it (P9/C4 W7).
+    ///
+    /// Binds the receipt to the live `pendingCycleId` + `pendingAdapterPath` so the deploy
+    /// gate (W4) can verify path, digest, and single-use. Uses the injected test key when
+    /// set (so unit tests mint without Keychain access), else the per-install Keychain key.
+    /// `internal` so the loop integration test can drive the REAL mint → deploy chain.
+    func mintAndStoreGateReceipt(
+        context: ReceiptMintContext, measured: MeasuredDeltas
+    ) async throws {
+        let state = try await store.readState()
+        guard let cycleId = state.pendingCycleId else {
+            throw ImprovementCycleError.gateReceiptRejected("no_pending_cycle_id")
+        }
+        guard let candidate = state.pendingAdapterPath else {
+            throw ImprovementCycleError.noPendingCandidate
+        }
+        let mintedAt = ISO8601DateFormatter().string(from: Date())
+        let receipt: GateReceipt
+        if let key = injectedGateKey {
+            receipt = try GateMinter.mint(
+                cycleId: cycleId, candidatePath: candidate, kind: context.kind,
+                measured: measured.measured, evaluatorId: context.evaluatorId,
+                baseModelId: context.baseModelId, evalSuiteVersion: context.evalSuiteVersion,
+                mintedAt: mintedAt, using: key
+            )
+        } else {
+            receipt = try GateMinter.mint(
+                cycleId: cycleId, candidatePath: candidate, kind: context.kind,
+                measured: measured.measured, evaluatorId: context.evaluatorId,
+                baseModelId: context.baseModelId, evalSuiteVersion: context.evalSuiteVersion,
+                mintedAt: mintedAt
+            )
+        }
+        try await store.insertGateReceipt(receipt)
+        NSLog(
+            "ImprovementCycleCoordinator: gate receipt minted by %@ for cycle %@ (kind=%@)",
+            context.evaluatorId, cycleId, context.kind.rawValue
         )
     }
 
