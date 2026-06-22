@@ -1023,6 +1023,55 @@ actor DaemonLLMEngine: LLMEngine {
             payload: ["scale": Double(scale)])
     }
 
+    /// The personal adapter the running sidecar currently serves, as reported by
+    /// the daemon's `runtime.status` (`{ adapter: { path, sha256, scale } | null }`).
+    /// `nil` ⇒ the sidecar is serving the base model (no adapter). Used by the
+    /// daemon-lane A/B evaluator (P9/C4 W7b) to CONFIRM the deployed adapter was
+    /// restored after an eval — a daemon left on the un-gated candidate is exactly
+    /// the deploy-without-receipt hole this series closes.
+    struct LoadedAdapterStatus: Sendable, Equatable {
+        let path: String
+        let sha256: String?
+        let scale: Double?
+    }
+
+    /// Query `runtime.status` and return the loaded personal adapter (or `nil` for
+    /// base). Throws `adapterCommandFailed`/`daemonError` on a rejected or malformed
+    /// response so a confirmation failure is never read as "no adapter".
+    func runtimeStatus() async throws -> LoadedAdapterStatus? {
+        guard isLoaded, let connection else { throw DaemonLLMEngineError.notLoaded }
+        let requestID = nextRequestID()
+        let frame = try DaemonWire.encodeFrame(
+            requestID: requestID, command: "runtime.status", payload: [:])
+        let raw = try await connection.roundTrip(frame: frame, expectRequestID: requestID)
+        let response = try DaemonWire.unwrapResponse(raw)
+        let result = (response["result"] as? [String: Any]) ?? [:]
+        guard let adapter = result["adapter"] as? [String: Any] else {
+            // `adapter: null` (base model) is a valid, expected state.
+            return nil
+        }
+        guard let path = adapter["path"] as? String else {
+            throw DaemonLLMEngineError.protocolError("runtime.status adapter missing path")
+        }
+        return LoadedAdapterStatus(
+            path: path,
+            sha256: adapter["sha256"] as? String,
+            scale: (adapter["scale"] as? NSNumber)?.doubleValue
+        )
+    }
+
+    /// One non-streaming text turn collected to a `(text, toolCalls)` result, used
+    /// by the daemon-lane A/B evaluator (P9/C4 W7b) to score the same held-out
+    /// prompt under two adapters. This is a plain text turn — no audio, no
+    /// two-pass — so it reuses `runTurn` directly; tool specs come from `options`.
+    func inferForEval(
+        messages: [LLMMessage],
+        systemPrompt: String,
+        options: GenerationOptions
+    ) async throws -> DaemonWire.Turn {
+        try await runTurn(messages: messages, systemPrompt: systemPrompt, options: options)
+    }
+
     /// `LLMEngine` conformance for the daemon lane: a personal adapter is a GGUF
     /// the daemon loads + activates, not an MLX adapter directory. `directory`
     /// here is the GGUF path (the deploy/self-config layer passes the produced

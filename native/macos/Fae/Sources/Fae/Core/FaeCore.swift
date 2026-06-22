@@ -568,6 +568,10 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     // only if its load() succeeded above (else it fell back to MLX).
                     if let daemonEngine = llmEngine as? DaemonLLMEngine {
                         await sched.setDaemonTrainingBaseModel(daemonEngine.daemonModelID)
+                        // P9/C4 (W7b): hand the live daemon engine to the scheduler so it
+                        // can build the `.gguf`-lane DaemonABEvaluator (A/B the daemon over
+                        // the held-out eval set), un-blocking gated GGUF deploys.
+                        await sched.setDaemonLLMEngine(daemonEngine)
                     }
                     await sched.setAwarenessConfig(config.awareness)
                     await sched.setVisionEnabled(config.vision.enabled)

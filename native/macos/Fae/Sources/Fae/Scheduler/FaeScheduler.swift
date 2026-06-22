@@ -241,6 +241,16 @@ actor FaeScheduler {
         daemonTrainingBaseModel = baseModel
     }
 
+    /// The live daemon LLM engine, set by FaeCore when the daemon LLM lane loaded.
+    /// Used to construct the `.gguf`-lane `DaemonABEvaluator` (P9/C4 W7b) so the
+    /// nightly cycle can score a trained GGUF candidate against the deployed adapter
+    /// by A/B-testing the live daemon. `nil` ⇒ daemon lane off ⇒ `.gguf` stays blocked.
+    private var daemonLLMEngine: DaemonLLMEngine?
+
+    func setDaemonLLMEngine(_ engine: DaemonLLMEngine?) {
+        daemonLLMEngine = engine
+    }
+
     func setVisionEnabled(_ enabled: Bool) {
         visionEnabled = enabled
     }
@@ -1691,8 +1701,7 @@ actor FaeScheduler {
             // lane — but ONLY when its FaeBenchmark harness is actually configured.
             // Without a benchmark binary the evaluator can't measure, so leaving the lane
             // blocked (W6) is correct: it avoids burning a training run on a candidate that
-            // could never produce a gate receipt. The `.gguf` daemon lane stays blocked
-            // until its DaemonABEvaluator lands (W7b).
+            // could never produce a gate receipt.
             if let bridge {
                 let mlxEvaluator = FaeBenchmarkEvaluator(bridge: bridge)
                 if await mlxEvaluator.isAvailable() {
@@ -1700,6 +1709,29 @@ actor FaeScheduler {
                 } else {
                     NSLog("FaeScheduler: FaeBenchmark not configured — mlxDir lane stays blocked (no evaluator)")
                 }
+            }
+            // P9/C4 (W7b): register the daemon-lane A/B evaluator and un-block the
+            // `.gguf` lane — ONLY when the daemon LLM lane is live AND the SHA-locked
+            // held-out eval suite loads. Either missing ⇒ leave `.gguf` blocked (W6):
+            // the daemon-lane cycle produces a GGUF, and without a real evaluator a
+            // GGUF candidate could only auto-deploy un-gated — the hole this series closes.
+            if let daemonEngine = daemonLLMEngine {
+                do {
+                    let suite = try DaemonEvalSuite.loadBundled()
+                    let client = LiveDaemonABClient(engine: daemonEngine)
+                    let daemonEvaluator = DaemonABEvaluator(client: client, suite: suite)
+                    if await daemonEvaluator.isAvailable() {
+                        await coordinator.setAdapterEvaluator(daemonEvaluator)
+                    } else {
+                        NSLog("FaeScheduler: daemon unreachable for A/B eval — gguf lane stays blocked (no evaluator)")
+                    }
+                } catch {
+                    NSLog(
+                        "FaeScheduler: daemon A/B eval suite unavailable (%@) — gguf lane stays blocked (no evaluator)",
+                        error.localizedDescription)
+                }
+            } else {
+                NSLog("FaeScheduler: daemon LLM lane off — gguf lane stays blocked (no evaluator)")
             }
         } catch {
             NSLog("FaeScheduler: improvement_cycle — training bridge unavailable (%@), cycle will skip training", error.localizedDescription)
