@@ -41,7 +41,7 @@ This is the long-running F-2 egress-membrane work-package (`PrivacyFilterBridge`
 
 **Decision to make in G-M2-spec (before D2 budget-governance / D7 eval land):**
 
-1. **PII membrane as the egress gate.** Every cloud-bound prompt (ACP, remote API, x0x peer) MUST pass through `SensitiveContentPolicy` (port to Rust, or call the Swift impl via the control plane). `shouldBlockRemoteEgress` blocks at `likelyCredential` and up. This is the F-2 egress membrane landing point. Decide: Rust-native port vs. bridge — same shape as the MetaOpt port question (D-M3).
+1. **PII membrane as the egress gate.** Every cloud-bound prompt (ACP, remote API, x0x peer) MUST pass through the PII membrane (`SensitiveContentPolicy`'s `shouldBlockRemoteEgress`, blocking at `likelyCredential` and up). This is the F-2 egress membrane landing point. **Port-vs-bridge: RESOLVED in D-M2-4 below → PORT to Rust, no bridge.** The ingress counterpart (`fae-envelope-gate`, `peer_envelope_ingress`) is already Rust; the egress membrane is its missing mirror and must be Rust too.
 2. **`WorkerLocality::LocalAcp` lane mapping.** Not `LocalOnly`. Options: a new `PrivacyLane::CloudBacked` (clear, recommended) vs. fold into `RemoteAllowed`. Decide in G-M2-spec. Either way, the PII membrane — not the lane label — is the actual egress authority; the lane drives budget-tier routing.
 3. **Tiering on top of PII.** Cloud-backed ACP requires **Tier B or Tier C** (`ApprovalClass::StandingGrant` / `PerTurn`), never Tier A. Tier B needs the D2 budget cap to be meaningful (a standing grant is meaningless without a spend ceiling). The PII membrane runs *before* the tier check, so a blocked-by-PII route never reaches the approval surface at all.
 4. **Per-provider granularity.** Does each provider (OpenAI / Anthropic / Google / x0x peer) get its own grant + budget bucket, or one "cloud-backed" class? OpenAI vs Anthropic have different data-retention policies; this may warrant per-provider lanes. Decide in G-M2-spec.
@@ -72,6 +72,51 @@ These are NOT M2 blockers (chain stays off) but ARE release-validation blockers.
 ## D-M2-3 — Corrupt-key persistence (DONE in this cleanup; recorded for context)
 
 `InstallKey::load_or_create` now **regenerates AND re-persists** a corrupt/truncated key (was: regenerate-only → different key every restart → repeatedly-discontinuous telemetry). M2's reward aggregator reads this telemetry; silently-discontinuous fingerprints would have corrupted the eval signal. Test `corrupt_key_is_regenerated_and_repersisted` proves stability across loads.
+
+---
+
+## D-M2-4 — Port-vs-bridge principle (RESOLVED recommendation; ratify at G-M2-spec)
+
+**Resolves:** D-M2-1 item 1 (PII membrane) **and** the D-M3 MetaOpt port-vs-bridge question — *once, together*, as the advisor flagged. Not a blanket "port everything": it's a principle that splits the two by what actually matters.
+
+### The principle
+
+Port a Swift capability to Rust **unconditionally** when **any** of:
+- it is **egress- or ingress-critical** (privacy/security gate on the trust boundary);
+- it is **per-turn hot-path** (runs on every routed turn — latency + availability couple to it);
+- it **must outlive the Swift app** (the Swift app is being retired per ADR-011; a dependency on it is a dependency on a dying surface);
+- it is **small enough** that bridging isn't worth the coupling.
+
+Bridge a Swift capability **transiently** (then port, time-boxed) when **all** of:
+- it is a **large existing subsystem** (porting is real work);
+- it is **not egress/ingress-critical**;
+- it is **cold-path** (scheduled / batched, not per-turn).
+
+### Application — the asymmetry the advisor asked to resolve once
+
+| Capability | Verdict | Why |
+|---|---|---|
+| **PII membrane** (`SensitiveContentPolicy`) | **PORT — no bridge, ever** | Egress-critical ✓ + per-turn hot-path ✓ (every cloud-bound turn) + must outlive Swift ✓ + small (106 lines, 12 regex rules, all portable to Rust `regex` — no lookbehind/backrefs) ✓. Plus two decisive structural points below. |
+| **MetaOpt** (`Scheduler/MetaOpt*.swift`) | **bridge-now → port-later (lean); decide at G-M2-spec** | Large existing subsystem ✓, non-critical ✓, cold-path ✓ (scheduler-cycle, not per-turn). ADR-011 itself offers both ("ported (or bridged)"). Bridge unblocks M3; port retires it. Time-box the bridge with an explicit retirement date. |
+
+### Why the membrane is PORT (not a close call once ADR-011 is read carefully)
+
+1. **ADR-011's direction is intelligence *out of* Swift, into Rust.** Bridging the *most* security-critical, never-retiring decision *into* Swift is migrating the wrong way — the opposite of the ADR's whole point.
+2. **The daemon must run headless.** ADR-011: "the headless Rust daemon is the brain." A Swift bridge means the daemon cannot make an egress decision without the Swift app process present — it breaks the moment the daemon runs standalone (the target state). Today the daemon is embedded in the Swift app, but building new egress logic as a bridge bakes in a dependency the ADR is migrating *away* from.
+3. **Dependency direction.** The Swift app is a *client* of the daemon (control-plane client), not a server the daemon calls into. A daemon→Swift bridge for a security decision inverts that: the server would depend on a client. Architecturally wrong under ADR-002 v2 / ADR-011.
+4. **Symmetry with the already-Rust ingress gate.** `fae-envelope-gate` (`peer_envelope_ingress`, signature-checked, audited, already a `fae-daemon` dep) is the **ingress** membrane — untrusted peer→Fae input is gated before use. The PII membrane is its **egress** mirror — Fae→cloud output is gated before egress. Having ingress validation in Rust and egress in Swift is an inconsistent split of one trust boundary; both belong in the canonical core.
+
+### Concrete asks for G-M2-spec (ratify or override)
+
+1. **Ratify PORT for the PII membrane** (expected non-controversial given the four points above).
+2. **Home for the Rust membrane.** Lean: a small new crate `crates/fae-pii-membrane/` — egress counterpart to `fae-envelope-gate`, independently testable, reusable by `fae-acp` if a worker needs a pre-flight check. Alternative: a `fae-daemon/src/pii/` module (less ceremony, less reuse). Decide at the gate.
+3. **Rule-source.** Port the 12 regex rules as Rust constants first (fastest); promote to a shared data file (TOML/JSON) later *only if* drift between the Swift legacy impl and the Rust canonical impl becomes a maintenance risk. Don't pre-build the shared-file abstraction — it's a YAML/regex config layer with no current second consumer.
+4. **MetaOpt: bridge-now-port-later vs port-now.** Lean bridge-now-port-later (pragmatic, unblocks M3 on a cold path). Decide at G-M2-spec with a porting-effort estimate + an explicit bridge-retirement date (e.g. "bridge retired by M4").
+5. **Membrane wiring point.** The conductor executor calls the membrane *before* constructing any cloud-bound `ChatRequest` (per-role-call for chain, not just the outer prompt — see D-M2-2). A `shouldBlockRemoteEgress` block returns `RouteFailure::PrivacyBlocked` (new variant?) → fail-closed-to-direct. Decide the exact failure shape at the gate.
+
+### Why this is front-loaded (independent of D2/D7)
+
+The port-vs-bridge *decision* needs nothing from the team's budget-governance (D2) or eval-corpus (D7) WPs — it's an ADR-011 + architecture question. The membrane *port itself* (the Rust code) is similarly independent: it's a privacy primitive, not routing logic, and M1's on-device-only conductor doesn't need it yet but M2's first cloud route does. So the decision + the port can both land before D2/D7, exactly like the corrupt-key fix did. (Implementation of the port stays gated behind G-M2-spec ratification — this doc is the *decision*, not authorization to write the crate yet.)
 
 ---
 
