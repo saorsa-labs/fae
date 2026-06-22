@@ -174,14 +174,20 @@ regression and the `restore-on-every-exit` design did not hold — stop and surf
 
 ## Live de-risk run — 2026-06-22 (results)
 
-First live run on real hardware (Apple M5 Max), driven headlessly by
-`crates/fae-engine/examples/daemon_ab_derisk.rs` (a manual, non-CI harness that
-spawns the real `llama-server` sidecar and exercises the *actual* `fae-engine`
-`set_adapter_scale` / `reload_adapter` / `loaded_adapter` primitives — the same
-mechanism `DaemonABEvaluator` drives — bypassing only the Swift/NDJSON layer, which
-is already unit-proven). Base model `gemma-4-E4B-it-Q4_K_M.gguf`; adapters
-`~/llama-spike/personal-metric.gguf` and `personal-c2.gguf` (P3/C3 bench probes).
-Run it with `env -u RUSTFLAGS cargo run --release --manifest-path crates/Cargo.toml -p fae-engine --example daemon_ab_derisk`.
+First live run on real hardware (Apple M5 Max), driven headlessly by a manual,
+non-CI harness that spawns the real `llama-server` sidecar and exercises the
+*actual* `fae-engine` `set_adapter_scale` / `reload_adapter` / `loaded_adapter`
+primitives — the same mechanism `DaemonABEvaluator` drives — bypassing only the
+Swift/NDJSON layer, which is already unit-proven. Base model
+`gemma-4-E4B-it-Q4_K_M.gguf`; adapters `~/llama-spike/personal-metric.gguf` and
+`personal-c2.gguf` (P3/C3 bench probes).
+
+> The original v1 harness (`examples/daemon_ab_derisk.rs`) was removed when
+> `daemon-ab-eval-v1.json` was deleted in the v2 cutover (it embedded v1 at compile
+> time). Its successors with the full v2 scorer are
+> `crates/fae-engine/examples/v2_base_dryrun.rs` (base over the suite) and
+> `v2_calib_matrix.rs` (the 3-fixture calibration gate); the v1 results below stand
+> as the historical finding that motivated v2.
 
 Per-dimension accuracy:
 
