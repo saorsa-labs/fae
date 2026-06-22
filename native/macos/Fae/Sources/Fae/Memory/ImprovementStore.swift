@@ -307,6 +307,26 @@ actor ImprovementStore {
             CREATE INDEX IF NOT EXISTS idx_mol_cycle
             ON meta_optimization_log (cycle_number, kept)
         """)
+        // P9/C4 (W2): persisted gate receipts — tamper-evident proof a candidate passed
+        // a real eval. W4 requires a verifying, unconsumed receipt before any deploy.
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS gate_receipts (
+                cycle_id            TEXT    PRIMARY KEY,
+                candidate_path      TEXT    NOT NULL,
+                kind                TEXT    NOT NULL,
+                artifact_digest     TEXT    NOT NULL,
+                measured_json       TEXT    NOT NULL,
+                decision            TEXT    NOT NULL,
+                evaluator_id        TEXT    NOT NULL,
+                base_model_id       TEXT    NOT NULL,
+                eval_suite_version  TEXT    NOT NULL,
+                gate_policy_version INTEGER NOT NULL,
+                receipt_version     INTEGER NOT NULL,
+                minted_at           TEXT    NOT NULL,
+                hmac                TEXT    NOT NULL,
+                consumed_at         TEXT
+            )
+        """)
     }
 
     // MARK: - Singleton State Row
@@ -817,6 +837,107 @@ actor ImprovementStore {
             receptionScore: row["reception_score"],
             evaluated: (row["evaluated"] as? Int64 ?? 0) != 0,
             evalOutcome: row["eval_outcome"]
+        )
+    }
+
+    // MARK: - Gate Receipts (P9/C4 W2)
+
+    /// Persist a minted gate receipt (one per cycle). Replaces any prior receipt for the
+    /// same cycle id. Failures surface (Rule 12) — a swallowed receipt write followed by
+    /// a deploy that requires a receipt must not silently mis-gate.
+    func insertGateReceipt(_ receipt: GateReceipt) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        let measuredJSON = String(
+            data: try JSONEncoder().encode(receipt.measured), encoding: .utf8
+        ) ?? "{}"
+        try db.write { db in
+            try db.execute(
+                sql: """
+                    INSERT OR REPLACE INTO gate_receipts
+                        (cycle_id, candidate_path, kind, artifact_digest, measured_json,
+                         decision, evaluator_id, base_model_id, eval_suite_version,
+                         gate_policy_version, receipt_version, minted_at, hmac, consumed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                arguments: [
+                    receipt.cycleId, receipt.candidatePath, receipt.kind.rawValue,
+                    receipt.artifactDigest, measuredJSON, receipt.decision,
+                    receipt.evaluatorId, receipt.baseModelId, receipt.evalSuiteVersion,
+                    receipt.gatePolicyVersion, receipt.receiptVersion,
+                    receipt.mintedAt, receipt.hmac,
+                ]
+            )
+        }
+    }
+
+    /// Fetch the gate receipt for a cycle, if present.
+    func gateReceipt(forCycleId cycleId: String) throws -> GateReceipt? {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM gate_receipts WHERE cycle_id = ? LIMIT 1",
+                arguments: [cycleId]
+            ) else { return nil }
+            return Self.gateReceipt(from: row)
+        }
+    }
+
+    /// Whether the receipt for a cycle has already been consumed (single-use gate).
+    func isGateReceiptConsumed(cycleId: String) throws -> Bool {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        return try db.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT consumed_at FROM gate_receipts WHERE cycle_id = ? LIMIT 1",
+                arguments: [cycleId]
+            ) else { return false }
+            let consumed: String? = row["consumed_at"]
+            return consumed != nil
+        }
+    }
+
+    /// Mark a receipt consumed (single-use). Sets `consumed_at` only if still null, so a
+    /// replayed deploy of the same receipt cannot re-consume it.
+    func consumeGateReceipt(cycleId: String, at timestamp: String) throws {
+        guard let db else { throw ImprovementStoreError.notOpen }
+        try db.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE gate_receipts SET consumed_at = ?
+                    WHERE cycle_id = ? AND consumed_at IS NULL
+                """,
+                arguments: [timestamp, cycleId]
+            )
+        }
+    }
+
+    private static func gateReceipt(from row: Row) -> GateReceipt? {
+        let measuredJSON: String = row["measured_json"] ?? "{}"
+        let decoded = try? JSONDecoder().decode([String: Double].self, from: Data(measuredJSON.utf8))
+        if decoded == nil {
+            // Surface (don't silently swallow) a corrupt measured payload — the receipt's
+            // HMAC will fail verification anyway, but a logged decode failure flags DB damage.
+            NSLog("ImprovementStore: gate_receipts.measured_json failed to decode (db damage?)")
+        }
+        let measured = decoded ?? [:]
+        guard let kindRaw: String = row["kind"], let kind = AdapterKind(rawValue: kindRaw) else {
+            return nil
+        }
+        return GateReceipt(
+            cycleId: row["cycle_id"] ?? "",
+            candidatePath: row["candidate_path"] ?? "",
+            kind: kind,
+            artifactDigest: row["artifact_digest"] ?? "",
+            measured: measured,
+            decision: row["decision"] ?? "",
+            evaluatorId: row["evaluator_id"] ?? "",
+            baseModelId: row["base_model_id"] ?? "",
+            evalSuiteVersion: row["eval_suite_version"] ?? "",
+            gatePolicyVersion: Int(row["gate_policy_version"] as? Int64 ?? 0),
+            receiptVersion: Int(row["receipt_version"] as? Int64 ?? 0),
+            mintedAt: row["minted_at"] ?? "",
+            hmac: row["hmac"] ?? ""
         )
     }
 }
