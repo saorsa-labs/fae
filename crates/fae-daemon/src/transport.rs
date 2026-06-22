@@ -50,6 +50,7 @@ pub async fn serve_unix(
     events: EventBus,
     playbacks: PlaybackRegistry,
     agents: AgentSessionRegistry,
+    conductor: Arc<crate::conductor::ConductorRuntime>,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -76,6 +77,7 @@ pub async fn serve_unix(
         let events = events.clone();
         let playbacks = playbacks.clone();
         let agents = agents.clone();
+        let conductor = Arc::clone(&conductor);
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -88,6 +90,7 @@ pub async fn serve_unix(
                 &events,
                 &playbacks,
                 &agents,
+                conductor.as_ref(),
             )
             .await
             {
@@ -110,6 +113,7 @@ async fn handle_connection(
     events: &EventBus,
     playbacks: &PlaybackRegistry,
     agents: &AgentSessionRegistry,
+    conductor: &crate::conductor::ConductorRuntime,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -203,6 +207,7 @@ async fn handle_connection(
                 events,
                 playbacks,
                 agents,
+                conductor: Some(conductor),
             };
             let outcome =
                 handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;

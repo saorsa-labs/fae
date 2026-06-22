@@ -81,11 +81,6 @@ impl ConductorRuntime {
         &self.policy
     }
 
-    /// Whether chain topology may execute this run.
-    pub fn chain_enabled(&self) -> bool {
-        self.chain_enabled
-    }
-
     /// Run a routed turn. Returns the wire-type result verbatim; tracks a
     /// `TurnOutcome` internally for the receipt. Never aborts the turn on a
     /// routing failure — every `RouteFailure` fails closed to `direct`-local
@@ -475,6 +470,3 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
         .unwrap_or(0)
 }
-
-/// Marker so callers can hold a shared runtime. Provided for `main`.
-pub type SharedConductorRuntime = Arc<ConductorRuntime>;

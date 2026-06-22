@@ -446,6 +446,7 @@ async fn ws_message_loop(
             events,
             playbacks,
             agents,
+            conductor: None,
         };
         let outcome = handle_frame(registry, &backends, &mut session, line, now, event_id).await;
 

@@ -151,6 +151,50 @@ async fn main() -> DaemonResult<()> {
         fae_control_plane::BOOTSTRAP_CLIENT_ID
     );
 
+    // ── Learned conductor (M1) ──────────────────────────────────────────
+    // The static-direct policy: always emits direct + local-model +
+    // ApprovalClass::None. Byte-identical to the legacy inject_text path by
+    // construction (the direct arm calls inject_text_core verbatim). Chain is
+    // opt-in via FAE_CONDUCTOR_CHAIN (default off — F-3). Telemetry is
+    // fire-and-forget to an isolated store; fingerprint continuity needs a
+    // stable per-install key under the data dir.
+    let chain_enabled = std::env::var("FAE_CONDUCTOR_CHAIN")
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"));
+    let conductor_data_dir = data_directory().map_err(|e| e.to_string())?;
+    let install_key =
+        conductor::InstallKey::load_or_create(&conductor_data_dir.join("conductor-install.key"))
+            .map_err(|e| format!("conductor install key: {e}"))?;
+    let conductor_store = conductor::ConductorStore::open(conductor_data_dir.join("conductor"))
+        .map_err(|e| format!("conductor store: {e}"))?;
+    let conductor_recipes = conductor::RecipeSet::default(); // M1: no recipe needs loading (static-direct is hardcoded in the policy)
+    let conductor_workers = conductor::WorkerRegistry::m1();
+    let conductor_policy = conductor::StaticDirectPolicy;
+    if chain_enabled {
+        eprintln!(
+            "fae-daemon: conductor chain ENABLED (FAE_CONDUCTOR_CHAIN). Direct remains the default; chain executes only for vetted chain recipes."
+        );
+    }
+    // Startup misconfiguration warning (spec §5.3 m4): if any loaded recipe
+    // specifies Chain while chain is disabled, surface it. M1 loads no recipes
+    // (static-direct is hardcoded), so this is a forward-looking no-op now and
+    // a real guard once M2/M3 load candidate recipes.
+    if !chain_enabled {
+        // No recipes loaded in M1; nothing to warn about. The guard lives here
+        // for M2/M3 to populate when recipe loading lands.
+    }
+    let conductor_runtime = Arc::new(conductor::ConductorRuntime::new(
+        conductor_policy,
+        conductor_recipes,
+        conductor_workers,
+        conductor_store,
+        install_key,
+        chain_enabled,
+    ));
+    println!(
+        "conductor: static-direct (chain {}) — telemetry isolated",
+        if chain_enabled { "on" } else { "off" }
+    );
+
     // Optional TCP-loopback HTTP/WS diagnostic surface (opt-in, never default).
     if let Some(port) = diagnostic_port() {
         let state = Arc::new(diagnostic::DiagnosticState {
@@ -186,6 +230,7 @@ async fn main() -> DaemonResult<()> {
         events,
         playbacks,
         agents,
+        conductor_runtime,
     )
     .await?;
     Ok(())

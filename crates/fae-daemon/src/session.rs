@@ -45,6 +45,13 @@ pub struct SessionBackends<'a> {
     /// Live native-ACP sessions (gap A2): `agent.session_start/prompt/cancel/
     /// close` look sessions up here.
     pub agents: &'a AgentSessionRegistry,
+    /// The learned conductor. `None` on test/diagnostic paths (legacy
+    /// direct-`inject_text_core` behavior); `Some` on the production path, where
+    /// `inject_text` routes through it. The M1 static policy always emits
+    /// `direct` + `local-model` + `ApprovalClass::None`, so a routed turn is
+    /// byte-identical to the legacy path (the `direct` arm calls
+    /// [`inject_text_core`] verbatim — spec §8).
+    pub conductor: Option<&'a crate::conductor::ConductorRuntime>,
 }
 
 /// The `session.authenticate` payload.
@@ -1237,7 +1244,37 @@ async fn inject_text(
     // verbatim so the byte-identical-direct safety contract holds by
     // construction (one implementation, two entry points). Today this is a
     // pass-through — zero behavior change.
-    inject_text_core(backends, cmd).await
+    match backends.conductor {
+        Some(runtime) => {
+            // Build the content-blind turn context (request_id + metadata;
+            // no prompt text) and route through the conductor. The static
+            // policy emits direct + local-model + ApprovalClass::None, so the
+            // executor's direct arm runs inject_text_core verbatim — byte-
+            // identical to the legacy path. Telemetry is fire-and-forget.
+            let ctx = build_turn_context(cmd);
+            crate::conductor::route_turn(runtime, backends, cmd, &ctx).await
+        }
+        None => {
+            // Legacy/test/diagnostic path: no conductor wired.
+            inject_text_core(backends, cmd).await
+        }
+    }
+}
+
+/// Build the conductor turn context from a command. Content-blind: carries the
+/// opaque `request_id` and non-content metadata only — **no prompt text** is
+/// read (F-4, and the policy's content-blindness guarantee).
+fn build_turn_context(cmd: &Command) -> crate::conductor::ConductorTurnContext {
+    use crate::conductor::recipe::{ConductorTaskClass, PrivacyLane};
+    crate::conductor::ConductorTurnContext {
+        request_id: cmd.request_id.clone(),
+        task_class: ConductorTaskClass::Unknown,
+        feature_predicates: Vec::new(),
+        privacy_lane: PrivacyLane::LocalOnly,
+        available_workers: Vec::new(),
+        working_directory: None,
+        deadline_ms: None,
+    }
 }
 
 /// Core conversation turn: FAE_DUMP → parse → `assistant.generating` event
@@ -1649,6 +1686,7 @@ mod tests {
             events: &events,
             playbacks: &playbacks,
             agents: &agents,
+            conductor: None,
         };
         super::handle_frame(registry, &backends, state, line, now_ms, event_id).await
     }
@@ -2397,6 +2435,105 @@ mod tests {
         );
     }
 
+    // ── M1 byte-identity: the conductor-routed path equals the legacy path ──
+    //
+    // Spec §13.1. With conductor wired (Some) and FAE_CONDUCTOR_CHAIN unset, the
+    // static policy emits direct + local-model + ApprovalClass::None; the
+    // executor's direct arm calls inject_text_core VERBATIM. So the routed turn
+    // must produce the identical answer AND the identical assistant.generating
+    // event pair — and additionally drop a telemetry event + receipt into the
+    // isolated conductor store.
+    #[tokio::test]
+    async fn conductor_routed_direct_is_byte_identical_to_legacy() {
+        use crate::conductor::{
+            ConductorRuntime, ConductorStore, InstallKey, RecipeSet, StaticDirectPolicy,
+            WorkerRegistry,
+        };
+
+        let tmp = tempfile::tempdir().expect("tempdir in test");
+        let install_key =
+            InstallKey::load_or_create(&tmp.path().join("install.key")).expect("key in test");
+        let store = ConductorStore::open(tmp.path().join("store")).expect("store in test");
+        let runtime = ConductorRuntime::new(
+            StaticDirectPolicy,
+            RecipeSet::default(),
+            WorkerRegistry::m1(),
+            store,
+            install_key,
+            false, // FAE_CONDUCTOR_CHAIN unset → chain disabled (F-3)
+        );
+
+        let bus = crate::events::EventBus::new();
+        let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let (sink, captured) = CapturingSink::new();
+        let sink_dyn: std::sync::Arc<dyn crate::events::EventSink> = sink.clone();
+        bus.subscribe(
+            std::sync::Arc::downgrade(&sink_dyn),
+            [Scope::ConversationRead].into_iter().collect(),
+        );
+        let backends = SessionBackends {
+            engine: &mock(),
+            asr_fallback: None,
+            tts: &mock_tts(),
+            audio: &AudioManager::new(),
+            events: &bus,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+        };
+        let cmd = fae_control_plane::Command {
+            v: 2,
+            request_id: "gen1".to_owned(),
+            command: "conversation.inject_text".to_owned(),
+            payload: serde_json::json!({ "text": "hello" }),
+        };
+        let result = inject_text(&backends, &cmd).await.expect("turn ok");
+        // Byte-identical answer.
+        assert_eq!(
+            result.get("text").and_then(|v| v.as_str()),
+            Some("echo: hello")
+        );
+        // Byte-identical generating event pair.
+        let actives = {
+            let store_captured = captured.lock().expect("captured lock");
+            store_captured
+                .iter()
+                .filter(|v| v.get("event").and_then(|e| e.as_str()) == Some("assistant.generating"))
+                .filter_map(|v| {
+                    v.get("payload")
+                        .and_then(|p| p.get("active"))
+                        .and_then(|a| a.as_bool())
+                })
+                .collect::<Vec<bool>>()
+        };
+        assert_eq!(
+            actives,
+            vec![true, false],
+            "conductor path keeps paired signal"
+        );
+
+        // Telemetry landed in the isolated conductor store (fire-and-forget on
+        // the blocking pool — give it a moment to flush).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events_path = tmp
+            .path()
+            .join("store")
+            .join("conductor_route_events.jsonl");
+        let receipts_path = tmp.path().join("store").join("conductor_receipts.jsonl");
+        let events = std::fs::read_to_string(&events_path).unwrap_or_default();
+        let receipts = std::fs::read_to_string(&receipts_path).unwrap_or_default();
+        assert!(
+            events.contains("fae.static-direct.v1"),
+            "route event written"
+        );
+        assert!(receipts.contains("local-model"), "receipt written");
+        // Privacy: neither file carries the request text or the raw request_id.
+        assert!(!events.contains("hello"), "no prompt text in telemetry");
+        assert!(!receipts.contains("hello"), "no prompt text in receipt");
+        assert!(!events.contains("gen1"), "no raw request_id in telemetry");
+    }
+
     // ── Orb-host-owns-state: assistant.generating event ──
 
     /// A minimal capturing event sink for inject_text event tests. The real
@@ -2446,6 +2583,7 @@ mod tests {
             events: &bus,
             playbacks: &playbacks,
             agents: &agents,
+            conductor: None,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2495,6 +2633,7 @@ mod tests {
             events: &bus,
             playbacks: &playbacks,
             agents: &agents,
+            conductor: None,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2540,6 +2679,7 @@ mod tests {
             events: &bus,
             playbacks: &playbacks,
             agents: &agents,
+            conductor: None,
         };
         // kind missing → bad_request, nothing published.
         let cmd = fae_control_plane::Command {

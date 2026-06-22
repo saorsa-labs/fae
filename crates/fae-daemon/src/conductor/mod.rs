@@ -42,6 +42,15 @@
 // `dead_code` is expected until M1 wires the routing policy; removing this
 // allow is itself an M1 acceptance criterion.
 #![allow(dead_code)]
+// M1 wires the runtime/policy/executor/telemetry, but the conductor module
+// also carries deliberately-front-loaded scaffolding for M2/M3 that is unused
+// in M1: the full `FaeConductorRecipe` schema + `validate()` (M2 loads real
+// recipes), `PrivacyLane::permits` / `locality_to_lane` (M2 recipe validation),
+// `RecipeProfile`, `SUPPORTED_TOPOLOGIES`, and the `run_chain` body (M3 chain
+// candidates). This is staged plumbing, not masked bugs. Each milestone
+// removes the allowance for the surface it wires; the residue is re-audited at
+// G-M2/G-M3. Do NOT blanket-suppress NEW dead code — add a targeted,
+// dated `#[allow(dead_code)]` with a TODO(<milestone>) for anything new.
 #![allow(unused_imports)]
 #![cfg_attr(
     not(test),
@@ -59,7 +68,7 @@ pub mod telemetry;
 pub mod workers;
 
 pub use error::ConductorError;
-pub use executor::{route_turn, ConductorRuntime, SharedConductorRuntime};
+pub use executor::{route_turn, ConductorRuntime};
 pub use fingerprint::{InstallKey, RequestFingerprint};
 pub use policy::{ConductorRoutingPolicy, StaticDirectPolicy, STATIC_DIRECT_RECIPE_ID};
 pub use recipe::{
