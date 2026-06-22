@@ -84,6 +84,7 @@ pub struct ConductorRouteEvent {
 impl ConductorRouteEvent {
     /// Build a minimal turn-level event (no role/worker detail). M0b uses this
     /// shape; M1 fills role/worker as the executor runs.
+    #[allow(dead_code)] // exercised in unit tests; M2 eval aggregation uses it directly
     pub fn turn_level(
         request_fingerprint: RequestFingerprint,
         task_class: ConductorTaskClass,

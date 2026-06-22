@@ -100,6 +100,7 @@ pub enum PrivacyLane {
 impl PrivacyLane {
     /// True if `other` is at least as permissive as `self`. Used to guard
     /// against widening: a mutation may narrow but never silently widen.
+    #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
     pub fn permits(self, other: PrivacyLane) -> bool {
         fn rank(lane: PrivacyLane) -> u8 {
             match lane {
@@ -274,6 +275,7 @@ pub enum ConductorRecipeError {
 /// M1 static policy may deploy. Loosening it (to permit OwnerFleet/TrustedPeer/
 /// RemoteProvider workers, or Star/Debate topologies) is a deliberate,
 /// milestone-gated change.
+#[allow(dead_code)] // TODO(M2): recipe validation on candidate load
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeProfile {
     /// M0–M3: local model + local ACP workers only; Direct/Chain only;
@@ -285,6 +287,7 @@ pub enum RecipeProfile {
 impl FaeConductorRecipe {
     /// Validate against the v1 safe profile. Returns the first structural
     /// violation, or `Ok(())` if the recipe is deployable.
+    #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
     pub fn validate(&self) -> Result<(), ConductorRecipeError> {
         self.validate_for(RecipeProfile::V1Safe)
     }
@@ -365,6 +368,7 @@ impl FaeConductorRecipe {
     }
 }
 
+#[allow(dead_code)] // TODO(M2): recipe validation on candidate load
 fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
     match l {
         WorkerLocality::LocalModel | WorkerLocality::LocalAcp => PrivacyLane::LocalOnly,
@@ -384,13 +388,20 @@ fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
 #[derive(Debug, Clone)]
 pub struct ConductorTurnContext {
     pub request_id: String,
+    #[allow(dead_code)]
+    // TODO(M2): richer classify() reads these; M1 policy is content-blind and inert
     pub task_class: ConductorTaskClass,
+    #[allow(dead_code)] // TODO(M2): feature-gated routing
     pub feature_predicates: Vec<String>,
+    #[allow(dead_code)] // TODO(M2): privacy-lane-aware routing
     pub privacy_lane: PrivacyLane,
+    #[allow(dead_code)] // TODO(M2): worker selection
     pub available_workers: Vec<WorkerSelector>,
     /// Optional working directory for ACP runners.
+    #[allow(dead_code)] // TODO(M2): ACP worker execution
     pub working_directory: Option<String>,
     /// Optional hard deadline (millis since epoch).
+    #[allow(dead_code)] // TODO(M2): budget enforcement
     pub deadline_ms: Option<u64>,
 }
 
@@ -416,10 +427,12 @@ pub enum ApprovalClass {
     None,
     /// Per-turn approval required (Tier C: sensitive / cross-owner / PII, or
     /// anything not covered by a standing grant).
+    #[allow(dead_code)] // TODO(M2): Tier C approval surface
     PerTurn,
     /// Covered by a standing, revocable grant (Tier B). `id` is the opaque
     /// grant identifier; the conductor resolves it against the grant ledger.
     /// M1 never emits this — present so the seam exists.
+    #[allow(dead_code)] // TODO(M2): Tier B approval surface
     StandingGrant(String),
 }
 
@@ -441,6 +454,8 @@ pub struct OwnedRouteDecision {
     pub task_class: ConductorTaskClass,
     pub approval: ApprovalClass,
     /// Short, static, audit-safe reason (e.g. `"static-direct-local"`).
+    #[allow(dead_code)]
+    // TODO(M2): surfaced in receipt.team_view; M1 receipts carry fallback_reason instead
     pub reason: String,
 }
 
@@ -472,6 +487,7 @@ pub struct RecipeSet {
 
 impl RecipeSet {
     /// Build from an iterator of `(id, recipe)`. Later duplicates win.
+    #[allow(dead_code)] // TODO(M2): M1 loads no candidate recipes; static-direct is hardcoded in the policy
     pub fn from_iter<I: IntoIterator<Item = (String, FaeConductorRecipe)>>(iter: I) -> Self {
         Self {
             recipes: iter.into_iter().collect(),
@@ -484,11 +500,13 @@ impl RecipeSet {
     }
 
     /// Number of loaded recipes.
+    #[allow(dead_code)] // exercised in unit tests; M2 recipe loading surfaces it in runtime.status
     pub fn len(&self) -> usize {
         self.recipes.len()
     }
 
     /// Whether the set is empty.
+    #[allow(dead_code)] // exercised in unit tests; M2 recipe loading surfaces it
     pub fn is_empty(&self) -> bool {
         self.recipes.is_empty()
     }

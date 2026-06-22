@@ -40,11 +40,13 @@ impl WorkerRegistry {
     }
 
     /// Number of registered workers.
+    #[allow(dead_code)] // exercised in unit tests; M2 worker introspection surfaces it
     pub fn len(&self) -> usize {
         self.ids.len()
     }
 
     /// Whether the registry is empty.
+    #[allow(dead_code)] // exercised in unit tests; M2 worker introspection surfaces it
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }

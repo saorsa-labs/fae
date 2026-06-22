@@ -21,5 +21,7 @@ pub enum ConductorError {
     Recipe(String),
     /// A store path component was malformed (non-sanitized id, path escape, …).
     #[error("conductor path: {0}")]
+    #[allow(dead_code)]
+    // TODO(M2): raised by RecipeSet/recipe-store paths when M2 loads candidate recipes
     Path(String),
 }

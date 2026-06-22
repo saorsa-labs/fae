@@ -38,11 +38,11 @@ use fae_engine::{ChatMessage, ChatRequest, ProviderAdapter, Role};
 /// the payload and break byte-identity.
 #[derive(Debug, Clone)]
 pub(crate) struct TurnOutcome {
-    success: bool,
-    fallback: bool,
-    fallback_reason: Option<String>,
-    target_kind: TargetKind,
-    privacy_lane: PrivacyLane,
+    pub(crate) success: bool,
+    pub(crate) fallback: bool,
+    pub(crate) fallback_reason: Option<String>,
+    pub(crate) target_kind: TargetKind,
+    pub(crate) privacy_lane: PrivacyLane,
 }
 
 /// Startup-constructed conductor state. Cheap to share (`Arc`) across the
@@ -91,20 +91,30 @@ impl ConductorRuntime {
         backends: &SessionBackends<'_>,
         cmd: &Command,
     ) -> (Result<Value, &'static str>, TurnOutcome) {
-        // 1. Recipe resolution (spec §5.4).
-        let recipe = match self.recipes.get(&decision.recipe_id) {
-            Some(r) => r,
-            None => {
-                return self
-                    .fail_closed_direct(
-                        decision,
-                        backends,
-                        cmd,
-                        RouteFailure::InvalidRecipe {
-                            recipe_id: decision.recipe_id.clone(),
-                        },
-                    )
-                    .await;
+        // 1. Recipe resolution (spec §5.4). The static-direct recipe is a
+        //    policy invariant, not a loadable artifact, so it always resolves
+        //    to the local-only direct profile without a RecipeSet lookup. Any
+        //    OTHER recipe id must be present in the loaded set; a miss fails
+        //    closed to direct-local.
+        let is_static_direct =
+            decision.recipe_id == crate::conductor::policy::STATIC_DIRECT_RECIPE_ID;
+        let recipe = if is_static_direct {
+            None // static-direct needs no recipe object; its profile is hardcoded below.
+        } else {
+            match self.recipes.get(&decision.recipe_id) {
+                Some(r) => Some(r),
+                None => {
+                    return self
+                        .fail_closed_direct(
+                            decision,
+                            backends,
+                            cmd,
+                            RouteFailure::InvalidRecipe {
+                                recipe_id: decision.recipe_id.clone(),
+                            },
+                        )
+                        .await;
+                }
             }
         };
         // 2. Worker resolution.
@@ -146,7 +156,11 @@ impl ConductorRuntime {
                     fallback: false,
                     fallback_reason: None,
                     target_kind: TargetKind::LocalModel,
-                    privacy_lane: recipe.privacy_lane,
+                    // Static-direct is always LocalOnly; loaded recipes carry
+                    // their own privacy_lane.
+                    privacy_lane: recipe
+                        .map(|r| r.privacy_lane)
+                        .unwrap_or(PrivacyLane::LocalOnly),
                 };
                 (wire, outcome)
             }
@@ -168,8 +182,15 @@ impl ConductorRuntime {
                 // M1 ships with chain_enabled defaulting to false; the arm is
                 // exercised only when FAE_CONDUCTOR_CHAIN is set AND a vetted
                 // chain recipe is loaded. See `run_chain`.
-                self.run_chain(decision, backends, cmd, recipe.privacy_lane)
-                    .await
+                self.run_chain(
+                    decision,
+                    backends,
+                    cmd,
+                    recipe
+                        .map(|r| r.privacy_lane)
+                        .unwrap_or(PrivacyLane::LocalOnly),
+                )
+                .await
             }
         }
     }

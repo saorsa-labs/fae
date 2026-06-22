@@ -37,6 +37,7 @@ impl ConductorStore {
         Ok(Self { dir })
     }
 
+    #[allow(dead_code)] // exercised in unit tests; M2 store introspection surfaces it
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -54,6 +55,7 @@ impl ConductorStore {
     /// Persist a recipe version. Path: `recipes/<recipe_id>.v<version>.json`.
     /// Overwrites an exact (id, version) match (idempotent re-writes); never
     /// touches other versions. `recipe_id` is sanitized to a safe filename set.
+    #[allow(dead_code)] // exercised in unit tests; M2 recipe persistence surfaces it
     pub fn store_recipe(&self, recipe: &FaeConductorRecipe) -> Result<PathBuf, ConductorError> {
         let safe_id = sanitize_id(&recipe.id)?;
         let path = self
@@ -69,6 +71,7 @@ impl ConductorStore {
     }
 
     /// Load a specific recipe version. `None` if absent.
+    #[allow(dead_code)] // exercised in unit tests; M2 recipe loading surfaces it
     pub fn load_recipe(
         &self,
         recipe_id: &str,
@@ -102,6 +105,7 @@ fn append_jsonl<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Condu
 
 /// Restrict `id` to `[A-Za-z0-9._-]` and reject empty/path-like values. Prevents
 /// path escape via a crafted recipe id (oracle risk: path traversal).
+#[allow(dead_code)] // exercised in unit tests; M2 recipe persistence routes through it
 fn sanitize_id(id: &str) -> Result<String, ConductorError> {
     if id.is_empty() || id.len() > 128 {
         return Err(ConductorError::Path(format!(
