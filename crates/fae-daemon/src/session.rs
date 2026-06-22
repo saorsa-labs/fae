@@ -1232,6 +1232,29 @@ async fn inject_text(
     backends: &SessionBackends<'_>,
     cmd: &Command,
 ) -> Result<serde_json::Value, &'static str> {
+    // M1 step A: pure mechanical extraction. The conductor (step E) will route
+    // through this wrapper; its `direct` decision calls `inject_text_core`
+    // verbatim so the byte-identical-direct safety contract holds by
+    // construction (one implementation, two entry points). Today this is a
+    // pass-through — zero behavior change.
+    inject_text_core(backends, cmd).await
+}
+
+/// Core conversation turn: FAE_DUMP → parse → `assistant.generating` event
+/// pair → NaN-logits retry loop → `run_turn`. Extracted from `inject_text` so
+/// the conductor's `direct` arm can run the exact same code path (the M1
+/// byte-identical-direct contract — see
+/// `docs/architecture/conductor-m1-static-recipes-spec-2026-06-22.md` §8).
+///
+/// User-visible behavior lives here: the `assistant.generating {active:true}`
+/// publish (the orb host's generating indicator), the NaN-logits retry loop
+/// (`NAN_RETRY_PADS = [4,24,80]`, rescues a known Metal failure), and the
+/// exactly-once `active:false` publish on every return path. Any re-route MUST
+/// call this verbatim, never a bare `run_turn`.
+pub(crate) async fn inject_text_core(
+    backends: &SessionBackends<'_>,
+    cmd: &Command,
+) -> Result<serde_json::Value, &'static str> {
     // Diagnostic payload dump (dev only): FAE_DUMP_REQUESTS=<dir> writes each
     // inject_text payload verbatim so failing turns can be replayed offline.
     if let Ok(dir) = std::env::var("FAE_DUMP_REQUESTS") {
