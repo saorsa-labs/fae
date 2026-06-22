@@ -34,6 +34,7 @@ use fae_engine::{
 };
 
 mod agents;
+mod conductor;
 mod diagnostic;
 mod events;
 mod offline_turn;
