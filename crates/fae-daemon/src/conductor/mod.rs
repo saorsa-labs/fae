@@ -49,21 +49,28 @@
 )]
 
 pub mod error;
+pub mod executor;
 pub mod fingerprint;
+pub mod policy;
+pub mod prompts;
 pub mod recipe;
 pub mod store;
 pub mod telemetry;
+pub mod workers;
 
 pub use error::ConductorError;
+pub use executor::{route_turn, ConductorRuntime, SharedConductorRuntime};
 pub use fingerprint::{InstallKey, RequestFingerprint};
+pub use policy::{ConductorRoutingPolicy, StaticDirectPolicy, STATIC_DIRECT_RECIPE_ID};
 pub use recipe::{
     AggregationPolicy, ApprovalClass, BudgetPolicy, ConductorRecipeError, ConductorRole,
-    ConductorRouteDecision, ConductorTaskClass, ConductorTopology, ConductorTurnContext,
-    EscalationPolicy, FaeConductorRecipe, PrivacyLane, RoleSlot, StopPolicy, WorkerLocality,
-    WorkerSelector,
+    ConductorTaskClass, ConductorTopology, ConductorTurnContext, EscalationPolicy,
+    FaeConductorRecipe, OwnedRouteDecision, PrivacyLane, RecipeSet, RoleSlot, RouteFailure,
+    StopPolicy, WorkerLocality, WorkerSelector,
 };
 pub use store::ConductorStore;
 pub use telemetry::{ConductorRouteEvent, RouteReceipt, TargetKind};
+pub use workers::{WorkerRegistry, LOCAL_MODEL_WORKER_ID};
 
 /// Supported topology set for v1. Star/Debate are intentionally absent — they
 /// are compile-time-unreachable (F-15 enforcement, stronger than a runtime

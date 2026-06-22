@@ -113,28 +113,41 @@ impl ConductorRouteEvent {
 }
 
 /// Human/audit-facing receipt for a route. Surfaces in the opt-in "team view"
-/// and the security log. Excludes raw prompt/memory/secrets.
+/// Audit-facing per-turn receipt. One written per `inject_text` after
+/// execution. Joins to [`ConductorRouteEvent`] via `request_fingerprint`.
+/// Excludes raw prompt/memory/secrets; the only payload-derived value is
+/// `payload_hash` (SHA-256 of the *outbound* payload, M2), never the input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteReceipt {
-    /// Stable route id (correlates to the security log entry).
-    pub route_id: String,
-    pub timestamp_ms: u64,
+    /// Opaque per-install correlation token (F-4). Joins to the route event.
+    pub request_fingerprint: RequestFingerprint,
+    pub recipe_id: String,
     pub topology: ConductorTopology,
-    /// Roles executed, in order.
-    pub roles: Vec<ConductorRole>,
+    pub worker_id: String,
     pub target_kind: TargetKind,
     pub privacy_lane: PrivacyLane,
+    /// Roles executed, in order (M2 chain). `None` for direct topology.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_estimate_micros: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_actual_micros: Option<u64>,
+    pub roles: Option<Vec<ConductorRole>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u64>,
-    pub fallback_used: bool,
-    /// SHA-256 of the outbound payload (not the payload). Lets the user/auditor
-    /// verify two receipts refer to the same ask without storing the ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micros: Option<u64>,
+    pub success: bool,
+    pub fallback: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    /// SHA-256 of the outbound payload (not the payload). M2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload_hash: Option<String>,
+    /// *M2 invariant:* aggregate scores only, never query content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_delta: Option<String>,
+    /// *M2 invariant:* enum-like tokens only, never user text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_signal: Option<String>,
+    /// Millis since epoch.
+    pub timestamp_ms: u64,
 }
 
 #[cfg(test)]
@@ -163,17 +176,22 @@ mod tests {
     #[test]
     fn receipt_roundtrip() {
         let r = RouteReceipt {
-            route_id: "route-1".into(),
-            timestamp_ms: 1,
+            request_fingerprint: fp(),
+            recipe_id: "fae.static-direct.v1".into(),
             topology: ConductorTopology::Chain,
-            roles: vec![ConductorRole::Thinker, ConductorRole::Worker],
-            target_kind: TargetKind::LocalAcp,
+            worker_id: "local-model".into(),
+            target_kind: TargetKind::LocalModel,
             privacy_lane: PrivacyLane::LocalOnly,
-            cost_estimate_micros: None,
-            cost_actual_micros: Some(1200),
+            roles: Some(vec![ConductorRole::Thinker, ConductorRole::Worker]),
             latency_ms: Some(450),
-            fallback_used: false,
+            cost_micros: Some(1200),
+            success: true,
+            fallback: false,
+            fallback_reason: None,
             payload_hash: Some("deadbeef".into()),
+            eval_delta: None,
+            user_signal: None,
+            timestamp_ms: 1,
         };
         let json = serde_json::to_string(&r).expect("ser in test");
         let back: RouteReceipt = serde_json::from_str(&json).expect("de in test");

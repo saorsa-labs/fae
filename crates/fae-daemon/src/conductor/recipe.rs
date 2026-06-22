@@ -379,15 +379,17 @@ fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
 /// Inputs to one conductor routing decision. Deliberately carries **no user
 /// text** — correlation with telemetry is via `request_id` only (see
 /// [`crate::conductor::fingerprint::RequestFingerprint`], F-4).
+///
+/// OWNED (no borrows) so the decision can move across `.await` boundaries.
 #[derive(Debug, Clone)]
-pub struct ConductorTurnContext<'a> {
-    pub request_id: &'a str,
+pub struct ConductorTurnContext {
+    pub request_id: String,
     pub task_class: ConductorTaskClass,
-    pub feature_predicates: &'a [String],
+    pub feature_predicates: Vec<String>,
     pub privacy_lane: PrivacyLane,
-    pub available_workers: &'a [WorkerSelector],
+    pub available_workers: Vec<WorkerSelector>,
     /// Optional working directory for ACP runners.
-    pub working_directory: Option<&'a str>,
+    pub working_directory: Option<String>,
     /// Optional hard deadline (millis since epoch).
     pub deadline_ms: Option<u64>,
 }
@@ -421,26 +423,75 @@ pub enum ApprovalClass {
     StandingGrant(String),
 }
 
-/// The conductor's routing decision for one turn. M1's static policy produces
-/// the first two variants; `MeshDelegate` and `FallbackLocal` are emitted but
-/// deferred (mesh) or last-resort (fallback).
+/// The conductor's decision for one turn. OWNED — safe to move across `.await`.
+/// The executor resolves `recipe_id`/`worker_id` against the loaded recipe set
+/// and worker registry, and computes the request fingerprint (HMAC of
+/// `request_id` under the install key — F-4) during execution.
+///
+/// M1's `StaticDirectPolicy` always emits `direct` + `local-model` +
+/// `ApprovalClass::None`.
 #[derive(Debug, Clone)]
-pub enum ConductorRouteDecision<'a> {
-    /// Answer locally, no delegation.
-    LocalAnswer { recipe_id: &'a str, reason: String },
-    /// Run a one-shot agent (ACP) under the given recipe/worker.
-    AgentRun {
-        recipe: &'a FaeConductorRecipe,
-        worker: &'a WorkerSelector,
-        /// The approval gate this run must pass before execution. M1 always
-        /// emits [`ApprovalClass::None`]; M2 introduces the higher tiers.
-        approval: ApprovalClass,
-    },
-    /// Mesh delegation is the right call but is not executable yet (pre-M4).
-    /// Logged + falls back to local.
-    MeshDeferred { recipe_id: &'a str, reason: String },
-    /// No eligible worker; fall back to a safe local answer.
-    FallbackLocal { reason: String },
+pub struct OwnedRouteDecision {
+    /// Opaque; the executor HMACs it into the fingerprint. Never stored raw in
+    /// telemetry (only its HMAC is).
+    pub request_id: String,
+    pub recipe_id: String,
+    pub topology: ConductorTopology,
+    pub worker_id: String,
+    pub task_class: ConductorTaskClass,
+    pub approval: ApprovalClass,
+    /// Short, static, audit-safe reason (e.g. `"static-direct-local"`).
+    pub reason: String,
+}
+
+/// Failure to route — the executor fails closed to `direct`-local (never aborts
+/// the user's turn) and logs the reason in the receipt's `fallback` field.
+#[derive(Debug, Clone)]
+pub enum RouteFailure {
+    /// Recipe id not found in the loaded set.
+    InvalidRecipe { recipe_id: String },
+    /// Worker id not in the vetted registry.
+    WorkerUnavailable { worker_id: String },
+    /// Recipe requested chain but `chain_enabled` is false (or similar).
+    RecipeDisabled { recipe_id: String, reason: String },
+    /// A non-`None` approval class reached the executor in M1 (defense-in-depth;
+    /// unreachable, since the static policy emits `None`).
+    UnexpectedApproval { approval: ApprovalClass },
+}
+
+/// The loaded recipe set, keyed by id. The executor looks up `recipe_id`
+/// here before executing; a miss is a [`RouteFailure::InvalidRecipe`] that
+/// fails closed to direct-local (spec §5.4).
+/// The loaded recipe set, keyed by id. The executor looks up `recipe_id`
+/// here before executing; a miss is a [`RouteFailure::InvalidRecipe`] that
+/// fails closed to direct-local (spec §5.4).
+#[derive(Debug, Clone, Default)]
+pub struct RecipeSet {
+    recipes: std::collections::HashMap<String, FaeConductorRecipe>,
+}
+
+impl RecipeSet {
+    /// Build from an iterator of `(id, recipe)`. Later duplicates win.
+    pub fn from_iter<I: IntoIterator<Item = (String, FaeConductorRecipe)>>(iter: I) -> Self {
+        Self {
+            recipes: iter.into_iter().collect(),
+        }
+    }
+
+    /// Look up a recipe by id.
+    pub fn get(&self, id: &str) -> Option<&FaeConductorRecipe> {
+        self.recipes.get(id)
+    }
+
+    /// Number of loaded recipes.
+    pub fn len(&self) -> usize {
+        self.recipes.len()
+    }
+
+    /// Whether the set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.recipes.is_empty()
+    }
 }
 
 // Convenience for error conversion at module boundaries.
