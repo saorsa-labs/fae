@@ -1,20 +1,21 @@
-//! P9/C4 HEADLESS LIVE DE-RISK (manual only — NOT a test, never runs in CI).
+//! P9/C4 v2 BASE DRY-RUN (manual only — NOT a test, never runs in CI).
 //!
-//! Proves the two things only real hardware can show about the gguf-lane A/B
-//! eval gate (`DaemonABEvaluator`):
-//!   1. the real llama.cpp scale-0/1 + reload mechanism A/Bs a real GGUF LoRA
-//!      end-to-end and yields a MEASURED per-dimension delta (not "blocked"),
-//!   2. the bundled held-out eval set `daemon-ab-eval-v1.json` actually
-//!      DISCRIMINATES — a different adapter scores measurably differently, not
-//!      identically.
+//! Phase 2 of the daemon-ab-eval-v2 build: run the BASE model (scale 0, NO
+//! adapter) over the 64-item v2 held-out eval set and score each item with a
+//! Rust port of the FULL v2 `DaemonEvalScorer.isCorrect`. The goal is to find
+//! which items the base model already aces (so they can't discriminate a better
+//! adapter) and confirm base lands in a ~60–80% band on the hard dimensions,
+//! leaving headroom. This is the validation v1 lacked.
 //!
-//! Mirrors `examples/llama_reload.rs`. Needs the `~/llama-spike` bench
-//! artifacts. Run manually:
+//! Run manually (crate cargo commands REQUIRE `env -u RUSTFLAGS`):
 //! ```sh
-//! env -u RUSTFLAGS cargo run -p fae-engine --example daemon_ab_derisk
+//! env -u RUSTFLAGS cargo run --release --manifest-path crates/Cargo.toml \
+//!   -p fae-engine --example v2_base_dryrun
 //! ```
 //! Scoring rules are a faithful port of `DaemonEvalScorer.isCorrect` in
-//! `native/macos/Fae/Sources/Fae/Scheduler/DaemonABEvaluator.swift`.
+//! `native/macos/Fae/Sources/Fae/Scheduler/DaemonABEvaluator.swift` — INCLUDING
+//! the v2 arms `expectConcise` (maxChars/maxLines + optional anyOf/allOf) and the
+//! `allOf` extension to `expectKeywords`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,7 +27,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 const EVAL_JSON: &str =
-    include_str!("../../../native/macos/Fae/Sources/Fae/Resources/Models/daemon-ab-eval-v1.json");
+    include_str!("../../../native/macos/Fae/Sources/Fae/Resources/Models/daemon-ab-eval-v2.json");
 
 /// One scored inference: the model's text + any tool calls it emitted.
 struct Inference {
@@ -38,22 +39,19 @@ struct Inference {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
 
-    // Let `reload_adapter`'s confinement accept the bench adapters (they live in
-    // ~/llama-spike, not the app's personal-adapters dir). This is the documented
-    // FAE_PERSONAL_ADAPTERS_DIR override the daemon honours.
-    std::env::set_var("FAE_PERSONAL_ADAPTERS_DIR", format!("{home}/llama-spike"));
-
     let base = format!("{home}/llama-spike/gguf/gemma-4-E4B-it-Q4_K_M.gguf");
-    let metric = format!("{home}/llama-spike/personal-metric.gguf");
-    let c2 = format!("{home}/llama-spike/personal-c2.gguf");
     let server = format!("{home}/llama-spike/llama.cpp/build/bin/llama-server");
 
     let examples = parse_examples(EVAL_JSON)?;
-    eprintln!("[derisk] loaded {} eval examples", examples.len());
+    eprintln!(
+        "[v2-dryrun] loaded {} eval examples (suiteVersion check in JSON)",
+        examples.len()
+    );
 
-    // Spawn ONE sidecar: base model + personal-metric loaded but inactive
-    // (--lora-init-without-apply). scale 0 = base, scale 1 = personalized — the
-    // exact production "portable gate" the design names.
+    // Spawn ONE sidecar: BASE model only, NO LoRA. The dry-run measures the base
+    // model alone, so there is nothing to scale — scale 0 with no adapter IS the
+    // base. (We still call set_adapter_scale(0.0) for parity with the gate path,
+    // which is a no-op without a loaded adapter.)
     let config = LlamaServerConfig {
         binary: server,
         model: LlamaModelSource::Local {
@@ -61,84 +59,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             mmproj: None,
             mtp_draft: None,
         },
-        lora_gguf: Some(metric.clone()),
+        lora_gguf: None,
         alias: "gemma-4-e4b".to_owned(),
         enable_thinking: false, // deterministic, fast — no thinking span
         mtp_draft_tokens: None,
-        port: 18133,
+        port: 18134,
         ctx_size: 4096,
         ngl: 99,
     };
-    eprintln!("[derisk] spawning sidecar (base + personal-metric loaded inactive)…");
+    eprintln!("[v2-dryrun] spawning sidecar (BASE model, no LoRA)…");
     let adapter = LlamaServerAdapter::spawn(config, "gemma-4-e4b").await?;
+    let _ = adapter.set_adapter_scale(0.0); // parity no-op; ignore if no adapter
 
-    // --- Good-candidate A/B via the scale-0/1 portable gate -----------------
-    eprintln!("\n[derisk] === PHASE 1: scale-0 BASELINE (base model) ===");
-    adapter.set_adapter_scale(0.0)?;
-    let baseline = run_suite(&adapter, &examples).await?;
-    let base_acc = accuracy_by_dim(&baseline);
+    eprintln!("\n[v2-dryrun] === BASE-ONLY RUN (scale 0, no adapter) ===");
+    let results = run_suite(&adapter, &examples).await?;
 
-    eprintln!("\n[derisk] === PHASE 2: scale-1 CANDIDATE (personal-metric) ===");
-    adapter.set_adapter_scale(1.0)?;
-    let candidate = run_suite(&adapter, &examples).await?;
-    let cand_acc = accuracy_by_dim(&candidate);
-
-    eprintln!("\n[derisk] === GOOD-CANDIDATE A/B (personal-metric scale1 − base scale0) ===");
-    print_delta_table(&base_acc, &cand_acc);
-
-    // --- Restore + confirm safety property ----------------------------------
-    eprintln!("\n[derisk] === RESTORE: scale back to 0 (base) ===");
-    adapter.set_adapter_scale(0.0)?;
-    match adapter.loaded_adapter() {
-        Some(la) => eprintln!(
-            "[derisk] loaded_adapter after restore: path={} scale={} sha={}…",
-            la.path,
-            la.scale,
-            &la.sha256.chars().take(12).collect::<String>()
-        ),
-        None => eprintln!("[derisk] loaded_adapter after restore: None (base only)"),
-    }
-
-    // --- Discrimination: a DIFFERENT adapter via the real reload primitive ---
-    // reload_adapter confines + SHA-hashes the path (the untrusted NDJSON path),
-    // then restarts the sidecar with --lora personal-c2.gguf.
-    eprintln!("\n[derisk] === PHASE 3: reload → personal-c2 (different adapter) ===");
-    adapter.reload_adapter(Some(c2.clone())).await?;
-    match adapter.loaded_adapter() {
-        Some(la) => eprintln!(
-            "[derisk] reloaded adapter: path={} sha={}… scale={}",
-            la.path,
-            &la.sha256.chars().take(12).collect::<String>(),
-            la.scale
-        ),
-        None => eprintln!("[derisk] WARNING: reload reported no loaded adapter"),
-    }
-    adapter.set_adapter_scale(1.0)?;
-    let c2_results = run_suite(&adapter, &examples).await?;
-    let c2_acc = accuracy_by_dim(&c2_results);
-    eprintln!("\n[derisk] === DISCRIMINATION A/B (personal-c2 scale1 − base scale0) ===");
-    print_delta_table(&base_acc, &c2_acc);
-
-    eprintln!("\n[derisk] === SUMMARY (per-dimension accuracy %) ===");
-    let mut dims: Vec<&String> = base_acc.keys().collect();
-    dims.sort();
-    eprintln!(
-        "{:<16} {:>10} {:>14} {:>12}",
-        "dimension", "base(s0)", "metric(s1)", "c2(s1)"
-    );
-    for d in &dims {
-        eprintln!(
-            "{:<16} {:>9.0}% {:>13.0}% {:>11.0}%",
-            d,
-            base_acc.get(*d).copied().unwrap_or(0.0) * 100.0,
-            cand_acc.get(*d).copied().unwrap_or(0.0) * 100.0,
-            c2_acc.get(*d).copied().unwrap_or(0.0) * 100.0,
+    // ---- Machine-readable per-item results (parsed by the analysis step) ----
+    eprintln!("\n[v2-dryrun] === PER-ITEM RESULTS (RESULT lines) ===");
+    for (ex, correct) in examples.iter().zip(results.iter()) {
+        // RESULT <id> <dimension> <CORRECT|WRONG>
+        println!(
+            "RESULT {} {} {}",
+            ex.id,
+            ex.dimension,
+            if *correct { "CORRECT" } else { "WRONG" }
         );
     }
 
-    // Restore to base for a clean exit.
-    adapter.reload_adapter(None).await?;
-    eprintln!("\n[derisk] restored to base; exit");
+    // ---- Per-dimension accuracy summary -------------------------------------
+    let dim_results: Vec<(String, bool)> = examples
+        .iter()
+        .zip(results.iter())
+        .map(|(ex, c)| (ex.dimension.clone(), *c))
+        .collect();
+    let acc = accuracy_by_dim(&dim_results);
+    eprintln!("\n[v2-dryrun] === PER-DIMENSION BASE ACCURACY ===");
+    eprintln!("{:<16} {:>8} {:>8}", "dimension", "correct", "acc%");
+    let mut dims: Vec<&String> = acc.keys().collect();
+    dims.sort();
+    for d in &dims {
+        let (correct, total) = dim_count(&dim_results, d);
+        eprintln!(
+            "{:<16} {:>4}/{:<3} {:>7.0}%",
+            d,
+            correct,
+            total,
+            acc.get(*d).copied().unwrap_or(0.0) * 100.0
+        );
+    }
+    println!("ACCSUMMARY START");
+    for d in &dims {
+        let (correct, total) = dim_count(&dim_results, d);
+        println!("ACC {d} {correct} {total}");
+    }
+    println!("ACCSUMMARY END");
+
+    eprintln!("\n[v2-dryrun] base dry-run complete; exit");
     Ok(())
 }
 
@@ -147,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 // ---------------------------------------------------------------------------
 
 struct Example {
+    id: String,
     dimension: String,
     system: String,
     prompt: String,
@@ -158,7 +135,7 @@ fn parse_examples(json: &str) -> Result<Vec<Example>, Box<dyn std::error::Error>
     let root: Value = serde_json::from_str(json)?;
     let arr = root["examples"]
         .as_array()
-        .ok_or("daemon-ab-eval-v1.json missing examples[]")?;
+        .ok_or("daemon-ab-eval-v2.json missing examples[]")?;
     let mut out = Vec::new();
     for e in arr {
         let tools = e["tools"]
@@ -174,6 +151,7 @@ fn parse_examples(json: &str) -> Result<Vec<Example>, Box<dyn std::error::Error>
             })
             .unwrap_or_default();
         out.push(Example {
+            id: e["id"].as_str().unwrap_or_default().to_owned(),
             dimension: e["dimension"].as_str().unwrap_or_default().to_owned(),
             system: e["system"].as_str().unwrap_or_default().to_owned(),
             prompt: e["prompt"].as_str().unwrap_or_default().to_owned(),
@@ -187,22 +165,27 @@ fn parse_examples(json: &str) -> Result<Vec<Example>, Box<dyn std::error::Error>
 async fn run_suite(
     adapter: &LlamaServerAdapter,
     examples: &[Example],
-) -> Result<Vec<(String, bool)>, Box<dyn std::error::Error>> {
+) -> Result<Vec<bool>, Box<dyn std::error::Error>> {
     let mut results = Vec::new();
     for (i, ex) in examples.iter().enumerate() {
         let inf = run_one(adapter, ex).await?;
         let correct = is_correct(&inf, &ex.scoring);
-        if i == 0 {
-            // Show one concrete prompt→output so the run is verifiable.
+        // Show a concrete prompt→output for the first item per dimension so the
+        // run is verifiable (real inference ran, not fabricated).
+        if i == 0
+            || (i < examples.len() && examples[..i].iter().all(|p| p.dimension != ex.dimension))
+        {
             eprintln!(
-                "  [sample] prompt={:?}\n           text={:?} toolCalls={:?} correct={}",
-                ex.prompt,
+                "  [sample {}] dim={} prompt={:?}\n           text={:?} toolCalls={:?} -> {}",
+                ex.id,
+                ex.dimension,
+                ex.prompt.chars().take(120).collect::<String>(),
                 inf.text.chars().take(160).collect::<String>(),
                 inf.tool_calls.iter().map(|(n, _)| n).collect::<Vec<_>>(),
-                correct
+                if correct { "CORRECT" } else { "WRONG" }
             );
         }
-        results.push((ex.dimension.clone(), correct));
+        results.push(correct);
     }
     Ok(results)
 }
@@ -237,7 +220,7 @@ async fn run_one(
 }
 
 // ---------------------------------------------------------------------------
-// Scorer — faithful port of DaemonEvalScorer.isCorrect (Swift)
+// Scorer — faithful port of DaemonEvalScorer.isCorrect (Swift), v2 arms included
 // ---------------------------------------------------------------------------
 
 fn is_correct(inf: &Inference, scoring: &Value) -> bool {
@@ -249,14 +232,7 @@ fn is_correct(inf: &Inference, scoring: &Value) -> bool {
             let Some((_, keys)) = inf.tool_calls.iter().find(|(n, _)| n == name) else {
                 return false;
             };
-            let required: BTreeSet<String> = scoring["requiredArgs"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let required: BTreeSet<String> = string_array(scoring, "requiredArgs");
             required.is_subset(keys)
         }
         "expectNoToolCall" => inf.tool_calls.is_empty() && !text.is_empty(),
@@ -289,22 +265,83 @@ fn is_correct(inf: &Inference, scoring: &Value) -> bool {
             if contains_forbidden(&lower, scoring) {
                 return false;
             }
-            let any_of: Vec<String> = scoring["anyOf"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                        .collect()
-                })
-                .unwrap_or_default();
+            // v2 `allOf`: EVERY listed substring must be present. When both `allOf`
+            // and `anyOf` are given, require all-of AND at least one any-of.
+            let all_of = lower_array(scoring, "allOf");
+            if !all_of.is_empty() && !all_of.iter().all(|k| lower.contains(k)) {
+                return false;
+            }
+            let any_of = lower_array(scoring, "anyOf");
             if any_of.is_empty() {
+                // No anyOf: pass on a satisfied allOf (above) or a non-empty answer.
                 return !text.is_empty();
             }
             any_of.iter().any(|k| lower.contains(k))
         }
+        "expectConcise" => {
+            // Deterministic brevity check: a forbidden phrase still hard-fails, then
+            // the answer must be non-empty and within the char/line bounds given.
+            if contains_forbidden(&lower, scoring) {
+                return false;
+            }
+            if text.is_empty() {
+                return false;
+            }
+            if let Some(max_chars) = scoring["maxChars"].as_u64() {
+                // Swift `text.count` counts Characters (grapheme clusters).
+                if text.chars().count() > max_chars as usize {
+                    return false;
+                }
+            }
+            if let Some(max_lines) = scoring["maxLines"].as_u64() {
+                let lines = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .count();
+                if lines > max_lines as usize {
+                    return false;
+                }
+            }
+            // v2: expectConcise may also assert keyword presence so a concise-but-
+            // wrong answer fails — brevity alone is not correctness.
+            let all_of = lower_array(scoring, "allOf");
+            if !all_of.is_empty() && !all_of.iter().all(|k| lower.contains(k)) {
+                return false;
+            }
+            let any_of = lower_array(scoring, "anyOf");
+            if !any_of.is_empty() && !any_of.iter().any(|k| lower.contains(k)) {
+                return false;
+            }
+            true
+        }
         "expectNonEmpty" => !contains_forbidden(&lower, scoring) && !text.is_empty(),
         _ => false,
     }
+}
+
+/// Lowercased string array from a scoring field (for case-insensitive matching).
+fn lower_array(scoring: &Value, key: &str) -> Vec<String> {
+    scoring[key]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// As-written string set from a scoring field (tool arg keys are case-sensitive).
+fn string_array(scoring: &Value, key: &str) -> BTreeSet<String> {
+    scoring[key]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn contains_forbidden(lower: &str, scoring: &Value) -> bool {
@@ -358,16 +395,16 @@ fn accuracy_by_dim(results: &[(String, bool)]) -> BTreeMap<String, f64> {
         .collect()
 }
 
-fn print_delta_table(base: &BTreeMap<String, f64>, cand: &BTreeMap<String, f64>) {
-    eprintln!(
-        "{:<16} {:>10} {:>12} {:>10}",
-        "dimension", "base%", "cand%", "Δ(pp)"
-    );
-    let mut dims: BTreeSet<&String> = base.keys().collect();
-    dims.extend(cand.keys());
-    for d in dims {
-        let b = base.get(d).copied().unwrap_or(0.0) * 100.0;
-        let c = cand.get(d).copied().unwrap_or(0.0) * 100.0;
-        eprintln!("{:<16} {:>9.0}% {:>11.0}% {:>+9.0}", d, b, c, c - b);
+fn dim_count(results: &[(String, bool)], dim: &str) -> (u32, u32) {
+    let mut correct = 0;
+    let mut total = 0;
+    for (d, ok) in results {
+        if d == dim {
+            total += 1;
+            if *ok {
+                correct += 1;
+            }
+        }
     }
+    (correct, total)
 }

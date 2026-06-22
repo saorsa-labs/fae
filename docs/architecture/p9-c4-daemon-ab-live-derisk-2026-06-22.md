@@ -59,7 +59,7 @@ set is **discriminating** — a bad adapter scores measurably worse, not the sam
 | Daemon status | `DaemonLLMEngine.runtimeStatus()` → daemon `runtime.status` (`{path, sha256, scale}`) |
 | Per-prompt infer | `DaemonLLMEngine.inferForEval(messages:systemPrompt:options:)` |
 | Registration | `FaeScheduler` → `coordinator.setAdapterEvaluator(daemonEvaluator)` (only when the daemon lane is live AND `DaemonEvalSuite.loadBundled()` SHA-verifies) |
-| Held-out suite | `daemon-ab-eval-v1.json` (SHA-locked via `DaemonEvalSuite.lockedSHA256`) |
+| Held-out suite | `daemon-ab-eval-v2.json` (SHA-locked via `DaemonEvalSuite.lockedSHA256`; see "v2 calibration results" below) |
 | Gate receipt | `GateReceipt` minted by `ImprovementCycleCoordinator.mintAndStoreGateReceipt`, required by `requireGateReceipt` before deploy |
 
 ## Procedure
@@ -174,14 +174,20 @@ regression and the `restore-on-every-exit` design did not hold — stop and surf
 
 ## Live de-risk run — 2026-06-22 (results)
 
-First live run on real hardware (Apple M5 Max), driven headlessly by
-`crates/fae-engine/examples/daemon_ab_derisk.rs` (a manual, non-CI harness that
-spawns the real `llama-server` sidecar and exercises the *actual* `fae-engine`
-`set_adapter_scale` / `reload_adapter` / `loaded_adapter` primitives — the same
-mechanism `DaemonABEvaluator` drives — bypassing only the Swift/NDJSON layer, which
-is already unit-proven). Base model `gemma-4-E4B-it-Q4_K_M.gguf`; adapters
-`~/llama-spike/personal-metric.gguf` and `personal-c2.gguf` (P3/C3 bench probes).
-Run it with `env -u RUSTFLAGS cargo run --release --manifest-path crates/Cargo.toml -p fae-engine --example daemon_ab_derisk`.
+First live run on real hardware (Apple M5 Max), driven headlessly by a manual,
+non-CI harness that spawns the real `llama-server` sidecar and exercises the
+*actual* `fae-engine` `set_adapter_scale` / `reload_adapter` / `loaded_adapter`
+primitives — the same mechanism `DaemonABEvaluator` drives — bypassing only the
+Swift/NDJSON layer, which is already unit-proven. Base model
+`gemma-4-E4B-it-Q4_K_M.gguf`; adapters `~/llama-spike/personal-metric.gguf` and
+`personal-c2.gguf` (P3/C3 bench probes).
+
+> The original v1 harness (`examples/daemon_ab_derisk.rs`) was removed when
+> `daemon-ab-eval-v1.json` was deleted in the v2 cutover (it embedded v1 at compile
+> time). Its successors with the full v2 scorer are
+> `crates/fae-engine/examples/v2_base_dryrun.rs` (base over the suite) and
+> `v2_calib_matrix.rs` (the 3-fixture calibration gate); the v1 results below stand
+> as the historical finding that motivated v2.
 
 Per-dimension accuracy:
 
@@ -224,3 +230,56 @@ Per-dimension accuracy:
 - This smoke is owner-run on real hardware and is intentionally **not** wired into
   CI (no live daemon + GGUF adapters in the runners). The unit tests + the SHA lock
   are the automated proofs; this page is the manual confirmation of the live legs.
+
+## v2 calibration results (2026-06-22)
+
+**`daemon-ab-eval-v2` replaces `daemon-ab-eval-v1` as the live production gate.**
+The cutover sets `DaemonEvalSuite.resourceName = "daemon-ab-eval-v2"` and
+`lockedSHA256 = 6cfc1140a82bc0e4c618ccfb0259663e011ad809460bee5b9800cb886a25b32b`
+(the SHA-256 of the bundled `daemon-ab-eval-v2.json`). v1 is deleted. v2 is **64
+items, 16 per dimension** (up from v1's 32 / 8-per-dim) and adds two discriminating
+scorer arms — `expectConcise` (char/line bounds + optional keyword) and `allOf`
+(every listed token must co-occur, distinct from `anyOf`'s OR) — so the previously
+free `expectNonEmpty` fit items and bare-`STORE:` serialization items are replaced
+with content-asserting checks, and `faeCapability` carries harder/multi-token items.
+
+### Why v2 was promoted: it discriminates
+
+A calibration matrix (`crates/fae-engine/examples/v2_calib_matrix.rs`, with the base
+dry-run baseline from `v2_base_dryrun.rs`) ran the v2 suite + the production
+`DaemonEvalScorer` rules across a fixture matrix of candidate behaviours:
+
+| Candidate | Result | Evidence |
+|-----------|--------|----------|
+| Deep-overfit (trained to garbage) | **caught** | **−62.5pp** on toolCalling → gate `.fail`, no receipt, no deploy |
+| Light/genuine LoRA | **`.pass`** | **+6.2pp faeCapability**, no regression on any dimension |
+| Null (base presented as candidate) | **blocked** | flat delta, no measured improvement → `.blockedNoMeasurement` |
+
+**Good-vs-bad dynamic range: 56pp** (good candidate's max dimension delta vs the
+bad candidate's max), comfortably above the accepted ≥25pp separation bar.
+
+### Accepted (relaxed) acceptance bar
+
+The gate was calibrated against this **accepted** bar, not an aspirational one:
+
+- **good → `.pass`** with **no regression** on any dimension;
+- **bad → `.fail`** sharply (large negative delta on at least one dimension);
+- **null → blocked** (no measurement, no deploy);
+- **good-vs-bad separation ≥ 25pp** of dynamic range.
+
+The aspirational leg — "**≥ +12.5pp improvement on toolCalling / serialization**"
+from a genuine adapter — is **NOT demonstrable** with a narrow LoRA over a base model
+already near the ceiling on those dimensions (the base scores ~100% on the
+tool-name+arg and JSON/SUPERSEDE items, so there is no headroom for a positive delta
+there; improvement shows up on faeCapability instead). This is a **documented
+limitation of the base+narrow-LoRA regime, not a gate failure** — the gate's job is
+to catch regressions and block unmeasured/bad candidates, which it does.
+
+### Known residual (low risk)
+
+The calibration matrix is implemented in **Rust** (`v2_calib_matrix.rs`) re-deriving
+the scorer logic, while the **production scorer is Swift** (`DaemonEvalScorer`). The
+two are kept behaviourally aligned by the v2 scorer-arm unit tests
+(`DaemonABEvaluatorTests`), but a Rust-vs-Swift parity drift is a known low-risk
+residual: the Swift unit tests are the authoritative gate-behaviour proof; the Rust
+harness is reproducibility evidence for the calibration, not the production scorer.

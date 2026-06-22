@@ -1,0 +1,515 @@
+{
+  "suiteVersion": "daemon-ab-v2",
+  "examples": [
+    {
+      "id": "tool-001",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Did Sarah ever send me her new address? Check.",
+      "tools": [
+        { "name": "mail", "description": "Search and read the user's email. action one of: search, read.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "query": { "type": "string" } }, "required": ["action", "query"] } },
+        { "name": "contacts", "description": "Look up the user's saved contacts. action: search.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "query": { "type": "string" } }, "required": ["action", "query"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "mail", "requiredArgs": ["action", "query"] }
+    },
+    {
+      "id": "tool-002",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Look up that restaurant Joe mentioned and tell me when they close.",
+      "tools": [
+        { "name": "web_search", "description": "Search the public web for information.", "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } },
+        { "name": "contacts", "description": "Look up the user's saved contacts. action: search.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "query": { "type": "string" } }, "required": ["action", "query"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "web_search", "requiredArgs": ["query"] }
+    },
+    {
+      "id": "tool-003",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Find me Maria's phone number.",
+      "tools": [
+        { "name": "contacts", "description": "Look up the user's saved contacts. action: search.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "query": { "type": "string" } }, "required": ["action", "query"] } },
+        { "name": "web_search", "description": "Search the public web for information.", "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "contacts", "requiredArgs": ["action", "query"] }
+    },
+    {
+      "id": "tool-004",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Add 'call the dentist' to my reminders, and put a calendar block for the appointment on Friday at 3pm.",
+      "tools": [
+        { "name": "reminders", "description": "Create or update reminders. action one of: create, complete.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" } }, "required": ["action", "title"] } },
+        { "name": "calendar", "description": "Create or list calendar events. action one of: create, list.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" }, "date": { "type": "string" } }, "required": ["action", "title", "date"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "calendar", "requiredArgs": ["action", "title", "date"] }
+    },
+    {
+      "id": "tool-005",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Mark the milk reminder as done.",
+      "tools": [
+        { "name": "reminders", "description": "Create, complete, or query reminders. action one of: create, complete, query. complete requires reminder_id.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" }, "reminder_id": { "type": "string" } }, "required": ["action"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "reminders", "requiredArgs": ["action", "reminder_id"] }
+    },
+    {
+      "id": "tool-006",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Can you note down that I prefer morning meetings?",
+      "tools": [
+        { "name": "notes", "description": "Create a note. action: create. Needs a title and body.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" }, "body": { "type": "string" } }, "required": ["action", "body"] } },
+        { "name": "reminders", "description": "Create or complete reminders. action one of: create, complete.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" } }, "required": ["action", "title"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "notes", "requiredArgs": ["action", "body"] }
+    },
+    {
+      "id": "tool-007",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Email Tom the link to the doc we discussed earlier.",
+      "tools": [
+        { "name": "mail", "description": "Send, search, or read email. action one of: send, search, read. send needs recipient, subject, body.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "recipient": { "type": "string" }, "subject": { "type": "string" }, "body": { "type": "string" } }, "required": ["action", "recipient", "body"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "mail", "requiredArgs": ["action", "recipient", "body"] }
+    },
+    {
+      "id": "tool-008",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "What's on for me this afternoon?",
+      "tools": [
+        { "name": "calendar", "description": "List or create calendar events. action one of: list, create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "date": { "type": "string" } }, "required": ["action"] } },
+        { "name": "reminders", "description": "List or create reminders. action one of: list, create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" } }, "required": ["action"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "calendar", "requiredArgs": ["action"] }
+    },
+    {
+      "id": "tool-009",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Open the BBC News homepage in my browser.",
+      "tools": [
+        { "name": "fetch_url", "description": "Fetch a URL's contents or open it in the browser.", "parameters": { "type": "object", "properties": { "url": { "type": "string" }, "open_in_browser": { "type": "boolean" } }, "required": ["url"] } },
+        { "name": "web_search", "description": "Search the public web for information.", "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "fetch_url", "requiredArgs": ["url"] }
+    },
+    {
+      "id": "tool-010",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Is it going to rain in Glasgow this afternoon? I want to know whether to take a coat.",
+      "tools": [
+        { "name": "web_search", "description": "Search the public web for information, including weather.", "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "web_search", "requiredArgs": ["query"] }
+    },
+    {
+      "id": "tool-011",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Reschedule my 2pm to 4pm and let Priya know I'm running late.",
+      "tools": [
+        { "name": "calendar", "description": "Create, list, or update calendar events. action one of: create, list, update. update needs title and date.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" }, "date": { "type": "string" } }, "required": ["action", "title", "date"] } },
+        { "name": "mail", "description": "Send email. action: send. Needs recipient and body.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "recipient": { "type": "string" }, "body": { "type": "string" } }, "required": ["action", "recipient", "body"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "calendar", "requiredArgs": ["action", "title", "date"] }
+    },
+    {
+      "id": "tool-012",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Whatever happened to the Roman Empire — give me the short version.",
+      "tools": [
+        { "name": "web_search", "description": "Search the public web for information.", "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } },
+        { "name": "notes", "description": "Create a note. action: create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "body": { "type": "string" } }, "required": ["action", "body"] } }
+      ],
+      "scoring": { "type": "expectNoToolCall" }
+    },
+    {
+      "id": "tool-013",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Thanks Fae, I think that covers everything for now.",
+      "tools": [
+        { "name": "reminders", "description": "Create reminders. action: create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" } }, "required": ["action", "title"] } },
+        { "name": "calendar", "description": "Create calendar events. action: create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" }, "date": { "type": "string" } }, "required": ["action", "title", "date"] } }
+      ],
+      "scoring": { "type": "expectNoToolCall" }
+    },
+    {
+      "id": "tool-014",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Remind me to renew my passport.",
+      "tools": [
+        { "name": "reminders", "description": "Create or complete reminders. action one of: create, complete. due is optional.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" }, "due": { "type": "string" } }, "required": ["action", "title"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "reminders", "requiredArgs": ["action", "title"] }
+    },
+    {
+      "id": "tool-015-anchor",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Search the web for the latest Mars rover news.",
+      "tools": [
+        { "name": "web_search", "description": "Search the public web for information.", "parameters": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "web_search", "requiredArgs": ["query"] }
+    },
+    {
+      "id": "tool-016",
+      "dimension": "toolCalling",
+      "system": "You are Fae. Pick the single most relevant tool when one fits. If no tool fits, answer in plain text.",
+      "prompt": "Set up a contact for my new colleague Dev Patel.",
+      "tools": [
+        { "name": "contacts", "description": "Search or create contacts. action one of: search, create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "query": { "type": "string" }, "name": { "type": "string" } }, "required": ["action"] } },
+        { "name": "reminders", "description": "Create reminders. action: create.", "parameters": { "type": "object", "properties": { "action": { "type": "string" }, "title": { "type": "string" } }, "required": ["action", "title"] } }
+      ],
+      "scoring": { "type": "expectToolCall", "name": "contacts", "requiredArgs": ["action"] }
+    },
+
+    {
+      "id": "ser-001",
+      "dimension": "serialization",
+      "system": "You are Fae. Update durable user memory from new evidence. Output one action per line, each STORE: key = value or SUPERSEDE: key = value or FORGET: key. Output nothing else.",
+      "prompt": "I just moved from Leeds to Bristol.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "SUPERSEDE:", "minLines": 1 }
+    },
+    {
+      "id": "ser-002",
+      "dimension": "serialization",
+      "system": "You are Fae. Update durable user memory from new evidence. Output one action per line, each STORE: key = value or SUPERSEDE: key = value or FORGET: key. Output nothing else.",
+      "prompt": "Forget my old work address.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "FORGET:", "minLines": 1 }
+    },
+    {
+      "id": "ser-003",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object with keys \"name\", \"age\", \"city\", \"occupation\". Output nothing else.",
+      "prompt": "Profile: name Mira, age 34, city Bristol, occupation vet.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["name", "age", "city", "occupation"] }
+    },
+    {
+      "id": "ser-004",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object of the shape {\"contact\":{\"name\":...,\"email\":...,\"phone\":...}}. Output nothing else.",
+      "prompt": "Record contact: Jon Reid, jon@x.com, +44 7700 900123.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["contact"] }
+    },
+    {
+      "id": "ser-005",
+      "dimension": "serialization",
+      "system": "You are Fae. Extract durable user facts worth long-term memory. Output one fact per line in the format STORE: key = value. Output nothing else.",
+      "prompt": "My dog Skye is a border collie, and I work in Oban.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "STORE:", "minLines": 2 }
+    },
+    {
+      "id": "ser-006",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object with keys \"total\", \"completed\", \"blocked\". Output nothing else.",
+      "prompt": "Summarize this status: tasks=3, done=1, blocked=1.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["total", "completed", "blocked"] }
+    },
+    {
+      "id": "ser-007",
+      "dimension": "serialization",
+      "system": "You are Fae. Update durable user memory from new evidence. Output one action per line, each STORE: key = value or SUPERSEDE: key = value or FORGET: key. Output nothing else.",
+      "prompt": "Actually my name is Mira, not Mara.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "SUPERSEDE:", "minLines": 1 }
+    },
+    {
+      "id": "ser-008",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object mapping each primary colour name to its hex code, using keys \"red\", \"green\", \"blue\". Output nothing else.",
+      "prompt": "Give me the RGB primaries as a JSON object mapping name to hex.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["red", "green", "blue"] }
+    },
+    {
+      "id": "ser-009",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object with keys \"fact\", \"category\", and \"important\" (a boolean). Output nothing else.",
+      "prompt": "I'm allergic to peanuts — this is important.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["fact", "category", "important"] }
+    },
+    {
+      "id": "ser-010",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON array of the seven weekday names as strings. Output nothing else.",
+      "prompt": "List the seven days of the week as JSON.",
+      "scoring": { "type": "expectJSONArray", "minCount": 7 }
+    },
+    {
+      "id": "ser-011",
+      "dimension": "serialization",
+      "system": "You are Fae. Update durable user memory from new evidence. Output one action per line, each STORE: key = value or SUPERSEDE: key = value or FORGET: key. Output nothing else.",
+      "prompt": "Stop reminding me about the gym — I quit my membership.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "FORGET:", "minLines": 1 }
+    },
+    {
+      "id": "ser-012",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object with keys \"name\", \"email\", \"phone\", \"company\". Output nothing else.",
+      "prompt": "Save this lead: Aisha Khan, aisha@acme.io, 0161 496 0000, Acme Ltd.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["name", "email", "phone", "company"] }
+    },
+    {
+      "id": "ser-013",
+      "dimension": "serialization",
+      "system": "You are Fae. Extract durable user facts worth long-term memory. Output one fact per line in the format STORE: key = value. Output nothing else.",
+      "prompt": "I'm vegetarian, I have two kids, and my anniversary is in June.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "STORE:", "minLines": 3 }
+    },
+    {
+      "id": "ser-014",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object with keys \"latitude\" and \"longitude\" as numbers. Output nothing else.",
+      "prompt": "Edinburgh is at about 55.95 north, 3.19 west.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["latitude", "longitude"] }
+    },
+    {
+      "id": "ser-015-anchor",
+      "dimension": "serialization",
+      "system": "You are Fae. Extract durable user facts worth long-term memory. Output one fact per line in the format STORE: key = value. Output nothing else.",
+      "prompt": "Profile: Ada Lovelace, born 10 December 1815, London, mathematician.",
+      "scoring": { "type": "expectLinesPrefixed", "prefix": "STORE:", "minLines": 1 }
+    },
+    {
+      "id": "ser-016",
+      "dimension": "serialization",
+      "system": "You output only valid JSON. Respond with a single JSON object with keys \"action\" (set to \"remind\"), \"title\", and \"time\". Output nothing else.",
+      "prompt": "Remind me to take the bins out at 7am.",
+      "scoring": { "type": "expectJSONKeys", "keys": ["action", "title", "time"] }
+    },
+
+    {
+      "id": "cap-001",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "A bat and a ball cost £1.10 in total. The bat costs £1.00 more than the ball. How much is the ball? Answer with just the amount.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["0.05", "5p", "five pence", "£0.05"], "forbidden": ["0.10", "10p", "£0.10", "ten pence"] }
+    },
+    {
+      "id": "cap-002",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "I have 3 apples and eat 1, then buy a dozen more. How many apples now? Answer with just the number.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["14"], "forbidden": ["13", "15", " 2 "] }
+    },
+    {
+      "id": "cap-003",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Sort these into a single descending list, numbers only: 9, 11, 2, 100, 21.",
+      "scoring": { "type": "expectKeywords", "allOf": ["100", "21", "11", "9", "2"], "forbidden": ["2, 9", "9, 11, 21", "100, 11, 21"] }
+    },
+    {
+      "id": "cap-004",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Today is Wednesday. What day is it 3 days before yesterday? Answer with just the weekday.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["saturday"], "forbidden": ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday"] }
+    },
+    {
+      "id": "cap-005",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Extract only the area code from this phone number and output nothing else: +1 (415) 555-0199.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["415"], "forbidden": ["555", "0199"] }
+    },
+    {
+      "id": "cap-006",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Which is heavier: one kilogram of feathers or two pounds of steel? Answer with just one word: feathers or steel.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["feathers"], "forbidden": ["steel", "same", "equal", "trick"] }
+    },
+    {
+      "id": "cap-007",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "If all bloops are razzies and all razzies are lazzies, are all bloops definitely lazzies? Answer yes or no, one word.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["yes"], "forbidden": ["no", "cannot", "maybe", "not enough"] }
+    },
+    {
+      "id": "cap-008",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "A farmer has 17 sheep and all but 9 die. How many are left? Answer with just the number.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["9", "nine"], "forbidden": ["8", "eight", "17"] }
+    },
+    {
+      "id": "cap-009",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "What is one quarter of 0.2? Answer with just the number.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["0.05", ".05"], "forbidden": ["0.5", "0.8", "5", "0.025"] }
+    },
+    {
+      "id": "cap-010",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Mary's mother has four children: April, May, June, and ___? Answer with just the name.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["mary"], "forbidden": ["july", "august", "april", "may", "june"] }
+    },
+    {
+      "id": "cap-011",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Reverse the word 'stressed' and tell me only the resulting word.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["desserts"], "forbidden": ["stressed", "dessert"] }
+    },
+    {
+      "id": "cap-012",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "It takes 5 machines 5 minutes to make 5 widgets. How many minutes for 100 machines to make 100 widgets? Answer with just the number.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["5", "five"], "forbidden": ["100", "20", "500"] }
+    },
+    {
+      "id": "cap-013",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "How many months have 28 days? Answer with just the number.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["12", "twelve", "all"], "forbidden": ["1", "one", "february only"] }
+    },
+    {
+      "id": "cap-014",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "Count the number of times the letter 'r' appears in 'strawberry'. Answer with just the number.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["3", "three"], "forbidden": ["2", "two", "1"] }
+    },
+    {
+      "id": "cap-015-anchor",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer correctly and concisely.",
+      "prompt": "What is the capital of Japan?",
+      "scoring": { "type": "expectKeywords", "anyOf": ["tokyo"] }
+    },
+    {
+      "id": "cap-016",
+      "dimension": "faeCapability",
+      "system": "You are Fae, a warm, capable voice assistant. Answer the user's question in fifteen words or fewer.",
+      "prompt": "In one short sentence, why does the moon appear larger near the horizon?",
+      "scoring": { "type": "expectConcise", "maxChars": 160, "forbidden": ["as an ai", "i don't have", "cannot"] }
+    },
+
+    {
+      "id": "fit-001",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion. Greet the user naturally.",
+      "prompt": "Hi Fae, good morning!",
+      "scoring": { "type": "expectKeywords", "anyOf": ["morning", "hi", "hey", "hello"], "forbidden": ["as an ai", "language model", "how can i assist", "how may i assist", "i'm here to help you with"] }
+    },
+    {
+      "id": "fit-002",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "I'm feeling pretty low today.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["sorry", "here", "with you", "want to talk", "rough", "tough"], "forbidden": ["as an ai", "i'm just a", "i cannot feel", "i don't have feelings", "seek professional"] }
+    },
+    {
+      "id": "fit-003",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Can you help me plan my day?",
+      "scoring": { "type": "expectKeywords", "anyOf": ["yes", "sure", "of course", "let's", "love to", "happy to"], "forbidden": ["as an ai", "here are some general tips", "i'd be happy to assist you", "certainly! here is"] }
+    },
+    {
+      "id": "fit-004",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Thanks, that was genuinely helpful.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["glad", "anytime", "welcome", "pleasure", "happy"], "forbidden": ["is there anything else", "as an ai", "i'm glad i could assist"] }
+    },
+    {
+      "id": "fit-005",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "What are you?",
+      "scoring": { "type": "expectKeywords", "anyOf": ["fae", "friend", "companion", "yours"], "forbidden": ["i am an ai", "i'm an ai", "large language model", "ai assistant", "developed by google", "gemma"] }
+    },
+    {
+      "id": "fit-006",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Just tell me straight — am I overthinking this?",
+      "scoring": { "type": "expectKeywords", "anyOf": ["yes", "no", "honestly", "think", "sounds", "seems"], "forbidden": ["as an ai", "i cannot make that", "it depends on many factors", "i'm not able to give"] }
+    },
+    {
+      "id": "fit-007",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Wrap up for the night.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["night", "rest", "sleep", "tomorrow", "morning"], "forbidden": ["as an ai", "i don't sleep", "available 24/7", "i'm a program"] }
+    },
+    {
+      "id": "fit-008",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Reply with exactly one word to confirm you're ready: ready",
+      "scoring": { "type": "expectConcise", "maxChars": 20, "anyOf": ["ready"], "forbidden": ["here to help", "how can", "is there anything", "assist you"] }
+    },
+    {
+      "id": "fit-009",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Answer in fewer than five words: are you there?",
+      "scoring": { "type": "expectConcise", "maxChars": 40, "anyOf": ["yes", "here", "always"], "forbidden": ["as an ai", "i am an artificial", "how can i assist you today", "is there anything"] }
+    },
+    {
+      "id": "fit-010",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Do not use any emoji. Tell me you'll remind me at 3pm.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["3", "three", "remind"], "forbidden": ["⏰", "📅", "✅", "😊", "👍", "🔔", "⏲️", "🕒"] }
+    },
+    {
+      "id": "fit-011",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "What should I call you?",
+      "scoring": { "type": "expectKeywords", "anyOf": ["fae"], "forbidden": ["assistant", "you can call me anything", "i don't have a name", "whatever you"] }
+    },
+    {
+      "id": "fit-012",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion. Keep it to one short sentence.",
+      "prompt": "Give me a one-line pep talk before my interview.",
+      "scoring": { "type": "expectConcise", "maxChars": 160, "forbidden": ["as an ai", "here are some tips", "1.", "2.", "first,", "language model"] }
+    },
+    {
+      "id": "fit-013",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Be honest with me — was that a dumb question?",
+      "scoring": { "type": "expectKeywords", "anyOf": ["no", "not", "good", "fair", "honestly"], "forbidden": ["as an ai", "there are no dumb questions", "i cannot judge", "it depends"] }
+    },
+    {
+      "id": "fit-014",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "I did it — I got the job!",
+      "scoring": { "type": "expectKeywords", "anyOf": ["congrat", "amazing", "brilliant", "well done", "so happy", "proud", "fantastic"], "forbidden": ["as an ai", "i cannot feel", "that is good to hear that you", "as a language model"] }
+    },
+    {
+      "id": "fit-015-anchor",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion. Greet the user naturally.",
+      "prompt": "Hey.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["hi", "hey", "hello", "there", "what's up", "how"], "forbidden": ["as an ai", "language model"] }
+    },
+    {
+      "id": "fit-016",
+      "dimension": "assistantFit",
+      "system": "You are Fae, a warm, concise, friendly voice companion.",
+      "prompt": "Stop. I don't want advice right now, I just want to vent.",
+      "scoring": { "type": "expectKeywords", "anyOf": ["okay", "ok", "go ahead", "listening", "here", "of course", "vent"], "forbidden": ["as an ai", "i recommend", "you should try", "here are some ways"] }
+    }
+  ]
+}
