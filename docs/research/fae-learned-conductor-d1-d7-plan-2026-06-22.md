@@ -45,7 +45,7 @@ Make Fae's routing judgment itself **learned** — by extending a Rust-native Me
 ### M1 — Static recipes (local + ACP runners only; `direct` DEFAULT, `chain` opt-in)
 **WPs:** `ConductorRoutingPolicy` (static; local/ACP only; denies mesh/peer/remote) · `direct` + `chain` executor with role-conditioned prompts · progressive-disclosure copy (L0 invisible, L1 status, L4 opt-in team view) · approval matrix.
 **F-3 fix:** `direct` is default; `chain` opt-in until M2 establishes a measured baseline.
-**F-7 prereq:** standing-autonomy policy decided before M1 start (default proposal: always-approve for non-local in v1).
+**F-7 prereq:** standing-autonomy policy decided before M1 start — **RESOLVED 2026-06-22: tiered model (Tier A autonomous in M1; Tier B/C in M2). Seam (`ApprovalClass`) added in M0b.**
 **Review gate:** `plan-reviewer` on the M1 spec before implementation.
 
 ### M2 — Reward & eval + shadow routing
@@ -103,6 +103,7 @@ Make Fae's routing judgment itself **learned** — by extending a Rust-native Me
 ## Open questions for David
 
 1. **Standing autonomy (F-7, prereq for clean M1):** always-approve for non-local in v1, or standing delegation policies? *Default proposal: always-approve v1; standing autonomy deferred.*
+   **→ DECIDED 2026-06-22:** Tiered model — Tier A (`ApprovalClass::None`, local/local-ACP) autonomous in M1; Tier B (standing grant) and Tier C (per-turn) specified in M2. The `always-approve non-local in v1` default was *rejected* as both too conservative (it would force 3 approvals per chain turn once M3 enables topology) and mis-scoped (M1 has no non-local routes). Seam added in M0b so M2 wires approval without routing-call-site retrofit.
 2. **MetaOpt split (new in v3):** Rust-native port (cleaner, recommended) or temporary control-plane bridge (faster)? This decides M3's shape.
 3. **ADR-008 amendment (F-5):** OK to file it authorizing the Rust-side `conductorRecipe` surface?
 4. **Conductor crate:** new `crates/fae-conductor` from the start, or `crates/fae-daemon/src/conductor/` promoted later?
@@ -118,7 +119,7 @@ Make Fae's routing judgment itself **learned** — by extending a Rust-native Me
 | F-4 | MAJOR | `user_text_fingerprint` undefined | HMAC-SHA-256 per-install key, request_id-scoped, TTL'd |
 | F-5 | MAJOR | Recipe mutation not in ADR-008 | ADR-008 amendment required before M3 |
 | F-6 | MAJOR | Release gate decorative | Enforced CI gate blocking merge |
-| F-7 | MAJOR | Standing autonomy unresolved | Open Q; default always-approve v1 |
+| F-7 | MAJOR | Standing autonomy unresolved | **RESOLVED 2026-06-22** — tiered model; Tier A autonomous in M1; seam in M0b |
 | F-8 | MAJOR | Shadow router deps on M4 guardrails | Explicit M0/M1 dependency before M2 |
 | F-9 | MAJOR | AGENTS.md checklist path wrong | Absorb into app-release-validation.md + update AGENTS.md |
 | F-10 | MAJOR | Implicit signals noisy | Weighted below routing_accuracy |

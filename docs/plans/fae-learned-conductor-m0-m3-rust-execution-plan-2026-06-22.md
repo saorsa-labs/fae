@@ -73,10 +73,14 @@
 
 ---
 
-## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ⏳ blocked on G-M0b + F-7
+## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ⏳ blocked on G-M0b
 
-**Prereq (open Q for David):**
-- [ ] F-7 standing-autonomy policy decided (default proposal: always-approve non-local in v1)
+**Prereq (RESOLVED 2026-06-22):**
+- [x] F-7 standing-autonomy policy decided — **tiered model, Tier A only in M1:**
+  - **Tier A — Autonomous (`ApprovalClass::None`):** local models + local ACP agents; zero egress. *All of M1* — no approval surface needed.
+  - **Tier B — Standing-grantable:** remote API / x0x peers; per-class grant + budget cap, revocable. *M2 spec* (budget-governance WP lives there).
+  - **Tier C — Always per-turn:** sensitive-data / cross-owner / PII / outside-a-grant. *M2 spec.*
+  - **Seam added in M0b:** `ApprovalClass` enum + `approval` field on `AgentRun` variant of `ConductorRouteDecision`. M1 always emits `None`; M2 wires Tier B/C into the existing seam (no routing-call-site retrofit).
 
 **Spec (review before impl):**
 - [ ] `ConductorRoutingPolicy` trait + static impl (local/ACP only; denies `OwnerFleet`/`TrustedPeer`/`RemoteAllowed`)

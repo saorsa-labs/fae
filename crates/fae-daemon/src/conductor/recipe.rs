@@ -392,6 +392,35 @@ pub struct ConductorTurnContext<'a> {
     pub deadline_ms: Option<u64>,
 }
 
+/// What approval gate, if any, a route decision must pass before execution.
+///
+/// This is the **F-7 autonomy seam**. M1 (local + local-ACP only) always
+/// emits [`ApprovalClass::None`] — there is no egress to gate. Keeping the
+/// field in the decision type now means M2 wires approval into an existing
+/// seam rather than retrofitting one onto every routing call site.
+///
+/// Tiering (F-7):
+///
+/// - **Tier A — Autonomous (`None`):** local models + local ACP agents; zero
+///   egress, zero cost. *This is all of M1* — no approval surface needed.
+/// - **Tier B — Standing-grantable:** remote API / x0x peers; per-class grant
+///   plus budget cap, revocable, auditable. *M2 spec.*
+/// - **Tier C — Always per-turn:** sensitive-data lane, cross-owner, PII, or
+///   anything outside a standing grant. *M2 spec.*
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ApprovalClass {
+    /// No approval needed (Tier A: local / local-ACP, zero egress).
+    #[default]
+    None,
+    /// Per-turn approval required (Tier C: sensitive / cross-owner / PII, or
+    /// anything not covered by a standing grant).
+    PerTurn,
+    /// Covered by a standing, revocable grant (Tier B). `id` is the opaque
+    /// grant identifier; the conductor resolves it against the grant ledger.
+    /// M1 never emits this — present so the seam exists.
+    StandingGrant(String),
+}
+
 /// The conductor's routing decision for one turn. M1's static policy produces
 /// the first two variants; `MeshDelegate` and `FallbackLocal` are emitted but
 /// deferred (mesh) or last-resort (fallback).
@@ -403,6 +432,9 @@ pub enum ConductorRouteDecision<'a> {
     AgentRun {
         recipe: &'a FaeConductorRecipe,
         worker: &'a WorkerSelector,
+        /// The approval gate this run must pass before execution. M1 always
+        /// emits [`ApprovalClass::None`]; M2 introduces the higher tiers.
+        approval: ApprovalClass,
     },
     /// Mesh delegation is the right call but is not executable yet (pre-M4).
     /// Logged + falls back to local.
@@ -576,5 +608,19 @@ mod tests {
         // F-15: star/debate fail-closed on deserialization.
         let bad = r#"{"topology":"star"}"#;
         assert!(serde_json::from_str::<ConductorTopology>(bad).is_err());
+    }
+
+    #[test]
+    fn approval_class_seam_defaults_to_none() {
+        // F-7: M1 (local + local-ACP) must never gate. The seam exists so M2
+        // can wire Tier B/C without touching routing call sites.
+        assert_eq!(ApprovalClass::default(), ApprovalClass::None);
+        // The higher tiers are constructible now (seam exists), but no M1
+        // policy path emits them.
+        assert_ne!(ApprovalClass::PerTurn, ApprovalClass::None);
+        assert_ne!(
+            ApprovalClass::StandingGrant("g_x0x_baseline".to_string()),
+            ApprovalClass::None
+        );
     }
 }

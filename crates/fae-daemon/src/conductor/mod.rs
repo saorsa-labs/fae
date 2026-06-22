@@ -57,9 +57,10 @@ pub mod telemetry;
 pub use error::ConductorError;
 pub use fingerprint::{InstallKey, RequestFingerprint};
 pub use recipe::{
-    AggregationPolicy, BudgetPolicy, ConductorRecipeError, ConductorRole, ConductorTaskClass,
-    ConductorTopology, ConductorTurnContext, EscalationPolicy, FaeConductorRecipe, PrivacyLane,
-    RoleSlot, StopPolicy, WorkerLocality, WorkerSelector,
+    AggregationPolicy, ApprovalClass, BudgetPolicy, ConductorRecipeError, ConductorRole,
+    ConductorRouteDecision, ConductorTaskClass, ConductorTopology, ConductorTurnContext,
+    EscalationPolicy, FaeConductorRecipe, PrivacyLane, RoleSlot, StopPolicy, WorkerLocality,
+    WorkerSelector,
 };
 pub use store::ConductorStore;
 pub use telemetry::{ConductorRouteEvent, RouteReceipt, TargetKind};
