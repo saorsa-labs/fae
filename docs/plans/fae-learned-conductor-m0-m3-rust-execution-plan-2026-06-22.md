@@ -73,7 +73,7 @@
 
 ---
 
-## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ⏳ blocked on G-M0b
+## M1 — Static recipes (local + ACP only; `direct` DEFAULT, `chain` opt-in)  ⏳ G-M1-spec PASSED → implement
 
 **Prereq (RESOLVED 2026-06-22):**
 - [x] F-7 standing-autonomy policy decided — **tiered model, Tier A only in M1:**
@@ -82,18 +82,15 @@
   - **Tier C — Always per-turn:** sensitive-data / cross-owner / PII / outside-a-grant. *M2 spec.*
   - **Seam added in M0b:** `ApprovalClass` enum + `approval` field on `AgentRun` variant of `ConductorRouteDecision`. M1 always emits `None`; M2 wires Tier B/C into the existing seam (no routing-call-site retrofit).
 
-**Spec (review before impl):**
-- [ ] `ConductorRoutingPolicy` trait + static impl (local/ACP only; denies `OwnerFleet`/`TrustedPeer`/`RemoteAllowed`)
-- [ ] `direct` + `chain` executor with role-conditioned prompts (Thinker decompose → Worker solve → Verifier check)
-- [ ] **F-3:** `direct` is DEFAULT for all task classes; `chain` opt-in (feature flag) until M2 proves it
-- [ ] Progressive-disclosure copy (L0 invisible / L1 "I'm asking your Mac" / L4 opt-in team view)
-- [ ] Approval matrix (local/ACP auto; everything heavier gated)
-- [ ] **G-M1-spec review: `plan-reviewer`**
+**Spec — G-M1-spec PASSED 2026-06-22:**
+- [x] Spec file: `docs/architecture/conductor-m1-static-recipes-spec-2026-06-22.md` (v2 + 4 MINOR clarifications N1-N4)
+- [x] G-M1-spec review (v1 FAILED: 1 BLOCKER B1 + 3 MAJOR M1/M2/M3, all folded into v2; v2 PASS: zero BLOCKER/MAJOR)
+- Key design locks: injection seam = `inject_text` only; **direct arm runs `inject_text_core` verbatim** (B1 byte-identity fix); `OwnedRouteDecision` carries `request_id` (fingerprint in executor, M2 panic-safety fix); `FAE_CONDUCTOR_CHAIN` env var gates chain (M3 fix); telemetry via `spawn_blocking`, best-effort, isolated JSONL
 
 **Impl:**
-- [ ] Wire `ConductorRoutingPolicy` into the Rust daemon agent loop
+- [ ] Wire `ConductorRoutingPolicy` into `inject_text` (extract `inject_text_core` first)
 - [ ] Passive route telemetry capture per role (no behavior change beyond routing)
-- [ ] **G-M1 review: `reviewer`** — local/ACP-only enforcement, telemetry correctness, no leakage
+- [ ] **G-M1 review: `reviewer`** — byte-identical direct (events + NaN-retry), local/ACP-only enforcement, telemetry correctness, no leakage
 
 ---
 

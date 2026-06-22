@@ -138,19 +138,21 @@ Execution rules:
 
 The `direct` arm does **not** build a `ChatRequest` and call `run_turn`. That would drop the `assistant.generating` event pair and the NaN-logits retry loop that `inject_text` performs today — a real behavior regression.
 
-Instead, M1 **extracts `inject_text`'s current body into a reusable `inject_text_core(backends, cmd) -> Result<Value, &'static str>`** (parse → `assistant.generating {active:true}` → NaN-retry pad loop → `assistant.generating {active:false}` on all return paths → the retry loop's internal `run_turn` calls). The conductor's `direct` arm calls `inject_text_core` **verbatim**. Byte-identical is then *truly* by construction: one implementation, called from two entry points.
+Instead, M1 **extracts `inject_text`'s ENTIRE current body into a reusable `inject_text_core(backends, cmd) -> Result<Value, &'static str>`** — including the leading `FAE_DUMP_REQUESTS` block, the parse, the `assistant.generating {active:true}` publish, the NaN-retry pad loop, the retry loop's internal `run_turn` calls, and the exactly-once `assistant.generating {active:false}` publish on all return paths. The conductor's `direct` arm calls `inject_text_core` **verbatim**. Byte-identical is then *truly* by construction: one implementation, called from two entry points.
 
 `inject_text` itself becomes:
 ```rust
-async fn inject_text(backends, cmd) -> ... {
+async fn inject_text(backends, cmd) -> Result<Value, &'static str> {
     let ctx = build_turn_context(&cmd);
     let decision = backends.conductor_policy.decide(&ctx);
-    backends.conductor_executor.emit_event(&decision).await;   // spawn_blocking
+    backends.conductor_executor.emit_event(&decision).await;   // spawn_blocking, isolated JSONL
     let result = backends.conductor_executor.run(&decision, backends, &cmd).await;
     backends.conductor_executor.emit_receipt(&decision, &result).await;  // spawn_blocking
     result
 }
 ```
+
+**Wire type (N2 clarification — protects the B1 fix):** `inject_text`'s return type is fixed by the dispatch contract (`"conversation.inject_text" => inject_text(backends, cmd).await` at session.rs:331) as `Result<Value, &'static str>`. For the `direct` arm, `run()` returns `inject_text_core`'s `Result<Value, &'static str>` **verbatim**. `TurnResult` (§5.4) is the executor's **internal bookkeeping** for the receipt (`fallback`, `latency_ms`, verifier-overrides) — it is never round-tripped through `Value → TurnResult → Value`, which would re-serialize the payload and break byte-identity. In M1 the direct path is literally `run() = inject_text_core(...)`; `TurnResult` only materializes for `chain`/`fallback`.
 
 ### 5.2 `chain` — opt-in, three-role
 
@@ -236,6 +238,8 @@ Per turn, two records to the `ConductorStore` (JSONL, 0700, separate from `fae.d
 
 **Non-blocking guarantee (v1 m2 fix):** `ConductorStore::append_*` is synchronous std::fs. The executor wraps each telemetry write in **`tokio::task::spawn_blocking`** and makes the receipt write best-effort (a write error is logged to stderr and swallowed — a broken telemetry store must never break a user turn). If the M1 executor turns out to be single-turn-per-process in practice, a tracked `// TODO(M2)` to relax `spawn_blocking` may be added, but the default is non-blocking.
 
+**Fingerprint-failure handling (N4 clarification):** `emit_event` computes `install_key.fingerprint(&request_id)`. That call is typed `Result<RequestFingerprint, ConductorError>` (unreachable for a 32-byte key + SHA-256, but typed fallible to stay panic-free). On the `Err` arm, `emit_event` logs the error to stderr and **skips the event** (no receipt either) — consistent with the best-effort contract. The turn itself is unaffected; only the telemetry row is dropped.
+
 The M0b doc invariant on `eval_delta`/`user_signal` (no query content) carries forward to M2.
 
 ---
@@ -265,14 +269,14 @@ For M1 this section is effectively a **non-requirement**: because `direct`-local
 
 ## 12. Files touched (M1 implementation, post-spec-approval)
 
-- `crates/fae-daemon/src/conductor/mod.rs` — add policy/executor re-exports
+- `crates/fae-daemon/src/conductor/mod.rs` — add policy/executor re-exports; **remove `#![allow(dead_code)]`** (N3: the conductor is now wired, so dead-code is a real signal again; removal is an M1 acceptance item, §13.7)
 - `crates/fae-daemon/src/conductor/recipe.rs` — remove borrowed `ConductorRouteDecision<'a>`; add `OwnedRouteDecision`, `RouteFailure`, `ConductorTurnContext` (owned); add `RecipeSet` (id → `FaeConductorRecipe`, v1 m1 fix)
 - `crates/fae-daemon/src/conductor/policy.rs` — **NEW**: `ConductorRoutingPolicy` trait + `StaticDirectPolicy` (no `install_key`)
 - `crates/fae-daemon/src/conductor/executor.rs` — **NEW**: `ConductorExecutor`, direct arm = `inject_text_core` call, chain arm, telemetry emission (spawn_blocking), recipe/worker resolution
 - `crates/fae-daemon/src/conductor/prompts.rs` — **NEW**: role system-prompt constants (dormant)
 - `crates/fae-daemon/src/conductor/workers.rs` — **NEW**: `WorkerRegistry` (vetted, `local-model` only in M1)
 - `crates/fae-daemon/src/session.rs` — **extract `inject_text_core` from `inject_text`**; wire conductor into `inject_text` via `SessionBackends`; build `ConductorTurnContext` from `cmd`
-- `crates/fae-daemon/src/main.rs` — read `FAE_CONDUCTOR_CHAIN` at startup; construct `StaticDirectPolicy` + `ConductorStore` + `InstallKey`; emit startup warning if a chain recipe is loaded while `chain_enabled` is false
+- `crates/fae-daemon/src/main.rs` — read `FAE_CONDUCTOR_CHAIN` at startup; construct `StaticDirectPolicy` + `ConductorStore` + `InstallKey` + **`RecipeSet` (the one direct-local recipe)** + **`WorkerRegistry` (the `local-model` entry)** that `ConductorExecutor` borrows; emit startup warning if a chain recipe is loaded while `chain_enabled` is false
 - `crates/fae-daemon/Cargo.toml` — no new deps expected (M0b added what's needed)
 
 No Swift changes. No `fae.db` writes (the daemon has no `fae.db` today; the guard is a forward-looking invariant). No remote/network code.
