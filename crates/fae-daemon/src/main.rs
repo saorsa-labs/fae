@@ -323,9 +323,14 @@ fn conductor_provider_pricing_from_env(
         }
     };
 
-    // Mock provider defaults keep Stage 1 opt-in egress testable without live
-    // HTTP or real provider billing. Real provider adapters must replace these
-    // with operator-configured pricing before they can be wired to the seam.
+    // Sentinel pricing defaults keep the §5.4 cost-gate path exercisable
+    // without live provider billing. They are NON-AUTHORITATIVE test
+    // scaffolding (owner decision 2026-06-23): provider-side spend caps are the
+    // real cost control, not conductor estimates. These are not a billing
+    // promise; operator-configured pricing (FAE_PROVIDER_PRICING) is an
+    // optional opt-in layer for operators who want conductor-level cost
+    // governance, not a prerequisite for real adapters or the all-available
+    // default.
     for worker_id in workers.worker_ids() {
         if worker_id != conductor::workers::LOCAL_MODEL_WORKER_ID
             && !table.contains_worker(&worker_id)

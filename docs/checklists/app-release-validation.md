@@ -226,6 +226,12 @@ be fixed and re-validated (see `docs/research/fae-learned-conductor-m2-decisions
 Until these pass, `FAE_CONDUCTOR_CHAIN` stays unset and no chain recipe is
 loaded.
 
+## Egress coverage + cost authority
+
+- [ ] **NOTE-2: route `agent.run`/`agent.prompt` through the conductor (M2 Stage 3 prerequisite).** These commands (`crates/fae-daemon/src/session.rs` ~430/~500) pre-date the M2 §5 gate pipeline and reach `fae_acp`/cloud providers DIRECTLY, bypassing mode cap / PII membrane / budget / approval. Before any `all-available` default cutover, ALL daemon egress surfaces must fall under §5. (Advisor-prioritized next work — this is a gap in the safety story, not a feature.)
+
+**Cost authority is external (owner decision 2026-06-23):** provider-side spend caps (OpenAI/Anthropic/etc.) are the authoritative cost control. The conductor makes NO spend guarantee; `FAE_PROVIDER_PRICING` + the `budget.rs` cost dimensions are an optional opt-in governance layer for operators who want conductor-level cost limits, not a billing promise. Operator/provider caps are an external responsibility and are NOT validated by this checklist.
+
 ## Release gate
 
 Do not claim production readiness unless all of the following are true:
