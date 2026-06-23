@@ -87,6 +87,17 @@ pub struct Response {
 pub struct ResponseError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<ResponseErrorDetails>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseErrorDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 impl Response {
@@ -111,6 +122,27 @@ impl Response {
             error: Some(ResponseError {
                 code: code.to_owned(),
                 message: message.to_owned(),
+                details: None,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn error_with_details(
+        request_id: &str,
+        code: &str,
+        message: &str,
+        details: ResponseErrorDetails,
+    ) -> Response {
+        Response {
+            v: PROTOCOL_VERSION,
+            request_id: request_id.to_owned(),
+            ok: false,
+            result: None,
+            error: Some(ResponseError {
+                code: code.to_owned(),
+                message: message.to_owned(),
+                details: Some(details),
             }),
         }
     }

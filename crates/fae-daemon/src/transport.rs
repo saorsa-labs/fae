@@ -90,7 +90,7 @@ pub async fn serve_unix(
                 &events,
                 &playbacks,
                 &agents,
-                conductor.as_ref(),
+                conductor,
             )
             .await
             {
@@ -113,7 +113,7 @@ async fn handle_connection(
     events: &EventBus,
     playbacks: &PlaybackRegistry,
     agents: &AgentSessionRegistry,
-    conductor: &crate::conductor::ConductorRuntime,
+    conductor: Arc<crate::conductor::ConductorRuntime>,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -173,9 +173,18 @@ async fn handle_connection(
                         let requester = requester.clone();
                         let audit_path = audit_path.to_path_buf();
                         let sink = Arc::clone(&sink);
+                        let conductor = Arc::clone(&conductor);
                         tokio::spawn(async move {
                             let outcome = run_authorized_agent_prompt(
-                                &record, &cmd, &agents, &events, requester, now, event_id,
+                                &record,
+                                &cmd,
+                                &agents,
+                                &events,
+                                Some(conductor.as_ref()),
+                                &crate::session::REAL_ACP_RUNNER,
+                                requester,
+                                now,
+                                event_id,
                             )
                             .await;
                             // Same fail-closed contract: audit before responding.
@@ -207,7 +216,8 @@ async fn handle_connection(
                 events,
                 playbacks,
                 agents,
-                conductor: Some(conductor),
+                conductor: Some(conductor.as_ref()),
+                acp_runner: &crate::session::REAL_ACP_RUNNER,
             };
             let outcome =
                 handle_frame(registry, &backends, &mut state, trimmed, now, event_id).await;

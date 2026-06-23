@@ -15,7 +15,7 @@ use fae_acp::AcpSession;
 
 /// A live session plus the metadata `agent.session_list` reports.
 struct Entry {
-    session: Arc<AcpSession>,
+    session: Option<Arc<AcpSession>>,
     agent: String,
     cwd: String,
 }
@@ -49,7 +49,7 @@ impl AgentSessionRegistry {
             map.insert(
                 id.clone(),
                 Entry {
-                    session: Arc::new(session),
+                    session: Some(Arc::new(session)),
                     agent,
                     cwd,
                 },
@@ -61,10 +61,19 @@ impl AgentSessionRegistry {
     /// Look up a live session by handle (cloned `Arc` so the lock is released
     /// before any `await` on the session).
     pub fn get(&self, id: &str) -> Option<Arc<AcpSession>> {
+        self.inner.lock().ok().and_then(|map| {
+            map.get(id)
+                .and_then(|entry| entry.session.as_ref().map(Arc::clone))
+        })
+    }
+
+    /// Agent name originally used to create the session. This lets per-turn
+    /// egress gates resolve the cloud-backed worker before submitting a prompt.
+    pub fn agent_for(&self, id: &str) -> Option<String> {
         self.inner
             .lock()
             .ok()
-            .and_then(|map| map.get(id).map(|entry| Arc::clone(&entry.session)))
+            .and_then(|map| map.get(id).map(|entry| entry.agent.clone()))
     }
 
     /// Remove a session by handle, returning it so the caller can close it.
@@ -72,7 +81,7 @@ impl AgentSessionRegistry {
         self.inner
             .lock()
             .ok()
-            .and_then(|mut map| map.remove(id).map(|entry| entry.session))
+            .and_then(|mut map| map.remove(id).and_then(|entry| entry.session))
     }
 
     /// Metadata for all live sessions.
@@ -90,6 +99,28 @@ impl AgentSessionRegistry {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Test-only metadata fixture for gate-blocked `agent.prompt` paths. The
+    /// prompt gate needs the session's agent name, but a blocked prompt must not
+    /// require constructing an opaque [`AcpSession`] or submitting to ACP.
+    #[cfg(test)]
+    pub(crate) fn insert_test_metadata(
+        &self,
+        id: impl Into<String>,
+        agent: impl Into<String>,
+        cwd: impl Into<String>,
+    ) {
+        if let Ok(mut map) = self.inner.lock() {
+            map.insert(
+                id.into(),
+                Entry {
+                    session: None,
+                    agent: agent.into(),
+                    cwd: cwd.into(),
+                },
+            );
+        }
     }
 }
 

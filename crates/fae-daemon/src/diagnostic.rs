@@ -60,6 +60,7 @@ pub struct DiagnosticState {
     pub events: crate::events::EventBus,
     pub playbacks: crate::events::PlaybackRegistry,
     pub agents: crate::agents::AgentSessionRegistry,
+    pub conductor: Arc<crate::conductor::ConductorRuntime>,
     pub port: u16,
 }
 
@@ -409,6 +410,7 @@ async fn handle_ws(stream: TcpStream, state: Arc<DiagnosticState>) -> std::io::R
         &state.events,
         &state.playbacks,
         &state.agents,
+        state.conductor.as_ref(),
     )
     .await
 }
@@ -425,6 +427,7 @@ async fn ws_message_loop(
     events: &crate::events::EventBus,
     playbacks: &crate::events::PlaybackRegistry,
     agents: &crate::agents::AgentSessionRegistry,
+    conductor: &crate::conductor::ConductorRuntime,
 ) -> std::io::Result<()> {
     while let Some(message) = ws.next().await {
         let text = match message {
@@ -446,7 +449,8 @@ async fn ws_message_loop(
             events,
             playbacks,
             agents,
-            conductor: None,
+            conductor: Some(conductor),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
         };
         let outcome = handle_frame(registry, &backends, &mut session, line, now, event_id).await;
 

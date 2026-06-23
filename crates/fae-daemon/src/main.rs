@@ -224,6 +224,7 @@ async fn main() -> DaemonResult<()> {
             events: events.clone(),
             playbacks: playbacks.clone(),
             agents: agents.clone(),
+            conductor: Arc::clone(&conductor_runtime),
             port,
         });
         println!("diag    : TCP loopback diagnostic enabled on port {port} (opt-in)");
