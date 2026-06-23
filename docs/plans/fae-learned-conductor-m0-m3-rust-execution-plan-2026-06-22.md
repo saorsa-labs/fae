@@ -97,7 +97,7 @@
 
 ---
 
-## M2 — Reward & eval + shadow routing  ⏳ D2+D7 primitives DONE (pending reviewer pass); spec + wiring gated on G-M2-spec
+## M2 — Reward & eval + shadow routing  ⏳ D2+D7 primitives DONE (reviewer pass PASSED, zero BLOCKER/MAJOR); spec + wiring gated on G-M2-spec
 
 **Spec:**
 - [ ] `routing_accuracy` eval dimension + reward aggregator (reject self-judgment-only — F-10)
@@ -115,6 +115,8 @@
 - [ ] **No auto-deploy yet** — candidates compare against deployed baseline only
 - [ ] **M2 executor wiring** — connects BudgetGovernor + RoutingScorer + PII membrane into the conductor routing path. GATED on G-M2-spec + both WP reviewer passes + D-M2-1 resolution.
 - [ ] **G-M2 review: `reviewer`** — reward weakness, shadow-path privacy, threshold enforcement
+
+**Reviewer pass (run 7b311b14, 2026-06-23):** Both WPs passed fresh-context adversarial review with **zero BLOCKER / zero MAJOR**. D2: 8 constraint surfaces verified (fail-closed, token-not-gated, BudgetExceeded structured-only, no executor wiring, CloudBacked placement, per-day privacy, engineering contract, test quality). D7: F-12 `is_improvement` confirmed as real code (4 conditions incl. real McNemar exact test), scrub-before-disk confirmed genuine (round-trip test reads file back), no aggregator/MetaOpt/auto-deploy, F-11 documented. **MINOR findings deferred:** D2 `daily_window>0` validation → M2 wiring (fail-closed not weakened); D2 `eprintln!`→`tracing` → M2 wiring; D7 `#![forbid(unsafe_code)]` parity → **fixed** (`b4e33ab4`). D2 `unwrap_or(0)` and D7 `Default` derive / O(n) `log_factorial`: non-issues, no action.
 
 ---
 
