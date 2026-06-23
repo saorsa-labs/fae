@@ -1,0 +1,17 @@
+[package]
+name = "fae-metaopt"
+version = "0.1.0"
+description = "Dormant Rust port of Fae MetaOpt meta-optimization primitive for M3 groundwork."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

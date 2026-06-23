@@ -8,6 +8,7 @@ members = [
   "fae-control-plane",
   "fae-envelope-gate",
   "fae-pii-membrane",
+  "fae-metaopt",
   "fae-engine",
   "fae-audio",
   "fae-acp",
@@ -26,6 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 regex = "1"
+uuid = { version = "1", features = ["serde"] }
 getrandom = { version = "0.2", features = ["std"] }
 sha2 = "0.10"
 hmac = "0.12"
