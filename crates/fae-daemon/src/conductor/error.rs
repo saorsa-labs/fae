@@ -24,4 +24,7 @@ pub enum ConductorError {
     #[allow(dead_code)]
     // TODO(M2): raised by RecipeSet/recipe-store paths when M2 loads candidate recipes
     Path(String),
+    /// Operator configuration failed validation.
+    #[error("conductor config: {0}")]
+    Config(String),
 }

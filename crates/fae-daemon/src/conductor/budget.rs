@@ -12,6 +12,7 @@
 // wiring calls `BudgetGovernor::check`/`record` around cloud-bound role-calls.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -55,6 +56,27 @@ pub struct BudgetLimits {
 impl BudgetLimits {
     pub fn daily_window_ms(self) -> u64 {
         duration_ms(self.daily_window)
+    }
+
+    pub fn validate(self) -> Result<(), ConductorError> {
+        if self.daily_window > Duration::ZERO {
+            Ok(())
+        } else {
+            Err(ConductorError::Config(
+                "budget daily_window must be greater than zero".to_string(),
+            ))
+        }
+    }
+}
+
+impl Default for BudgetLimits {
+    fn default() -> Self {
+        Self {
+            max_cost_micros_per_call: 250_000,
+            max_wall_clock_ms_per_call: 0,
+            max_daily_cost_micros: 2_500_000,
+            daily_window: Duration::from_millis(DEFAULT_DAILY_WINDOW_MS),
+        }
     }
 }
 
@@ -133,30 +155,48 @@ impl BudgetVerdict {
 #[derive(Clone)]
 pub struct BudgetGovernor {
     store: ConductorStore,
-    limits: BudgetLimits,
+    default_limits: BudgetLimits,
+    per_worker_limits: HashMap<String, BudgetLimits>,
     now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 impl BudgetGovernor {
-    pub fn new(store: ConductorStore, limits: BudgetLimits) -> Self {
+    pub fn new(store: ConductorStore, default_limits: BudgetLimits) -> Self {
+        Self::with_worker_limits(store, default_limits, HashMap::new())
+    }
+
+    pub fn with_worker_limits(
+        store: ConductorStore,
+        default_limits: BudgetLimits,
+        per_worker_limits: HashMap<String, BudgetLimits>,
+    ) -> Self {
+        warn_on_invalid_limits("default", default_limits);
+        for (worker_id, limits) in &per_worker_limits {
+            warn_on_invalid_limits(worker_id, *limits);
+        }
         Self {
             store,
-            limits,
+            default_limits,
+            per_worker_limits,
             now_ms: Arc::new(system_now_ms),
         }
     }
 
     /// Pre-flight budget check. Any unreadable or corrupt persisted rolling
     /// spend state blocks the route rather than risking uncapped spend.
-    pub fn check(&self, _route: &OwnedRouteDecision, estimate: &CostEstimate) -> BudgetVerdict {
-        let window_ms = self.limits.daily_window_ms();
-        let used_daily = match self.rolling_cost_micros(window_ms) {
+    pub fn check(&self, route: &OwnedRouteDecision, estimate: &CostEstimate) -> BudgetVerdict {
+        let limits = self.limits_for(&route.worker_id);
+        let window_ms = limits.daily_window_ms();
+        let used_daily = match self.rolling_cost_micros(&route.worker_id, window_ms) {
             Ok(used) => used,
             Err(error) => {
-                eprintln!("fae-daemon: budget state unavailable/corrupt; blocking route: {error}");
+                tracing::warn!(
+                    worker_id = %route.worker_id,
+                    "budget state unavailable/corrupt; blocking route: {error}"
+                );
                 return BudgetVerdict::Block {
                     dimension: BudgetDimension::DailyCostMicros,
-                    limit: self.limits.max_daily_cost_micros,
+                    limit: limits.max_daily_cost_micros,
                     attempted: estimate.cost_micros,
                     used: 0,
                     window_ms,
@@ -164,30 +204,30 @@ impl BudgetGovernor {
             }
         };
 
-        if estimate.cost_micros > self.limits.max_cost_micros_per_call {
+        if estimate.cost_micros > limits.max_cost_micros_per_call {
             return BudgetVerdict::Block {
                 dimension: BudgetDimension::CostMicros,
-                limit: self.limits.max_cost_micros_per_call,
+                limit: limits.max_cost_micros_per_call,
                 attempted: estimate.cost_micros,
                 used: 0,
                 window_ms: 0,
             };
         }
 
-        if estimate.wall_clock_ms > self.limits.max_wall_clock_ms_per_call {
+        if estimate.wall_clock_ms > limits.max_wall_clock_ms_per_call {
             return BudgetVerdict::Block {
                 dimension: BudgetDimension::WallClockMs,
-                limit: self.limits.max_wall_clock_ms_per_call,
+                limit: limits.max_wall_clock_ms_per_call,
                 attempted: estimate.wall_clock_ms,
                 used: 0,
                 window_ms: 0,
             };
         }
 
-        if used_daily.saturating_add(estimate.cost_micros) > self.limits.max_daily_cost_micros {
+        if used_daily.saturating_add(estimate.cost_micros) > limits.max_daily_cost_micros {
             return BudgetVerdict::Block {
                 dimension: BudgetDimension::DailyCostMicros,
-                limit: self.limits.max_daily_cost_micros,
+                limit: limits.max_daily_cost_micros,
                 attempted: estimate.cost_micros,
                 used: used_daily,
                 window_ms,
@@ -203,17 +243,24 @@ impl BudgetGovernor {
     pub fn record(&self, route: &OwnedRouteDecision, actual: &ActualCost) {
         let record = BudgetUsageRecord::from_route(route, actual, (self.now_ms)());
         if let Err(error) = self.store.append_budget_usage_line(&record) {
-            eprintln!("fae-daemon: budget usage write failed: {error}");
+            tracing::warn!("budget usage write failed: {error}");
         }
     }
 
-    fn rolling_cost_micros(&self, window_ms: u64) -> Result<u64, ConductorError> {
+    fn limits_for(&self, worker_id: &str) -> BudgetLimits {
+        self.per_worker_limits
+            .get(worker_id)
+            .copied()
+            .unwrap_or(self.default_limits)
+    }
+
+    fn rolling_cost_micros(&self, worker_id: &str, window_ms: u64) -> Result<u64, ConductorError> {
         let now_ms = (self.now_ms)();
         let cutoff_ms = now_ms.saturating_sub(window_ms);
         let mut used = 0_u64;
         for line in self.store.read_budget_usage_lines()? {
             let record: BudgetUsageRecord = serde_json::from_str(&line)?;
-            if record.timestamp_ms >= cutoff_ms {
+            if record.worker_id == worker_id && record.timestamp_ms >= cutoff_ms {
                 used = used.saturating_add(record.cost_micros);
             }
         }
@@ -222,9 +269,20 @@ impl BudgetGovernor {
 
     #[cfg(test)]
     fn with_now_ms(store: ConductorStore, limits: BudgetLimits, now_ms: u64) -> Self {
+        Self::with_worker_limits_now_ms(store, limits, HashMap::new(), now_ms)
+    }
+
+    #[cfg(test)]
+    fn with_worker_limits_now_ms(
+        store: ConductorStore,
+        default_limits: BudgetLimits,
+        per_worker_limits: HashMap<String, BudgetLimits>,
+        now_ms: u64,
+    ) -> Self {
         Self {
             store,
-            limits,
+            default_limits,
+            per_worker_limits,
             now_ms: Arc::new(move || now_ms),
         }
     }
@@ -259,6 +317,12 @@ impl BudgetUsageRecord {
             output_tokens: actual.output_tokens,
             total_tokens: actual.total_tokens(),
         }
+    }
+}
+
+fn warn_on_invalid_limits(label: &str, limits: BudgetLimits) {
+    if let Err(error) = limits.validate() {
+        tracing::warn!(budget_limits = label, "invalid budget limits: {error}");
     }
 }
 
@@ -299,6 +363,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             worker_id: "acp:codex".to_string(),
             task_class: ConductorTaskClass::Coding,
+            lane: crate::conductor::recipe::PrivacyLane::CloudBacked,
             approval: ApprovalClass::StandingGrant("grant-acp-codex".to_string()),
             reason: "budget-test".to_string(),
         }
@@ -475,6 +540,65 @@ mod tests {
             .check(&route, &estimate(100, 10))
             .is_allow());
         Ok(())
+    }
+
+    #[test]
+    fn per_worker_daily_spend_isolated_by_worker_id() -> Result<(), Box<dyn Error>> {
+        let (_dir, governor) = governor()?;
+        let provider_a = route();
+        let mut provider_b = route();
+        provider_b.worker_id = "acp:claude".to_string();
+
+        governor.record(&provider_a, &actual(980, 120));
+        assert_eq!(
+            governor.check(&provider_a, &estimate(21, 1)),
+            BudgetVerdict::Block {
+                dimension: BudgetDimension::DailyCostMicros,
+                limit: 1_000,
+                attempted: 21,
+                used: 980,
+                window_ms: DEFAULT_DAILY_WINDOW_MS,
+            }
+        );
+        assert!(governor.check(&provider_b, &estimate(100, 1)).is_allow());
+        Ok(())
+    }
+
+    #[test]
+    fn per_worker_limits_override_default_limit() -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let store = ConductorStore::open(dir.path())?;
+        let mut per_worker = HashMap::new();
+        let mut worker_a_limits = limits();
+        worker_a_limits.max_daily_cost_micros = 50;
+        per_worker.insert("acp:codex".to_string(), worker_a_limits);
+        let governor =
+            BudgetGovernor::with_worker_limits_now_ms(store, limits(), per_worker, NOW_MS);
+        let provider_a = route();
+        let mut provider_b = route();
+        provider_b.worker_id = "acp:claude".to_string();
+
+        governor.record(&provider_a, &actual(50, 1));
+        assert_eq!(
+            governor.check(&provider_a, &estimate(1, 1)),
+            BudgetVerdict::Block {
+                dimension: BudgetDimension::DailyCostMicros,
+                limit: 50,
+                attempted: 1,
+                used: 50,
+                window_ms: DEFAULT_DAILY_WINDOW_MS,
+            }
+        );
+        assert!(governor.check(&provider_b, &estimate(100, 1)).is_allow());
+        Ok(())
+    }
+
+    #[test]
+    fn budget_limits_validate_daily_window() {
+        assert!(limits().validate().is_ok());
+        let mut invalid = limits();
+        invalid.daily_window = Duration::ZERO;
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

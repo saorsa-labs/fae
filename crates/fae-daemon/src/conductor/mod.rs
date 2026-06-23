@@ -57,6 +57,7 @@ pub mod eval;
 pub mod executor;
 pub mod fingerprint;
 pub mod policy;
+pub mod pricing;
 pub mod prompts;
 pub mod recipe;
 pub mod store;
@@ -69,9 +70,13 @@ pub use budget::{
 };
 pub use error::ConductorError;
 pub use eval::{is_improvement, score, Corpus, RoutingScore, RoutingScorer};
-pub use executor::{route_turn, ConductorRuntime};
+pub use executor::{route_turn, ConductorEgress, ConductorRuntime};
 pub use fingerprint::{InstallKey, RequestFingerprint};
-pub use policy::{ConductorRoutingPolicy, StaticDirectPolicy, STATIC_DIRECT_RECIPE_ID};
+pub use policy::{
+    mode_permits_lane, ConductorRoutingPolicy, ModelMode, StaticDirectPolicy,
+    STATIC_DIRECT_RECIPE_ID,
+};
+pub use pricing::{ProviderPricing, ProviderPricingTable};
 pub use recipe::{
     AggregationPolicy, ApprovalClass, BudgetPolicy, ConductorRecipeError, ConductorRole,
     ConductorTaskClass, ConductorTopology, ConductorTurnContext, EscalationPolicy,

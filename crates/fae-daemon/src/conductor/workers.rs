@@ -2,53 +2,125 @@
 //! this registry — there is no runtime auto-discovery, and no path by which an
 //! arbitrary ACP session or remote endpoint becomes routable.
 //!
-//! M1 registry: `local-model` only (the daemon's loaded `ProviderAdapter`).
-//! Adding a vetted local-ACP worker is an explicit code change, not a runtime
-//! discovery. This is the spec's "vetted registry" guarantee (§6.2) and the
-//! `direct`-default byte-identity contract (§8): the only executable worker in
-//! M1 resolves to the same engine `inject_text_core` uses today.
+//! M2 Stage 1 keeps `local-model` always present and admits cloud-backed ACP
+//! worker ids only as explicit, startup-vetted registrations. A provisioned
+//! credential is represented as a boolean grant state; the registry never stores
+//! credential material.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-/// The canonical M1 worker id. Resolves to the daemon's loaded engine.
+use crate::conductor::recipe::WorkerLocality;
+
+/// The canonical local worker id. Resolves to the daemon's loaded engine.
 pub const LOCAL_MODEL_WORKER_ID: &str = "local-model";
+
+/// Vetted worker ids used by the native ACP/cloud seams.
+pub const CODEX_CLOUD_WORKER_ID: &str = "acp:codex";
+pub const CLAUDE_CLOUD_WORKER_ID: &str = "acp:claude";
+pub const GEMINI_CLOUD_WORKER_ID: &str = "acp:gemini";
+pub const COPILOT_CLOUD_WORKER_ID: &str = "acp:copilot";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerRegistration {
+    locality: WorkerLocality,
+    provisioned: bool,
+}
 
 /// Compile-time-vetted set of worker ids the conductor may route to.
 #[derive(Debug, Clone)]
 pub struct WorkerRegistry {
-    ids: HashSet<String>,
+    workers: HashMap<String, WorkerRegistration>,
 }
 
 impl Default for WorkerRegistry {
-    /// M1 default: only the local model is routable.
+    /// Safe default: only the local model is routable.
     fn default() -> Self {
         Self::m1()
     }
 }
 
 impl WorkerRegistry {
-    /// The M1 registry — `local-model` only.
+    /// The M1-compatible registry — `local-model` only.
     pub fn m1() -> Self {
-        let mut ids = HashSet::new();
-        ids.insert(LOCAL_MODEL_WORKER_ID.to_string());
-        Self { ids }
+        let mut workers = HashMap::new();
+        workers.insert(
+            LOCAL_MODEL_WORKER_ID.to_string(),
+            WorkerRegistration {
+                locality: WorkerLocality::LocalModel,
+                provisioned: true,
+            },
+        );
+        Self { workers }
+    }
+
+    /// Build a registry from startup credential presence. Only non-empty
+    /// credentials add the corresponding cloud-backed worker; credential values
+    /// are deliberately discarded.
+    pub fn from_cloud_credentials<I>(credentials: I) -> Self
+    where
+        I: IntoIterator<Item = (&'static str, Option<String>)>,
+    {
+        let mut registry = Self::m1();
+        for (worker_id, credential) in credentials {
+            if credential
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                registry.register_cloud_backed(worker_id, true);
+            }
+        }
+        registry
+    }
+
+    /// Add a vetted cloud-backed ACP worker. Tests use `provisioned = false` to
+    /// exercise the approval gate; production startup passes `true` only when a
+    /// credential is present.
+    pub fn register_cloud_backed(&mut self, id: impl Into<String>, provisioned: bool) {
+        self.workers.insert(
+            id.into(),
+            WorkerRegistration {
+                locality: WorkerLocality::CloudBackedAcp,
+                provisioned,
+            },
+        );
     }
 
     /// Whether `id` is a known, vetted worker.
     pub fn contains(&self, id: &str) -> bool {
-        self.ids.contains(id)
+        self.workers.contains_key(id)
+    }
+
+    /// Locality for a known worker.
+    pub fn locality(&self, id: &str) -> Option<WorkerLocality> {
+        self.workers
+            .get(id)
+            .map(|registration| registration.locality)
+    }
+
+    /// Whether a known worker has a provisioned standing grant credential.
+    pub fn is_provisioned(&self, id: &str) -> bool {
+        self.workers
+            .get(id)
+            .is_some_and(|registration| registration.provisioned)
+    }
+
+    /// Registered worker ids, stable-sorted for startup pricing defaults.
+    pub fn worker_ids(&self) -> Vec<String> {
+        let mut ids = self.workers.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
     }
 
     /// Number of registered workers.
     #[allow(dead_code)] // exercised in unit tests; M2 worker introspection surfaces it
     pub fn len(&self) -> usize {
-        self.ids.len()
+        self.workers.len()
     }
 
     /// Whether the registry is empty.
     #[allow(dead_code)] // exercised in unit tests; M2 worker introspection surfaces it
     pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
+        self.workers.is_empty()
     }
 }
 
@@ -60,10 +132,41 @@ mod tests {
     fn m1_registry_has_only_local_model() {
         let r = WorkerRegistry::m1();
         assert!(r.contains(LOCAL_MODEL_WORKER_ID));
+        assert_eq!(
+            r.locality(LOCAL_MODEL_WORKER_ID),
+            Some(WorkerLocality::LocalModel)
+        );
+        assert!(r.is_provisioned(LOCAL_MODEL_WORKER_ID));
         assert_eq!(r.len(), 1);
-        // No remote / ACP / peer ids are routable.
+        // No remote / ACP / peer ids are routable by default.
         assert!(!r.contains("remote-gpt4"));
         assert!(!r.contains("x0x-peer"));
         assert!(!r.contains("acp-session-1"));
+    }
+
+    #[test]
+    fn cloud_workers_are_keyed_by_credential_presence() {
+        let registry = WorkerRegistry::from_cloud_credentials([
+            (CODEX_CLOUD_WORKER_ID, Some("sk-test".to_string())),
+            (CLAUDE_CLOUD_WORKER_ID, Some("   ".to_string())),
+            (GEMINI_CLOUD_WORKER_ID, None),
+        ]);
+        assert!(registry.contains(LOCAL_MODEL_WORKER_ID));
+        assert!(registry.contains(CODEX_CLOUD_WORKER_ID));
+        assert!(registry.is_provisioned(CODEX_CLOUD_WORKER_ID));
+        assert_eq!(
+            registry.locality(CODEX_CLOUD_WORKER_ID),
+            Some(WorkerLocality::CloudBackedAcp)
+        );
+        assert!(!registry.contains(CLAUDE_CLOUD_WORKER_ID));
+        assert!(!registry.contains(GEMINI_CLOUD_WORKER_ID));
+    }
+
+    #[test]
+    fn unprovisioned_vetted_worker_can_exercise_approval_gate() {
+        let mut registry = WorkerRegistry::m1();
+        registry.register_cloud_backed(CODEX_CLOUD_WORKER_ID, false);
+        assert!(registry.contains(CODEX_CLOUD_WORKER_ID));
+        assert!(!registry.is_provisioned(CODEX_CLOUD_WORKER_ID));
     }
 }

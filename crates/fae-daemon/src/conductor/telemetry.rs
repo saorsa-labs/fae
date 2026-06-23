@@ -19,7 +19,7 @@ use crate::conductor::recipe::{
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     LocalModel,
-    LocalAcp,
+    CloudBackedAcp,
     OwnerFleet,
     TrustedPeer,
     RemoteProvider,
@@ -29,7 +29,7 @@ impl From<WorkerLocality> for TargetKind {
     fn from(l: WorkerLocality) -> Self {
         match l {
             WorkerLocality::LocalModel => TargetKind::LocalModel,
-            WorkerLocality::LocalAcp => TargetKind::LocalAcp,
+            WorkerLocality::CloudBackedAcp => TargetKind::CloudBackedAcp,
             WorkerLocality::OwnerFleet => TargetKind::OwnerFleet,
             WorkerLocality::TrustedPeer => TargetKind::TrustedPeer,
             WorkerLocality::RemoteProvider => TargetKind::RemoteProvider,

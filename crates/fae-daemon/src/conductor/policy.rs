@@ -11,12 +11,63 @@
 
 use crate::conductor::recipe::{
     ApprovalClass, ConductorTaskClass, ConductorTopology, ConductorTurnContext, OwnedRouteDecision,
+    PrivacyLane,
 };
 use crate::conductor::workers::LOCAL_MODEL_WORKER_ID;
 
 /// Decide a route from context alone. Pure + infallible by construction.
 pub trait ConductorRoutingPolicy: Send + Sync {
     fn decide(&self, ctx: &ConductorTurnContext) -> OwnedRouteDecision;
+}
+
+/// Operator-selected model availability mode for the conductor egress gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelMode {
+    /// Only on-device local model routes may execute.
+    #[default]
+    PureLocal,
+    /// On-device local model routes plus same-owner fleet routes may execute.
+    LocalSymphony,
+    /// All lanes are eligible; later gates still fail closed on privacy/budget/approval.
+    AllAvailable,
+}
+
+impl ModelMode {
+    /// Parse the environment-facing spelling. Unknown or absent values are not
+    /// accepted here; callers choose the safe default.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "pure-local" | "pure_local" | "local" => Some(Self::PureLocal),
+            "local-symphony" | "local_symphony" | "symphony" => Some(Self::LocalSymphony),
+            "all-available" | "all_available" | "all" => Some(Self::AllAvailable),
+            _ => None,
+        }
+    }
+
+    /// Parse an optional environment value, defaulting safely to pure-local.
+    pub fn from_env_value(value: Option<&str>) -> Self {
+        value.and_then(Self::parse).unwrap_or(Self::PureLocal)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PureLocal => "pure-local",
+            Self::LocalSymphony => "local-symphony",
+            Self::AllAvailable => "all-available",
+        }
+    }
+}
+
+/// Stage-1 lane cap. Pure-local permits LocalOnly only; local-symphony permits
+/// LocalOnly + OwnerFleet; all-available permits every lane.
+pub fn mode_permits_lane(mode: ModelMode, lane: PrivacyLane) -> bool {
+    match mode {
+        ModelMode::PureLocal => lane == PrivacyLane::LocalOnly,
+        ModelMode::LocalSymphony => {
+            matches!(lane, PrivacyLane::LocalOnly | PrivacyLane::OwnerFleet)
+        }
+        ModelMode::AllAvailable => true,
+    }
 }
 
 /// The single M1 recipe id (direct topology, local-model worker).
@@ -48,6 +99,7 @@ impl ConductorRoutingPolicy for StaticDirectPolicy {
             topology: ConductorTopology::Direct,
             worker_id: LOCAL_MODEL_WORKER_ID.to_string(),
             task_class: Self::classify(ctx),
+            lane: PrivacyLane::LocalOnly,
             approval: ApprovalClass::None,
             reason: "static-direct-local".to_string(),
         }
@@ -96,5 +148,40 @@ mod tests {
         let d_b = p.decide(&ctx("r"));
         assert_eq!(d_a.worker_id, d_b.worker_id);
         assert_eq!(d_a.topology, d_b.topology);
+        assert_eq!(d_a.lane, PrivacyLane::LocalOnly);
+    }
+
+    #[test]
+    fn model_mode_defaults_safely_and_caps_lanes() {
+        assert_eq!(ModelMode::from_env_value(None), ModelMode::PureLocal);
+        assert_eq!(
+            ModelMode::from_env_value(Some("unknown")),
+            ModelMode::PureLocal
+        );
+        assert_eq!(
+            ModelMode::parse("all-available"),
+            Some(ModelMode::AllAvailable)
+        );
+
+        assert!(mode_permits_lane(
+            ModelMode::PureLocal,
+            PrivacyLane::LocalOnly
+        ));
+        assert!(!mode_permits_lane(
+            ModelMode::PureLocal,
+            PrivacyLane::CloudBacked
+        ));
+        assert!(mode_permits_lane(
+            ModelMode::LocalSymphony,
+            PrivacyLane::OwnerFleet
+        ));
+        assert!(!mode_permits_lane(
+            ModelMode::LocalSymphony,
+            PrivacyLane::CloudBacked
+        ));
+        assert!(mode_permits_lane(
+            ModelMode::AllAvailable,
+            PrivacyLane::RemoteAllowed
+        ));
     }
 }
