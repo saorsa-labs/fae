@@ -476,4 +476,26 @@ mod tests {
             .is_allow());
         Ok(())
     }
+
+    #[test]
+    fn blocking_verdict_maps_to_structured_route_failure() {
+        let verdict = BudgetVerdict::Block {
+            dimension: BudgetDimension::DailyCostMicros,
+            limit: 1_000,
+            attempted: 50,
+            used: 975,
+            window_ms: DEFAULT_DAILY_WINDOW_MS,
+        };
+
+        assert!(matches!(
+            verdict.into_route_failure(),
+            Some(RouteFailure::BudgetExceeded {
+                dimension: BudgetDimension::DailyCostMicros,
+                limit: 1_000,
+                attempted: 50,
+                used: 975,
+                window_ms: DEFAULT_DAILY_WINDOW_MS,
+            })
+        ));
+    }
 }
