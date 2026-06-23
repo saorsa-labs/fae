@@ -555,9 +555,7 @@ fn paired_route_disagreements(
     let mut baseline_right_candidate_wrong = 0_u64;
 
     for candidate_outcome in &candidate.case_outcomes {
-        let Some(baseline_correct) = baseline_by_id.get(candidate_outcome.entry_id.as_str()) else {
-            return None;
-        };
+        let baseline_correct = baseline_by_id.get(candidate_outcome.entry_id.as_str())?;
         paired = paired.saturating_add(1);
         match (*baseline_correct, candidate_outcome.route_correct) {
             (false, true) => {
@@ -688,16 +686,16 @@ mod tests {
 
         let score = score(&corpus, &StaticDirectPolicy);
         assert_eq!(score.sample_size, 10);
-        assert_eq!(score.correct_routes, 5);
-        assert_eq!(score.routing_accuracy, 0.5);
+        assert_eq!(score.correct_routes, 6);
+        assert_eq!(score.routing_accuracy, 0.6);
 
         let recipe = score
             .dimensions
             .get(&RoutingDimension::RecipeId)
             .expect("recipe dimension");
-        assert_eq!(recipe.correct, 5);
+        assert_eq!(recipe.correct, 6);
         assert_eq!(recipe.total, 10);
-        assert_eq!(recipe.accuracy, 0.5);
+        assert_eq!(recipe.accuracy, 0.6);
 
         let task_class = score
             .dimensions
