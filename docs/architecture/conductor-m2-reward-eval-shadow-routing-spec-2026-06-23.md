@@ -95,13 +95,15 @@ Genuinely-local ACP runners (if they ever exist — a local-LLM ACP) map to `Wor
 
 ## 4. Approval / mode model (owner ruling 2026-06-23)
 
-The operator selects a **model availability mode** (read once at daemon startup from `FAE_MODEL_MODE`, default `all-available`):
+The operator selects a **model availability mode** (read once at daemon startup from `FAE_MODEL_MODE`):
 
 | Mode | Permitted lanes | Effect |
 |---|---|---|
 | `pure-local` | `LocalOnly` only | M1 behavior exactly. Every non-local route fails closed to direct-local at the mode cap (§5.2). |
 | `local-symphony` | `LocalOnly`, `OwnerFleet` | Local models + same-owner x0x peers (Symphony). Cloud-backed ACP + remote providers blocked at the mode cap. |
-| `all-available` *(default)* | all lanes | Cloud-backed ACP (Tier B), OwnerFleet (Tier B/C), TrustedPeer/RemoteProvider (Tier C) all *eligible*. Tier A/B are wired in M2; **Tier C lanes are eligible-but-fail-closed-unimplemented** in M2 (Q2) — a route the policy assigns to a Tier C lane degrades to direct-local at §5.5 rather than egressing without an approval surface. |
+| `all-available` | all lanes | Cloud-backed ACP (Tier B), OwnerFleet (Tier B/C), TrustedPeer/RemoteProvider (Tier C) all *eligible*. Tier A/B are wired in M2; **Tier C lanes are eligible-but-fail-closed-unimplemented** in M2 (Q2) — a route the policy assigns to a Tier C lane degrades to direct-local at §5.5 rather than egressing without an approval surface. |
+
+**Destination default = `all-available`** (the owner ruling's intended state once the egress path is proven and security-reviewed). **BUT the landing default is `pure-local`** — see §15 (Staged landing). The M2 wiring lands behind `FAE_MODEL_MODE` defaulting to `pure-local`, so cloud egress is *reachable only by explicit operator opt-in* until a separate gated cutover (§15 Stage 3) flips the default to `all-available`. "Wiring works" and "cloud egress on by default" are deliberately different commits. This §4 table describes the eventual destination; §15 governs the path there.
 
 **Approval is constituted at provisioning time, not via a separate runtime step:**
 - Setting an API key for a provider (OpenAI/Anthropic/Google) = **standing approval** (`ApprovalClass::StandingGrant`) for that provider's `CloudBackedAcp` worker, bounded by its D2 caps.
@@ -340,3 +342,35 @@ The impl review passes when:
 - **Q2 (Tier C approval surface) — refined:** §4 now states Tier C lanes are eligible-but-fail-closed-unimplemented in M2 (MINOR-1). The question reduces to: does M2 need *any* Tier C path (the per-turn approval event), or is fail-closed-to-direct-local sufficient until a provider-metadata ADR (MAJOR-5) lands? Lean: fail-closed suffices for M2; the first real Tier C user (a trusted peer, M4) is the trigger to wire the approval surface. Reviewer to confirm.
 - **Q3 (reward window):** over what window does `aggregate_reward` score (per-N-turns? time-bounded? on-demand)? Lean: on-demand at promotion-check time, over a fixed-N-turn rolling window in the shadow log, corpus-version-homogeneous with the corpus score (MINOR-4). Reviewer to confirm.
 - **Q4 (per-provider retention) — deferred, not open:** M2 models all `CloudBacked` providers at one trust tier (§3.1, MAJOR-5). Per-provider retention/training differentiation is deferred to a provider-metadata ADR / M4. Recorded here so the re-review can confirm the deferral is acceptable, not to decide it in M2.
+
+---
+
+## 15. Staged landing / cutover discipline (M2 wiring)
+
+**This is the first change in the conductor track that makes cloud egress *reachable* from the executor.** Before it, a gate-ordering bug is harmless (the executor cannot reach a cloud provider); after it, the same bug silently exfiltrates user data. That risk asymmetry is why the wiring lands staged, not as a land-and-flip-default — exactly like a daemon-playback cutover.
+
+**The hard rule:** "the egress wiring works" and "cloud egress is on by default for every user" MUST be different commits, separated by a security review gate.
+
+### Stage 1 — Wiring behind a flag, `pure-local` runtime default
+Land the §5 egress pipeline end-to-end, with `FAE_MODEL_MODE` **defaulting to `pure-local`** (so cloud egress is reachable only by explicit operator opt-in). Stage 1 scope is deliberately **narrow** — only what proves the egress path is safe:
+- `FAE_MODEL_MODE` parsing (default `pure-local`).
+- `WorkerLocality::LocalAcp` → `CloudBackedAcp` rename (§3.2).
+- Mode cap (§5.2), PII membrane **before any cloud-bound request is constructed** (§5.3, per-role for chain), budget check/record around each cloud call (§5.4/§5.7), Tier B approval assertion for provisioned workers (§5.5).
+- The `pricing.rs` `CostEstimate` module (§5.4) — required, the budget gate depends on it.
+- `PrivacyBlocked` / `BudgetExceeded` → fail-closed-to-direct (§5.3/§5.4).
+- The M1 executor `UnexpectedApproval` gate modified to permit provisioned `StandingGrant` (§10 MINOR-5).
+
+**Deferred out of Stage 1** (to keep the security-review surface minimal): the reward aggregator (§7) and the shadow router (§8). They do not touch the egress path and are not needed to prove egress safety; they land in a later M2 substage after Stage 2 clears.
+
+**Stage 1 acceptance (must land before Stage 2):**
+1. **The membrane-before-construction invariant, as a test that fails on reordering.** Cloud-request construction MUST be a separable, spy-able boundary (e.g. a `CloudRequestBuilder` trait or dedicated function — NOT inlined). The test uses a **credential-bearing prompt**, the **real `fae-pii-membrane`**, a spy request-builder, and a mock provider; it asserts the spy request-builder is invoked **zero times** AND the mock provider is invoked **zero times**. If a future change reorders the gates to build-the-request-then-check, this test fails (builder call count ≥ 1). This is stronger than asserting "provider not called" — it catches construction-before-check, which is the dangerous ordering even if the provider call is later skipped.
+2. Per-role membrane test for chain (§13.3): a chain to a cloud mock is blocked if any of Thinker/Worker/Verifier fails the membrane.
+3. Byte-identity for direct-local holds under `pure-local` default (§6 test 1) AND for a local route (§6 test 2).
+4. The default is verifiably `pure-local`: a fresh process with `FAE_MODEL_MODE` unset routes every turn direct-local and constructs zero cloud requests.
+5. Standard gates: fmt + `cargo check --workspace --all-targets` + strict clippy + `cargo test -p fae-daemon` green.
+
+### Stage 2 — Egress-security review (gate)
+Fresh-context **`red-team`** review focused exclusively on the egress-critical path: membrane-before-construction, `pure-local` default, no bypass around mode/budget/approval, per-role chain egress, no telemetry/user-text leakage, the spy-test genuinely fails-on-reorder. **Required: zero BLOCKER / zero MAJOR before merge to main and before any default-cutover discussion.** A normal `reviewer` pass may follow but `red-team` is the required gate for the egress surface.
+
+### Stage 3 — Separate gated cutover to `all-available` default
+Only after Stage 1 is merged AND Stage 2 clears: a **separate** change flips the `FAE_MODEL_MODE` default from `pure-local` to `all-available`, gated by the **release-validation contract** (`docs/checklists/app-release-validation.md` + `docs/checklists/main-and-cowork-live-test-scenarios.md`). This is its own commit, its own review, its own gate — never bundled with the wiring landing. Until Stage 3, cloud egress is opt-in (`FAE_MODEL_MODE=all-available` or `local-symphony`), not default.
