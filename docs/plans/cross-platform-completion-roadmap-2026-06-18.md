@@ -126,6 +126,8 @@ transparency/render defects (tauri#12800/#13157/#9220) via the designed **opaque
 path (skills = hands), so calendar/contacts/mail work off macOS. EventKit stays the macOS adapter.
 **Done:** on a non-Apple platform, calendar/contacts/mail operations route through the portable skills.
 
+> **⚠ Egress-surface flag (added 2026-06-23):** when this (or any later phase) lands a **daemon-side ToolHost** that executes `web_search` / `fetch_url` / networked tools, those become **fresh cloud-egress surfaces** and MUST route through the conductor's `assert_*_egress_gates` pipeline (mode cap → secret/credential membrane → provisioning) — the same gate that now covers `conversation.inject_text` and the `agent.*` commands. Today the daemon "is tool-aware but executes nothing," so there is no egress; the moment that changes, the gate must cover it. Flagged here (not in a review) so it is not rediscovered the way `agent.session_start` was — an ungated surface everyone assumed was fine. See `docs/architecture/egress-scope-and-stage3-hold-2026-06-23.md` §3.
+
 ### P8 — A1–A4: native ACP delegation/conductor  (independent — branch `acp-native-rust`)
 **Objective:** finish the native ACP client in the daemon. **A1** Swift thin client (repoint
 `AgentDelegateTool` at the daemon). **A2** streaming + persistent sessions. **A3** server-initiated
