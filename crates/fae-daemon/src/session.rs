@@ -655,17 +655,23 @@ fn gate_agent_command(
 /// native ACP client, returning the collected text + stop reason + tool calls.
 /// Non-streaming (Stage 1): blocks until the agent's turn completes.
 async fn agent_run(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
-    let agent = cmd
+    let agent_raw = cmd
         .payload
         .get("agent")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
+    // Normalize once (trim + lowercase) so the gate and the runner see the
+    // same agent string. fae_acp::resolve_agent also lowercases, but the gate's
+    // worker-resolution does too — normalizing here keeps them in lockstep and
+    // avoids a latent UX inconsistency (e.g. "  Codex  " passing the gate then
+    // failing on the ACP side). [NOTE-2 red-team NOTE-1]
+    let agent: String = agent_raw.trim().to_ascii_lowercase();
     let prompt = cmd
         .payload
         .get("prompt")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
-    let _worker_id = gate_agent_command(backends.conductor, "agent.run", agent, Some(prompt))?;
+    let _worker_id = gate_agent_command(backends.conductor, "agent.run", &agent, Some(prompt))?;
     let cwd = cmd
         .payload
         .get("cwd")
@@ -687,7 +693,7 @@ async fn agent_run(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResu
 
     let outcome = backends
         .acp_runner
-        .run_one_shot(agent, &cwd, prompt, policy)
+        .run_one_shot(&agent, &cwd, prompt, policy)
         .await
         .map_err(|error| {
             tracing::warn!(error = %error, "fae-daemon: agent.run failed");
@@ -765,12 +771,15 @@ fn classify_agent_error(error: &fae_acp::AcpError) -> &'static str {
 /// `agent.session_start` — spawn a persistent native-ACP session and return its
 /// daemon handle. Requires `AgentExecute`.
 async fn agent_session_start(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
-    let agent = cmd
+    let agent_raw = cmd
         .payload
         .get("agent")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
-    let _worker_id = gate_agent_command(backends.conductor, "agent.session_start", agent, None)?;
+    // Normalize once (same rationale as agent_run); the normalized value is
+    // stored in the registry so agent.prompt's per-turn gate sees the same id.
+    let agent: String = agent_raw.trim().to_ascii_lowercase();
+    let _worker_id = gate_agent_command(backends.conductor, "agent.session_start", &agent, None)?;
     let cwd = cmd
         .payload
         .get("cwd")
@@ -782,7 +791,7 @@ async fn agent_session_start(backends: &SessionBackends<'_>, cmd: &Command) -> C
 
     let session = backends
         .acp_runner
-        .start_session(agent, &cwd, policy)
+        .start_session(&agent, &cwd, policy)
         .await
         .map_err(|error| {
             tracing::warn!(error = %error, "fae-daemon: agent.session_start failed");
@@ -790,7 +799,7 @@ async fn agent_session_start(backends: &SessionBackends<'_>, cmd: &Command) -> C
         })?;
     let session_id = backends
         .agents
-        .insert(session, agent.to_owned(), cwd.display().to_string());
+        .insert(session, agent, cwd.display().to_string());
     Ok(serde_json::json!({ "session_id": session_id }))
 }
 
@@ -2203,6 +2212,36 @@ mod tests {
         )
         .expect("clean provisioned prompt passes the shared gate");
         assert_eq!(resolved, crate::conductor::workers::CODEX_CLOUD_WORKER_ID);
+    }
+
+    /// Normalization consistency (NOTE-2 red-team NOTE-1): an agent payload
+    /// with surrounding whitespace + mixed case (e.g. "  Codex  ") must pass the
+    /// gate AND reach the runner as the same normalized id. Before the fix, the
+    /// gate normalized internally but the raw string was passed to the runner,
+    /// so fae_acp could reject a value the gate accepted.
+    #[tokio::test]
+    async fn agent_payload_is_normalized_for_both_gate_and_runner() {
+        let harness = AgentCommandHarness::with_run_outcome(
+            crate::conductor::ModelMode::AllAvailable,
+            true,
+            "normalized ok",
+        );
+        let backends = harness.backends();
+
+        let result = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({
+                "agent": "  Codex  ",
+                "prompt": "clean prompt",
+            })),
+        )
+        .await
+        .expect("whitespace + mixed-case agent payload is accepted");
+        assert_eq!(
+            result.get("text").and_then(serde_json::Value::as_str),
+            Some("normalized ok")
+        );
+        assert_eq!(harness.runner.run_count(), 1);
     }
 
     #[tokio::test]
