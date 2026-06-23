@@ -9,7 +9,7 @@
 //! the final path (under the run dir) in M1; M0b does not wire it in.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crate::conductor::error::ConductorError;
@@ -18,6 +18,7 @@ use crate::conductor::telemetry::{ConductorRouteEvent, RouteReceipt};
 
 const EVENTS_FILE: &str = "conductor_route_events.jsonl";
 const RECEIPTS_FILE: &str = "conductor_receipts.jsonl";
+const BUDGET_USAGE_FILE: &str = "conductor_budget_usage.jsonl";
 const RECIPES_DIR: &str = "recipes";
 
 /// Append-only store. Cheap to clone (holds only a path).
@@ -50,6 +51,39 @@ impl ConductorStore {
     /// Append one route receipt (audit / team-view source).
     pub fn append_receipt(&self, receipt: &RouteReceipt) -> Result<(), ConductorError> {
         append_jsonl(&self.dir.join(RECEIPTS_FILE), receipt)
+    }
+
+    /// Append one budget-governance usage row. The concrete row type lives in
+    /// `budget.rs`; the store owns only the isolated JSONL persistence seam.
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): used when BudgetGovernor wires into executor
+    pub(crate) fn append_budget_usage_line<T: serde::Serialize>(
+        &self,
+        record: &T,
+    ) -> Result<(), ConductorError> {
+        append_jsonl(&self.dir.join(BUDGET_USAGE_FILE), record)
+    }
+
+    /// Read persisted budget-governance rows as raw JSONL lines. Missing file
+    /// means a fresh initialized store; missing/corrupt store directory is an
+    /// error so the BudgetGovernor can fail closed.
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): used when BudgetGovernor wires into executor
+    pub(crate) fn read_budget_usage_lines(&self) -> Result<Vec<String>, ConductorError> {
+        ensure_store_dir_available(&self.dir)?;
+        let path = self.dir.join(BUDGET_USAGE_FILE);
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let reader = std::io::BufReader::new(file);
+        let mut lines = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+        Ok(lines)
     }
 
     /// Persist a recipe version. Path: `recipes/<recipe_id>.v<version>.json`.
@@ -100,6 +134,18 @@ fn append_jsonl<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Condu
     line.push('\n');
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+#[allow(dead_code)] // TODO(M2, 2026-06-23): budget reads fail closed when store unavailable
+fn ensure_store_dir_available(dir: &Path) -> Result<(), ConductorError> {
+    let metadata = std::fs::metadata(dir)?;
+    if !metadata.is_dir() {
+        return Err(ConductorError::Path(format!(
+            "conductor store path is not a directory: {}",
+            dir.display()
+        )));
+    }
     Ok(())
 }
 

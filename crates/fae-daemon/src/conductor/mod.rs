@@ -51,6 +51,7 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+pub mod budget;
 pub mod error;
 pub mod executor;
 pub mod fingerprint;
@@ -61,6 +62,10 @@ pub mod store;
 pub mod telemetry;
 pub mod workers;
 
+pub use budget::{
+    ActualCost, BudgetDimension, BudgetGovernor, BudgetLimits, BudgetVerdict, CostEstimate,
+    DEFAULT_DAILY_WINDOW_MS,
+};
 pub use error::ConductorError;
 pub use executor::{route_turn, ConductorRuntime};
 pub use fingerprint::{InstallKey, RequestFingerprint};
