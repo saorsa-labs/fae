@@ -1,12 +1,12 @@
 # ADR-008a: ConductorRecipe MetaOpt Surface Amendment
 
-**Status:** Proposed (Amendment)
+**Status:** Accepted (Amendment) — **owner-accepted 2026-06-23.**
 **Date:** 2026-06-23
 **Owner:** David Irvine
 **Amends:** [ADR-008 — Autonomous Self-Improvement (Meta-Optimization)](008-autonomous-self-improvement.md) (§Decision, "Four optimization surfaces")
 **Scope:** ADR-008's surface set; `crates/fae-metaopt/src/types.rs` (`MetaOptSurface` enum); the conductor recipe surface in `crates/fae-daemon/src/conductor/recipe.rs` (`FaeConductorRecipe`, `PrivacyLane`, `ConductorTopology`); the M2 per-role-call executor gate pipeline (`crates/fae-daemon/src/conductor/executor.rs`)
 
-> David accepts ADRs. This amendment is **Proposed**, not Accepted, until David's review.
+> David accepts ADRs. This amendment was **Accepted by David on 2026-06-23**, authorizing the `MetaOptSurface::ConductorRecipe` variant + M3 implementation under the enforceable constraints below. Acceptance was made with the protected-kernel review on record (v2: ModelMode constraint explicit, secret/credential-membrane naming corrected) and the Fae-as-local-coordinator security model (commit `c3fa2225`) as context.
 
 ## Context
 
@@ -114,7 +114,9 @@ This two-layer design means a single bug in one layer does not break egress safe
 
 ## Status transition
 
-On David's acceptance, this amendment's status becomes **Accepted (Amendment)**, the `MetaOptSurface::ConductorRecipe` variant may be added to `crates/fae-metaopt/src/types.rs` (removing the doc comment that gates it), and the M3 ConductorRecipe mutation operator may be implemented per the allowed-operator/constraint specification above. The ADR-008 README row and its "amendment needed" note are updated in the same change.
+**✅ Accepted by David on 2026-06-23.** On acceptance, this amendment's status becomes **Accepted (Amendment)** (done), the `MetaOptSurface::ConductorRecipe` variant may be added to `crates/fae-metaopt/src/types.rs` (removing the doc comment that gates it), and the M3 ConductorRecipe mutation operator may be implemented per the allowed-operator/constraint specification above. The ADR-008 README row and its "amendment needed" note are updated in the same change.
+
+Acceptance conditions (all met): (1) protected-kernel review complete (v2 — ModelMode constraint explicit); (2) secret/credential-membrane naming corrected so the defense-in-depth argument is not over-read; (3) the Fae-as-local-coordinator security model (`egress-scope-and-stage3-hold-2026-06-23.md` §0) is on record as the authoritative framing — the trust boundary is Fae being local, the membrane is defense-in-depth; (4) Stage 3 (all-available default flip) decided NOT proceeding, so MetaOpt's recipe-mutation authority operates under a `pure-local` default where cloud egress stays opt-in.
 
 ## References
 
