@@ -24,7 +24,12 @@
 //! redaction/block checks first, and only then writes a bounded redacted excerpt
 //! plus structured membrane labels. No raw user text is required for scoring.
 
-#![allow(dead_code)] // TODO(M2 2026-06-23): wire into reward aggregator after M2 spec review.
+#![allow(dead_code)]
+// TODO(M2 2026-06-23): wire into reward aggregator after M2 spec review.
+// Per-module forbid for parity with fae-pii-membrane (the parent mod.rs crate-level
+// attribute already cascades here; this is belt-and-braces per the privacy-crate
+// convention flagged in the WP-D7 reviewer pass, 2026-06-23).
+#![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::fs;
