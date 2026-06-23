@@ -1,11 +1,22 @@
-# Egress scope, the membrane's real coverage, and the Stage 3 hold
+# Security model: Fae-as-local-coordinator, the membrane's real coverage, and the Stage 3 default decision
 
-- **Status:** Decision record — corrects a premise of the M2 "all-available default" ruling. **Stage 3 is HELD** pending David's conscious re-decision.
+- **Status:** Decision record — **DECIDED 2026-06-23 (owner acknowledgment).** Two things: (1) the **security architecture** — Fae (local Gemma) is the coordinator and the primary trust boundary; she coordinates other agents as tools; the membrane is defense-in-depth; (2) the **Stage 3 default** — `pure-local` remains the default; `all-available` is an explicit, disclosed opt-in. The Stage 3 flip-to-`all-available`-default is **not proceeding**; cloud egress stays opt-in. (Originally flagged HELD pending decision; resolved by owner acknowledgment same day.)
 - **Date:** 2026-06-23
 - **Trigger:** advisor review following the M2 NOTE-2 merge, verified against source.
 - **Supersedes in part:** the "PII membrane" characterization in `conductor-m2-reward-eval-shadow-routing-spec-2026-06-23.md` §5.3 and `008a-conductor-recipe-surface-amendment.md` (both patched in the same change).
 
-## 1. The correction (verified in source)
+## 0. The security model (authoritative framing — owner 2026-06-23)
+
+Before the membrane discussion, the architecture itself must be stated correctly, because it is the actual security boundary:
+
+- **Fae runs on a local model (Gemma). She is local, private, and the coordinator.** All routing decisions — *what to delegate, to whom, and with what scope* — are reasoned locally, on-device. Her memory and the conversation context never leave the machine for the purpose of *making the routing decision*. **She is the boss.** That is where the security lies.
+- **Other agents are tools she coordinates, not peers she pipes data to.** ACP harnesses the user has installed (Claude Code, Codex, Gemini CLI, Copilot, …) and cloud models reached via user-provided API keys are *capabilities Fae exercises under her local judgment*. They extend Fae's reach; they do not become Fae.
+- **Cloud coordination is Fae-mediated delegation, not a data firehose.** Fae decides the scoped task each agent sees. A cloud agent receives what Fae chose to send for that specific delegated sub-task — closer to "I'll ask my lawyer about this specific clause" than "here is my whole life, advise me." The full conversational context stays with Fae (local); the delegate sees the slice.
+- **The membrane is defense-in-depth, not the authority.** It is a credential/secret safety net that catches accidental leaks (an API key pasted into a prompt, a private key in context). It is a useful layer; it is not, and was never intended to be, the trust boundary itself. The trust boundary is Fae being local.
+
+This framing matters because an earlier draft of this record over-rotated on the membrane's limitation and read as "cloud is dangerous, lock it down." That is the wrong read. The architecture is sound: a privacy-first companion whose coordinator is local and exercises cloud agents as scoped tools is a legitimate, trustworthy design. The Stage 3 question is **not** "is cloud egress safe" — it is **"what is the right default coordination reach for a privacy-first companion?"** (answered in §2: pure-local).
+
+## 1. The membrane's real coverage (a layer within the model above — verified in source)
 
 Throughout the conductor track, the egress authority in `crates/fae-pii-membrane/` has been called a **"PII membrane"** — in specs, in the crate name, in the ADR. That name **oversells what the implementation does.** It is a **credential / secret filter**, not a personal-information filter.
 
@@ -30,25 +41,23 @@ Throughout the conductor track, the egress authority in `crates/fae-pii-membrane
 
 **Proposed follow-up (not this change):** rename the crate to `fae-secret-membrane` (or `fae-credential-filter`) and update call sites, so the name matches the coverage. Until then, read "PII membrane" in older docs as "secret/credential filter."
 
-## 2. What this means for Stage 3 (the load-bearing consequence)
+## 2. What this means for the default posture (the real Stage 3 question)
 
-The M2 spec's stated destination default is **`all-available`** (every provisioned cloud worker eligible). The owner ruling two turns ago selected that destination default, with the reasoning (paraphrased from the track) *"we route cloud-backed work through the PII membrane to protect users' data."* **That reasoning rests on the oversold characterization.** The membrane protects **credentials**, not the **personal content** that is the actual substance of a memory-strong companion built to "remember important things from every conversation."
+Re-stated with the §0 framing: cloud coordination is legitimate *because Fae mediates it*. So the Stage 3 question is **not** "is cloud egress safe" (the architecture answers yes, Fae-mediated). It is **"what coordination reach should Fae exercise by default for a privacy-first companion?"**
 
-Concretely, **`all-available` as the default means:** for every user, on every install, with no choice made and no disclosure shown, Fae sends deeply personal — non-secret — content (health, finances, relationships, location, family) to OpenAI / Anthropic / Google by default. That is a real inversion of the product's stated identity:
+The owner's answer (2026-06-23): **pure-local by default.** Rationale that holds under the corrected model:
 
-- ADR-003 (local LLM inference): *"Fae's core promise is privacy — all intelligence runs on the user's Mac with no remote servers… Complete privacy — no data leaves the device."* Status: *"remains active and implemented."*
-- ADR-001 (cascaded voice pipeline): *"Local-only privacy — all inference on-device, no API keys or remote servers."*
-- ADR-007 (companion device handoff): the user *"owns all intelligence."*
+- **The product's identity is local-first.** ADR-003 (*"Fae's core promise is privacy — all intelligence runs on the user's Mac… Complete privacy — no data leaves the device"*; status: *remains active and implemented*), ADR-001 (*"Local-only privacy — all inference on-device"*), ADR-007 (the user *"owns all intelligence"*). The default should match the identity. A user who has not chosen to extend Fae's reach should not, by default, have a local-first companion that delegates their personal context to third-party clouds.
+- **The membrane is defense-in-depth, not the decision-maker.** Under `all-available`, Fae *may* legitimately decide to delegate a task that carries personal content (a health question to Claude, say) — that is her call as boss. But the membrane will not catch that the content is personal, because it only catches secrets. So defaulting to `all-available` means *defaulting to Fae making cloud-delegation decisions about personal content before the user has opted into that reach.* That is a legitimate mode — it is not the right *default* for a companion whose identity is local-first.
+- **No cloud-egress consent / disclosure UX exists today** (cloud was not a runtime surface until this track). So `all-available`-as-default would be *opt-out*, not opt-in. Defaulting to `pure-local` keeps the extension-of-reach an explicit, disclosed user choice.
 
-A default-on cloud flip doesn't merely *use* cloud — it inverts an identity the product is explicitly built around. There is also **no cloud-egress consent / disclosure UX today** (cloud was not a runtime surface until this track), so "default-on" is structurally "silent egress of personal content," not "informed opt-in."
+This is a stronger and more accurate argument than "the membrane is insufficient." The architecture is sound; the default is a product posture, and the posture is: a privacy-first companion delegates nothing by default, and gains coordination reach only when the user chooses to extend it.
 
-### Stage 3 status: HELD
+### Stage 3 status: DECIDED — pure-local default confirmed; all-available is opt-in
 
-Stage 3 (the separate gated commit flipping `FAE_MODEL_MODE` default from `pure-local` to `all-available`) is **on hold** until David makes the default-privacy-posture call **with this corrected premise on the table.** It is not "egress-complete; only release-validation remaining" — that framing assumed the membrane covered personal content, which it does not.
+Stage 3 (the separate gated commit flipping `FAE_MODEL_MODE` default from `pure-local` to `all-available`) is **not proceeding** — owner acknowledgment 2026-06-23 confirmed the privacy-first posture: **`pure-local` remains the default**; `all-available` is an **explicit, disclosed opt-in.** The decision was made with the corrected premise on the table (Fae-as-coordinator is the boundary; the membrane is defense-in-depth for secrets; cloud coordination is legitimate but an extension of reach the user should choose).
 
-**Recommendation (advisor + this orchestrator):** default to **`pure-local`** (or **`local-symphony`** — cloud-free, keeps coordination power within the user's own devices), and make `all-available` an **explicit, disclosed opt-in** (a first-run cloud-egress disclosure the user affirmatively enables). The mechanism work merged in M2 Stage 1 + NOTE-2 makes **any** of these choices safe to implement — the gates run identically regardless of default; this is purely "what is the right default for a privacy-first companion." The bias should be hard against silently shipping personal conversations to third parties.
-
-If, knowing the membrane stops secrets only, David still wants `all-available` as the default, that is his informed call and the orchestrator will execute it — but it should be made with the corrected premise, and default-on then requires the disclosure UX as real (scoped) work, not a checkbox.
+Cloud egress therefore stays **opt-in** (`FAE_MODEL_MODE=all-available` or `local-symphony`) until/unless a future owner decision reverses this with a fresh disclosure-UX commitment. The mechanism work merged in M2 Stage 1 + NOTE-2 makes any of these choices safe to implement — the gates run identically regardless of default.
 
 ## 3. Scope the "egress-complete" claim so it isn't over-read
 
