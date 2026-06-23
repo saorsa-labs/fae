@@ -17,6 +17,7 @@
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -85,6 +86,7 @@ async fn main() -> DaemonResult<()> {
         return Ok(());
     }
 
+    init_tracing();
     println!("fae-daemon (Phase 1, chunk 2a) — protocol v{PROTOCOL_VERSION}");
 
     spawn_parent_watch();
@@ -167,8 +169,21 @@ async fn main() -> DaemonResult<()> {
     let conductor_store = conductor::ConductorStore::open(conductor_data_dir.join("conductor"))
         .map_err(|e| format!("conductor store: {e}"))?;
     let conductor_recipes = conductor::RecipeSet::default(); // M1: no recipe needs loading (static-direct is hardcoded in the policy)
-    let conductor_workers = conductor::WorkerRegistry::m1();
+    let conductor_workers = conductor_worker_registry_from_env();
     let conductor_policy = conductor::StaticDirectPolicy;
+    let model_mode = conductor_model_mode_from_env();
+    let budget_limits = conductor_budget_limits_from_env();
+    if let Err(error) = budget_limits.validate() {
+        tracing::warn!("invalid conductor budget limits; cloud routes will fail closed: {error}");
+    }
+    let budget_governor = conductor::BudgetGovernor::with_worker_limits(
+        conductor_store.clone(),
+        budget_limits,
+        conductor_worker_budget_limits_from_env(),
+    );
+    let provider_pricing = conductor_provider_pricing_from_env(&conductor_workers);
+    let conductor_egress =
+        conductor::ConductorEgress::production(model_mode, budget_governor, provider_pricing);
     if chain_enabled {
         eprintln!(
             "fae-daemon: conductor chain ENABLED (FAE_CONDUCTOR_CHAIN). Direct remains the default; chain executes only for vetted chain recipes."
@@ -182,16 +197,18 @@ async fn main() -> DaemonResult<()> {
         // No recipes loaded in M1; nothing to warn about. The guard lives here
         // for M2/M3 to populate when recipe loading lands.
     }
-    let conductor_runtime = Arc::new(conductor::ConductorRuntime::new(
+    let conductor_runtime = Arc::new(conductor::ConductorRuntime::new_with_egress(
         conductor_policy,
         conductor_recipes,
         conductor_workers,
         conductor_store,
         install_key,
         chain_enabled,
+        conductor_egress,
     ));
     println!(
-        "conductor: static-direct (chain {}) — telemetry isolated",
+        "conductor: static-direct (mode {}, chain {}) — telemetry isolated",
+        model_mode.as_str(),
         if chain_enabled { "on" } else { "off" }
     );
 
@@ -234,6 +251,95 @@ async fn main() -> DaemonResult<()> {
     )
     .await?;
     Ok(())
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+}
+
+fn conductor_model_mode_from_env() -> conductor::ModelMode {
+    let raw = std::env::var("FAE_MODEL_MODE").ok();
+    let mode = conductor::ModelMode::from_env_value(raw.as_deref());
+    if raw
+        .as_deref()
+        .is_some_and(|value| conductor::ModelMode::parse(value).is_none())
+    {
+        tracing::warn!("unknown FAE_MODEL_MODE; defaulting to pure-local");
+    }
+    mode
+}
+
+fn conductor_worker_registry_from_env() -> conductor::WorkerRegistry {
+    conductor::WorkerRegistry::from_cloud_credentials([
+        (
+            conductor::workers::CODEX_CLOUD_WORKER_ID,
+            first_non_empty_env(["FAE_CODEX_API_KEY", "OPENAI_API_KEY"]),
+        ),
+        (
+            conductor::workers::CLAUDE_CLOUD_WORKER_ID,
+            first_non_empty_env(["FAE_CLAUDE_API_KEY", "ANTHROPIC_API_KEY"]),
+        ),
+        (
+            conductor::workers::GEMINI_CLOUD_WORKER_ID,
+            first_non_empty_env(["FAE_GEMINI_API_KEY", "GOOGLE_API_KEY"]),
+        ),
+        (
+            conductor::workers::COPILOT_CLOUD_WORKER_ID,
+            first_non_empty_env(["FAE_COPILOT_API_KEY", "GITHUB_TOKEN"]),
+        ),
+    ])
+}
+
+fn first_non_empty_env<const N: usize>(names: [&str; N]) -> Option<String> {
+    names.into_iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+fn conductor_budget_limits_from_env() -> conductor::BudgetLimits {
+    // Stage 1 exposes the per-worker bucket machinery while keeping startup
+    // config deliberately conservative and simple. Unknown/unset values fall
+    // back to the safe default; LocalOnly routes never consult this governor.
+    conductor::BudgetLimits::default()
+}
+
+fn conductor_worker_budget_limits_from_env() -> HashMap<String, conductor::BudgetLimits> {
+    HashMap::new()
+}
+
+fn conductor_provider_pricing_from_env(
+    workers: &conductor::WorkerRegistry,
+) -> conductor::ProviderPricingTable {
+    let raw = std::env::var("FAE_PROVIDER_PRICING").ok();
+    let mut table = match conductor::ProviderPricingTable::from_env_value(raw.as_deref()) {
+        Ok(table) => table,
+        Err(error) => {
+            tracing::warn!(
+                "invalid FAE_PROVIDER_PRICING; cloud routes without pricing fail closed: {error}"
+            );
+            conductor::ProviderPricingTable::empty()
+        }
+    };
+
+    // Mock provider defaults keep Stage 1 opt-in egress testable without live
+    // HTTP or real provider billing. Real provider adapters must replace these
+    // with operator-configured pricing before they can be wired to the seam.
+    for worker_id in workers.worker_ids() {
+        if worker_id != conductor::workers::LOCAL_MODEL_WORKER_ID
+            && !table.contains_worker(&worker_id)
+        {
+            table.insert(
+                worker_id,
+                conductor::ProviderPricing {
+                    input_micros_per_token: 1,
+                    output_micros_per_token: 1,
+                },
+            );
+        }
+    }
+    table
 }
 
 /// Build the TTS backend (S19). On macOS: Kokoro via voice-tts/mlx-rs, with

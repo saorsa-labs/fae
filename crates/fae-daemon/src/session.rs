@@ -2576,6 +2576,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             worker_id: "local-model".to_string(),
             task_class: ConductorTaskClass::Unknown,
+            lane: crate::conductor::PrivacyLane::LocalOnly,
             approval: ApprovalClass::None,
             reason: "static-direct-local".to_string(),
         };

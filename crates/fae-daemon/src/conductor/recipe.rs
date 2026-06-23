@@ -76,7 +76,7 @@ pub enum WorkerLocality {
     /// these are cloud-backed providers, so prompts may egress to OpenAI /
     /// Anthropic / Google after the PII membrane and D2 budget caps. D-M2-1 maps
     /// this locality to [`PrivacyLane::CloudBacked`]. *Local process ≠ local data.*
-    LocalAcp,
+    CloudBackedAcp,
     /// Same-owner x0x peer (`delegate_to_mesh`, Tier 1). M4+.
     OwnerFleet,
     /// Cross-owner x0x peer under a capability grant. ADR-gated.
@@ -341,13 +341,13 @@ impl FaeConductorRecipe {
         // v1 safe profile: worker locality + privacy lane.
         if profile == RecipeProfile::V1Safe {
             for w in &self.allowed_workers {
-                // D-M2-1: `LocalAcp` is permitted only as a cloud-backed Tier B
+                // D-M2-1: `CloudBackedAcp` is permitted only as a cloud-backed Tier B
                 // worker. The PII membrane and D2 budget caps are the egress
                 // floor/ceiling; M1 remains local-only because static-direct is
                 // hardcoded `LocalModel` and this validation path is dormant.
                 if !matches!(
                     w.locality,
-                    WorkerLocality::LocalModel | WorkerLocality::LocalAcp
+                    WorkerLocality::LocalModel | WorkerLocality::CloudBackedAcp
                 ) {
                     return Err(ConductorRecipeError::WorkerLocalityNotPermitted(
                         w.id.clone(),
@@ -388,7 +388,7 @@ impl FaeConductorRecipe {
 fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
     match l {
         WorkerLocality::LocalModel => PrivacyLane::LocalOnly,
-        WorkerLocality::LocalAcp => PrivacyLane::CloudBacked,
+        WorkerLocality::CloudBackedAcp => PrivacyLane::CloudBacked,
         WorkerLocality::OwnerFleet => PrivacyLane::OwnerFleet,
         WorkerLocality::TrustedPeer => PrivacyLane::TrustedPeer,
         WorkerLocality::RemoteProvider => PrivacyLane::RemoteAllowed,
@@ -472,6 +472,7 @@ pub struct OwnedRouteDecision {
     pub topology: ConductorTopology,
     pub worker_id: String,
     pub task_class: ConductorTaskClass,
+    pub lane: PrivacyLane,
     pub approval: ApprovalClass,
     /// Short, static, audit-safe reason (e.g. `"static-direct-local"`).
     #[allow(dead_code)]
@@ -489,6 +490,8 @@ pub enum RouteFailure {
     WorkerUnavailable { worker_id: String },
     /// Recipe requested chain but `chain_enabled` is false (or similar).
     RecipeDisabled { recipe_id: String, reason: String },
+    /// The operator-selected model mode does not permit this privacy lane.
+    ModeBlocked { mode: String, lane: PrivacyLane },
     /// A non-`None` approval class reached the executor in M1 (defense-in-depth;
     /// unreachable, since the static policy emits `None`).
     UnexpectedApproval { approval: ApprovalClass },
@@ -708,10 +711,10 @@ mod tests {
     }
 
     #[test]
-    fn local_acp_maps_to_cloud_backed_lane() {
+    fn cloud_backed_acp_maps_to_cloud_backed_lane() {
         let mut r = direct_recipe();
         let mut acp = local_worker("acp:codex");
-        acp.locality = WorkerLocality::LocalAcp;
+        acp.locality = WorkerLocality::CloudBackedAcp;
         r.allowed_workers = vec![acp.clone()];
         r.role_slots[0].worker = acp;
         r.privacy_lane = PrivacyLane::LocalOnly;
