@@ -385,7 +385,7 @@ impl FaeConductorRecipe {
 }
 
 #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
-fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
+pub(crate) fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
     match l {
         WorkerLocality::LocalModel => PrivacyLane::LocalOnly,
         WorkerLocality::CloudBackedAcp => PrivacyLane::CloudBacked,

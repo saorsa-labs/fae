@@ -289,7 +289,7 @@ impl ConductorRuntime {
         // the local-only direct profile without a RecipeSet lookup.
         let is_static_direct =
             decision.recipe_id == crate::conductor::policy::STATIC_DIRECT_RECIPE_ID;
-        let recipe = if is_static_direct {
+        let _recipe = if is_static_direct {
             None
         } else {
             match self.recipes.get(&decision.recipe_id) {
@@ -352,9 +352,7 @@ impl ConductorRuntime {
                     fallback: false,
                     fallback_reason: None,
                     target_kind: TargetKind::LocalModel,
-                    privacy_lane: recipe
-                        .map(|r| r.privacy_lane)
-                        .unwrap_or(PrivacyLane::LocalOnly),
+                    privacy_lane: decision.lane,
                     cost_micros: None,
                 };
                 (wire, outcome)
@@ -380,15 +378,7 @@ impl ConductorRuntime {
                             .fail_closed_direct(decision, backends, cmd, failure)
                             .await;
                     }
-                    self.run_chain(
-                        decision,
-                        backends,
-                        cmd,
-                        recipe
-                            .map(|r| r.privacy_lane)
-                            .unwrap_or(PrivacyLane::LocalOnly),
-                    )
-                    .await
+                    self.run_chain(decision, backends, cmd, decision.lane).await
                 } else {
                     self.run_cloud_chain(decision, backends, cmd).await
                 }
@@ -623,10 +613,26 @@ impl ConductorRuntime {
             (
                 PrivacyLane::CloudBacked | PrivacyLane::OwnerFleet,
                 ApprovalClass::StandingGrant(_),
-            ) if self.workers.is_provisioned(&decision.worker_id) => Ok(()),
+            ) if self.workers.is_provisioned(&decision.worker_id)
+                && self.worker_lane_matches_locality(&decision.worker_id, decision.lane) =>
+            {
+                Ok(())
+            }
             _ => Err(RouteFailure::UnexpectedApproval {
                 approval: decision.approval.clone(),
             }),
+        }
+    }
+
+    /// Defense-in-depth (M2 Stage 1 red-team MINOR): a non-local decision's
+    /// lane must match the targeted worker's locality-derived lane. Prevents a
+    /// buggy or compromised policy from routing a cloud lane to a local-model
+    /// worker, which would otherwise pass the provisioned-approval gate and
+    /// rely only on the incidental absence of worker pricing to fail closed.
+    fn worker_lane_matches_locality(&self, worker_id: &str, lane: PrivacyLane) -> bool {
+        match self.workers.locality(worker_id) {
+            Some(locality) => crate::conductor::recipe::locality_to_lane(locality) == lane,
+            None => false,
         }
     }
 
@@ -1340,6 +1346,58 @@ mod tests {
             .join("store")
             .join("conductor_budget_usage.jsonl");
         std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    /// Defense-in-depth for the red-team MINOR (lane/worker locality
+    /// mismatch): a `CloudBacked` decision targeting the local-model worker
+    /// must fail closed at the approval gate even when the worker is
+    /// provisioned AND has pricing, so that neither the PII membrane nor the
+    /// budget gate blocks first. The locality assertion is the sole remaining
+    /// defense; without it the request would be constructed and egressed.
+    #[tokio::test]
+    async fn locality_mismatch_blocks_cloud_lane_to_provisioned_local_worker(
+    ) -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        // Deterministic non-blocking membrane: isolates the test from any
+        // real-membrane benign-text behavior so only the approval gate can
+        // stop egress.
+        let (membrane, _membrane_calls) = CountingMembrane::new(false);
+        // Price the LOCAL worker so the budget gate (uncostable => fail closed)
+        // does NOT block. This isolates the locality assertion as the sole
+        // defense: without the fix this test would observe cloud egress.
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(LOCAL_MODEL_WORKER_ID),
+            membrane,
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-mismatch", "plan a small function");
+        let decision = decision(
+            "req-mismatch",
+            "recipe-cloud",
+            LOCAL_MODEL_WORKER_ID,
+            ConductorTopology::Direct,
+            PrivacyLane::CloudBacked,
+            ApprovalClass::StandingGrant("grant".to_string()),
+        );
+
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok());
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+        assert!(outcome.fallback);
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("approval")));
+        assert!(budget_usage_content(&runtime).is_empty());
+        Ok(())
     }
 
     #[tokio::test]
