@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "corpus_version": "conductor-routing-hybrid.v1.2026-06-23",
+  "annotator": "david",
+  "notes": "WP-D7 synthetic core. Metadata-only entries; no prompt or user text. Real-sample refreshes append source=real_sample entries only after fae-pii-membrane scrubbing.",
+  "entries": [
+    {
+      "id": "synthetic.chat.local_direct.001",
+      "source": "synthetic_core",
+      "task_class": "chat",
+      "feature_predicates": ["short_turn", "no_tool_call", "local_ok"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.static-direct.v1",
+        "topology": "direct",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.personal_data.local_direct.001",
+      "source": "synthetic_core",
+      "task_class": "personal_data",
+      "feature_predicates": ["personal_context", "credential_absent", "local_required"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.static-direct.v1",
+        "topology": "direct",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.tool_use.local_direct.001",
+      "source": "synthetic_core",
+      "task_class": "tool_use",
+      "feature_predicates": ["local_tool_available", "no_remote_context", "short_turn"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.static-direct.v1",
+        "topology": "direct",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.planning.local_direct.001",
+      "source": "synthetic_core",
+      "task_class": "planning",
+      "feature_predicates": ["low_complexity", "owner_preferences", "local_ok"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.static-direct.v1",
+        "topology": "direct",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.unknown.safe_fallback.001",
+      "source": "synthetic_core",
+      "task_class": "unknown",
+      "feature_predicates": ["classifier_low_confidence", "safe_fallback", "local_ok"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.static-direct.v1",
+        "topology": "direct",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.reasoning.local_chain.001",
+      "source": "synthetic_core",
+      "task_class": "reasoning",
+      "feature_predicates": ["multi_step", "verification_useful", "local_ok"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.chain-local.v1",
+        "topology": "chain",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.code_review.local_chain.001",
+      "source": "synthetic_core",
+      "task_class": "code_review",
+      "feature_predicates": ["has_diff_metadata", "verification_required", "local_ok"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.chain-local-review.v1",
+        "topology": "chain",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    },
+    {
+      "id": "synthetic.coding.cloud_acp.001",
+      "source": "synthetic_core",
+      "task_class": "coding",
+      "feature_predicates": ["large_codebase", "cloud_backed_acp_available", "credential_absent", "budget_tier_b"],
+      "privacy_lane": "remote_allowed",
+      "ideal_route": {
+        "recipe_id": "fae.direct-cloud-acp.v1",
+        "topology": "direct",
+        "worker_id": "acp:codex",
+        "approval": "standing_grant"
+      }
+    },
+    {
+      "id": "synthetic.research.cloud_chain.001",
+      "source": "synthetic_core",
+      "task_class": "research",
+      "feature_predicates": ["web_context_needed", "cloud_backed_acp_available", "credential_absent", "budget_tier_b"],
+      "privacy_lane": "remote_allowed",
+      "ideal_route": {
+        "recipe_id": "fae.chain-cloud-research.v1",
+        "topology": "chain",
+        "worker_id": "acp:claude",
+        "approval": "standing_grant"
+      }
+    },
+    {
+      "id": "synthetic.coding.local_direct.001",
+      "source": "synthetic_core",
+      "task_class": "coding",
+      "feature_predicates": ["small_patch", "single_file", "local_ok"],
+      "privacy_lane": "local_only",
+      "ideal_route": {
+        "recipe_id": "fae.static-direct.v1",
+        "topology": "direct",
+        "worker_id": "local-model",
+        "approval": "none"
+      }
+    }
+  ]
+}

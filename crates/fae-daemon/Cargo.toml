@@ -17,6 +17,7 @@ fae-control-plane = { path = "../fae-control-plane" }
 fae-envelope-gate = { path = "../fae-envelope-gate" }
 fae-engine = { path = "../fae-engine" }
 fae-acp = { path = "../fae-acp" }
+fae-pii-membrane = { path = "../fae-pii-membrane" }
 serde = { workspace = true }
 serde_json.workspace = true
 thiserror.workspace = true
