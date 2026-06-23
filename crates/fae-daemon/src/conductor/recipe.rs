@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::conductor::budget::BudgetDimension;
 use crate::conductor::error::ConductorError;
 
 // ───────────────────────────── Enums ─────────────────────────────
@@ -72,12 +73,9 @@ pub enum WorkerLocality {
     LocalModel,
     /// ACP agent (Codex/Claude/Pi/Gemini/Copilot) driven via `fae-acp`. **The
     /// "local" here is the *process* (a local subprocess), NOT the *data*:**
-    /// these are cloud-backed providers, so the prompt egresses to OpenAI /
-    /// Anthropic / Google. Mapping this locality to a privacy lane + approval
-    /// tier is a **G-M2-spec decision** (see
-    /// `docs/research/fae-learned-conductor-m2-decisions-2026-06-22.md`);
-    /// the current `locality_to_lane(LocalAcp) → LocalOnly` mapping is a
-    /// known placeholder that MUST NOT be relied upon. *Local process ≠ local data.*
+    /// these are cloud-backed providers, so prompts may egress to OpenAI /
+    /// Anthropic / Google after the PII membrane and D2 budget caps. D-M2-1 maps
+    /// this locality to [`PrivacyLane::CloudBacked`]. *Local process ≠ local data.*
     LocalAcp,
     /// Same-owner x0x peer (`delegate_to_mesh`, Tier 1). M4+.
     OwnerFleet,
@@ -88,15 +86,19 @@ pub enum WorkerLocality {
 }
 
 /// How sensitive the context is, and therefore how far it may travel.
-/// Monotonically widening: `LocalOnly` ⊂ `OwnerFleet` ⊂ `TrustedPeer` ⊂
-/// `RemoteAllowed`. The v1 routing policy never widens a lane beyond what the
-/// task requires, and never auto-widens via recipe mutation (M3 guard).
+/// Monotonically widening: `LocalOnly` ⊂ `CloudBacked` ⊂ `OwnerFleet` ⊂
+/// `TrustedPeer` ⊂ `RemoteAllowed`. The v1 routing policy never widens a lane
+/// beyond what the task requires, and never auto-widens via recipe mutation
+/// (M3 guard).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrivacyLane {
     /// Stays in the local process. Required for personal-data / credential /
     /// sensitive-content tasks.
     LocalOnly,
+    /// May egress to a provisioned cloud-backed local ACP worker (Codex,
+    /// Claude, Gemini, Copilot, etc.) after the PII membrane and budget caps.
+    CloudBacked,
     /// May cross to same-owner x0x peers. M4+.
     OwnerFleet,
     /// May cross to an explicitly-granted trusted peer. ADR-gated.
@@ -113,9 +115,10 @@ impl PrivacyLane {
         fn rank(lane: PrivacyLane) -> u8 {
             match lane {
                 PrivacyLane::LocalOnly => 0,
-                PrivacyLane::OwnerFleet => 1,
-                PrivacyLane::TrustedPeer => 2,
-                PrivacyLane::RemoteAllowed => 3,
+                PrivacyLane::CloudBacked => 1,
+                PrivacyLane::OwnerFleet => 2,
+                PrivacyLane::TrustedPeer => 3,
+                PrivacyLane::RemoteAllowed => 4,
             }
         }
         rank(other) <= rank(self)
@@ -286,9 +289,9 @@ pub enum ConductorRecipeError {
 #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeProfile {
-    /// M0–M3: local model + local ACP workers only; Direct/Chain only;
-    /// LocalOnly/OwnerFleet lanes only (OwnerFleet is permitted in recipes but
-    /// not executed until M4).
+    /// M0–M3: local model + cloud-backed local ACP workers only; Direct/Chain
+    /// only; LocalOnly/CloudBacked/OwnerFleet lanes only (OwnerFleet is
+    /// permitted in recipes but not executed until M4).
     V1Safe,
 }
 
@@ -338,12 +341,10 @@ impl FaeConductorRecipe {
         // v1 safe profile: worker locality + privacy lane.
         if profile == RecipeProfile::V1Safe {
             for w in &self.allowed_workers {
-                // FIXME(G-M2-spec): `LocalAcp` is currently permitted in the
-                // v1-safe profile, but ACP agents are cloud-backed (prompt
-                // egresses to OpenAI/Anthropic/Google). Whether an ACP worker
-                // is "v1-safe" is exactly the G-M2-spec ACP-egress decision —
-                // do not rely on this permissivity until that lands. (Dead in
-                // M1: static-direct is hardcoded LocalModel; validate() is M2.)
+                // D-M2-1: `LocalAcp` is permitted only as a cloud-backed Tier B
+                // worker. The PII membrane and D2 budget caps are the egress
+                // floor/ceiling; M1 remains local-only because static-direct is
+                // hardcoded `LocalModel` and this validation path is dormant.
                 if !matches!(
                     w.locality,
                     WorkerLocality::LocalModel | WorkerLocality::LocalAcp
@@ -353,11 +354,12 @@ impl FaeConductorRecipe {
                         w.locality,
                     ));
                 }
-                // OwnerFleet is permitted in recipes (so M4 can flip the switch)
-                // but TrustedPeer/RemoteAllowed are not yet.
+                // CloudBacked is the M2 ACP lane; OwnerFleet is permitted in
+                // recipes (so M4 can flip the switch) but TrustedPeer/
+                // RemoteAllowed are not yet.
                 let lane_ok = matches!(
                     self.privacy_lane,
-                    PrivacyLane::LocalOnly | PrivacyLane::OwnerFleet
+                    PrivacyLane::LocalOnly | PrivacyLane::CloudBacked | PrivacyLane::OwnerFleet
                 );
                 if !lane_ok {
                     return Err(ConductorRecipeError::WorkerExceedsPrivacyLane(
@@ -384,16 +386,9 @@ impl FaeConductorRecipe {
 
 #[allow(dead_code)] // TODO(M2): recipe validation on candidate load
 fn locality_to_lane(l: WorkerLocality) -> PrivacyLane {
-    // FIXME(G-M2-spec): this is a KNOWN-INCORRECT placeholder for LocalAcp.
-    // `LocalAcp` agents (Codex/Claude/Pi/Gemini/Copilot) are cloud-backed — the
-    // prompt egresses to OpenAI/Anthropic/Google — so they do NOT belong in
-    // `LocalOnly`. The correct lane + approval tier for ACP is a named M2
-    // decision (see `fae-learned-conductor-m2-decisions-2026-06-22.md`).
-    // Unchanged at runtime in M1: static-direct is hardcoded `LocalModel`;
-    // this mapping is only reached by `validate()` (dead, M2). Do NOT ship an
-    // ACP recipe against this mapping — fix it first.
     match l {
-        WorkerLocality::LocalModel | WorkerLocality::LocalAcp => PrivacyLane::LocalOnly,
+        WorkerLocality::LocalModel => PrivacyLane::LocalOnly,
+        WorkerLocality::LocalAcp => PrivacyLane::CloudBacked,
         WorkerLocality::OwnerFleet => PrivacyLane::OwnerFleet,
         WorkerLocality::TrustedPeer => PrivacyLane::TrustedPeer,
         WorkerLocality::RemoteProvider => PrivacyLane::RemoteAllowed,
@@ -505,6 +500,17 @@ pub enum RouteFailure {
     /// cloud-routing + the membrane wiring land (see D-M2-1 / D-M2-4).
     #[allow(dead_code)] // TODO(M2): constructed when cloud egress membrane wiring lands
     PrivacyBlocked { level: String, labels: Vec<String> },
+    /// A cloud-bound route exceeded a D2 budget cap. Carries structured numeric
+    /// fields only — never user text — so receipts/telemetry can safely surface
+    /// the reason.
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): constructed when BudgetGovernor wiring lands
+    BudgetExceeded {
+        dimension: BudgetDimension,
+        limit: u64,
+        attempted: u64,
+        used: u64,
+        window_ms: u64,
+    },
 }
 
 /// The loaded recipe set, keyed by id. The executor looks up `recipe_id`
@@ -692,9 +698,30 @@ mod tests {
     #[test]
     fn privacy_lane_permits_is_monotone() {
         assert!(PrivacyLane::LocalOnly.permits(PrivacyLane::LocalOnly));
-        assert!(!PrivacyLane::LocalOnly.permits(PrivacyLane::OwnerFleet));
+        assert!(!PrivacyLane::LocalOnly.permits(PrivacyLane::CloudBacked));
+        assert!(PrivacyLane::CloudBacked.permits(PrivacyLane::LocalOnly));
+        assert!(PrivacyLane::CloudBacked.permits(PrivacyLane::CloudBacked));
+        assert!(!PrivacyLane::CloudBacked.permits(PrivacyLane::OwnerFleet));
+        assert!(PrivacyLane::OwnerFleet.permits(PrivacyLane::CloudBacked));
         assert!(PrivacyLane::RemoteAllowed.permits(PrivacyLane::LocalOnly));
         assert!(PrivacyLane::RemoteAllowed.permits(PrivacyLane::RemoteAllowed));
+    }
+
+    #[test]
+    fn local_acp_maps_to_cloud_backed_lane() {
+        let mut r = direct_recipe();
+        let mut acp = local_worker("acp:codex");
+        acp.locality = WorkerLocality::LocalAcp;
+        r.allowed_workers = vec![acp.clone()];
+        r.role_slots[0].worker = acp;
+        r.privacy_lane = PrivacyLane::LocalOnly;
+        assert!(matches!(
+            r.validate(),
+            Err(ConductorRecipeError::WorkerExceedsPrivacyLane(_, _, _))
+        ));
+
+        r.privacy_lane = PrivacyLane::CloudBacked;
+        assert!(r.validate().is_ok());
     }
 
     #[test]

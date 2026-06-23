@@ -479,6 +479,18 @@ fn route_failure_display(f: &RouteFailure) -> String {
             // Structured fields only — never user text (see the variant doc).
             format!("privacy membrane blocked (level={level}, labels={labels:?})")
         }
+        RouteFailure::BudgetExceeded {
+            dimension,
+            limit,
+            attempted,
+            used,
+            window_ms,
+        } => {
+            // Structured fields only — never user text (see the variant doc).
+            format!(
+                "budget exceeded (dimension={dimension:?}, limit={limit}, attempted={attempted}, used={used}, window_ms={window_ms})"
+            )
+        }
     }
 }
 
