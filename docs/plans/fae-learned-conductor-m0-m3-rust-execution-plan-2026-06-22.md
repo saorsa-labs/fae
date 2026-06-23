@@ -97,7 +97,7 @@
 
 ---
 
-## M2 — Reward & eval + shadow routing  ⏳ D2+D7 primitives DONE (reviewer pass PASSED, zero BLOCKER/MAJOR); spec + wiring gated on G-M2-spec
+## M2 — Reward & eval + shadow routing  ⏳ D2+D7 DONE; **G-M2-spec PASSED** (spec v2.1 `ffa0819e`); M2 wiring UNBLOCKED
 
 **Spec:**
 - [ ] `routing_accuracy` eval dimension + reward aggregator (reject self-judgment-only — F-10)
@@ -105,7 +105,7 @@
 - [ ] Shadow router: route-decision-only by default; local-only execution under strict budget; **never** remote/paid/cross-owner
 - [x] **F-11:** eval corpus methodology documented (single-annotator = David, versioned, known limitation) — *landed in `eval.rs` module docs (WP-D7)*
 - [x] **F-12:** "measured improvement" = statistical significance + ≥5% relative + no regression on any measured dimension — *landed as `is_improvement()` code, not prose (WP-D7)*
-- [ ] **G-M2-spec review: `plan-reviewer`**
+- [ ] **G-M2-spec review: `plan-reviewer`** — **PASSED** (run 860ab950, 2026-06-23). v1 CONDITIONAL FAIL (5 MAJORs) → v2 resolved all → v2.1 folded 2 substantive NOTEs. Spec at `docs/architecture/conductor-m2-reward-eval-shadow-routing-spec-2026-06-23.md`.
 
 **Impl:**
 - [x] **WP-D2 — Budget governance primitive** (commits `251ae1dc`, merged to main): `BudgetGovernor` (Cost + Wall-clock + Per-day, fail-closed; token telemetry-only), `RouteFailure::BudgetExceeded` structured-only, per-day state in isolated store, `PrivacyLane::CloudBacked` + `locality_to_lane(LocalAcp)` fix. Dormant — no executor wiring. Independently gate-verified (95 tests, fmt/check/clippy clean).
@@ -120,11 +120,12 @@
 
 ---
 
-## M3 — MetaOpt learning  ⏳ blocked on G-M2 + ADR-008 amendment + MetaOpt-port decision
+## M3 — MetaOpt learning  ⏳ MetaOpt Rust port DONE (merged `750a4a4a`); blocked on G-M2 impl + ADR-008 amendment for ConductorRecipe surface
 
 **Prereqs (open Qs for David):**
 - [ ] F-5: file **ADR-008 amendment** authorizing Rust-side `conductorRecipe` surface (enforceable constraints: no privacy-lane widening, no budget-cap override w/o approval, no trustedPeer/remoteProvider/star/debate)
-- [ ] MetaOpt-split decision: Rust-native port (recommended) vs temporary control-plane bridge
+- [x] MetaOpt-split decision: **Rust-native port** (D-M2-4 RATIFIED: PORT NOW, no bridge)
+- [x] **MetaOpt primitive ported** (commit `5b9275a3`, merged `750a4a4a`): `crates/fae-metaopt/` (~1500 lines). 4 existing surfaces (Directive/ConfigKnob/Skill/MemorySeed), hill-climbing loop, 6 trait seams, 3 intentional hardening points. Reviewer pass MERGE-READY (0 BLOCKER/MAJOR). Dormant + unwired. **NO ConductorRecipe variant** (ADR-008-gated).
 
 **Spec:**
 - [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (swap worker, direct↔chain, add/remove Verifier, mutate role prompt, adjust budget)
