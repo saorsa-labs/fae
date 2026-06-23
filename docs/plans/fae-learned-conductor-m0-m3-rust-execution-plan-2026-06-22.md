@@ -127,12 +127,12 @@
 
 ---
 
-## M3 — MetaOpt learning  ⏳ MetaOpt Rust port DONE (merged `750a4a4a`); blocked on G-M2 impl + ADR-008 amendment for ConductorRecipe surface
+## M3 — MetaOpt learning  ⏳ MetaOpt Rust port DONE (merged `750a4a4a`); **ADR-008a ACCEPTED/MERGED (`ec856463`)** — M3 no longer blocked on the ADR; remaining gate is **G-M2 impl completion (reward/shadow §7/§8)**
 
 **Prereqs (open Qs for David):**
-- [ ] F-5: file **ADR-008 amendment** authorizing Rust-side `conductorRecipe` surface (enforceable constraints: no privacy-lane widening, no budget-cap override w/o approval, no trustedPeer/remoteProvider/star/debate) — **DRAFTED** (`docs/adr/008a-conductor-recipe-surface-amendment.md`, branch `m3/adr-008-conductor-recipe-amendment`, Proposed, awaits David's acceptance). Two-layer enforcement: Layer 1 proposal-structural (fae-metaopt), Layer 2 runtime-authoritative (M2 §5 gates). Cross-ADR dependency on the M2 §5.6 membrane-before-construction invariant.
+- [x] F-5: **ADR-008 amendment ACCEPTED + MERGED** (`ec856463`, owner-accepted 2026-06-23): `docs/adr/008a-conductor-recipe-surface-amendment.md` — Accepted (Amendment). Authorizes Rust-side `conductorRecipe` surface under **four** enforceable constraints (keep-or-narrow lane, budget-within-provisioned-cap, no gated locality/topology, **no `ModelMode` override**). Two-layer enforcement: Layer 1 proposal-structural (fae-metaopt), Layer 2 runtime-authoritative (M2 §5 gates). Cross-ADR dependency on the M2 §5.6 membrane-before-construction invariant (test-enforced). **M3 is no longer blocked on the ADR** — remaining M3 gate is G-M2 impl completion (reward/shadow §7/§8).
 - [x] MetaOpt-split decision: **Rust-native port** (D-M2-4 RATIFIED: PORT NOW, no bridge)
-- [x] **MetaOpt primitive ported** (commit `5b9275a3`, merged `750a4a4a`): `crates/fae-metaopt/` (~1500 lines). 4 existing surfaces (Directive/ConfigKnob/Skill/MemorySeed), hill-climbing loop, 6 trait seams, 3 intentional hardening points. Reviewer pass MERGE-READY (0 BLOCKER/MAJOR). Dormant + unwired. **NO ConductorRecipe variant** (ADR-008-gated).
+- [x] **MetaOpt primitive ported** (commit `5b9275a3`, merged `750a4a4a`): `crates/fae-metaopt/` (~1500 lines). 4 existing surfaces (Directive/ConfigKnob/Skill/MemorySeed), hill-climbing loop, 6 trait seams, 3 intentional hardening points. Reviewer pass MERGE-READY (0 BLOCKER/MAJOR). Dormant + unwired. **NO ConductorRecipe variant** (now ADR-008a-authorized; lands in M3).
 
 **Spec:**
 - [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (swap worker, direct↔chain, add/remove Verifier, mutate role prompt, adjust budget)
