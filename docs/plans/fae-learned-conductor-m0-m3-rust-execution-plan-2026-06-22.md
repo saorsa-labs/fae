@@ -97,19 +97,23 @@
 
 ---
 
-## M2 — Reward & eval + shadow routing  ⏳ blocked on G-M1
+## M2 — Reward & eval + shadow routing  ⏳ D2+D7 primitives DONE (pending reviewer pass); spec + wiring gated on G-M2-spec
 
 **Spec:**
 - [ ] `routing_accuracy` eval dimension + reward aggregator (reject self-judgment-only — F-10)
 - [ ] **F-8:** shadow router depends on budget-governance + audit-logging WPs from M0b/M1
 - [ ] Shadow router: route-decision-only by default; local-only execution under strict budget; **never** remote/paid/cross-owner
-- [ ] **F-11:** eval corpus methodology documented (single-annotator = David, versioned, known limitation)
-- [ ] **F-12:** "measured improvement" = statistical significance + ≥5% relative + no regression on any measured dimension
+- [x] **F-11:** eval corpus methodology documented (single-annotator = David, versioned, known limitation) — *landed in `eval.rs` module docs (WP-D7)*
+- [x] **F-12:** "measured improvement" = statistical significance + ≥5% relative + no regression on any measured dimension — *landed as `is_improvement()` code, not prose (WP-D7)*
 - [ ] **G-M2-spec review: `plan-reviewer`**
 
 **Impl:**
-- [ ] Reward aggregator; shadow router; cost/latency budget governance
+- [x] **WP-D2 — Budget governance primitive** (commits `251ae1dc`, merged to main): `BudgetGovernor` (Cost + Wall-clock + Per-day, fail-closed; token telemetry-only), `RouteFailure::BudgetExceeded` structured-only, per-day state in isolated store, `PrivacyLane::CloudBacked` + `locality_to_lane(LocalAcp)` fix. Dormant — no executor wiring. Independently gate-verified (95 tests, fmt/check/clippy clean).
+- [x] **WP-D7 — Eval corpus + routing scorer** (commits `3ac27ffe`, merged to main): versioned hybrid corpus (synthetic core + membrane-scrubbed real samples), `RoutingScorer` + `score()` + `is_improvement()` (F-12 as code), scrub-before-disk test (genuine: reads file back, asserts credential absent). Dormant — no executor wiring, no aggregator, no MetaOpt. Independently gate-verified (92 tests standalone, 101 combined).
+- [ ] Reward aggregator (M2 spec integration — consumes the D7 `RoutingScore` interface)
+- [ ] Shadow router
 - [ ] **No auto-deploy yet** — candidates compare against deployed baseline only
+- [ ] **M2 executor wiring** — connects BudgetGovernor + RoutingScorer + PII membrane into the conductor routing path. GATED on G-M2-spec + both WP reviewer passes + D-M2-1 resolution.
 - [ ] **G-M2 review: `reviewer`** — reward weakness, shadow-path privacy, threshold enforcement
 
 ---
