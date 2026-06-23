@@ -1,6 +1,6 @@
 # M2 NOTE-2: Agent-command egress gating
 
-- **Status:** DRAFT v2 — for G-M2-NOTE2-spec re-review. v1 returned 1 BLOCKER + 2 MAJOR + 3 MINOR from the fresh-context reviewer (run `a9341fe5`); all folded into v2. NOT implementation-authorized until the re-review passes.
+- **Status:** v2.1 — G-M2-NOTE2-spec **PASSED** (re-review run `b32b86c2`, 2026-06-23: zero BLOCKER / zero MAJOR; all v1 findings verified fixed; all v2 questions resolved; no fourth bypass surface). v2.1 folds 3 residual MINORs/NOTEs (claude-code alias footnote; strengthened scope guard; `prompt_session` added to the trait per v2-Q2 resolution). **Implementation-authorized.**
 - **Date:** 2026-06-23 (v1); v2 same day after review.
 - **Scope:** Close the egress-coverage gap surfaced by the Stage 1 red-team (NOTE-2): `agent.run`, `agent.prompt`, and `agent.session_start` reach cloud-backed coding agents via `fae_acp` WITHOUT passing through the conductor §5 gate pipeline.
 - **Parent spec:** `docs/architecture/conductor-m2-reward-eval-shadow-routing-spec-2026-06-23.md` (§5 gate pipeline; §15 Stage 3 prerequisites).
@@ -61,6 +61,8 @@ Map the payload `agent` string to a conductor worker id. The resolution table (t
 | `opencode` | `acp:opencode` | **TBD** (`npx opencode-ai` — credential model not env-var-based) | **not provisioned today** |
 | anything else | — | — | `unknown_agent` (fail closed) |
 
+**Alias:** `fae_acp::resolve_agent` also accepts `"claude-code"` as an alias for `"claude"` (same `acp:claude` worker / same credential env vars). The `claude-code` payload name maps to `acp:claude`. (`fae_acp` also accepts `"mock"` — dev/test only, never advertised to users.)
+
 **Pre-existing inconsistency (flagged, not silently fixed):** `KNOWN_AGENTS` (session.rs:423) advertises 6 agents including `pi`/`opencode`; `fae_acp::resolve_agent` (lib.rs:83) resolves 7 (adds `claude-code` alias + `mock`); `WorkerRegistry` (main.rs:276-288) provisions only 4. `pi`/`opencode` are advertised + resolvable but have **no conductor credential env var**, so under the §3.4 gate they resolve to a worker id but fail `is_provisioned` → `not_provisioned` (fail closed). This is the correct fail-closed default. **Impl decision (Q1, §8):** either (a) extend `WorkerRegistry::from_cloud_credentials`/`main.rs` with `pi`/`opencode` credential env vars once their auth model is determined from `fae_acp`, or (b) remove `pi`/`opencode` from `KNOWN_AGENTS`/`agent.list` as a product decision. The spec does NOT prescribe which; it prescribes the fail-closed default + that the three lists be reconciled to a single source of truth.
 
 ### 3.2 Mode cap (§5.2 equivalent)
@@ -107,9 +109,12 @@ The `fae_acp` spawn/start/submit boundary MUST be a separable, spy-able seam (§
           -> Result<AcpOutcome, AcpError>;
       async fn start_session(&self, agent: &str, cwd: &Path, policy: ApprovalPolicy)
           -> Result<AcpSession, AcpError>;
+      async fn prompt_session(&self, session: &AcpSession, prompt: &str)
+          -> Result<_, AcpError>; // return type matches fae_acp's streaming API
   }
   ```
-  Production: `RealAcpAgentRunner` delegates to the real `fae_acp` functions. Test: `CountingAcpAgentRunner` (`Arc<AtomicUsize>` per method). **Scope guard (review):** this is a testability seam, not Approach B unification — it does NOT model ACP agents as conductor workers or change command semantics.
+  Production: `RealAcpAgentRunner` delegates to the real `fae_acp` functions. Test: `CountingAcpAgentRunner` (`Arc<AtomicUsize>` per method). **`prompt_session` is on the trait (v2.1, re-review v2-Q2 resolved)** so test #2 can count per-turn submits on the credential-blocked `agent.prompt` path — not just spawns/starts. The membrane gate fires at the entry of `agent_prompt_inner` BEFORE `prompt_session` is called, so the spy count is zero on the blocked path. The `agent_prompt_inner` event loop (`session.prompt` → `AcpUpdate`/`AcpServerRequest` iteration) routes through `runner.prompt_session` so the submit is the spy-able boundary.
+  **Scope guard (v2.1 strengthened per re-review NOTE-2):** this is a testability seam, NOT Approach B unification. It MUST NOT model ACP agents as conductor workers; MUST NOT include routing/policy methods; MUST NOT change command semantics. It is purely delegation + counting. If a later stage extends this trait, it must not slide toward a full ACP-provider abstraction — that is Approach B, which is separately gated future work (§7).
 - **`agent_run` gains a `&SessionBackends` param** (currently takes only `cmd`); the dispatch table (~line 358) passes `backends`.
 - **Shared gate:** `assert_agent_egress_gates(backends, agent, prompt: Option<&str>) -> Result<ResolvedAgent, AgentGateFailure>` called at the entry of all three functions before any `fae_acp` call. `prompt: None` for `session_start` (skips §3.3).
 - **Gate reads** `model_mode` + `WorkerRegistry` from the conductor runtime (already threaded via `SessionBackends.conductor`) and calls `fae_pii_membrane::should_block_remote_egress` directly.
@@ -132,7 +137,9 @@ v1's Q1–Q5 are resolved by the review (run `a9341fe5`) with primary-source evi
 - **v1-Q4 (refusal vs degradation):** RESOLVED — refusal is correct (explicit delegation). §4 confirmed.
 - **v1-Q5 (per-turn membrane):** RESOLVED — per-turn is required; each `session.prompt()` is a separate egress and conversation context accumulates. Gate fires at the start of `agent_prompt_inner`, not `session_start`. §3.3 confirmed.
 
-**v2 open questions:**
-- **v2-Q1:** the `pi`/`opencode` credential model (above) — is "fail-closed `not_provisioned` until investigated" the right landing default, or should the impl resolve their auth model as part of THIS milestone?
-- **v2-Q2:** is the `AcpAgentRunner` trait sketch (§6) the right shape, or should `session.prompt` (the per-turn submit on a live session) also be on the trait so test #2 can count submits, not just spawns/starts? (Currently `session.prompt` is a method on the returned `AcpSession`, which complicates counting — confirm the test strategy.)
-- **v2-Q3:** does gating `agent.session_start` under pure-local break any existing caller/feature that legitimately starts a session before flipping mode? (i.e. is there a startup or warmup path that calls `session_start` unconditionally?)
+**v2 open questions — RESOLVED by re-review (run `b32b86c2`):**
+- **v2-Q1 (pi/opencode credential model):** RESOLVED — fail-closed `not_provisioned` is the correct landing default; do NOT resolve in this milestone. `npx`-based tools use their own auth flow (npm token / tool config), no conductor env var maps to them. Making the existing silent gap explicit + fail-closed improves safety. Follow-on product decision when/if pi/opencode support is desired.
+- **v2-Q2 (AcpAgentRunner trait shape):** RESOLVED — adopt the reviewer recommendation: add `prompt_session` to the trait (§6 updated in v2.1). The membrane gate fires before the submit, so the spy count is zero on the blocked path; `prompt_session` on the trait lets test #2 assert "zero submits" structurally, not just "zero starts."
+- **v2-Q3 (session_start caller impact):** RESOLVED — no breakage. The only caller of `agent.session_start` is the dispatch table on the explicit `"agent.session_start"` command; no automatic warmup/startup path exists. Blocking under pure-local regresses nothing.
+
+**v2.1 status:** re-review returned zero BLOCKER / zero MAJOR — spec is **CLEAR to implement**. Three residual MINORs/NOTEs folded into v2.1 (claude-code alias footnote; strengthened scope guard; prompt_session trait method).
