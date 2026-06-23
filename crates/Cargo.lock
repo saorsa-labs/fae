@@ -1955,6 +1955,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fae-metaopt"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid 1.23.2",
+]
+
+[[package]]
 name = "fae-pii-membrane"
 version = "0.1.0"
 dependencies = [
