@@ -53,6 +53,7 @@
 
 pub mod budget;
 pub mod error;
+pub mod eval;
 pub mod executor;
 pub mod fingerprint;
 pub mod policy;
@@ -67,6 +68,7 @@ pub use budget::{
     DEFAULT_DAILY_WINDOW_MS,
 };
 pub use error::ConductorError;
+pub use eval::{is_improvement, score, Corpus, RoutingScore, RoutingScorer};
 pub use executor::{route_turn, ConductorRuntime};
 pub use fingerprint::{InstallKey, RequestFingerprint};
 pub use policy::{ConductorRoutingPolicy, StaticDirectPolicy, STATIC_DIRECT_RECIPE_ID};
