@@ -158,6 +158,10 @@ pub struct ConductorEgress {
 }
 
 impl ConductorEgress {
+    pub fn mode(&self) -> ModelMode {
+        self.mode
+    }
+
     pub fn production(
         mode: ModelMode,
         budget: BudgetGovernor,
@@ -272,6 +276,17 @@ impl ConductorRuntime {
     /// The static policy reference, for `inject_text` to call `decide`.
     pub fn policy(&self) -> &dyn ConductorRoutingPolicy {
         &self.policy
+    }
+
+    /// Operator-selected lane cap for all egress surfaces, including ACP agent
+    /// commands that gate at session entry.
+    pub fn model_mode(&self) -> ModelMode {
+        self.egress.mode()
+    }
+
+    /// Startup-vetted worker registry used by entry-point egress gates.
+    pub fn workers(&self) -> &WorkerRegistry {
+        &self.workers
     }
 
     /// Run a routed turn. Returns the wire-type result verbatim; tracks a
@@ -1285,6 +1300,7 @@ mod tests {
                 playbacks: &self.playbacks,
                 agents: &self.agents,
                 conductor: Some(&self.runtime),
+                acp_runner: &crate::session::REAL_ACP_RUNNER,
             }
         }
     }
@@ -1594,6 +1610,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
         };
         let cmd = command("req-local", "hello");
         let local_decision = decision(

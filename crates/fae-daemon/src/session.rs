@@ -6,10 +6,13 @@
 //! live here so the whole frame lifecycle is unit-testable without a socket —
 //! the same control-plane-first discipline the workspace was built on.
 
+use std::path::Path;
+
+use async_trait::async_trait;
 use fae_audio::AudioManager;
 use fae_control_plane::{
     authorize, AuditDecision, AuditEvent, AuthzDecision, ClientRecord, ClientRegistry, Command,
-    ConsumedTicket, Response, Scope, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
+    ConsumedTicket, Response, ResponseErrorDetails, Scope, AUTHENTICATE_COMMAND, PROTOCOL_VERSION,
 };
 use fae_engine::{
     ChatEvent, ChatMessage, ChatRequest, ProviderAdapter, Role, ToolSpec, TtsAdapter,
@@ -45,13 +48,79 @@ pub struct SessionBackends<'a> {
     /// Live native-ACP sessions (gap A2): `agent.session_start/prompt/cancel/
     /// close` look sessions up here.
     pub agents: &'a AgentSessionRegistry,
-    /// The learned conductor. `None` on test/diagnostic paths (legacy
-    /// direct-`inject_text_core` behavior); `Some` on the production path, where
-    /// `inject_text` routes through it. The M1 static policy always emits
-    /// `direct` + `local-model` + `ApprovalClass::None`, so a routed turn is
-    /// byte-identical to the legacy path (the `direct` arm calls
-    /// [`inject_text_core`] verbatim — spec §8).
+    /// The learned conductor. `None` on legacy tests that exercise direct
+    /// `inject_text_core` behavior; production paths pass `Some` so both
+    /// conversation routing and explicit ACP agent commands share the same
+    /// egress mode/provisioning gates.
     pub conductor: Option<&'a crate::conductor::ConductorRuntime>,
+    /// Thin testability seam for the native ACP boundary. This is deliberately
+    /// NOT an ACP-provider/routing abstraction: it only delegates to the concrete
+    /// `fae_acp` calls and lets tests count spawn/start/submit attempts.
+    pub acp_runner: &'a dyn AcpAgentRunner,
+}
+
+/// Thin delegation seam for native ACP calls.
+///
+/// Scope guard (M2 NOTE-2 §6): this exists only so tests can prove gate-blocked
+/// paths never spawn/start/submit. It must not model ACP agents as conductor
+/// workers, include routing/policy methods, or change command semantics.
+#[async_trait]
+pub trait AcpAgentRunner: Send + Sync {
+    async fn run_one_shot(
+        &self,
+        agent: &str,
+        cwd: &Path,
+        prompt: &str,
+        policy: fae_acp::ApprovalPolicy,
+    ) -> Result<fae_acp::AcpOutcome, fae_acp::AcpError>;
+
+    async fn start_session(
+        &self,
+        agent: &str,
+        cwd: &Path,
+        policy: fae_acp::ApprovalPolicy,
+    ) -> Result<fae_acp::AcpSession, fae_acp::AcpError>;
+
+    fn prompt_session(
+        &self,
+        session: &fae_acp::AcpSession,
+        text: String,
+    ) -> Result<fae_acp::PromptHandle, fae_acp::AcpError>;
+}
+
+#[derive(Debug, Default)]
+pub struct RealAcpRunner;
+
+pub static REAL_ACP_RUNNER: RealAcpRunner = RealAcpRunner;
+
+#[async_trait]
+impl AcpAgentRunner for RealAcpRunner {
+    async fn run_one_shot(
+        &self,
+        agent: &str,
+        cwd: &Path,
+        prompt: &str,
+        policy: fae_acp::ApprovalPolicy,
+    ) -> Result<fae_acp::AcpOutcome, fae_acp::AcpError> {
+        fae_acp::run_one_shot(agent, cwd, prompt, policy).await
+    }
+
+    async fn start_session(
+        &self,
+        agent: &str,
+        cwd: &Path,
+        policy: fae_acp::ApprovalPolicy,
+    ) -> Result<fae_acp::AcpSession, fae_acp::AcpError> {
+        fae_acp::AcpSession::start(agent, cwd, policy).await
+    }
+
+    fn prompt_session(
+        &self,
+        session: &fae_acp::AcpSession,
+        text: String,
+    ) -> Result<fae_acp::PromptHandle, fae_acp::AcpError> {
+        session.prompt(text)
+    }
 }
 
 /// The `session.authenticate` payload.
@@ -281,7 +350,7 @@ async fn handle_command(
         // MUST move behind the audit write in the shell.
         AuthzDecision::Allow => match dispatch(backends, cmd).await {
             Ok(result) => Response::ok(&cmd.request_id, result),
-            Err(code) => Response::error(&cmd.request_id, code, "command could not be completed"),
+            Err(failure) => failure.into_response(&cmd.request_id),
         },
         AuthzDecision::ConfirmRequired => Response::error(
             &cmd.request_id,
@@ -299,13 +368,63 @@ async fn handle_command(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandFailure {
+    code: &'static str,
+    details: Option<ResponseErrorDetails>,
+}
+
+impl CommandFailure {
+    fn new(code: &'static str) -> Self {
+        Self {
+            code,
+            details: None,
+        }
+    }
+
+    fn with_details(code: &'static str, details: ResponseErrorDetails) -> Self {
+        Self {
+            code,
+            details: Some(details),
+        }
+    }
+
+    fn into_response(self, request_id: &str) -> Response {
+        let message = "command could not be completed";
+        match self.details {
+            Some(details) => Response::error_with_details(request_id, self.code, message, details),
+            None => Response::error(request_id, self.code, message),
+        }
+    }
+}
+
+impl From<&'static str> for CommandFailure {
+    fn from(code: &'static str) -> Self {
+        Self::new(code)
+    }
+}
+
+impl From<AgentGateFailure> for CommandFailure {
+    fn from(failure: AgentGateFailure) -> Self {
+        match failure {
+            AgentGateFailure::PrivacyBlocked { level, labels } => Self::with_details(
+                "privacy_blocked",
+                ResponseErrorDetails {
+                    level: Some(level),
+                    labels,
+                },
+            ),
+            other => Self::new(other.wire_code()),
+        }
+    }
+}
+
+type CommandResult = Result<serde_json::Value, CommandFailure>;
+
 /// Command dispatch. Read-only `host`/`runtime` status, plus
 /// `conversation.inject_text` through the engine (chunk 3c). Everything else is
 /// authorized-but-unimplemented (fail loud, not a silent success).
-async fn dispatch(
-    backends: &SessionBackends<'_>,
-    cmd: &Command,
-) -> Result<serde_json::Value, &'static str> {
+async fn dispatch(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
     match cmd.command.as_str() {
         "host.ping" => Ok(serde_json::json!({ "pong": true })),
         "host.version" => {
@@ -335,39 +454,45 @@ async fn dispatch(
                 "adapter": adapter,
             }))
         }
-        "conversation.inject_text" => inject_text(backends, cmd).await,
-        "audio.transcribe_fallback" => transcribe_fallback(backends, cmd).await,
+        "conversation.inject_text" => inject_text(backends, cmd).await.map_err(Into::into),
+        "audio.transcribe_fallback" => transcribe_fallback(backends, cmd).await.map_err(Into::into),
         // Open this connection's server-push event stream (voice spine V2). The
         // ack is the signal the transport uses to register the connection's sink
         // as a subscriber; events (e.g. `audio.level`) are then pushed to it,
         // filtered by the scopes it was granted. ConversationRead is enforced by
         // `authorize` before dispatch.
         "conversation.subscribe" => Ok(serde_json::json!({ "subscribed": true })),
-        "tts.synthesize" => synthesize_tts(backends.tts, cmd).await,
+        "tts.synthesize" => synthesize_tts(backends.tts, cmd).await.map_err(Into::into),
         // Voice spine V3a: synthesize + play in the daemon, non-blocking, with
         // the playback level streamed on the event bus to subscribers.
-        "tts.speak" => speak_tts(backends, cmd).await,
-        "audio.devices" => audio_devices(backends.audio).await,
-        "audio.capture_start" | "audio.start_capture" => audio_capture_start(backends.audio).await,
-        "audio.capture_stop" | "audio.stop_capture" => {
-            audio_capture_stop(backends.audio, cmd).await
+        "tts.speak" => speak_tts(backends, cmd).await.map_err(Into::into),
+        "audio.devices" => audio_devices(backends.audio).await.map_err(Into::into),
+        "audio.capture_start" | "audio.start_capture" => audio_capture_start(backends.audio)
+            .await
+            .map_err(Into::into),
+        "audio.capture_stop" | "audio.stop_capture" => audio_capture_stop(backends.audio, cmd)
+            .await
+            .map_err(Into::into),
+        "audio.play" | "audio.playback_control" => {
+            audio_play(backends.audio, cmd).await.map_err(Into::into)
         }
-        "audio.play" | "audio.playback_control" => audio_play(backends.audio, cmd).await,
         // Voice spine V3a: barge-in — stop daemon-owned playback(s).
-        "audio.stop" => audio_stop(backends, cmd).await,
-        "agent.run" => agent_run(cmd).await,
-        "agent.list" => agent_list(),
+        "audio.stop" => audio_stop(backends, cmd).await.map_err(Into::into),
+        "agent.run" => agent_run(backends, cmd).await,
+        "agent.list" => agent_list().map_err(Into::into),
         "agent.session_start" => agent_session_start(backends, cmd).await,
         "agent.prompt" => agent_prompt(backends, cmd).await,
-        "agent.cancel" => agent_cancel(backends, cmd),
-        "agent.close" => agent_close(backends, cmd),
-        "agent.session_list" => agent_session_list(backends),
-        "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd),
-        "engine.reload" => reload_adapter(backends.engine, cmd).await,
+        "agent.cancel" => agent_cancel(backends, cmd).map_err(Into::into),
+        "agent.close" => agent_close(backends, cmd).map_err(Into::into),
+        "agent.session_list" => agent_session_list(backends).map_err(Into::into),
+        "engine.set_adapter_scale" => set_adapter_scale(backends.engine, cmd).map_err(Into::into),
+        "engine.reload" => reload_adapter(backends.engine, cmd)
+            .await
+            .map_err(Into::into),
         // Orb-host-owns-state: push an info set → publishes `info.update` to
         // subscribed orb hosts (the green-dot indicator). StatusRead scope.
-        "info.push" => info_push(backends, cmd).await,
-        _ => Err("not_implemented"),
+        "info.push" => info_push(backends, cmd).await.map_err(Into::into),
+        _ => Err(CommandFailure::from("not_implemented")),
     }
 }
 
@@ -427,20 +552,126 @@ fn agent_list() -> Result<serde_json::Value, &'static str> {
     Ok(serde_json::json!({ "agents": KNOWN_AGENTS }))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AgentGateFailure {
+    ModeBlocked,
+    PrivacyBlocked { level: String, labels: Vec<String> },
+    NotProvisioned,
+    UnknownAgent,
+    ConductorUnavailable,
+}
+
+impl AgentGateFailure {
+    fn wire_code(&self) -> &'static str {
+        match self {
+            Self::ModeBlocked => "mode_blocked",
+            Self::PrivacyBlocked { .. } => "privacy_blocked",
+            Self::NotProvisioned => "not_provisioned",
+            Self::UnknownAgent => "unknown_agent",
+            Self::ConductorUnavailable => "conductor_unavailable",
+        }
+    }
+}
+
+fn resolve_agent_worker_id(agent: &str) -> Result<&'static str, AgentGateFailure> {
+    match agent.trim().to_ascii_lowercase().as_str() {
+        "claude" | "claude-code" => Ok(crate::conductor::workers::CLAUDE_CLOUD_WORKER_ID),
+        "codex" => Ok(crate::conductor::workers::CODEX_CLOUD_WORKER_ID),
+        "gemini" => Ok(crate::conductor::workers::GEMINI_CLOUD_WORKER_ID),
+        "copilot" => Ok(crate::conductor::workers::COPILOT_CLOUD_WORKER_ID),
+        "pi" => Ok("acp:pi"),
+        "opencode" => Ok("acp:opencode"),
+        _ => Err(AgentGateFailure::UnknownAgent),
+    }
+}
+
+fn assert_agent_egress_gates(
+    conductor: Option<&crate::conductor::ConductorRuntime>,
+    agent: &str,
+    prompt: Option<&str>,
+) -> Result<String, AgentGateFailure> {
+    let conductor = conductor.ok_or(AgentGateFailure::ConductorUnavailable)?;
+    let worker_id = resolve_agent_worker_id(agent)?;
+
+    if !crate::conductor::mode_permits_lane(
+        conductor.model_mode(),
+        crate::conductor::PrivacyLane::CloudBacked,
+    ) {
+        return Err(AgentGateFailure::ModeBlocked);
+    }
+
+    if let Some(prompt) = prompt {
+        if fae_pii_membrane::should_block_remote_egress(prompt) {
+            let scan = fae_pii_membrane::scan(prompt);
+            return Err(AgentGateFailure::PrivacyBlocked {
+                level: format!("{:?}", scan.level),
+                labels: scan.matched_labels,
+            });
+        }
+    }
+
+    let workers = conductor.workers();
+    if !workers.is_provisioned(worker_id)
+        || workers.locality(worker_id) != Some(crate::conductor::WorkerLocality::CloudBackedAcp)
+    {
+        return Err(AgentGateFailure::NotProvisioned);
+    }
+
+    Ok(worker_id.to_owned())
+}
+
+fn log_agent_gate_failure(command: &str, agent: &str, failure: &AgentGateFailure) {
+    let worker_id = resolve_agent_worker_id(agent).unwrap_or("unknown_agent");
+    match failure {
+        AgentGateFailure::PrivacyBlocked { level, labels } => tracing::warn!(
+            command,
+            worker_id,
+            level = %level,
+            labels = ?labels,
+            "agent egress gate blocked command"
+        ),
+        _ => tracing::warn!(
+            command,
+            worker_id,
+            reason = failure.wire_code(),
+            "agent egress gate blocked command"
+        ),
+    }
+}
+
+fn gate_agent_command(
+    conductor: Option<&crate::conductor::ConductorRuntime>,
+    command: &'static str,
+    agent: &str,
+    prompt: Option<&str>,
+) -> Result<String, CommandFailure> {
+    assert_agent_egress_gates(conductor, agent, prompt).map_err(|failure| {
+        log_agent_gate_failure(command, agent, &failure);
+        CommandFailure::from(failure)
+    })
+}
+
 /// `agent.run` — delegate one prompt turn to an external coding agent via the
 /// native ACP client, returning the collected text + stop reason + tool calls.
 /// Non-streaming (Stage 1): blocks until the agent's turn completes.
-async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
-    let agent = cmd
+async fn agent_run(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let agent_raw = cmd
         .payload
         .get("agent")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
+    // Normalize once (trim + lowercase) so the gate and the runner see the
+    // same agent string. fae_acp::resolve_agent also lowercases, but the gate's
+    // worker-resolution does too — normalizing here keeps them in lockstep and
+    // avoids a latent UX inconsistency (e.g. "  Codex  " passing the gate then
+    // failing on the ACP side). [NOTE-2 red-team NOTE-1]
+    let agent: String = agent_raw.trim().to_ascii_lowercase();
     let prompt = cmd
         .payload
         .get("prompt")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
+    let _worker_id = gate_agent_command(backends.conductor, "agent.run", &agent, Some(prompt))?;
     let cwd = cmd
         .payload
         .get("cwd")
@@ -460,11 +691,13 @@ async fn agent_run(cmd: &Command) -> Result<serde_json::Value, &'static str> {
         _ => fae_acp::ApprovalPolicy::ApproveAll,
     };
 
-    let outcome = fae_acp::run_one_shot(agent, &cwd, prompt, policy)
+    let outcome = backends
+        .acp_runner
+        .run_one_shot(&agent, &cwd, prompt, policy)
         .await
         .map_err(|error| {
-            eprintln!("fae-daemon: agent.run failed: {error}");
-            classify_agent_error(&error)
+            tracing::warn!(error = %error, "fae-daemon: agent.run failed");
+            CommandFailure::from(classify_agent_error(&error))
         })?;
 
     let tool_calls: Vec<serde_json::Value> = outcome
@@ -537,15 +770,16 @@ fn classify_agent_error(error: &fae_acp::AcpError) -> &'static str {
 
 /// `agent.session_start` — spawn a persistent native-ACP session and return its
 /// daemon handle. Requires `AgentExecute`.
-async fn agent_session_start(
-    backends: &SessionBackends<'_>,
-    cmd: &Command,
-) -> Result<serde_json::Value, &'static str> {
-    let agent = cmd
+async fn agent_session_start(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let agent_raw = cmd
         .payload
         .get("agent")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
+    // Normalize once (same rationale as agent_run); the normalized value is
+    // stored in the registry so agent.prompt's per-turn gate sees the same id.
+    let agent: String = agent_raw.trim().to_ascii_lowercase();
+    let _worker_id = gate_agent_command(backends.conductor, "agent.session_start", &agent, None)?;
     let cwd = cmd
         .payload
         .get("cwd")
@@ -555,25 +789,32 @@ async fn agent_session_start(
         .ok_or("bad_request")?;
     let policy = agent_approval_policy(cmd);
 
-    let session = fae_acp::AcpSession::start(agent, &cwd, policy)
+    let session = backends
+        .acp_runner
+        .start_session(&agent, &cwd, policy)
         .await
         .map_err(|error| {
-            eprintln!("fae-daemon: agent.session_start failed: {error}");
-            classify_agent_error(&error)
+            tracing::warn!(error = %error, "fae-daemon: agent.session_start failed");
+            CommandFailure::from(classify_agent_error(&error))
         })?;
     let session_id = backends
         .agents
-        .insert(session, agent.to_owned(), cwd.display().to_string());
+        .insert(session, agent, cwd.display().to_string());
     Ok(serde_json::json!({ "session_id": session_id }))
 }
 
 /// `agent.prompt` (inline/diagnostic path, no `ServerRequester`) — permission
 /// requests fall back to approve-first since there is no UI to ask.
-async fn agent_prompt(
-    backends: &SessionBackends<'_>,
-    cmd: &Command,
-) -> Result<serde_json::Value, &'static str> {
-    agent_prompt_inner(backends.agents, backends.events, None, cmd).await
+async fn agent_prompt(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    agent_prompt_inner(
+        backends.agents,
+        backends.events,
+        backends.conductor,
+        backends.acp_runner,
+        None,
+        cmd,
+    )
+    .await
 }
 
 /// `agent.prompt` core — submit a prompt to a live session, republishing the
@@ -584,9 +825,11 @@ async fn agent_prompt(
 async fn agent_prompt_inner(
     agents: &AgentSessionRegistry,
     events: &EventBus,
+    conductor: Option<&crate::conductor::ConductorRuntime>,
+    acp_runner: &dyn AcpAgentRunner,
     requester: Option<ServerRequester>,
     cmd: &Command,
-) -> Result<serde_json::Value, &'static str> {
+) -> CommandResult {
     let session_id = cmd
         .payload
         .get("session_id")
@@ -597,10 +840,12 @@ async fn agent_prompt_inner(
         .get("prompt")
         .and_then(serde_json::Value::as_str)
         .ok_or("bad_request")?;
+    let agent = agents.agent_for(session_id).ok_or("unknown_session")?;
+    let _worker_id = gate_agent_command(conductor, "agent.prompt", &agent, Some(prompt))?;
     let session = agents.get(session_id).ok_or("unknown_session")?;
-    let handle = session
-        .prompt(prompt.to_owned())
-        .map_err(|_| "session_closed")?;
+    let handle = acp_runner
+        .prompt_session(session.as_ref(), prompt.to_owned())
+        .map_err(|_| CommandFailure::from("session_closed"))?;
 
     // Drain the live update stream onto the V2 event bus. `turn_id` is this
     // prompt's request id, so a subscriber can correlate events with the final
@@ -679,8 +924,8 @@ async fn agent_prompt_inner(
         .await
         .map_err(|_| "agent_error")?
         .map_err(|error| {
-            eprintln!("fae-daemon: agent.prompt turn failed: {error}");
-            classify_agent_error(&error)
+            tracing::warn!(error = %error, "fae-daemon: agent.prompt turn failed");
+            CommandFailure::from(classify_agent_error(&error))
         })?;
     let _ = updates_drain.await;
     let _ = requests_drain.await;
@@ -767,11 +1012,14 @@ fn permission_decision_from_reply(reply: &serde_json::Value) -> fae_acp::AcpPerm
 /// (gap A3 transport spawn path). The transport runs this on a spawned task so
 /// the connection read loop keeps reading the client's server-request replies
 /// while the turn is in flight.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_authorized_agent_prompt(
     record: &ClientRecord,
     cmd: &Command,
     agents: &AgentSessionRegistry,
     events: &EventBus,
+    conductor: Option<&crate::conductor::ConductorRuntime>,
+    acp_runner: &dyn AcpAgentRunner,
     requester: ServerRequester,
     now_ms: u64,
     event_id: String,
@@ -786,11 +1034,11 @@ pub async fn run_authorized_agent_prompt(
     );
     let response = match &decision {
         AuthzDecision::Allow => {
-            match agent_prompt_inner(agents, events, Some(requester), cmd).await {
+            match agent_prompt_inner(agents, events, conductor, acp_runner, Some(requester), cmd)
+                .await
+            {
                 Ok(result) => Response::ok(&cmd.request_id, result),
-                Err(code) => {
-                    Response::error(&cmd.request_id, code, "command could not be completed")
-                }
+                Err(failure) => failure.into_response(&cmd.request_id),
             }
         }
         AuthzDecision::ConfirmRequired => Response::error(
@@ -1564,6 +1812,9 @@ mod tests {
     use fae_control_plane::{hash_token, ClientClass, Scope};
     use fae_engine::MockAdapter;
     use std::collections::HashSet;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     fn mock() -> MockAdapter {
         MockAdapter::new("test")
@@ -1580,6 +1831,182 @@ mod tests {
             command: "agent.run".to_owned(),
             payload,
         }
+    }
+
+    fn command_named(command: &str, payload: serde_json::Value) -> fae_control_plane::Command {
+        fae_control_plane::Command {
+            v: 2,
+            request_id: "r1".to_owned(),
+            command: command.to_owned(),
+            payload,
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingAcpRunner {
+        run_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        prompt_calls: Arc<AtomicUsize>,
+        run_outcome: Option<fae_acp::AcpOutcome>,
+    }
+
+    impl CountingAcpRunner {
+        fn with_run_outcome(text: &str) -> Self {
+            Self {
+                run_outcome: Some(fae_acp::AcpOutcome {
+                    text: text.to_owned(),
+                    stop_reason: "end_turn".to_owned(),
+                    tool_calls: Vec::new(),
+                }),
+                ..Self::default()
+            }
+        }
+
+        fn run_count(&self) -> usize {
+            self.run_calls.load(Ordering::SeqCst)
+        }
+
+        fn start_count(&self) -> usize {
+            self.start_calls.load(Ordering::SeqCst)
+        }
+
+        fn prompt_count(&self) -> usize {
+            self.prompt_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AcpAgentRunner for CountingAcpRunner {
+        async fn run_one_shot(
+            &self,
+            _agent: &str,
+            _cwd: &Path,
+            _prompt: &str,
+            _policy: fae_acp::ApprovalPolicy,
+        ) -> Result<fae_acp::AcpOutcome, fae_acp::AcpError> {
+            self.run_calls.fetch_add(1, Ordering::SeqCst);
+            self.run_outcome.clone().ok_or_else(|| {
+                fae_acp::AcpError::Protocol("test double: should not be reached".to_owned())
+            })
+        }
+
+        async fn start_session(
+            &self,
+            _agent: &str,
+            _cwd: &Path,
+            _policy: fae_acp::ApprovalPolicy,
+        ) -> Result<fae_acp::AcpSession, fae_acp::AcpError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Err(fae_acp::AcpError::Protocol(
+                "test double: should not be reached".to_owned(),
+            ))
+        }
+
+        fn prompt_session(
+            &self,
+            _session: &fae_acp::AcpSession,
+            _text: String,
+        ) -> Result<fae_acp::PromptHandle, fae_acp::AcpError> {
+            self.prompt_calls.fetch_add(1, Ordering::SeqCst);
+            Err(fae_acp::AcpError::Protocol(
+                "test double: should not be reached".to_owned(),
+            ))
+        }
+    }
+
+    struct AgentGateRuntime {
+        _tmp: tempfile::TempDir,
+        runtime: crate::conductor::ConductorRuntime,
+    }
+
+    fn agent_gate_runtime(
+        mode: crate::conductor::ModelMode,
+        provisioned: bool,
+    ) -> AgentGateRuntime {
+        use crate::conductor::{
+            BudgetGovernor, BudgetLimits, ConductorEgress, ConductorRuntime, ConductorStore,
+            InstallKey, ProviderPricingTable, RecipeSet, StaticDirectPolicy, WorkerRegistry,
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let store = ConductorStore::open(tmp.path().join("store")).expect("store");
+        let install_key =
+            InstallKey::load_or_create(&tmp.path().join("install.key")).expect("install key");
+        let mut workers = WorkerRegistry::m1();
+        if provisioned {
+            workers.register_cloud_backed(crate::conductor::workers::CODEX_CLOUD_WORKER_ID, true);
+        }
+        let egress = ConductorEgress::production(
+            mode,
+            BudgetGovernor::new(store.clone(), BudgetLimits::default()),
+            ProviderPricingTable::empty(),
+        );
+        AgentGateRuntime {
+            _tmp: tmp,
+            runtime: ConductorRuntime::new_with_egress(
+                StaticDirectPolicy,
+                RecipeSet::default(),
+                workers,
+                store,
+                install_key,
+                false,
+                egress,
+            ),
+        }
+    }
+
+    struct AgentCommandHarness {
+        conductor: AgentGateRuntime,
+        runner: CountingAcpRunner,
+        engine: MockAdapter,
+        tts: fae_engine::MockTtsAdapter,
+        audio: AudioManager,
+        events: crate::events::EventBus,
+        playbacks: crate::events::PlaybackRegistry,
+        agents: crate::agents::AgentSessionRegistry,
+    }
+
+    impl AgentCommandHarness {
+        fn new(mode: crate::conductor::ModelMode, provisioned: bool) -> Self {
+            Self {
+                conductor: agent_gate_runtime(mode, provisioned),
+                runner: CountingAcpRunner::default(),
+                engine: mock(),
+                tts: mock_tts(),
+                audio: AudioManager::new(),
+                events: crate::events::EventBus::new(),
+                playbacks: crate::events::PlaybackRegistry::new(),
+                agents: crate::agents::AgentSessionRegistry::new(),
+            }
+        }
+
+        fn with_run_outcome(
+            mode: crate::conductor::ModelMode,
+            provisioned: bool,
+            text: &str,
+        ) -> Self {
+            Self {
+                runner: CountingAcpRunner::with_run_outcome(text),
+                ..Self::new(mode, provisioned)
+            }
+        }
+
+        fn backends(&self) -> SessionBackends<'_> {
+            SessionBackends {
+                engine: &self.engine,
+                asr_fallback: None,
+                tts: &self.tts,
+                audio: &self.audio,
+                events: &self.events,
+                playbacks: &self.playbacks,
+                agents: &self.agents,
+                conductor: Some(&self.conductor.runtime),
+                acp_runner: &self.runner,
+            }
+        }
+    }
+
+    fn error_response_text(failure: CommandFailure) -> String {
+        serde_json::to_string(&failure.into_response("r1")).expect("response json")
     }
 
     #[test]
@@ -1650,16 +2077,280 @@ mod tests {
 
     #[tokio::test]
     async fn agent_run_rejects_missing_fields() {
+        let harness = AgentCommandHarness::new(crate::conductor::ModelMode::AllAvailable, true);
+        let backends = harness.backends();
         // No agent, no prompt → bad_request before any subprocess is spawned.
-        let err = super::agent_run(&agent_command(serde_json::json!({})))
+        let err = super::agent_run(&backends, &agent_command(serde_json::json!({})))
             .await
             .expect_err("missing fields must fail");
-        assert_eq!(err, "bad_request");
+        assert_eq!(err.code, "bad_request");
         // Agent present but no prompt is still bad_request.
-        let err = super::agent_run(&agent_command(serde_json::json!({ "agent": "codex" })))
-            .await
-            .expect_err("missing prompt must fail");
-        assert_eq!(err, "bad_request");
+        let err = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "codex" })),
+        )
+        .await
+        .expect_err("missing prompt must fail");
+        assert_eq!(err.code, "bad_request");
+        assert_eq!(harness.runner.run_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn pure_local_blocks_all_agent_commands_before_runner() {
+        let harness =
+            AgentCommandHarness::new(crate::conductor::ModelMode::from_env_value(None), true);
+        harness
+            .agents
+            .insert_test_metadata("acp-test", "codex", "/tmp");
+        let backends = harness.backends();
+
+        let run_err = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "codex", "prompt": "clean prompt" })),
+        )
+        .await
+        .expect_err("pure-local blocks one-shot agent egress");
+        assert_eq!(run_err.code, "mode_blocked");
+
+        let start_err = super::agent_session_start(
+            &backends,
+            &command_named(
+                "agent.session_start",
+                serde_json::json!({ "agent": "codex" }),
+            ),
+        )
+        .await
+        .expect_err("pure-local blocks session spawn");
+        assert_eq!(start_err.code, "mode_blocked");
+
+        let prompt_err = super::agent_prompt(
+            &backends,
+            &command_named(
+                "agent.prompt",
+                serde_json::json!({ "session_id": "acp-test", "prompt": "clean prompt" }),
+            ),
+        )
+        .await
+        .expect_err("pure-local blocks per-turn prompt submit");
+        assert_eq!(prompt_err.code, "mode_blocked");
+
+        assert_eq!(harness.runner.run_count(), 0);
+        assert_eq!(harness.runner.start_count(), 0);
+        assert_eq!(harness.runner.prompt_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn credential_prompt_blocks_before_spawn_or_submit() {
+        let harness = AgentCommandHarness::new(crate::conductor::ModelMode::AllAvailable, true);
+        harness
+            .agents
+            .insert_test_metadata("acp-test", "codex", "/tmp");
+        let backends = harness.backends();
+        let secret = "please review sk-abcdefghijklmnopqrstuvwxyz";
+
+        let run_err = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "codex", "prompt": secret })),
+        )
+        .await
+        .expect_err("credential prompt must be privacy-blocked before spawn");
+        assert_privacy_blocked_without_secret(&run_err, secret);
+
+        let prompt_err = super::agent_prompt(
+            &backends,
+            &command_named(
+                "agent.prompt",
+                serde_json::json!({ "session_id": "acp-test", "prompt": secret }),
+            ),
+        )
+        .await
+        .expect_err("credential prompt must be privacy-blocked before submit");
+        assert_privacy_blocked_without_secret(&prompt_err, secret);
+
+        assert_eq!(harness.runner.run_count(), 0);
+        assert_eq!(harness.runner.start_count(), 0);
+        assert_eq!(harness.runner.prompt_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn all_available_provisioned_clean_agent_run_reaches_runner() {
+        let harness = AgentCommandHarness::with_run_outcome(
+            crate::conductor::ModelMode::AllAvailable,
+            true,
+            "mock output",
+        );
+        let backends = harness.backends();
+
+        let result = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "codex", "prompt": "clean prompt" })),
+        )
+        .await
+        .expect("clean provisioned one-shot reaches ACP runner");
+        assert_eq!(
+            result.get("text").and_then(serde_json::Value::as_str),
+            Some("mock output")
+        );
+        assert_eq!(harness.runner.run_count(), 1);
+
+        let start_err = super::agent_session_start(
+            &backends,
+            &command_named(
+                "agent.session_start",
+                serde_json::json!({ "agent": "codex" }),
+            ),
+        )
+        .await
+        .expect_err("counting start runner returns its sentinel error after gate pass");
+        assert_eq!(start_err.code, "agent_error");
+        assert_eq!(harness.runner.start_count(), 1);
+
+        let resolved = super::assert_agent_egress_gates(
+            Some(&harness.conductor.runtime),
+            "codex",
+            Some("clean prompt"),
+        )
+        .expect("clean provisioned prompt passes the shared gate");
+        assert_eq!(resolved, crate::conductor::workers::CODEX_CLOUD_WORKER_ID);
+    }
+
+    /// Normalization consistency (NOTE-2 red-team NOTE-1): an agent payload
+    /// with surrounding whitespace + mixed case (e.g. "  Codex  ") must pass the
+    /// gate AND reach the runner as the same normalized id. Before the fix, the
+    /// gate normalized internally but the raw string was passed to the runner,
+    /// so fae_acp could reject a value the gate accepted.
+    #[tokio::test]
+    async fn agent_payload_is_normalized_for_both_gate_and_runner() {
+        let harness = AgentCommandHarness::with_run_outcome(
+            crate::conductor::ModelMode::AllAvailable,
+            true,
+            "normalized ok",
+        );
+        let backends = harness.backends();
+
+        let result = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({
+                "agent": "  Codex  ",
+                "prompt": "clean prompt",
+            })),
+        )
+        .await
+        .expect("whitespace + mixed-case agent payload is accepted");
+        assert_eq!(
+            result.get("text").and_then(serde_json::Value::as_str),
+            Some("normalized ok")
+        );
+        assert_eq!(harness.runner.run_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn unprovisioned_agent_blocks_before_runner() {
+        let harness = AgentCommandHarness::new(crate::conductor::ModelMode::AllAvailable, false);
+        let backends = harness.backends();
+
+        let run_err = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "codex", "prompt": "clean prompt" })),
+        )
+        .await
+        .expect_err("unprovisioned one-shot must fail closed");
+        assert_eq!(run_err.code, "not_provisioned");
+
+        let start_err = super::agent_session_start(
+            &backends,
+            &command_named(
+                "agent.session_start",
+                serde_json::json!({ "agent": "codex" }),
+            ),
+        )
+        .await
+        .expect_err("unprovisioned session start must fail closed");
+        assert_eq!(start_err.code, "not_provisioned");
+
+        assert_eq!(harness.runner.run_count(), 0);
+        assert_eq!(harness.runner.start_count(), 0);
+        assert_eq!(harness.runner.prompt_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn unknown_agent_blocks_before_runner() {
+        let harness = AgentCommandHarness::new(crate::conductor::ModelMode::AllAvailable, true);
+        let backends = harness.backends();
+
+        let run_err = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "bogus", "prompt": "clean prompt" })),
+        )
+        .await
+        .expect_err("unknown agent must fail closed");
+        assert_eq!(run_err.code, "unknown_agent");
+
+        let start_err = super::agent_session_start(
+            &backends,
+            &command_named(
+                "agent.session_start",
+                serde_json::json!({ "agent": "bogus" }),
+            ),
+        )
+        .await
+        .expect_err("unknown session agent must fail closed");
+        assert_eq!(start_err.code, "unknown_agent");
+
+        assert_eq!(harness.runner.run_count(), 0);
+        assert_eq!(harness.runner.start_count(), 0);
+        assert_eq!(harness.runner.prompt_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn privacy_gate_error_response_never_contains_raw_prompt() {
+        let harness = AgentCommandHarness::new(crate::conductor::ModelMode::AllAvailable, true);
+        let backends = harness.backends();
+        let secret = "token sk-abcdefghijklmnopqrstuvwxyz must not leak";
+
+        let err = super::agent_run(
+            &backends,
+            &agent_command(serde_json::json!({ "agent": "codex", "prompt": secret })),
+        )
+        .await
+        .expect_err("secret-shaped prompt must be blocked");
+        let response = error_response_text(err);
+        assert!(!response.contains(secret));
+        assert!(!response.contains("sk-abcdefghijklmnopqrstuvwxyz"));
+        assert!(response.contains("privacy_blocked"));
+        assert!(response.contains("openai_key"));
+    }
+
+    #[tokio::test]
+    async fn pure_local_session_start_does_not_start_runner() {
+        let harness =
+            AgentCommandHarness::new(crate::conductor::ModelMode::from_env_value(None), true);
+        let backends = harness.backends();
+        let err = super::agent_session_start(
+            &backends,
+            &command_named(
+                "agent.session_start",
+                serde_json::json!({ "agent": "codex" }),
+            ),
+        )
+        .await
+        .expect_err("pure-local blocks session start at the mode gate");
+        assert_eq!(err.code, "mode_blocked");
+        assert_eq!(harness.runner.start_count(), 0);
+    }
+
+    fn assert_privacy_blocked_without_secret(error: &CommandFailure, secret: &str) {
+        assert_eq!(error.code, "privacy_blocked");
+        let details = error.details.as_ref().expect("privacy details");
+        assert_eq!(details.level.as_deref(), Some("LikelyCredential"));
+        assert!(
+            details.labels.iter().any(|label| label == "openai_key"),
+            "labels should name the detector, got {:?}",
+            details.labels
+        );
+        let response = error_response_text(error.clone());
+        assert!(!response.contains(secret));
+        assert!(!response.contains("sk-abcdefghijklmnopqrstuvwxyz"));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1687,6 +2378,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: None,
+            acp_runner: &REAL_ACP_RUNNER,
         };
         super::handle_frame(registry, &backends, state, line, now_ms, event_id).await
     }
@@ -2481,6 +3173,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: Some(&runtime),
+            acp_runner: &REAL_ACP_RUNNER,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2593,6 +3286,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: Some(&runtime),
+            acp_runner: &REAL_ACP_RUNNER,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2668,6 +3362,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: None,
+            acp_runner: &REAL_ACP_RUNNER,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2718,6 +3413,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: None,
+            acp_runner: &REAL_ACP_RUNNER,
         };
         let cmd = fae_control_plane::Command {
             v: 2,
@@ -2764,6 +3460,7 @@ mod tests {
             playbacks: &playbacks,
             agents: &agents,
             conductor: None,
+            acp_runner: &REAL_ACP_RUNNER,
         };
         // kind missing → bad_request, nothing published.
         let cmd = fae_control_plane::Command {
