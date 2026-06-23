@@ -1,15 +1,17 @@
 # ADR-006: Voice Privilege Escalation (Tool Approval System)
 
-**Status:** Accepted (implementation evolved — approval overlay removed, replaced by governance model)
+**Status:** Superseded (voice identity retired; this whole mechanism is gone)
 **Date:** 2026-02-23
-**Updated:** 2026-04-05 — Tool-level approval gating removed. Security now enforced by voice identity (Speaker ID), DamageControlPolicy, and tool modes.
-**Scope:** Tool governance — `Tools/ToolExecutor.swift`, `Tools/DamageControlPolicy.swift`, `Pipeline/PipelineCoordinator.swift`
+**Scope:** Tool governance (historical)
 
-> **2026-04-05 update:** The per-tool `ApprovalTool` wrapper and approval overlay UI have been removed.
-> The current security model uses voice identity as the primary gate (owner verification before tool access),
-> DamageControlPolicy for catastrophic operation blocking, and tool modes (`read_only` / `full` / `full_no_approval`)
-> for access control. The conceptual trust model described below remains valid; the concrete implementation
-> has changed. See CLAUDE.md "Tool security (4-layer model)" for the current stack.
+> **Superseded by S18 (2026-06-12).** This ADR's decision — voice-based privilege
+> escalation — no longer exists. Voice identity / Speaker ID (its primary gate) was
+> **retired**; the `ApprovalTool` wrapper, the voice/button approval overlay, and the
+> `classify_intent()` routing described below were all removed; and the `src/…` Rust
+> paths it cites are from a long-dead era. The **only** surviving safety net is
+> `DamageControlPolicy` (catastrophic-op blocking + protected paths), which is the
+> design intent recorded in **ADR-005** and the current stack in `CLAUDE.md`. Kept for
+> provenance only.
 
 ## Context
 

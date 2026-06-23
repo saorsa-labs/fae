@@ -1,7 +1,6 @@
 # Hand-back report — orb-host-owns-state (Steps 3–5)
 
 Branch: `llamacpp-serving-adapter` · Working tree (NOT committed/pushed — for reviewer)
-Plan: `docs/plans/orb-host-owns-state-mega-prompt-2026-06-17.md`
 Session: 2026-06-17. Steps 1+2 were committed earlier (`67ce77dd`); this change
 completes Steps 3, 4, and the static portion of 5.
 

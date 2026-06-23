@@ -33,7 +33,6 @@
 - [x] Retire stale Rust guard: `scripts/ci/guard-no-rust-reintro.sh` removed from `.github/workflows/ci.yml` (preflight → no-op echo); `justfile guard-no-rust` recipe → no-op echo. *(Script file itself left in place as inert; delete in a later cleanup.)*
 - [x] Fix MAJOR: misleading "default Swift-only bundle" justfile comment → "Swift-legacy migration bundle"
 - [x] Fix MINOR: AGENTS.md memory touchpoints now scoped "Swift migration/legacy surface"
-- [x] Fix MINOR: `docs/plans/retire-legacy-swift-ui-mega-prompt-2026-06-18.md` stale "you shouldn't touch crates" note → annotated with ADR-011
 
 ---
 

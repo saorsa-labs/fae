@@ -1,11 +1,17 @@
 # ADR-001: Cascaded Voice Pipeline
 
-**Status:** Accepted
+**Status:** Superseded (cascade principle survives; the described pipeline does not)
 **Date:** 2026-02-10
-**Scope:** Voice pipeline architecture — originally Rust (`src/pipeline/`), now Swift (`native/macos/Fae/Sources/Fae/Pipeline/`, `Audio/`, `ML/`)
+**Scope:** Voice pipeline architecture (historical)
 
-> The cascaded pipeline architecture remains the active production design.
-> Implementation was ported from Rust to Swift/MLX but the architectural decisions are unchanged.
+> **Superseded by S18 (2026-06-12) + ADR-010/ADR-011.** The always-on
+> `VAD → Speaker ID → STT → LLM → TTS` flow described here is **deleted**: capture
+> is now **push-to-talk only**, the local STT engine (Qwen3-ASR) is gone, and audio
+> is handled by the Rust daemon in a **two-pass** turn (transcribe → reason) via the
+> llama.cpp sidecar (ADR-010). Voice identity / Speaker ID was retired in S18. The
+> only surviving idea is the *cascade* principle (independent transcribe → reason →
+> speak stages). For the current pipeline see `CLAUDE.md` and ADR-010/ADR-011; this
+> ADR is kept for the original model-selection rationale only.
 
 ## Context
 

@@ -87,4 +87,4 @@ If you are making a security-sensitive code change, read in this order:
 3) PR checklist  
 4) Adversarial test plan
 
-Historical: the CoWork security and remote egress plan was archived when CoWork was removed (2026-06-11) — see [docs/archive/](../archive/cowork-security-and-egress-plan-2026-03-07.md).
+Historical: the CoWork security and remote egress plan was removed when CoWork was removed (2026-06-11); see git history if needed.

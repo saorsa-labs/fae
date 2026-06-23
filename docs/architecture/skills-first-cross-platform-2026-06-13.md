@@ -117,7 +117,6 @@ which is the bridge.
 
 - Prior: `docs/architecture/cross-platform-go-nogo-2026-06-11.md`,
   `docs/architecture/full-cross-platform-ml-pipeline-2026-06-11.md`
-- Execution: `docs/plans/skills-first-cross-platform-mega-prompt-2026-06-13.md`
 - Hermes: github.com/NousResearch/hermes-agent (skills/, tools/, apps/desktop)
 - wry/Linux: tauri#12800, tauri#13157, tauri#9220, tauri discussion #8524,
   NLnet Servo-webview-for-Tauri

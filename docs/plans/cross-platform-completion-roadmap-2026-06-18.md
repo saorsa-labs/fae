@@ -56,7 +56,6 @@ XC  Release-validation real-audio phase          (cross-cutting gate before ANY 
 ```
 
 ### P1 — B1.5: the app runs on the llama.cpp daemon  ⏳ NEXT — prompt ready
-**Prompt:** `docs/plans/llamacpp-app-routing-B1.5-mega-prompt-2026-06-18.md`.
 **Objective:** prove (via daemon-log attribution, not the UI label) that a real Swift-app turn is served
 by the llama.cpp daemon, not the in-process MLX Qwen engine; if it falls back, find+fix why; fix the
 misleading `modelLabel` to report the actual serving engine; prove text+tool+audio+TTS+orb through the

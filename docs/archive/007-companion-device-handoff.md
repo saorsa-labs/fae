@@ -1,12 +1,15 @@
 # ADR-007: Companion Device Handoff (iPhone, iPad, Apple Watch)
 
-**Status:** Deferred (Phases 1-2 complete, 3-7 pending)
+**Status:** ARCHIVED 2026-06-24 (Deferred; design predates ADR-011 and must be re-authored before any work)
 **Date:** 2026-02-23
-**Scope:** Cross-device architecture — FaeOrbKit (`native/apple/FaeOrbKit/`), FaeRelayKit (`native/apple/FaeRelayKit/`), FaeCompanion (`native/apple/FaeCompanion/`)
+**Scope:** Cross-device architecture (historical / archived)
 
-> Phases 1-2 (orb extraction, relay service) are built. FaeRelayServer.swift exists in the main app.
-> Remaining phases (iOS/iPadOS app, audio bridging, watchOS) are deferred.
-> Original Rust/libfae assumptions no longer apply — design against Swift runtime.
+> **Archived 2026-06-24.** Cross-device handoff is not near-term, and this design is
+> built on the `libfae.a` **C-ABI Mode A** integration that **ADR-011 retired**. Do not
+> implement against it. The irony worth preserving: the daemon/control-plane protocol
+> (ADR-011) is a *better* handoff boundary than C-ABI ever was — so if/when multi-device
+> returns to the roadmap, this must be re-designed against the daemon protocol, not
+> resurrected. Kept for the cross-device product thinking only.
 
 ## Context
 

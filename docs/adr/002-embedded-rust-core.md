@@ -1,11 +1,15 @@
 # ADR-002: Embedded Rust Core Architecture
 
-**Status:** Superseded
+**Status:** Superseded (the *C-ABI in-process embedding*, not the Rust core itself)
 **Date:** 2026-02-11
-**Scope:** Rust-era host architecture (`src/ffi.rs`, `src/host/`, `native/macos/`) — **no longer applicable**
+**Scope:** Rust-era in-process host architecture (`src/ffi.rs`, `src/host/`) — **no longer applicable**
 
-> **Superseded by pure Swift architecture.** There is no Rust core, no libfae.a, no C ABI.
-> Current production runtime is Swift-native under `native/macos/Fae/`. See CURRENT_STATE.md.
+> **Superseded — but read the reason carefully (corrected 2026-06-22, ADR-011).**
+> What is dead is the *integration mode* described here: in-process `libfae.a` linked
+> via **C ABI**. The earlier "superseded by pure Swift; there is no Rust core" note was
+> itself wrong. Per **ADR-011**, the headless **Rust core is canonical again** — it
+> just integrates as a **daemon over the control-plane protocol** (Unix socket /
+> WebSocket), not as an in-process C ABI. See ADR-011 and `CURRENT_STATE.md`.
 
 ## Context
 
@@ -112,11 +116,11 @@ Single backend instance is scheduler leader. Leader lease via lock file with 5s 
 
 - **FFI boundary** requires careful memory management (C string lifecycle)
 - **Single crash domain** — a Rust panic takes down the UI (mitigated by zero-panic policy)
-- **Build complexity** — static library + Swift Package Manager linking with anti-dead-strip anchor (see `docs/guides/linker-anchor.md`)
+- **Build complexity** — static library + Swift Package Manager linking with anti-dead-strip anchor
 
 ## Anti-dead-strip anchor
 
-SPM's `-dead_strip` removes Rust subsystems not reachable from FFI exports. `src/linker_anchor.rs` prevents this with `black_box`-guarded references to all major subsystem constructors. See `docs/guides/linker-anchor.md` for maintenance instructions.
+SPM's `-dead_strip` removes Rust subsystems not reachable from FFI exports. `src/linker_anchor.rs` prevented this with `black_box`-guarded references to all major subsystem constructors. (Historical — the C-ABI integration is retired; see ADR-011.)
 
 ## macOS sandbox and security
 

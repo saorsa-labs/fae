@@ -71,7 +71,7 @@ Make Fae's routing judgment itself **learned** — by extending a Rust-native Me
 **Review gate:** `red-team` on the egress membrane + same-owner boundary.
 
 ### M5 — Hardening + release validation
-**WPs:** release-validation update (fix the doc drift F-9: absorb `main-and-cowork-live-test-scenarios.md` into `app-release-validation.md`, update `AGENTS.md` to point at it) · new comprehensive spec `16-conductor-routing.yaml` · real-app + real-audio + screenshots · partition/fallback UX copy.
+**WPs:** release-validation update (fix the doc drift F-9 in `app-release-validation.md`, update `AGENTS.md` to point at it) · new comprehensive spec `16-conductor-routing.yaml` · real-app + real-audio + screenshots · partition/fallback UX copy.
 **F-6:** release gate is **enforced** — CI job / required PR checklist blocking merge to `main` until the full run set executes and attaches results.
 **Review gate:** live validation contract signed off.
 

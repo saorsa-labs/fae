@@ -493,7 +493,6 @@ Relevant files:
 
 - [test-comprehensive.sh](../../scripts/test-comprehensive.sh)
 - [App release validation checklist](../checklists/app-release-validation.md)
-- [Main and Cowork live scenarios (archived 2026-06-11)](../archive/main-and-cowork-live-test-scenarios.md)
 
 ### Promotion gates
 
@@ -653,4 +652,3 @@ Not:
 - [Local model strategy](local-model-strategy.md)
 - [LLM benchmark overview / scoreboard](../benchmarks/llm-benchmarks.md)
 - [Local model benchmark report — 2026-03-07](../benchmarks/local-model-eval-2026-03-07.md)
-- [Fae-priority local model evaluation — 2026-03-07](../benchmarks/fae-priority-eval-2026-03-07.md)

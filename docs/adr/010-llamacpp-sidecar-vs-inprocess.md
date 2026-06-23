@@ -89,6 +89,5 @@ decision.
 ## Related
 
 - `docs/architecture/cross-platform-brain-llamacpp-2026-06-16.md` (B1–B4 pivot)
-- `docs/plans/llamacpp-default-engine-B1-mega-prompt-2026-06-18.md` (B1 implementation)
 - ADR-002 (embedded Rust core — historical in-process C-ABI assumptions, explicitly superseded)
 - ADR-003 (local LLM inference)

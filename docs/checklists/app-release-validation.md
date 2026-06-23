@@ -183,7 +183,7 @@ The Swift main window scenarios remain required while the live pipeline is still
 
 ## Cowork scenarios (removed)
 
-CoWork was removed from the product in the Great Cleanup (2026-06-11). The historical scenarios live in `../archive/main-and-cowork-live-test-scenarios.md` and `../archive/cowork-launch-ux-checklist.md`. The only remaining CoWork-related checks are the anti-restoration guards above (Cowork/canvas must NOT appear as product UI surfaces).
+CoWork was removed from the product in the Great Cleanup (2026-06-11). The historical scenarios were removed with it (see git history). The only remaining CoWork-related checks are the anti-restoration guards above (Cowork/canvas must NOT appear as product UI surfaces).
 
 ## Settings and diagnostics scenarios
 
