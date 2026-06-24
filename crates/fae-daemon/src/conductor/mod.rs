@@ -60,15 +60,19 @@ pub mod policy;
 pub mod pricing;
 pub mod prompts;
 pub mod recipe;
-/// M2 reward aggregator (spec §7). Landed dormant + test-covered; wired when
-/// the executor's live loop integrates the reward window. The self-judgment-
-/// advisory-only invariant (F-10) is structurally enforced + mutation-tested.
-#[allow(dead_code)] // TODO(M2, 2026-06-23): wired when the executor integrates the reward signal
+/// M2 reward aggregator (spec §7). Landed dormant + test-covered. **Capture is
+/// NOT yet wired** (Stage C of the M2-live-wiring milestone wires
+/// `reward_snapshot` over the live window); the self-judgment-advisory-only
+/// invariant (F-10) is structurally enforced + mutation-tested regardless.
+#[allow(dead_code)] // TODO(M2-live, 2026-06-24): Stage C wires the reward snapshot read
 pub mod reward;
 /// M2 shadow router (spec §8). Decision-only + structurally no-egress (holds
-/// no CloudProvider/AcpAgentRunner handle). Landed dormant + test-covered;
-/// wired when the executor's live loop runs candidate policies alongside deployed.
-#[allow(dead_code)] // TODO(M2, 2026-06-23): wired when the executor integrates shadow routing
+/// no CloudProvider/AcpAgentRunner handle). **Per-turn shadow *capture* is now
+/// wired** (Stage A of the M2-live-wiring milestone: `ConductorRuntime::
+/// with_shadow` + `route_turn` → `capture_shadow`). **Promotion flagging**
+/// (`score_policies`/`flag_promotion_candidates`/`PromotionCandidate`) remains
+/// dormant until M3 candidates land.
+#[allow(dead_code)] // TODO(M3): promotion flagging surfaces when candidate recipes land
 pub mod shadow;
 pub mod store;
 pub mod telemetry;

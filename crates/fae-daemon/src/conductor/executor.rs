@@ -22,7 +22,8 @@ use serde_json::Value;
 use crate::conductor::budget::{
     ActualCost, BudgetDimension, BudgetGovernor, BudgetLimits, CostEstimate,
 };
-use crate::conductor::fingerprint::InstallKey;
+use crate::conductor::eval::Corpus;
+use crate::conductor::fingerprint::{InstallKey, RequestFingerprint};
 use crate::conductor::policy::{
     mode_permits_lane, ConductorRoutingPolicy, ModelMode, StaticDirectPolicy,
 };
@@ -31,6 +32,7 @@ use crate::conductor::recipe::{
     ApprovalClass, ConductorRole, ConductorTopology, OwnedRouteDecision, PrivacyLane, RecipeSet,
     RouteFailure, WorkerLocality,
 };
+use crate::conductor::shadow::ShadowRouter;
 use crate::conductor::store::ConductorStore;
 use crate::conductor::telemetry::{ConductorRouteEvent, RouteReceipt, TargetKind};
 use crate::conductor::workers::WorkerRegistry;
@@ -220,13 +222,22 @@ pub(crate) struct TurnOutcome {
 /// Startup-constructed conductor state. Cheap to share (`Arc`) across the
 /// session. Constructed once in `main`; borrowed by `SessionBackends`.
 pub struct ConductorRuntime {
-    policy: StaticDirectPolicy,
+    policy: Arc<dyn ConductorRoutingPolicy>,
     recipes: RecipeSet,
     workers: WorkerRegistry,
     store: ConductorStore,
     install_key: InstallKey,
     chain_enabled: bool,
     egress: ConductorEgress,
+    /// M2-live §2.2: optional shadow router. `None` ⇒ no per-turn shadow
+    /// capture (legacy/test/`new` default). `Some` when constructed via
+    /// [`Self::with_shadow`]. Shares the **same** `policy` `Arc` as the live
+    /// route decision (anti-divergence, spec §2.2a).
+    shadow: Option<ShadowRouter>,
+    /// M2-live §2.2: the corpus parsed once at startup (`with_shadow`).
+    /// `None` when shadow is disabled or the (embedded, tested) corpus failed
+    /// to parse (non-fatal — §8 decision 2: start with shadow disabled + warn).
+    corpus: Option<Corpus>,
 }
 
 impl ConductorRuntime {
@@ -263,19 +274,63 @@ impl ConductorRuntime {
         egress: ConductorEgress,
     ) -> Self {
         Self {
-            policy,
+            policy: Arc::new(policy),
             recipes,
             workers,
             store,
             install_key,
             chain_enabled,
             egress,
+            shadow: None,
+            corpus: None,
         }
+    }
+
+    /// M2-live §2.2: enable per-turn shadow capture. Parses the embedded
+    /// corpus once and builds a [`ShadowRouter`] whose deployed policy is an
+    /// `Arc::clone` of this runtime's routing policy (so the shadow "deployed
+    /// decision" is byte-equal to the executed decision — anti-divergence,
+    /// spec §2.2a / V2). Ships with **zero candidates** (M2 has none).
+    ///
+    /// Corpus parse failure is non-fatal (§8 decision 2): the embedded corpus
+    /// is tested, but if it ever fails to parse, shadow stays disabled and a
+    /// warning is logged rather than gating the daemon.
+    pub fn with_shadow(mut self) -> Self {
+        let corpus = match Corpus::synthetic_core() {
+            Ok(corpus) => corpus,
+            Err(error) => {
+                tracing::warn!(
+                    "conductor synthetic corpus failed to parse; shadow capture disabled: {error}"
+                );
+                return self;
+            }
+        };
+        let deployed = Arc::clone(&self.policy);
+        self.shadow = Some(ShadowRouter::new(deployed, Vec::new()));
+        self.corpus = Some(corpus);
+        self
     }
 
     /// The static policy reference, for `inject_text` to call `decide`.
     pub fn policy(&self) -> &dyn ConductorRoutingPolicy {
-        &self.policy
+        self.policy.as_ref()
+    }
+
+    /// Compute the F-4 fingerprint for a request id (M2-live §2.1 lift:
+    /// computed once per turn in `route_turn` and threaded to every emitter).
+    /// Best-effort callers log + skip telemetry on the unreachable `Err`.
+    pub(crate) fn fingerprint(
+        &self,
+        request_id: &str,
+    ) -> Result<RequestFingerprint, crate::conductor::error::ConductorError> {
+        self.install_key.fingerprint(request_id)
+    }
+
+    /// True iff per-turn shadow capture is active (a [`ShadowRouter`] + corpus
+    /// are configured). Used for the startup banner; `false` when `with_shadow`
+    /// was never called or the embedded corpus failed to parse (§8 decision 2).
+    pub(crate) fn shadow_enabled(&self) -> bool {
+        self.shadow.is_some()
     }
 
     /// Operator-selected lane cap for all egress surfaces, including ACP agent
@@ -813,16 +868,14 @@ impl ConductorRuntime {
 
     /// Emit a `ConductorRouteEvent` at decision time. Fire-and-forget on the
     /// blocking pool; the turn never waits on this write (spec §9).
-    pub fn emit_event(&self, decision: &OwnedRouteDecision, timestamp_ms: u64) {
-        let fp = match self.install_key.fingerprint(&decision.request_id) {
-            Ok(fp) => fp,
-            Err(e) => {
-                tracing::warn!("conductor fingerprint failed, skipping event: {e}");
-                return;
-            }
-        };
+    pub fn emit_event(
+        &self,
+        decision: &OwnedRouteDecision,
+        request_fingerprint: &RequestFingerprint,
+        timestamp_ms: u64,
+    ) {
         let event = ConductorRouteEvent {
-            request_fingerprint: fp,
+            request_fingerprint: request_fingerprint.clone(),
             task_class: decision.task_class,
             recipe_id: Some(decision.recipe_id.clone()),
             topology: decision.topology,
@@ -849,18 +902,12 @@ impl ConductorRuntime {
         &self,
         decision: &OwnedRouteDecision,
         outcome: &TurnOutcome,
+        request_fingerprint: &RequestFingerprint,
         latency_ms: u64,
         timestamp_ms: u64,
     ) {
-        let fp = match self.install_key.fingerprint(&decision.request_id) {
-            Ok(fp) => fp,
-            Err(e) => {
-                tracing::warn!("conductor fingerprint failed, skipping receipt: {e}");
-                return;
-            }
-        };
         let receipt = RouteReceipt {
-            request_fingerprint: fp,
+            request_fingerprint: request_fingerprint.clone(),
             recipe_id: decision.recipe_id.clone(),
             topology: decision.topology,
             worker_id: decision.worker_id.clone(),
@@ -880,6 +927,30 @@ impl ConductorRuntime {
         self.spawn_telemetry(move |store| match store.append_receipt(&receipt) {
             Ok(()) => {}
             Err(e) => tracing::warn!("conductor receipt write failed: {e}"),
+        });
+    }
+
+    /// M2-live §2.2: capture a shadow record for this turn and append it to the
+    /// isolated store **off the hot path** (`spawn_blocking`). Decision-only —
+    /// `evaluate_record` is pure (only `policy.decide`); no executor, no
+    /// provider, no agent runner is reachable (V1 no-egress-seam). No-op when
+    /// shadow is disabled (no [`ShadowRouter`] / corpus). The record shares the
+    /// turn's F-4 fingerprint so it joins the receipt at reward-scoring time,
+    /// and shares the receipt's `timestamp_ms` (§8 decision 1).
+    pub(crate) fn capture_shadow(
+        &self,
+        ctx: &crate::conductor::recipe::ConductorTurnContext,
+        request_fingerprint: RequestFingerprint,
+        timestamp_ms: u64,
+    ) {
+        let Some(router) = self.shadow.as_ref() else {
+            return;
+        };
+        let corpus = self.corpus.as_ref();
+        let record = router.evaluate_record(ctx, request_fingerprint, corpus, timestamp_ms);
+        self.spawn_telemetry(move |store| match store.append_shadow_record(&record) {
+            Ok(()) => {}
+            Err(e) => tracing::warn!("conductor shadow write failed: {e}"),
         });
     }
 
@@ -1013,6 +1084,12 @@ fn role_name(role: ConductorRole) -> &'static str {
 /// Convenience: run a full conductor turn for `inject_text`. Builds the context,
 /// decides, emits the decision event, runs, emits the receipt, returns the wire
 /// result. This is the only entry point the session layer calls.
+///
+/// M2-live §2.1: the F-4 fingerprint is computed **once** per turn and threaded
+/// to the event, receipt, and shadow record (which join on it). Telemetry is
+/// best-effort — a fingerprint/store failure is logged and the turn still
+/// succeeds (§9 N4). M2-live §2.2/§8-1: shadow capture runs **post-`run`**, off
+/// the hot path, sharing the receipt's `timestamp_ms`.
 pub async fn route_turn(
     runtime: &ConductorRuntime,
     backends: &SessionBackends<'_>,
@@ -1020,12 +1097,26 @@ pub async fn route_turn(
     ctx: &crate::conductor::recipe::ConductorTurnContext,
 ) -> Result<Value, &'static str> {
     let decision = runtime.policy().decide(ctx);
-    let now = || now_ms();
-    runtime.emit_event(&decision, now());
+    let event_ts = now_ms();
+    // §2.1 fingerprint lift: one HMAC per turn, threaded to every emitter. On
+    // the unreachable `Err`, all telemetry is skipped (the join key is absent)
+    // but the turn still runs.
+    let fingerprint = match runtime.fingerprint(&decision.request_id) {
+        Ok(fp) => fp,
+        Err(error) => {
+            tracing::warn!("conductor fingerprint failed, skipping telemetry: {error}");
+            return runtime.run(&decision, backends, cmd).await.0;
+        }
+    };
+    runtime.emit_event(&decision, &fingerprint, event_ts);
     let started = Instant::now();
     let (wire, outcome) = runtime.run(&decision, backends, cmd).await;
     let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-    runtime.emit_receipt(&decision, &outcome, latency_ms, now());
+    // §8 decision 1: receipt + shadow share the post-run timestamp so the
+    // window join is consistent.
+    let end_ts = now_ms();
+    runtime.emit_receipt(&decision, &outcome, &fingerprint, latency_ms, end_ts);
+    runtime.capture_shadow(ctx, fingerprint, end_ts);
     wire
 }
 
@@ -1345,7 +1436,8 @@ mod tests {
                 install_key,
                 options.chain_enabled,
                 egress,
-            ),
+            )
+            .with_shadow(),
             engine: MockAdapter::new("local"),
             tts: MockTtsAdapter::new("tts"),
             audio: AudioManager::new(),
@@ -1455,7 +1547,13 @@ mod tests {
             .is_some_and(|reason| reason.contains("privacy membrane blocked")));
         assert!(budget_usage_content(&runtime).is_empty());
 
-        runtime.runtime.emit_receipt(&decision, &outcome, 1, 1);
+        let fingerprint = runtime
+            .runtime
+            .fingerprint(&decision.request_id)
+            .map_err(|e| format!("fingerprint: {e}"))?;
+        runtime
+            .runtime
+            .emit_receipt(&decision, &outcome, &fingerprint, 1, 1);
         tokio::time::sleep(Duration::from_millis(50)).await;
         let receipts = std::fs::read_to_string(
             runtime
@@ -1825,5 +1923,246 @@ mod tests {
             assert!(budget_usage_content(&runtime).is_empty());
         }
         Ok(())
+    }
+
+    // === M2-live Stage A wiring tests (spec §6: V1, V2, V3, V4b, V8) ===
+    //
+    // These exercise the live `route_turn` path with shadow capture ON
+    // (`test_runtime` calls `.with_shadow()`). They pin the load-bearing
+    // wiring claims: no new egress seam (V1), shared-policy identity (V2),
+    // fingerprint join-correctness (V3), and the honest degenerate-routing
+    // signal (V4b — corpus_match is None for a content-blind local turn).
+
+    /// A content-blind turn context mirroring `session::build_turn_context`
+    /// (task_class Unknown, empty feature_predicates) — exactly what a real
+    /// `conversation.inject_text` turn produces today (F-4 content-blindness).
+    fn turn_ctx(request_id: &str) -> crate::conductor::recipe::ConductorTurnContext {
+        use crate::conductor::recipe::{ConductorTaskClass, ConductorTurnContext, PrivacyLane};
+        ConductorTurnContext {
+            request_id: request_id.to_string(),
+            task_class: ConductorTaskClass::Unknown,
+            feature_predicates: Vec::new(),
+            privacy_lane: PrivacyLane::LocalOnly,
+            available_workers: Vec::new(),
+            working_directory: None,
+            deadline_ms: None,
+        }
+    }
+
+    /// Read + parse the shadow log written under the test store dir.
+    fn shadow_records(runtime: &TestRuntime) -> Vec<crate::conductor::telemetry::ShadowTurnRecord> {
+        let path = runtime
+            ._tmp
+            .path()
+            .join("store")
+            .join("conductor_shadow.jsonl");
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("shadow record parses in test"))
+            .collect()
+    }
+
+    /// V1 + V8: a routed local turn with shadow ON produces a shadow record and
+    /// **zero** cloud-provider calls (no new egress seam). The shadow append is
+    /// fire-and-forget off the hot path: `route_turn` returns without awaiting
+    /// it (V8 — same `spawn_blocking` pattern as existing telemetry), so we yield
+    /// briefly then read.
+    #[tokio::test]
+    async fn route_turn_with_shadow_writes_record_without_egress() -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        assert!(
+            runtime.runtime.shadow_enabled(),
+            "test_runtime must enable shadow for the wiring tests"
+        );
+
+        let cmd = command("req-shadow", "a benign local prompt");
+        let ctx = turn_ctx("req-shadow");
+        let backends = runtime.backends();
+        let wire = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        assert!(wire.is_ok(), "turn must succeed: {:?}", wire.err());
+        // No egress seam: a pure-local turn never builds or calls a provider.
+        assert_eq!(builder_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+
+        // V8: route_turn returned without awaiting the shadow append; yield so
+        // the fire-and-forget `spawn_blocking` lands the record.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = shadow_records(&runtime);
+        assert_eq!(
+            records.len(),
+            1,
+            "exactly one shadow record per turn (zero candidates)"
+        );
+        assert!(records[0].candidates.is_empty(), "M2 ships zero candidates");
+        Ok(())
+    }
+
+    /// V1 mutation: a runtime WITHOUT shadow produces no shadow record, proving
+    /// the record in the test above came from `capture_shadow` (not some other
+    /// path). Uses the legacy `new` constructor (shadow disabled by default).
+    #[tokio::test]
+    async fn shadow_disabled_writes_no_shadow_record() -> Result<(), Box<dyn Error>> {
+        let tmp = tempfile::tempdir()?;
+        let store = ConductorStore::open(tmp.path().join("store"))?;
+        let install_key = InstallKey::load_or_create(&tmp.path().join("install.key"))?;
+        let runtime = ConductorRuntime::new(
+            StaticDirectPolicy,
+            RecipeSet::default(),
+            WorkerRegistry::m1(),
+            store,
+            install_key,
+            false,
+        );
+        assert!(!runtime.shadow_enabled());
+
+        let cmd = command("req-no-shadow", "a benign local prompt");
+        let ctx = turn_ctx("req-no-shadow");
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &AudioManager::new(),
+            events: &EventBus::new(),
+            playbacks: &PlaybackRegistry::new(),
+            agents: &crate::agents::AgentSessionRegistry::new(),
+            conductor: None,
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        let wire = route_turn(&runtime, &backends, &cmd, &ctx).await;
+        assert!(wire.is_ok());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let shadow_path = tmp.path().join("store").join("conductor_shadow.jsonl");
+        assert!(
+            !shadow_path.exists(),
+            "no shadow record when shadow is disabled"
+        );
+        Ok(())
+    }
+
+    /// V2: the shadow record's deployed decision is byte-equal to the decision
+    /// the live policy makes for the same context — because `ShadowRouter`
+    /// shares the runtime's policy `Arc` (anti-divergence, spec §2.2a).
+    #[tokio::test]
+    async fn shadow_deployed_decision_equals_executed_decision() -> Result<(), Box<dyn Error>> {
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder: CountingBuilder::new().0,
+            provider: CountingProvider::new(Vec::new()).0,
+            chain_enabled: false,
+        })?;
+        let ctx = turn_ctx("req-identity");
+        let cmd = command("req-identity", "benign");
+        let backends = runtime.backends();
+        let _ = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let executed = runtime.runtime.policy().decide(&ctx);
+        let records = shadow_records(&runtime);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].deployed_decision, executed,
+            "shadow deployed decision must equal the executed decision (shared Arc)"
+        );
+        Ok(())
+    }
+
+    /// V3: the event, receipt, and shadow record for one turn share an identical
+    /// F-4 `request_fingerprint` (computed once in `route_turn`, threaded to
+    /// every emitter — §2.1 lift).
+    #[tokio::test]
+    async fn telemetry_records_share_one_fingerprint() -> Result<(), Box<dyn Error>> {
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder: CountingBuilder::new().0,
+            provider: CountingProvider::new(Vec::new()).0,
+            chain_enabled: false,
+        })?;
+        let ctx = turn_ctx("req-join");
+        let cmd = command("req-join", "benign");
+        let backends = runtime.backends();
+        let _ = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let store_dir = runtime._tmp.path().join("store");
+        let read_first_fp = |file: &str| -> Option<String> {
+            let content = std::fs::read_to_string(store_dir.join(file)).unwrap_or_default();
+            content
+                .lines()
+                .next()
+                .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .and_then(|v| v.get("request_fingerprint")?.as_str().map(str::to_string))
+        };
+        let event_fp = read_first_fp("conductor_route_events.jsonl");
+        let receipt_fp = read_first_fp("conductor_receipts.jsonl");
+        let shadow_fp = shadow_records(&runtime)
+            .first()
+            .map(|r| r.request_fingerprint.0.clone());
+        assert!(event_fp.is_some(), "event written");
+        assert_eq!(
+            event_fp, receipt_fp,
+            "event + receipt share the fingerprint"
+        );
+        assert_eq!(
+            event_fp, shadow_fp,
+            "shadow record shares the fingerprint (one HMAC, threaded)"
+        );
+        Ok(())
+    }
+
+    /// V4b: routing signal honesty. A real local `conversation.inject_text` turn
+    /// is content-blind (task_class Unknown, empty feature_predicates), so
+    /// `match_corpus_entry` matches ZERO corpus entries (every entry carries
+    /// non-empty predicates that empty ctx predicates cannot satisfy). The
+    /// shadow record therefore carries `corpus_match = None`. This is the
+    /// degenerate-routing-accuracy state stated plainly in spec §2.5 — not a
+    /// defect; the plumbing is in place for when a classifier lands.
+    #[tokio::test]
+    async fn local_turn_corpus_match_is_none_no_routing_ground_truth() {
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder: CountingBuilder::new().0,
+            provider: CountingProvider::new(Vec::new()).0,
+            chain_enabled: false,
+        })
+        .expect("test runtime");
+        let ctx = turn_ctx("req-v4b");
+        let cmd = command("req-v4b", "benign");
+        let backends = runtime.backends();
+        let _ = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = shadow_records(&runtime);
+        assert_eq!(records.len(), 1);
+        assert!(
+            records[0].corpus_match.is_none(),
+            "content-blind local turn ⇒ no corpus match (§2.5): {:?}",
+            records[0].corpus_match
+        );
     }
 }

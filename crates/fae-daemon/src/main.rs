@@ -197,19 +197,24 @@ async fn main() -> DaemonResult<()> {
         // No recipes loaded in M1; nothing to warn about. The guard lives here
         // for M2/M3 to populate when recipe loading lands.
     }
-    let conductor_runtime = Arc::new(conductor::ConductorRuntime::new_with_egress(
-        conductor_policy,
-        conductor_recipes,
-        conductor_workers,
-        conductor_store,
-        install_key,
-        chain_enabled,
-        conductor_egress,
-    ));
+    let conductor_runtime = Arc::new(
+        conductor::ConductorRuntime::new_with_egress(
+            conductor_policy,
+            conductor_recipes,
+            conductor_workers,
+            conductor_store,
+            install_key,
+            chain_enabled,
+            conductor_egress,
+        )
+        .with_shadow(),
+    );
+    let shadow_enabled = conductor_runtime.shadow_enabled();
     println!(
-        "conductor: static-direct (mode {}, chain {}) — telemetry isolated",
+        "conductor: static-direct (mode {}, chain {}, shadow {}) — telemetry isolated",
         model_mode.as_str(),
-        if chain_enabled { "on" } else { "off" }
+        if chain_enabled { "on" } else { "off" },
+        if shadow_enabled { "on" } else { "off" }
     );
 
     // Optional TCP-loopback HTTP/WS diagnostic surface (opt-in, never default).

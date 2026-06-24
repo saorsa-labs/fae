@@ -57,6 +57,15 @@ impl ConductorStore {
         append_jsonl(&self.dir.join(RECEIPTS_FILE), receipt)
     }
 
+    /// Read all persisted receipts (the reward aggregator's outcome-metrics
+    /// window — M2-live §2.3). Missing file ⇒ empty (fresh store); a corrupt /
+    /// partial line is an error so the reward aggregator fails closed rather
+    /// than silently dropping outcome signal. Mirrors [`read_shadow_records`].
+    #[allow(dead_code)] // TODO(M2-live, 2026-06-24): used when reward_snapshot reads the window
+    pub(crate) fn read_receipts(&self) -> Result<Vec<RouteReceipt>, ConductorError> {
+        read_jsonl(&self.dir.join(RECEIPTS_FILE))
+    }
+
     /// Append one budget-governance usage row. The concrete row type lives in
     /// `budget.rs`; the store owns only the isolated JSONL persistence seam.
     #[allow(dead_code)] // TODO(M2, 2026-06-23): used when BudgetGovernor wires into executor

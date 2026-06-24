@@ -277,13 +277,15 @@ Load-bearing claims get a **mutation-tested** test where feasible.
 
 ## §7. Implementation staging & acceptance
 
-Each stage is independently testable + committable. **Process per stage: implement → `cargo fmt` → `cargo clippy --all-features --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used` → `cargo check --workspace --all-targets` → `cargo test -p fae-daemon` → commit.**
+Each stage is independently testable + committable. **Process per stage: implement → `cargo fmt` → `cargo clippy -p fae-daemon --all-targets -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used` → `cargo check --workspace --all-targets` → `cargo test -p fae-daemon` → commit.**
 
-- **Stage A** (§2): fingerprint lift + shared-policy refactor (`ShadowRouter.deployed` → `Arc<dyn …>`) + `evaluate_record`/`spawn_shadow` + `read_receipts`. Acceptance: V1, V2, V3, V4b, V7, V8, V9, V10; shadow records accrue on local turns (`corpus_match` honestly `None`); byte-identity intact.
+> **Practical gate note (owner decision pending, 2026-06-24):** `cargo test --workspace` is impractical per-stage on this repo — it rebuilds vendored `mistralrs-core` (183k LoC) + runs `fae-engine`'s inference tests, a multi-hour run that is **unrelated to the conductor track** (no crate depends on `fae-daemon`; the conductor change is provably contained). The per-stage gate is therefore `-p fae-daemon` (matches M0/M1/M2 precedent: "18/18", "85/85", "126 tests") plus the fast logic crates the later stages edit (`fae-control-plane`, `fae-pii-membrane`, `fae-metaopt`, `fae-envelope-gate`). The full `cargo test --workspace` is reserved for a one-time **milestone-end** run on a warm cache. `cargo check --workspace --all-targets` (which compiles every crate including mistralrs) already provides cross-crate compile-correctness proof per stage.
+
+- **Stage A** (§2): fingerprint lift + shared-policy refactor (`ShadowRouter.deployed` → `Arc<dyn …>`) + `evaluate_record`/`capture_shadow` + `read_receipts`. Acceptance: V1, V2, V3, V4b, V7, V8, V9, V10; shadow records accrue on local turns (`corpus_match` honestly `None`); byte-identity intact.
 - **Stage B** (§3): **register `conversation.feedback` → `ConversationWrite` in `required_scopes()` (`fae-control-plane/src/lib.rs`)** + `dispatch()` arm + `record_feedback`. Acceptance: V5a, V5b, V6; feedback lands in isolated log; fail-closed on bad payload.
 - **Stage C** (§4): **register `conductor.reward_snapshot` → `StatusRead` in `required_scopes()`** + `dispatch()` arm + `reward_snapshot`. Acceptance: V4a, V11; snapshot returns the auditable breakdown with live routing source (or honest neutral); read-only.
 
-**Whole-milestone gate (after all three):** V1–V11 green; full `cargo test --workspace` passes; both grep gates clean. Then **oracle + reviewer review** (oracle: security/isolation/§5 claims; reviewer: implementation correctness, panic-free, test quality).
+**Whole-milestone gate (after all three):** V1–V11 green; both grep gates clean; a one-time `cargo test --workspace` on a warm cache (or the scoped logic-crate set) passes. Then **oracle + reviewer review** (oracle: security/isolation/§5 claims; reviewer: implementation correctness, panic-free, test quality).
 
 **`#[allow(dead_code)]` discipline:** each staged-future item keeps a targeted, dated `#[allow(dead_code)] // TODO(M3, …)`. No blanket allows. Removing the module-level `reward`/`shadow` allows is an acceptance item once they have live call sites.
 

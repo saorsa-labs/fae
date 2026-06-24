@@ -9,15 +9,18 @@
 //! config default that could be flipped; it is structural in the precise sense
 //! that matters for egress safety:
 //!
-//! - [`ShadowRouter`] holds only [`Box<dyn ConductorRoutingPolicy>`] (a trait
+//! - [`ShadowRouter`] holds only [`Arc<dyn ConductorRoutingPolicy>`] (a trait
 //!   whose sole method [`decide`](ConductorRoutingPolicy::decide) returns an
-//!   [`OwnedRouteDecision`]) and a [`ConductorStore`] (an isolated append-only
-//!   log). There is **no field** of type `CloudProvider`, `AcpAgentRunner`,
-//!   `CloudRequestBuilder`, or any other egress handle. The executor's egress
-//!   seams are simply not in scope, so `evaluate` cannot call them.
-//! - [`ShadowRouter::evaluate`] computes decisions via `policy.decide(ctx)` and
-//!   writes a [`ShadowTurnRecord`] to the isolated store. It never calls the
-//!   executor, never constructs a provider request, never spawns an agent.
+//!   [`OwnedRouteDecision`]) and a [`Vec<NamedPolicy>`]. There is **no field**
+//!   of type `CloudProvider`, `AcpAgentRunner`, `CloudRequestBuilder`, or any
+//!   other egress handle. The executor's egress seams are simply not in scope,
+//!   so `evaluate`/`evaluate_record` cannot call them.
+//! - [`ShadowRouter::evaluate_record`] computes decisions via
+//!   `policy.decide(ctx)` and returns a [`ShadowTurnRecord`] **purely** — no
+//!   I/O. The live loop appends the record to the isolated store off the hot
+//!   path via `spawn_blocking` ([`ShadowRouter::evaluate`] keeps the old
+//!   synchronous append signature for unit tests). Neither ever calls the
+//!   executor, constructs a provider request, or spawns an agent.
 //!
 //! ## Honest scope of the claim
 //!
@@ -47,6 +50,8 @@
 //! ADR-008a-gated). The shadow router flags; it does not promote.
 //!
 //! [`is_improvement`]: crate::conductor::eval::is_improvement
+
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -103,16 +108,25 @@ fn match_corpus_entry<'a>(
 }
 
 /// The shadow router. Holds the deployed policy + candidate policies. **Holds no
-/// egress handle** (see module docs). Cheap to clone is NOT supported — policies
-/// are `Box<dyn>`; construct one per evaluation scope.
+/// egress handle** (see module docs). Not `Clone` — policies are `Arc<dyn>` /
+/// `Box<dyn>`; construct one per evaluation scope.
+///
+/// *M2-live §2.2a:* `deployed` is [`Arc<dyn ConductorRoutingPolicy>`] so the
+/// live [`crate::conductor::executor::ConductorRuntime`] can share the **same**
+/// policy object with the shadow baseline (an `Arc::clone`), guaranteeing the
+/// shadow "deployed decision" is byte-equal to the actually-executed decision —
+/// no two policy objects that could drift. In-tree this is currently moot
+/// (`StaticDirectPolicy` is stateless), but the invariant is load-bearing once
+/// M3 swaps policies.
 pub struct ShadowRouter {
-    deployed: Box<dyn ConductorRoutingPolicy>,
+    deployed: Arc<dyn ConductorRoutingPolicy>,
     candidates: Vec<NamedPolicy>,
 }
 
 impl ShadowRouter {
-    /// Construct with a deployed policy and zero or more candidates.
-    pub fn new(deployed: Box<dyn ConductorRoutingPolicy>, candidates: Vec<NamedPolicy>) -> Self {
+    /// Construct with a deployed policy and zero or more candidates. The
+    /// deployed policy is shared (by `Arc::clone`) with the live runtime.
+    pub fn new(deployed: Arc<dyn ConductorRoutingPolicy>, candidates: Vec<NamedPolicy>) -> Self {
         Self {
             deployed,
             candidates,
@@ -158,9 +172,12 @@ impl ShadowRouter {
         (deployed_score, flagged)
     }
 
-    /// Evaluate one turn: compute the deployed + candidate decisions (decision
-    /// only — **none executed**), score against the corpus if it matches, and
-    /// append a [`ShadowTurnRecord`] to the isolated store. Returns the record.
+    /// Evaluate one turn **purely**: compute the deployed + candidate decisions
+    /// (decision only — **none executed**), score against the corpus if it
+    /// matches, and return a [`ShadowTurnRecord`]. **No I/O** — does not touch
+    /// the store. The live loop appends the returned record off the hot path
+    /// via `spawn_blocking` (M2-live §2.2b: no synchronous file I/O on the
+    /// turn path).
     ///
     /// `request_fingerprint` is the **executor's authoritative F-4 fingerprint**
     /// (HMAC of the opaque request_id), passed in by the live loop so shadow
@@ -170,14 +187,13 @@ impl ShadowRouter {
     ///
     /// **This is the no-egress proof point.** Only `policy.decide()` is called
     /// (pure). No executor, no provider, no agent runner.
-    pub fn evaluate(
+    pub fn evaluate_record(
         &self,
         ctx: &ConductorTurnContext,
         request_fingerprint: RequestFingerprint,
         corpus: Option<&Corpus>,
-        store: &ConductorStore,
         timestamp_ms: u64,
-    ) -> Result<ShadowTurnRecord, crate::conductor::error::ConductorError> {
+    ) -> ShadowTurnRecord {
         let deployed_decision = self.deployed.decide(ctx);
         let corpus_match = corpus.and_then(|c| match_corpus_entry(c, ctx));
         let deployed_matched_ideal = corpus_match
@@ -200,7 +216,7 @@ impl ShadowRouter {
             })
             .collect();
 
-        let record = ShadowTurnRecord {
+        ShadowTurnRecord {
             request_fingerprint,
             deployed_decision,
             deployed_matched_ideal,
@@ -210,7 +226,23 @@ impl ShadowRouter {
                 entry_id: entry.id.clone(),
             }),
             timestamp_ms,
-        };
+        }
+    }
+
+    /// Evaluate one turn and **synchronously** append the record to the isolated
+    /// store. Convenience wrapper around [`evaluate_record`] for unit tests; the
+    /// **live loop does not call this** (it uses `evaluate_record` + an off-path
+    /// `spawn_blocking` append, so the turn path never blocks on the store —
+    /// M2-live §2.2b / V8).
+    pub fn evaluate(
+        &self,
+        ctx: &ConductorTurnContext,
+        request_fingerprint: RequestFingerprint,
+        corpus: Option<&Corpus>,
+        store: &ConductorStore,
+        timestamp_ms: u64,
+    ) -> Result<ShadowTurnRecord, crate::conductor::error::ConductorError> {
+        let record = self.evaluate_record(ctx, request_fingerprint, corpus, timestamp_ms);
         store.append_shadow_record(&record)?;
         Ok(record)
     }
@@ -298,7 +330,7 @@ mod tests {
     fn shadow_evaluation_records_deployed_and_candidate_decisions() {
         let store = tmp_store();
         let router = ShadowRouter::new(
-            Box::new(FixedPolicy {
+            Arc::new(FixedPolicy {
                 worker_id: "local-model",
                 topology: ConductorTopology::Direct,
             }),
@@ -324,7 +356,7 @@ mod tests {
     fn score_policies_uses_corpus() {
         let corpus = Corpus::synthetic_core().expect("synthetic corpus");
         let router = ShadowRouter::new(
-            Box::new(StaticDirectPolicy),
+            Arc::new(StaticDirectPolicy),
             vec![NamedPolicy::new(
                 "same-as-deployed",
                 Box::new(StaticDirectPolicy),
@@ -345,7 +377,7 @@ mod tests {
         // A candidate identical to deployed cannot be an improvement (F-12).
         let corpus = Corpus::synthetic_core().expect("synthetic corpus");
         let router = ShadowRouter::new(
-            Box::new(StaticDirectPolicy),
+            Arc::new(StaticDirectPolicy),
             vec![NamedPolicy::new("twin", Box::new(StaticDirectPolicy))],
         );
         let (_deployed, flagged) = router.flag_promotion_candidates(&corpus);
@@ -375,7 +407,7 @@ mod tests {
         // pure policy produces records with zero side effects beyond the store.
         let store = tmp_store();
         let router = ShadowRouter::new(
-            Box::new(FixedPolicy {
+            Arc::new(FixedPolicy {
                 worker_id: "local-model",
                 topology: ConductorTopology::Direct,
             }),
