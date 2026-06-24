@@ -5,7 +5,7 @@
 | [000](000-adopt-architecture-decision-records.md) | Adopt Architecture Decision Records | Accepted (meta) | 2026-02-10 |
 | [001](001-cascaded-voice-pipeline.md) | Cascaded Voice Pipeline | **Superseded** (S18 + ADR-010/011) | 2026-02-10 |
 | [002](002-embedded-rust-core.md) | Embedded Rust Core | **Superseded** (C-ABI mode only; Rust core canonical per ADR-011) | 2026-02-11 |
-| [003](003-local-llm-inference.md) | Local-Only LLM Inference | Accepted (evolved) | 2026-02-13 |
+| [003](003-local-llm-inference.md) | Local-**First** LLM Inference (reframed; was "Local-Only") | Accepted (evolved; see 012) | 2026-02-13 |
 | [004](004-fae-identity-and-personality.md) | Fae Identity and Personality | Accepted | 2026-02-10 |
 | [005](005-self-modification-safety.md) | Self-Modification Safety | Accepted (conceptual) | 2026-02-21 |
 | [006](006-voice-privilege-escalation.md) | Voice Privilege Escalation | **Superseded** (voice identity retired, S18) | 2026-02-23 |
@@ -15,6 +15,7 @@
 | [009](009-rust-orb-ui-shell.md) | Rust Orb UI Shell as Canonical Fae UI | Accepted | 2026-06-11 |
 | [010](010-llamacpp-sidecar-vs-inprocess.md) | llama.cpp via `llama-server` Sidecar, not In-Process FFI | Accepted | 2026-06-18 |
 | [011](011-headless-rust-core-runtime.md) | Headless Rust Core as Canonical Runtime | Accepted | 2026-06-22 |
+| [012](012-local-first-coordinator-of-external-ais.md) | Fae as Local-First Coordinator of External AIs ("Head Butler") | Accepted | 2026-06-24 |
 
 ## Conventions
 
@@ -37,3 +38,4 @@
 - ADR-008 documents the AutoAgent-inspired meta-optimization system added 2026-04-05. Its autonomous-mutation scope is extended to a Rust-side `conductorRecipe` surface by [ADR-008a](008a-conductor-recipe-surface-amendment.md) — **Accepted (Amendment) 2026-06-23**. The amendment authorizes a 5th `MetaOptSurface` (recipe mutation) gated on enforceable, two-layer runtime constraints (no privacy-lane widening, no budget-cap override above the provisioned ceiling, no ADR-gated lanes/topologies, no `ModelMode` override).
 - ADR-009 makes the Rust orb UI shell (`tao` + `wgpu` + `muda` + `wry`) the canonical UI.
 - ADR-010 fixes the llama.cpp integration as a prebuilt `llama-server` sidecar (not in-process FFI bindings) behind the `ProviderAdapter` seam; in-process is the deferred iOS path.
+- **ADR-012 (2026-06-24) is the foundational identity decision: Fae is a local-first _coordinator_ ("head butler") of external AIs** — local Gemma brain by default, dispatching to cloud APIs / ACP agents / mesh peers across a trust gradient. Three load-bearing principles: (1) the **PII membrane** (`fae-pii-membrane`) filters every egress per-call; (2) **provisioning** (adding an API key / installing an agent) is standing consent; (3) **compartmentalization** — the integrated/durable memory lives only on-device and **only Fae sees the whole**; collaborators get task-scoped slices, never the whole picture. It reframes ADR-003 from local-_only_ to local-_first_, and records that security rests on the membrane + compartmentalization + `DamageControlPolicy` (ADR-005), not voice identity (ADR-006, superseded).

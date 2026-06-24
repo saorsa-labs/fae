@@ -1,10 +1,20 @@
-# ADR-003: Local-Only LLM Inference
+# ADR-003: Local-First LLM Inference
 
-**Status:** Accepted (implementation evolved)
+**Status:** Accepted (evolved — **local-FIRST, not local-only**; see ADR-012)
 **Date:** 2026-02-13
-**Scope:** Local-only LLM inference — originally Rust/ONNX (`src/llm/`), now Swift/MLX (`Sources/FaeInference/`, `Sources/Fae/Core/FaeConfig.swift`)
+**Scope:** On-device LLM inference (the default brain)
 
-> The core decision (local-only, no API keys, privacy-first) remains active and implemented.
+> **Reframed 2026-06-24 (ADR-012): local-FIRST, not local-only.** The original
+> decision below — "Fae runs exclusively on local models, no API keys, no data leaves
+> the device" — is **superseded in stance**. Fae's *default* brain is the on-device
+> model (privacy-first by default), but per **ADR-012** Fae is a **coordinator** that
+> also dispatches to external AIs (cloud APIs, ACP agents, mesh peers) when the user
+> has provisioned them. External use is made safe by the **PII membrane**
+> (`fae-pii-membrane`), not by prohibition. What remains unchanged: the on-device model
+> is the default and requires no API keys, and nothing egresses without passing the
+> membrane. This ADR is kept for its model-selection + hardware-ceiling rationale,
+> which is still accurate for the local lane.
+>
 > Implementation changed from Rust/mistralrs/ONNX to Swift/MLX. Models evolved from Qwen3 to Qwen3.5, with Gemma 4 migration pending.
 >
 > **Update 2026-06-11 (Great Cleanup / orb-first):** the primary inference lane is now the
@@ -16,7 +26,7 @@
 
 ## Context
 
-Fae's core promise is privacy — all intelligence runs on the user's Mac with no remote servers. The LLM backend must support:
+Fae's core promise is privacy. The **on-device model is the default brain** and runs with no remote servers or API keys; external models are coordinated only when provisioned and only through the PII membrane (ADR-012). The local LLM backend must support:
 
 - Correct, thorough responses that leverage tools (memory, web search, file ops) before answering
 - Tool calling for all tasks (calendar, search, reminders, file management)
@@ -36,9 +46,9 @@ Apple Silicon Macs have unified memory shared between CPU and GPU. Available RAM
 
 ## Decision
 
-### Local-only inference
+### Local-first inference
 
-Fae runs exclusively on local models via `mistralrs` with Metal acceleration on Apple Silicon. No API keys or remote servers required. The `LlmBackend` config only accepts `"local"`.
+The **default** brain runs on local models via `mistralrs` (Metal on Apple Silicon) / the llama.cpp sidecar — no API keys or remote servers required for the default path. External models (cloud APIs, ACP agents, mesh peers) are dispatched by the coordinator only when the user has provisioned them, and only through the PII membrane (ADR-012). *(Historical: the original `LlmBackend` accepted only `"local"`; that local-only constraint is superseded by ADR-012.)*
 
 ### Dual-channel architecture
 
@@ -105,8 +115,8 @@ Defaults scale with system RAM:
 
 ### Positive
 
-- **Complete privacy** — no data leaves the device
-- **No API costs** — runs entirely on hardware the user already owns
+- **Privacy by default** — on the default local path no data leaves the device; any external dispatch is provisioned + PII-gated (ADR-012)
+- **No API costs by default** — the local brain runs on hardware the user already owns; cloud costs only when the user provisions a paid model, under the D2 budget caps
 - **Dual-channel** keeps voice responsive while enabling tool-heavy background work
 - **Automatic scaling** — model and context window adapt to hardware
 
