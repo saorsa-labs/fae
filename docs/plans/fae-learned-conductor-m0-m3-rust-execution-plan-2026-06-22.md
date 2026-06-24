@@ -134,11 +134,12 @@
 - [x] **MetaOpt primitive ported** (commit `5b9275a3`, merged `750a4a4a`): `crates/fae-metaopt/` (~1500 lines). 4 existing surfaces (Directive/ConfigKnob/Skill/MemorySeed), hill-climbing loop, 6 trait seams, 3 intentional hardening points. Reviewer pass MERGE-READY (0 BLOCKER/MAJOR). Dormant + unwired. **NO ConductorRecipe variant** (now ADR-008a-authorized; lands in M3).
 
 **Spec:**
-- [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (swap worker, direct↔chain, add/remove Verifier, mutate role prompt, adjust budget)
-- [ ] Apply/rollback transactional; narrator copy (no router jargon)
-- [ ] **F-15:** `FaeConductorRecipe` runtime-asserts against `star`/`debate`
-- [ ] **F-16:** SOUL-drift proxy metric + periodic review trigger
-- [ ] **G-M3-spec review: `oracle`** — ADR-008 amendment, rollback, protected-kernel
+- [x] **M3 spec — v5 PASSED** (`f3a1ed70`; G-M3-spec review run `d89f3738`, 2026-06-24). Five review rounds (v1→v5) folded 1 BLOCKER + 7 MAJOR + 1 NEW-MAJOR. The BLOCKER was real: `MetaOptimizer::apply_change`'s ConfigAdjustment path wrote unbounded config keys verbatim, so `FAE_MODEL_MODE` was reachable today — closed via `is_protected_config_key()` denylist with separator canonicalization. Design: dormant/offline/CLI-only; recipe-is-data-not-code; two-layer enforcement (Layer 1 validator + Layer 2 M2 §5 gates); `ConductorRecipePatch` (5 operators, `SwitchTopology` carries `chain_slots` for direct→chain construction) in `fae-metaopt`; `DaemonConductorRecipePort` adapter in `fae-daemon`; CAS apply/rollback (no TOCTOU); §5 prompt lint (incl. `no_tool_authority_expansion`); F-16 SOUL-drift (local-only held-out corpus + deterministic lint, model advisory-only). Spec at `docs/architecture/conductor-m3-metaopt-recipe-mutation-spec-2026-06-24.md`.
+- [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (per v5 spec §1.1, §2)
+- [ ] Apply/rollback transactional with CAS (v5 spec §2.2, §4); narrator copy (no router jargon)
+- [ ] **F-15:** `FaeConductorRecipe` runtime-asserts against `star`/`debate` (already compile-time-unreachable; serde deny_unknown_fields on DTOs)
+- [ ] **F-16:** SOUL-drift proxy metric + periodic review trigger (v5 spec §6)
+- [x] **G-M3-spec review: `oracle`** — **PASSED v5** (run `d89f3738`). 5 rounds: v1 FAIL (1 BLOCKER + 7 MAJOR), v2 FAIL (5 closed, 2 open + 1 new), v3 FAIL (MAJOR-3 closed, MAJOR-2 too-broad + TOCTOU), v4 FAIL (MAJOR-2 closed via fold, §4 contradiction), v5 PASS. All 9 findings closed.
 
 **Impl:**
 - [ ] MetaOpt recipe mutation (Rust-native or bridged per decision)
