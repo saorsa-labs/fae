@@ -980,6 +980,137 @@ impl ConductorRuntime {
         self.store.append_feedback(&record)
     }
 
+    /// M2-live §4.2: advisory reward snapshot. Read-only — joins three isolated-
+    /// store reads (receipts + shadow + feedback) and returns the auditable
+    /// breakdown. Constructs no provider request, spawns no agent, writes
+    /// nothing. `window_turns` is clamped to `>= 1`.
+    #[allow(clippy::too_many_lines)] // join logic reads best linearly
+    pub(crate) fn reward_snapshot(
+        &self,
+        window_turns: usize,
+    ) -> Result<crate::conductor::reward::RewardSnapshot, crate::conductor::error::ConductorError>
+    {
+        use std::collections::{BTreeMap, HashSet};
+
+        use crate::conductor::eval::{RoutingScore, RoutingScorer};
+        use crate::conductor::reward::{
+            aggregate_reward, OutcomeMetrics, RewardRoutingSource, RewardSignals, RewardSnapshot,
+            RewardSnapshotBaseline, RewardSnapshotWindow,
+        };
+        use crate::conductor::telemetry::{RouteReceipt, ShadowTurnRecord};
+
+        // 1. Receipts window — trailing-N by timestamp_ms (ascending).
+        let mut receipts = self.store.read_receipts()?;
+        receipts.sort_by_key(|r| r.timestamp_ms);
+        let window_turns = window_turns.max(1);
+        let start = receipts.len().saturating_sub(window_turns);
+        let window: Vec<RouteReceipt> = receipts[start..].to_vec();
+        let window_fps: HashSet<RequestFingerprint> = window
+            .iter()
+            .map(|r| r.request_fingerprint.clone())
+            .collect();
+
+        // 2. Outcome metrics (fully real).
+        let outcome = OutcomeMetrics::from_receipts(&window);
+
+        // 3. User signals — join feedback to the window on request_fingerprint.
+        let feedback = self.store.read_feedback()?;
+        let user_signals: Vec<crate::conductor::telemetry::UserSignal> = feedback
+            .iter()
+            .filter(|f| window_fps.contains(&f.request_fingerprint))
+            .map(|f| f.signal)
+            .collect();
+
+        // 4. Routing — LIVE shadow window (not the static corpus re-score).
+        let shadow = self.store.read_shadow_records()?;
+        let window_shadow: Vec<&ShadowTurnRecord> = shadow
+            .iter()
+            .filter(|s| window_fps.contains(&s.request_fingerprint))
+            .collect();
+        let corpus_matches = window_shadow
+            .iter()
+            .filter(|s| s.corpus_match.is_some())
+            .count();
+        let matched = corpus_matches;
+        let correct = window_shadow
+            .iter()
+            .filter(|s| s.corpus_match.is_some() && s.deployed_matched_ideal)
+            .count();
+        let corpus_version = self
+            .corpus
+            .as_ref()
+            .map(|c| c.corpus_version.clone())
+            .unwrap_or_default();
+
+        let (routing_accuracy, routing_source) = if matched >= 1 {
+            (
+                (correct as f64) / (matched as f64),
+                RewardRoutingSource::LiveShadow,
+            )
+        } else {
+            // Neutral: 0.5 → routing_accuracy_component maps to 0.0. Honest
+            // default — the common case until a classifier lands (§2.5).
+            (0.5, RewardRoutingSource::NeutralNoGroundTruth)
+        };
+
+        // MINOR-2 guardrail: synthesized score with EMPTY case_outcomes — valid
+        // only as input to aggregate_reward's routing component (reads
+        // routing_accuracy alone). NEVER pass to is_improvement() (F-12 N=0).
+        let live_score = RoutingScore {
+            corpus_version: corpus_version.clone(),
+            sample_size: u64::try_from(matched).unwrap_or(u64::MAX),
+            correct_routes: u64::try_from(correct).unwrap_or(u64::MAX),
+            routing_accuracy,
+            dimensions: BTreeMap::new(),
+            case_outcomes: Vec::new(),
+        };
+
+        // 6. Aggregate (self_judgment: None — F-10 honest; the snapshot surface
+        // never injects model self-judgment).
+        let reward = aggregate_reward(&RewardSignals {
+            routing_score: &live_score,
+            user_signal: &user_signals,
+            outcome_metrics: &outcome,
+            self_judgment: None,
+        });
+
+        Ok(RewardSnapshot {
+            score: reward.score,
+            self_judgment_was_capped: reward.self_judgment_was_capped,
+            components: reward.components,
+            routing_source,
+            window: RewardSnapshotWindow {
+                turns: outcome.turns,
+                feedback_count: u64::try_from(user_signals.len()).unwrap_or(u64::MAX),
+                shadow_records: u64::try_from(window_shadow.len()).unwrap_or(u64::MAX),
+                corpus_matches: u64::try_from(corpus_matches).unwrap_or(u64::MAX),
+                corpus_version,
+            },
+            baseline: RewardSnapshotBaseline {
+                static_corpus_routing_accuracy: self.static_corpus_routing_accuracy(),
+            },
+        })
+    }
+
+    /// §4.2 step 5 baseline: static corpus routing accuracy of the deployed
+    /// policy. Uses the startup-cached corpus; if shadow was never enabled
+    /// (corpus `None`) re-parses the embedded synthetic core (advisory,
+    /// low-frequency). Metadata only — NOT the live reward input. On the
+    /// unreachable parse failure (the embedded corpus is tested) returns `0.0`.
+    fn static_corpus_routing_accuracy(&self) -> f64 {
+        use crate::conductor::eval::RoutingScorer;
+        if let Some(corpus) = self.corpus.as_ref() {
+            return RoutingScorer::score(corpus, self.policy.as_ref()).routing_accuracy;
+        }
+        match Corpus::synthetic_core() {
+            Ok(corpus) => RoutingScorer::score(&corpus, self.policy.as_ref()).routing_accuracy,
+            Err(error) => {
+                tracing::warn!("conductor baseline corpus parse failed: {error}");
+                0.0
+            }
+        }
+    }
+
     fn spawn_telemetry<F>(&self, work: F)
     where
         F: FnOnce(&ConductorStore) + Send + 'static,
@@ -2211,6 +2342,151 @@ mod tests {
             records[0].corpus_match.is_none(),
             "content-blind local turn ⇒ no corpus match (§2.5): {:?}",
             records[0].corpus_match
+        );
+    }
+
+    // ── M2-live Stage C (§4): conductor.reward_snapshot ──
+
+    // V4a — F-10 holds on the snapshot surface: an empty window (no turns, no
+    // feedback, no self-judgment) ⇒ every component is 0.0, score 0.0. The
+    // snapshot surface never injects self-judgment, so score tracks only the
+    // real (empty) inputs. routing_source is honest neutral (no ground truth).
+    #[tokio::test]
+    async fn snapshot_empty_window_is_neutral_zero() {
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder: CountingBuilder::new().0,
+            provider: CountingProvider::new(Vec::new()).0,
+            chain_enabled: false,
+        })
+        .expect("test runtime");
+        let snap = runtime.runtime.reward_snapshot(100).expect("snapshot");
+        assert!(
+            snap.score.abs() < 1e-9,
+            "empty window ⇒ score 0 (got {})",
+            snap.score
+        );
+        assert_eq!(snap.window.turns, 0);
+        assert_eq!(snap.window.feedback_count, 0);
+        assert_eq!(snap.window.shadow_records, 0);
+        assert_eq!(snap.window.corpus_matches, 0);
+        assert_eq!(
+            snap.routing_source,
+            crate::conductor::RewardRoutingSource::NeutralNoGroundTruth
+        );
+        // F-10: self-judgment never inflates the snapshot (None injected).
+        assert!(snap.components.self_judgment.abs() < 1e-9);
+        assert!(
+            snap.components.routing.abs() < 1e-9,
+            "neutral routing ⇒ 0.0"
+        );
+        assert!(!snap.self_judgment_was_capped);
+    }
+
+    // V4b-snapshot: a real content-blind local turn ⇒ the shadow record's
+    // corpus_match is None (V4b) ⇒ the snapshot reports routing_source ==
+    // NeutralNoGroundTruth and routing component 0.0. Connects the shadow
+    // honesty to the snapshot surface.
+    #[tokio::test]
+    async fn snapshot_after_local_turn_reports_neutral_routing() {
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder: CountingBuilder::new().0,
+            provider: CountingProvider::new(Vec::new()).0,
+            chain_enabled: false,
+        })
+        .expect("test runtime");
+        let ctx = turn_ctx("req-snap");
+        let cmd = command("req-snap", "benign");
+        let backends = runtime.backends();
+        let _ = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let snap = runtime.runtime.reward_snapshot(100).expect("snapshot");
+        assert_eq!(snap.window.turns, 1, "one receipt in window");
+        assert_eq!(snap.window.shadow_records, 1, "one shadow record joined");
+        assert_eq!(snap.window.corpus_matches, 0, "content-blind ⇒ no match");
+        assert_eq!(
+            snap.routing_source,
+            crate::conductor::RewardRoutingSource::NeutralNoGroundTruth
+        );
+        assert!(snap.components.routing.abs() < 1e-9, "neutral ⇒ 0.0");
+        // F-4: no raw request id leaked into the serialized snapshot.
+        let json = serde_json::to_string(&snap).expect("serialize in test");
+        assert!(
+            !json.contains("req-snap"),
+            "no raw request_id in snapshot json"
+        );
+    }
+
+    // V11 — read-only: the snapshot constructs no provider request, writes
+    // nothing to the store. Pinned by capturing the provider counter and the
+    // store file sizes before/after the snapshot.
+    #[tokio::test]
+    async fn snapshot_is_read_only_no_provider_no_write() {
+        use std::fs;
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder: CountingBuilder::new().0,
+            provider,
+            chain_enabled: false,
+        })
+        .expect("test runtime");
+        // Drive one turn so the store has rows to read.
+        let ctx = turn_ctx("req-ro");
+        let cmd = command("req-ro", "benign");
+        let backends = runtime.backends();
+        let _ = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let provider_before = provider_calls.load(Ordering::SeqCst);
+        assert_eq!(provider_before, 0, "pure-local turn made no provider call");
+
+        // Capture store file sizes before the snapshot.
+        let store_dir = runtime._tmp.path().join("store");
+        let size = |file: &str| {
+            fs::metadata(store_dir.join(file))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        };
+        let receipts_before = size("conductor_receipts.jsonl");
+        let shadow_before = size("conductor_shadow.jsonl");
+        let feedback_before = size("conductor_feedback.jsonl");
+
+        let _snap = runtime.runtime.reward_snapshot(100).expect("snapshot");
+
+        // V11: no provider call, no store write (sizes unchanged).
+        assert_eq!(
+            provider_calls.load(Ordering::SeqCst),
+            0,
+            "snapshot made no provider call"
+        );
+        assert_eq!(
+            size("conductor_receipts.jsonl"),
+            receipts_before,
+            "snapshot wrote no receipt"
+        );
+        assert_eq!(
+            size("conductor_shadow.jsonl"),
+            shadow_before,
+            "snapshot wrote no shadow record"
+        );
+        assert_eq!(
+            size("conductor_feedback.jsonl"),
+            feedback_before,
+            "snapshot wrote no feedback"
         );
     }
 }

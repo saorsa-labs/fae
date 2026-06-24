@@ -458,6 +458,9 @@ async fn dispatch(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResul
         // M2-live §3: explicit user-feedback signal (payload-based). Requires
         // the conductor runtime (InstallKey + isolated ConductorStore).
         "conversation.feedback" => record_feedback(backends, cmd).await,
+        // M2-live §4: advisory reward snapshot (read-only; joins three isolated
+        // reads). StatusRead-scoped aggregate — no conversation content.
+        "conductor.reward_snapshot" => conductor_reward_snapshot(backends, cmd).await,
         "audio.transcribe_fallback" => transcribe_fallback(backends, cmd).await.map_err(Into::into),
         // Open this connection's server-push event stream (voice spine V2). The
         // ack is the signal the transport uses to register the connection's sink
@@ -1614,6 +1617,49 @@ async fn record_feedback(backends: &SessionBackends<'_>, cmd: &Command) -> Comma
             CommandFailure::from("feedback_store_failed")
         })?;
     Ok(serde_json::json!({ "recorded": true }))
+}
+
+/// M2-live §4.1: payload for `conductor.reward_snapshot`. Strict —
+/// `#[serde(deny_unknown_fields)]` accepts **only** `window_turns`
+/// (optional, default 100). An empty/null payload is accepted (defaults).
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RewardSnapshotPayload {
+    #[serde(default)]
+    window_turns: Option<usize>,
+}
+
+/// M2-live §4: advisory reward snapshot. Read-only — joins three isolated-store
+/// reads via `ConductorRuntime::reward_snapshot`. Constructs no provider
+/// request, spawns no agent, writes nothing.
+async fn conductor_reward_snapshot(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let runtime = match backends.conductor {
+        Some(rt) => rt,
+        None => return Err(CommandFailure::from("snapshot_requires_conductor")),
+    };
+    // Null/empty payload ⇒ defaults (window_turns = 100); otherwise strict
+    // deny_unknown_fields. Unknown key ⇒ unknown_field.
+    let payload: RewardSnapshotPayload = if cmd.payload.is_null() {
+        RewardSnapshotPayload::default()
+    } else {
+        match serde_json::from_value(cmd.payload.clone()) {
+            Ok(p) => p,
+            Err(err) => {
+                let code = if err.to_string().contains("unknown field") {
+                    "unknown_field"
+                } else {
+                    "invalid_snapshot_payload"
+                };
+                return Err(CommandFailure::from(code));
+            }
+        }
+    };
+    let window_turns = payload.window_turns.unwrap_or(100);
+    let snapshot = runtime.reward_snapshot(window_turns).map_err(|err| {
+        tracing::warn!("conductor reward snapshot failed: {err}");
+        CommandFailure::from("snapshot_failed")
+    })?;
+    serde_json::to_value(&snapshot).map_err(|_| CommandFailure::from("snapshot_serialize_failed"))
 }
 
 /// Core conversation turn: FAE_DUMP → parse → `assistant.generating` event

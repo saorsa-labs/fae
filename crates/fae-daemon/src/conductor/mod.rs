@@ -60,11 +60,16 @@ pub mod policy;
 pub mod pricing;
 pub mod prompts;
 pub mod recipe;
-/// M2 reward aggregator (spec §7). Landed dormant + test-covered. **Capture is
-/// NOT yet wired** (Stage C of the M2-live-wiring milestone wires
-/// `reward_snapshot` over the live window); the self-judgment-advisory-only
-/// invariant (F-10) is structurally enforced + mutation-tested regardless.
-#[allow(dead_code)] // TODO(M2-live, 2026-06-24): Stage C wires the reward snapshot read
+/// M2 reward aggregator (spec §7). **Capture is wired** (Stage A
+/// `route_turn` → `capture_shadow`) and **the reward is now consumable**
+/// (Stage C `ConductorRuntime::reward_snapshot` joins the live window and
+/// calls `aggregate_reward`). The self-judgment-advisory-only invariant (F-10)
+/// is structurally enforced + mutation-tested regardless.
+// Stage C (2026-06-24) wired reward_snapshot → aggregate_reward has live
+// call sites now. The module-level allow remains for SelfJudgment::new (model
+// self-judgment injection is a future milestone; the snapshot surface passes
+// self_judgment: None — F-10 honest).
+#[allow(dead_code)]
 pub mod reward;
 /// M2 shadow router (spec §8). Decision-only + structurally no-egress (holds
 /// no CloudProvider/AcpAgentRunner handle). **Per-turn shadow *capture* is now
@@ -98,7 +103,8 @@ pub use recipe::{
     StopPolicy, WorkerLocality, WorkerSelector,
 };
 pub use reward::{
-    aggregate_reward, OutcomeMetrics, Reward, RewardComponents, RewardSignals, SelfJudgment,
+    aggregate_reward, OutcomeMetrics, Reward, RewardComponents, RewardRoutingSource, RewardSignals,
+    RewardSnapshot, RewardSnapshotBaseline, RewardSnapshotWindow, SelfJudgment,
 };
 pub use shadow::{NamedPolicy, PromotionCandidate, ShadowRouter};
 pub use store::ConductorStore;

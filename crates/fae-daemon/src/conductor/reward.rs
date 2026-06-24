@@ -177,6 +177,60 @@ pub struct Reward {
     pub self_judgment_was_capped: bool,
 }
 
+// ── M2-live §4: advisory reward snapshot (read-only response surface) ──
+//
+// Returned by `ConductorRuntime::reward_snapshot`. Carries aggregates +
+// fingerprints + enum tokens only (no user text) — observation, not egress.
+
+/// How the routing component of a snapshot was derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewardRoutingSource {
+    /// `>= 1` shadow record in the window matched the corpus ⇒ routing
+    /// component is a live accuracy derived from the window.
+    LiveShadow,
+    /// Zero shadow matches ⇒ no routing ground truth; routing component is `0.0`
+    /// (neutral). The common case until a content-aware classifier lands (§2.5).
+    NeutralNoGroundTruth,
+}
+
+/// The scored window's row counts (audit context for a snapshot).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewardSnapshotWindow {
+    pub turns: u64,
+    pub feedback_count: u64,
+    pub shadow_records: u64,
+    pub corpus_matches: u64,
+    pub corpus_version: String,
+}
+
+/// Static metadata for a snapshot (NOT the live reward input — §4.2 step 5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RewardSnapshotBaseline {
+    /// Static corpus routing accuracy of the deployed policy. Context only; the
+    /// live routing component comes from the shadow window, not this value.
+    pub static_corpus_routing_accuracy: f64,
+}
+
+/// Advisory reward snapshot (spec §4). Joins three isolated-store reads
+/// (receipts + shadow + feedback) into an auditable breakdown. Read-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RewardSnapshot {
+    /// Scalar reward in `[-1.0, +1.0]`.
+    pub score: f64,
+    /// True iff the self-judgment term was capped by F-10. Always `false` for
+    /// snapshots (self-judgment is `None`); kept for shape parity with [`Reward`].
+    pub self_judgment_was_capped: bool,
+    /// Per-component breakdown.
+    pub components: RewardComponents,
+    /// How the routing component was derived.
+    pub routing_source: RewardRoutingSource,
+    /// The scored window's row counts.
+    pub window: RewardSnapshotWindow,
+    /// Static metadata (not the live reward input).
+    pub baseline: RewardSnapshotBaseline,
+}
+
 /// Map a corpus routing accuracy `acc ∈ [0,1]` to a reward contribution in
 /// `[-1.0, +1.0]`. Chance routing (0.5 on a binary task) maps to `0.0` (neutral);
 /// perfect routing maps to `+1.0`; worse-than-chance maps negative.

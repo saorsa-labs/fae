@@ -266,6 +266,11 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // registration points (MAJOR-2): this table runs *before* dispatch;
         // the handler arm is in fae-daemon `session.rs::dispatch`.
         "conversation.feedback" => &[Scope::ConversationWrite],
+        // M2-live §4: advisory reward snapshot (read-only). StatusRead — the
+        // existing pattern for aggregate operator surfaces with no conversation
+        // content (runtime.status, agent.list). Two registration points (§4.3):
+        // this table runs before dispatch; the handler arm is in session.rs.
+        "conductor.reward_snapshot" => &[Scope::StatusRead],
         "conversation.subscribe" => &[Scope::ConversationRead],
         "audio.capture_start"
         | "audio.capture_stop"
@@ -913,6 +918,37 @@ mod tests {
         let c = client(&[Scope::StatusRead], 1000, None);
         assert_eq!(
             authorize(&c, &cmd("conversation.feedback"), 10),
+            AuthzDecision::Deny(DenyReason::MissingScope)
+        );
+    }
+
+    // M2-live §4 (V5b-equivalent): conductor.reward_snapshot is StatusRead-
+    // scoped across both registration points. Gate 1 — required_scopes resolves
+    // it (unregistered ⇒ UnknownCommand before dispatch). Gate 2 — a client
+    // lacking StatusRead is denied MissingScope. A ConversationWrite-only
+    // client (no StatusRead) is denied — the snapshot is an operator surface.
+    #[test]
+    fn conductor_reward_snapshot_scope_registered() {
+        assert_eq!(
+            required_scopes("conductor.reward_snapshot").map(|s| s.to_vec()),
+            Some(vec![Scope::StatusRead])
+        );
+    }
+
+    #[test]
+    fn conductor_reward_snapshot_allows_with_status_read() {
+        let c = client(&[Scope::StatusRead], 1000, None);
+        assert_eq!(
+            authorize(&c, &cmd("conductor.reward_snapshot"), 10),
+            AuthzDecision::Allow
+        );
+    }
+
+    #[test]
+    fn conductor_reward_snapshot_denies_without_status_read() {
+        let c = client(&[Scope::ConversationWrite], 1000, None);
+        assert_eq!(
+            authorize(&c, &cmd("conductor.reward_snapshot"), 10),
             AuthzDecision::Deny(DenyReason::MissingScope)
         );
     }
