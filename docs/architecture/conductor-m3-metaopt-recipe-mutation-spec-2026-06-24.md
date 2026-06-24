@@ -1,13 +1,21 @@
-# M3 — MetaOpt ConductorRecipe Mutation (spec v4)
+# M3 — MetaOpt ConductorRecipe Mutation (spec v5)
 
-- **Status:** Proposed (spec v4) — awaits G-M3-spec re-review (`oracle` + `reviewer`).
-- **Date:** 2026-06-24 (v4 2026-06-24)
+- **Status:** Proposed (spec v5) — awaits G-M3-spec re-review (`oracle` + `reviewer`).
+- **Date:** 2026-06-24 (v5 2026-06-24)
 - **Owner:** David Irvine
 - **Authorizes:** ADR-008a (Accepted, `ec856463`) — the four enforceable constraints.
 - **Prereqs:** G-M2 impl PASSED (reward/shadow review-complete, `03d82169`). MetaOpt primitive ported + dormant (`750a4a4a`). Conductor recipe store versioned (`recipes/<id>.v<ver>.json`).
 - **Scope:** Add `ConductorRecipe` as the 5th MetaOptimization surface, with mutation operators, validation, rollback, and SOUL-drift gate. **Dormant/offline/CLI-only in M3** — no background scheduler, no live auto-deploy.
 
-> **v4 changelog (folds G-M3-spec v3 re-review run `1a8d0976` — MAJOR-3 CLOSED; 2 refined):**
+> **v5 changelog (folds G-M3-spec v4 re-review run `9adbbf1e` — MAJOR-2 CLOSED; CAS closed-but-§4-contradiction):**
+> - **MAJOR-2 CONFIRMED-CLOSED in v4** (`SwitchTopology` folds `chain_slots`; construction scoped to topology transitions; `prompt_template` lint-gated). Non-blocking impl notes folded: explicit negative tests for `chain_slots` Option semantics.
+> - **CAS contradiction fixed (§4):** v4 specified CAS in §1.1/§1.3/§2.2 but §4 (the canonical rollback section) still showed the old non-CAS signature `rollback(recipe_id, to_version)`, which would lead an implementer to build the unsafe path. v5 aligns §4 to the CAS signature `rollback(recipe_id, expected_current_version, to_version)` + the CAS guard + the CAS undo definition + the CAS tests.
+> - **MINOR fixed:** stale patch-enum comment ("five operators + one batch-construction element (v3)") corrected to "five operators; SwitchTopology carries chain construction data when transitioning to chain."
+> - **Negative tests added (§9):** `switch_to_direct_rejects_chain_slots_some`, `switch_to_chain_requires_chain_slots_some`, `switch_topology_noop_rejected`.
+>
+> **v4 changelog:** MAJOR-3 closed; MAJOR-2 folded `SetRoleSlotPlan` into `SwitchTopology`; NEW-MAJOR-1 added CAS (§1.1/§2.2).
+>
+> **v3/v2/v1 changelogs:** see v4 header — BLOCKER-1 + MAJOR-1/4/5/6/7 CONFIRMED-CLOSED in earlier re-reviews; MAJOR-3 closed in v3.
 > - **MAJOR-3 CONFIRMED-CLOSED in v3** (fanout formula uses real fields).
 > - **MAJOR-2 closed differently (§1.1, §2.2): fold `SetRoleSlotPlan` INTO `SwitchTopology`.** v3's standalone `SetRoleSlotPlan` was too broad (could rewrite all prompts/schemas/required flags anytime, outside the four constraints; `prompt_template` was not lint-covered). v4 removes it entirely. `SwitchTopology` gains an optional `chain_slots: Option<Vec<RoleSlotSpec>>` carried **only when transitioning to chain** (absent/None for chain→direct, where slots are removed by the topology rule). This constrains the construction surface to topology transitions only — the only place it's needed. All `chain_slots` prompts pass §5 lint; all workers pass the swap rules; the post-state still passes `validate_for(V1Safe)` + all four constraints.
 > - **NEW-MAJOR-1 (TOCTOU) closed (§1.1, §2.2): `apply_batch` takes `expected_base_version` — CAS semantics.** v3's read-version-then-apply had a race. v4: `apply_batch(recipe_id, expected_base_version, patches)` fails `Err(WrongBaseVersion { expected, actual })` if the active version differs. The rollback closure rolls back the exact version it produced (captured in the apply result). Tests for interleaved writer / stale base.
@@ -40,7 +48,9 @@ M3 is the **protected-kernel surface**: autonomous mutation of the egress-affect
 
 /// A mutation a MetaOpt run may propose on a conductor recipe.
 /// DATA ONLY — the daemon adapter interprets this against FaeConductorRecipe.
-/// Maps to ADR-008a's five allowed operators + one batch-construction element (v3).
+/// Maps to ADR-008a's five allowed operators. `SwitchTopology` carries the
+/// chain-slot construction data (`chain_slots`) when transitioning to chain.
+/// (v4: the standalone SetRoleSlotPlan from v3 was removed as too broad.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConductorRecipePatch {
@@ -243,13 +253,14 @@ The existing `MetaOptimizer::apply_change` ConfigAdjustment path writes **unboun
 
 ---
 
-## 4. Rollback (whole-recipe-version, revalidating — MAJOR-5)
+## 4. Rollback (whole-recipe-version, revalidating, CAS — MAJOR-5 + v4 CAS)
 
 - The recipe store is versioned: `recipes/<recipe_id>.v<version>.json`.
-- **`rollback(recipe_id, to_version)` revalidates the prior version against the CURRENT registry/caps/profile before re-activation** — not just deserialization. A recipe valid when written may be unsafe now (worker de-provisioned, cap lowered, lane policy tightened). Revalidation failure ⇒ `RecipePortError::RollbackTargetInvalid(reason)`; the recipe stays at its current version.
+- **`rollback(recipe_id, expected_current_version, to_version)` (v4 CAS signature — matches §1.1/§2.2).** It revalidates the prior version against the CURRENT registry/caps/profile before re-activation — not just deserialization. A recipe valid when written may be unsafe now (worker de-provisioned, cap lowered, lane policy tightened). Revalidation failure ⇒ `RecipePortError::RollbackTargetInvalid(reason)`; the recipe stays at its current version.
+- **CAS guard:** the rollback only proceeds if the **active** version equals `expected_current_version`; otherwise `Err(RecipePortError::WrongBaseVersion { expected, actual })`, no write. This prevents a rollback from clobbering a concurrent writer's mutation.
 - **Revalidation = the full Layer 1 check** (§3) + F-15 on deserialize (rejects star/debate on the way back in) + `validate_for(V1Safe)`.
-- **Per-operator partial rollback is NOT supported.** ADR-008a specifies "Restore previous recipe version" — one atomic unit. "Undo last change" = `rollback(recipe_id, current_version - 1)`.
-- **Tests:** `rollback_restores_prior_version`, `rollback_rejects_star_debate_on_deserialize` (F-15 on the way back in), `rollback_rejects_unprovisioned_worker` (MAJOR-5), `rollback_rejects_above_current_cap`.
+- **Per-operator partial rollback is NOT supported.** ADR-008a specifies "Restore previous recipe version" — one atomic unit. "Undo last change" = `rollback(recipe_id, expected_current_version = current_version, to_version = current_version - 1)`.
+- **Tests:** `rollback_restores_prior_version`, `rollback_rejects_star_debate_on_deserialize` (F-15 on the way back in), `rollback_rejects_unprovisioned_worker` (MAJOR-5), `rollback_rejects_above_current_cap`, `rollback_rejects_wrong_current_version` (v4 CAS), `rollback_does_not_clobber_concurrent_writer` (v4 CAS).
 
 ---
 
@@ -350,13 +361,13 @@ Scoped `#[allow(dead_code)]` with `TODO(post-M3)` until the live loop lands.
 
 **Atomic batches (§2.2):** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_batch_rejects_wrong_base_version` (v4 CAS), `rollback_rejects_wrong_current_version` (v4 CAS).
 
-**Role-slot construction (folded into SwitchTopology, v4):** `switch_to_chain_with_slot_plan_constructs_valid_chain` (direct→chain via `SwitchTopology { to: Chain, chain_slots: Some([T,W,V]) }` yields valid Thinker→Worker→Verifier), `switch_to_chain_rejects_unprovisioned_worker`, `chain_slots_prompt_bypasses_lint_rejected` (v4 lint-scope fix — prompts in `chain_slots` ARE linted).
+**Role-slot construction (folded into SwitchTopology, v4):** `switch_to_chain_with_slot_plan_constructs_valid_chain` (direct→chain via `SwitchTopology { to: Chain, chain_slots: Some([T,W,V]) }` yields valid Thinker→Worker→Verifier), `switch_to_chain_rejects_unprovisioned_worker`, `chain_slots_prompt_bypasses_lint_rejected` (v4 lint-scope fix — prompts in `chain_slots` ARE linted), `switch_to_direct_rejects_chain_slots_some` (v5), `switch_to_chain_requires_chain_slots_some` (v5), `switch_topology_noop_rejected` (v5).
 
 **Prompt lint (§5):** one per rule + `base64_secret_exfil_rejected`, `unicode_obfuscation_rejected`, `homoglyph_spacing_rejected`, `no_tool_authority_expansion_rejected`.
 
 **F-16 (§6):** `persona_regression_blocks_promotion`, `model_self_judgment_cannot_override_deterministic_drift`, `soul_drift_eval_never_egresses`.
 
-**Rollback (§4):** `rollback_restores_prior_version`, `rollback_rejects_star_debate_on_deserialize`, `rollback_rejects_unprovisioned_worker`, `rollback_rejects_above_current_cap`.
+**Rollback (§4):** `rollback_restores_prior_version`, `rollback_rejects_star_debate_on_deserialize`, `rollback_rejects_unprovisioned_worker`, `rollback_rejects_above_current_cap`, `rollback_rejects_wrong_current_version` (v4 CAS), `rollback_does_not_clobber_concurrent_writer` (v4 CAS).
 
 **F-12 / no-auto-promote:** `promotion_requires_is_improvement`, `no_auto_promotion_in_m3` (CLI flags for human review; no `apply_batch` without the approval step).
 
