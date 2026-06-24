@@ -1,23 +1,23 @@
-# M3 — MetaOpt ConductorRecipe Mutation (spec v2)
+# M3 — MetaOpt ConductorRecipe Mutation (spec v4)
 
-- **Status:** Proposed (spec v3) — awaits G-M3-spec re-review (`oracle` + `reviewer`).
-- **Date:** 2026-06-24 (v3 2026-06-24)
+- **Status:** Proposed (spec v4) — awaits G-M3-spec re-review (`oracle` + `reviewer`).
+- **Date:** 2026-06-24 (v4 2026-06-24)
 - **Owner:** David Irvine
 - **Authorizes:** ADR-008a (Accepted, `ec856463`) — the four enforceable constraints.
 - **Prereqs:** G-M2 impl PASSED (reward/shadow review-complete, `03d82169`). MetaOpt primitive ported + dormant (`750a4a4a`). Conductor recipe store versioned (`recipes/<id>.v<ver>.json`).
 - **Scope:** Add `ConductorRecipe` as the 5th MetaOptimization surface, with mutation operators, validation, rollback, and SOUL-drift gate. **Dormant/offline/CLI-only in M3** — no background scheduler, no live auto-deploy.
 
-> **v2 changelog (folds G-M3-spec v1 review run `3e771c6e` — 1 BLOCKER, 7 MAJOR):**
-> - **BLOCKER-1 fixed (§3.1):** `is_protected_config_key()` denylist at the top of the existing ConfigAdjustment arm (before `write_config`), covering canonical keys + aliases. **CONFIRMED-CLOSED in re-review (`81dafa80`).**
-> - **MAJOR-1, 4, 5, 6, 7 CONFIRMED-CLOSED in re-review.**
-> - MAJOR-2, MAJOR-3 required v3 refinement (see v3 changelog).
+> **v4 changelog (folds G-M3-spec v3 re-review run `1a8d0976` — MAJOR-3 CLOSED; 2 refined):**
+> - **MAJOR-3 CONFIRMED-CLOSED in v3** (fanout formula uses real fields).
+> - **MAJOR-2 closed differently (§1.1, §2.2): fold `SetRoleSlotPlan` INTO `SwitchTopology`.** v3's standalone `SetRoleSlotPlan` was too broad (could rewrite all prompts/schemas/required flags anytime, outside the four constraints; `prompt_template` was not lint-covered). v4 removes it entirely. `SwitchTopology` gains an optional `chain_slots: Option<Vec<RoleSlotSpec>>` carried **only when transitioning to chain** (absent/None for chain→direct, where slots are removed by the topology rule). This constrains the construction surface to topology transitions only — the only place it's needed. All `chain_slots` prompts pass §5 lint; all workers pass the swap rules; the post-state still passes `validate_for(V1Safe)` + all four constraints.
+> - **NEW-MAJOR-1 (TOCTOU) closed (§1.1, §2.2): `apply_batch` takes `expected_base_version` — CAS semantics.** v3's read-version-then-apply had a race. v4: `apply_batch(recipe_id, expected_base_version, patches)` fails `Err(WrongBaseVersion { expected, actual })` if the active version differs. The rollback closure rolls back the exact version it produced (captured in the apply result). Tests for interleaved writer / stale base.
+> - **Spec hygiene (MINOR):** title now says v4; status says v4; removed the dangling §2.3 references (the construction content lives in §2.2 atomic batches + the `SwitchTopology` variant).
 >
-> **v3 changelog (folds G-M3-spec v2 re-review run `81dafa80` — 5 CONFIRMED-CLOSED, 2 STILL-OPEN, 1 NEW-MAJOR):**
-> - **MAJOR-2 closed (§2.3): direct→chain role-slot construction.** A direct recipe has only a Worker slot; `AdjustVerifier` adds only a Verifier; `SwitchTopology` carried no slot plan — so direct→chain could not construct the required Thinker→Worker→Verifier slots. v3 adds `SetRoleSlotPlan { plan: Vec<RoleSlotSpec> }` as a sixth data-only batch element: it lets a batch define the full target role-slot plan atomically. It is **not a new mutation operator in the ADR-008a sense** — it is the *construction surface* that makes `SwitchTopology` + `AdjustVerifier` composable; the post-state still must pass `validate_for(V1Safe)` and all four constraints. (Clarified as a batch-construction element, not a capability expansion.)
-> - **MAJOR-3 closed (§2.1): fanout formula field corrections.** Fixed the factual error: the field is `StopPolicy.max_correction_loops` (NOT `max_verifier_loops`). Added explicit comparison against `BudgetPolicy.max_cost_micros` and `max_role_calls`, the real cap fields.
-> - **NEW-MAJOR-1 closed (§2.2): atomic-batch invariants.** `validate_batch` rejects mixed `recipe_id`s; `apply_change` captures `prior_version` before `apply_batch` so the rollback closure is unambiguous. Tests: `batch_rejects_mixed_recipe_ids`, `apply_change_conductor_recipe_captures_prior_version_for_rollback`.
-> - **NEW-MINOR-1 closed (§1.1):** `deny_unknown_fields` on the patch enum + each variant.
-> - **NEW-MINOR-2 closed (§3.1):** protected-key matching canonicalizes separators (`-`/`_`/`.`/camelCase → single canonical form) before comparison, closing `model-mode`/`availability.mode` variants without alias-list growth.
+> **v3 changelog (folds v2 re-review `81dafa80`):** MAJOR-3 closed (field corrections); NEW-MAJOR-1 attempted (batch invariants, superseded by v4 CAS); MINORs (deny_unknown_fields, separator canonicalization) folded.
+>
+> **v2 changelog (folds v1 review `3e771c6e`):** BLOCKER-1 closed (protected config keys — CONFIRMED-CLOSED in re-review); MAJOR-1/4/5/6/7 CONFIRMED-CLOSED; MAJOR-2/3 refined in v3.
+>
+> **v1 changelog:** initial spec (dormant/offline-first, five operators, two-layer enforcement, F-16).
 
 ---
 
@@ -51,10 +51,19 @@ pub enum ConductorRecipePatch {
         role: ConductorRoleDto,
         to_worker: String,
     },
-    /// (ADR-008a op 2) Switch topology direct ↔ chain. **For direct→chain, pair
-    /// with `SetRoleSlotPlan` in the same batch** to construct the required
-    /// Thinker→Worker→Verifier slots (a direct recipe has only a Worker slot).
-    SwitchTopology { recipe_id: String, to: ConductorTopologyDto },
+    /// (ADR-008a op 2) Switch topology direct ↔ chain. When transitioning
+    /// **to chain**, `chain_slots` MUST be `Some` carrying the full Thinker→
+    /// Worker→Verifier plan (a direct recipe has only a Worker slot — the plan
+    /// constructs the new slots). When transitioning **to direct**, `chain_slots`
+    /// is `None` (the topology rule reduces role_slots to the single Worker).
+    /// All `chain_slots` prompts pass §5 lint; all workers pass the swap rules.
+    /// v4: the construction surface is scoped to topology transitions ONLY
+    /// (v3's standalone SetRoleSlotPlan was too broad — removed).
+    SwitchTopology {
+        recipe_id: String,
+        to: ConductorTopologyDto,
+        chain_slots: Option<Vec<RoleSlotSpec>>,
+    },
     /// (ADR-008a op 3) Add or remove a Verifier role (chain only). Adding
     /// requires the worker + prompt + schema the new slot will use.
     AdjustVerifier {
@@ -72,28 +81,18 @@ pub enum ConductorRecipePatch {
     },
     /// (ADR-008a op 5) Adjust budget. Downward always; upward within cap (§2.1).
     AdjustBudget { recipe_id: String, delta_micros_per_day: i64 },
-    /// (v3, NEW-MAJOR-1 fix) **Batch-construction element, not a new operator.**
-    /// Sets the full target role-slot plan atomically. Required for direct→chain
-    /// (a direct recipe's single Worker slot cannot become Thinker→Worker→Verifier
-    /// via `AdjustVerifier` alone, which only adds a Verifier). The post-state
-    /// MUST still pass `validate_for(V1Safe)` and all four constraints — this
-    /// element constructs slots; it does not widen capability. All workers named
-    /// in the plan must be provisioned + same-or-lower tier.
-    SetRoleSlotPlan { recipe_id: String, plan: Vec<RoleSlotSpec> },
 }
 
-/// A data-only spec for a role slot (used by `SetRoleSlotPlan`). Mirrors the
-/// daemon's `RoleSlot` minus the mutation internals. All fields explicit — no
-/// implicit defaults — so a batch is fully auditable.
+/// A data-only spec for a role slot (carried by `SwitchTopology::chain_slots`).
+/// Mirrors the daemon's `RoleSlot` minus mutation internals. All fields explicit.
+/// **The prompt body IS subject to §5 lint** (v4 fix — v3 left it unlinted).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoleSlotSpec {
     pub role: ConductorRoleDto,
     pub worker: String,
     pub prompt_template_id: String,
-    /// The prompt body is set separately via `MutateRolePrompt`; here it is the
-    /// initial/template body for a newly-constructed slot.
-    pub prompt_template: String,
+    pub prompt_template: String, // §5-lint-gated
     pub output_schema: Option<String>,
     pub required: bool,
 }
@@ -131,16 +130,28 @@ pub trait ConductorRecipePort: Send + Sync {
         patches: &[ConductorRecipePatch],
     ) -> Result<RecipeSummary, PatchRejection>;
 
-    /// Apply a validated batch as ONE new recipe version (atomic). The impl MUST
-    /// call validate_batch first (defense-in-depth). Returns the new version.
+    /// Apply a validated batch as ONE new recipe version (atomic). v4 CAS:
+    /// `expected_base_version` must match the active version or the apply fails
+    /// `Err(RecipePortError::WrongBaseVersion { expected, actual })` — no write.
+    /// Closes the read-then-apply TOCTOU window (v3). The impl MUST call
+    /// validate_batch first (defense-in-depth). Returns the new version.
     async fn apply_batch(
         &self,
+        recipe_id: &str,
+        expected_base_version: u32,
         patches: &[ConductorRecipePatch],
     ) -> Result<u32, RecipePortError>;
 
     /// Roll back to a prior recipe version. Revalidates against CURRENT registry/
-    /// caps/profile before re-activation (MAJOR-5).
-    async fn rollback(&self, recipe_id: &str, to_version: u32) -> Result<(), RecipePortError>;
+    /// caps/profile before re-activation (MAJOR-5). v4: `expected_current_version`
+    /// CAS — the rollback only proceeds if the active version matches, so the
+    /// rollback cannot clobber a concurrent writer's mutation.
+    async fn rollback(
+        &self,
+        recipe_id: &str,
+        expected_current_version: u32,
+        to_version: u32,
+    ) -> Result<(), RecipePortError>;
 
     async fn current_recipe_summary(
         &self, recipe_id: &str,
@@ -159,7 +170,7 @@ The patch surface plugs into the **existing** optimizer flow, not alongside it:
 - `MetaOptSurface` gains `ConductorRecipe` (remove the ADR-gating doc comment in `types.rs`).
 - `MetaOptChange` gains a variant: `ConductorRecipePatch { patches: Vec<ConductorRecipePatch> }` — a batch is one `MetaOptChange` (atomic, one version).
 - `MetaOptimizer` gains an `Option<Arc<dyn ConductorRecipePort>>` field + setter, parallel to the existing ports.
-- `MetaOptimizer::apply_change` gains a `MetaOptChange::ConductorRecipePatch { patches }` arm that calls `recipe_port.validate_batch(&patches)` then `apply_batch(&patches)`, and returns a `MetaOptRollback` closure that calls `recipe_port.rollback(recipe_id, prior_version)`. **This closes the batch into the existing keep/rollback discipline** — a rejected benchmark rolls the whole batch back.
+- `MetaOptimizer::apply_change` gains a `MetaOptChange::ConductorRecipePatch { patches }` arm. It reads `base = recipe_port.current_recipe_summary(recipe_id).version`, calls `validate_batch`, then `apply_batch(recipe_id, base, &patches)`. If apply succeeds it captures the returned `new_version` into the `MetaOptRollback` closure, which calls `recipe_port.rollback(recipe_id, /*expected_current=*/ new_version, /*to=*/ base)`. **CAS at both ends** (v4): the apply fails if the base changed under us; the rollback fails if `new_version` is no longer active (another mutation landed). A failed benchmark triggers the rollback closure; a wrong-base rollback error surfaces to the human reviewer (M3 is CLI/manual, so concurrent writers are rare but must be detected, not silently clobbered). **This closes the batch into the existing keep/rollback discipline.**
 - The hypothesis source may propose `ConductorRecipePatch` hypotheses; the optimizer's benchmark gate (F-12 + F-16) decides keep vs rollback exactly as for the other four surfaces.
 
 ---
@@ -191,18 +202,19 @@ When a patch (or batch) changes the post-state's role-slot count, the validator 
 
 **Tests:** `direct_to_chain_rechecks_budget_fanout`, `add_verifier_rechecks_budget`, `multi_worker_chain_per_bucket_check`, `uncostable_worker_in_chain_rejected`, `verifier_loops_multiplied_in_worst_case` (uses `max_correction_loops`), `cost_cap_exceeded_rejected` (against `max_cost_micros`).
 
-### 2.2 Atomic patch batches (MAJOR-2 + §11 Q4 + v3 NEW-MAJOR-1)
+### 2.2 Atomic patch batches (MAJOR-2 + §11 Q4; v4 CAS)
 
-A single mutation often needs multiple operators to keep the recipe valid: `direct → chain` requires `SwitchTopology` **plus** `SetRoleSlotPlan` (Thinker/Worker/Verifier) **plus** possibly `AdjustBudget`. Applying these as separate versions would pass through an **invalid intermediate state** (chain with a single Worker slot fails `validate_for(V1Safe)`).
+A single mutation often needs multiple operators to keep the recipe valid: `direct → chain` is a single `SwitchTopology { to: Chain, chain_slots: Some([...]) }` patch (v4 folded the slot construction in) **plus** possibly `AdjustBudget`. Applying as separate versions would pass through an invalid intermediate state.
 
 - A batch is `Vec<ConductorRecipePatch>` applied **atomically as one new version**.
-- **Same-recipe invariant (v3 NEW-MAJOR-1):** every patch in a batch MUST target the **same `recipe_id`**. `validate_batch` rejects mixed recipe IDs ⇒ `PatchRejection::MixedRecipeIds`. (A batch is one recipe's mutation; multi-recipe coordination is not in M3.)
+- **Same-recipe invariant:** every patch in a batch MUST target the same `recipe_id`. `validate_batch` rejects mixed recipe IDs ⇒ `PatchRejection::MixedRecipeIds`.
 - The validator runs `validate_batch` on the **projected post-state after ALL patches** — not per-patch. Intermediate states are never persisted.
 - Every batch's post-state MUST pass `FaeConductorRecipe::validate_for(RecipeProfile::V1Safe)`. Invalid post-state ⇒ `PatchRejection::InvalidPostState`.
-- **Prior-version capture (v3 NEW-MAJOR-1):** `MetaOptimizer::apply_change`'s `ConductorRecipePatch` arm captures `prior_version = recipe_port.current_recipe_summary(recipe_id).version` **before** calling `apply_batch`, so the returned rollback closure calls `recipe_port.rollback(recipe_id, prior_version)` unambiguously. (No reliance on `new_version - 1`, which would be wrong if another writer bumped the version concurrently.)
+- **CAS apply (v4 — closes the v3 TOCTOU):** `apply_batch(recipe_id, expected_base_version, patches)` fails `Err(RecipePortError::WrongBaseVersion { expected, actual })` if the active version ≠ `expected_base_version`. No write on mismatch. The `MetaOptimizer::apply_change` arm reads the base version immediately before apply; the window is now bounded and fail-closed rather than silent.
+- **CAS rollback (v4):** `rollback(recipe_id, expected_current_version, to_version)` only proceeds if the active version matches `expected_current_version`, so a rollback cannot revert a concurrent writer's mutation.
 - Rollback is whole-version (§4) — undoing a batch = rolling back one version.
 
-**Tests:** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_change_conductor_recipe_captures_prior_version_for_rollback`.
+**Tests:** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot, i.e. `SwitchTopology { to: Chain, chain_slots: None }`), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_batch_rejects_wrong_base_version` (interleaved writer; v4 CAS), `rollback_rejects_wrong_current_version` (v4 CAS).
 
 ---
 
@@ -336,9 +348,9 @@ Scoped `#[allow(dead_code)]` with `TODO(post-M3)` until the live loop lands.
 
 **Fanout (§2.1):** `direct_to_chain_rechecks_budget_fanout`, `add_verifier_rechecks_budget`, `multi_worker_chain_per_bucket_check`, `uncostable_worker_in_chain_rejected`, `verifier_loops_multiplied_in_worst_case` (uses `max_correction_loops`), `cost_cap_exceeded_rejected` (against `max_cost_micros`).
 
-**Atomic batches (§2.2):** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_change_conductor_recipe_captures_prior_version_for_rollback`.
+**Atomic batches (§2.2):** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_batch_rejects_wrong_base_version` (v4 CAS), `rollback_rejects_wrong_current_version` (v4 CAS).
 
-**Role-slot construction (§2.3):** `set_role_slot_plan_constructs_chain_slots` (direct→chain via `SwitchTopology`+`SetRoleSlotPlan` batch yields valid Thinker→Worker→Verifier), `set_role_slot_plan_rejects_unprovisioned_worker`.
+**Role-slot construction (folded into SwitchTopology, v4):** `switch_to_chain_with_slot_plan_constructs_valid_chain` (direct→chain via `SwitchTopology { to: Chain, chain_slots: Some([T,W,V]) }` yields valid Thinker→Worker→Verifier), `switch_to_chain_rejects_unprovisioned_worker`, `chain_slots_prompt_bypasses_lint_rejected` (v4 lint-scope fix — prompts in `chain_slots` ARE linted).
 
 **Prompt lint (§5):** one per rule + `base64_secret_exfil_rejected`, `unicode_obfuscation_rejected`, `homoglyph_spacing_rejected`, `no_tool_authority_expansion_rejected`.
 
