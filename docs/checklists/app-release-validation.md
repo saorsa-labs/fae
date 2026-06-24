@@ -232,6 +232,8 @@ loaded.
 
 **Cost authority is external (owner decision 2026-06-23):** provider-side spend caps (OpenAI/Anthropic/etc.) are the authoritative cost control. The conductor makes NO spend guarantee; `FAE_PROVIDER_PRICING` + the `budget.rs` cost dimensions are an optional opt-in governance layer for operators who want conductor-level cost limits, not a billing promise. Operator/provider caps are an external responsibility and are NOT validated by this checklist.
 
+**`fae-metaopt` wiring gate (M3 BLOCKER-1 sequencing constraint, 2026-06-24):** the `fae-metaopt` crate is **dormant/unwired** (zero refs from `fae-daemon`, not in its Cargo.toml) and contains a real latent config-write hole — `optimizer.rs:309-323` writes unlisted config keys unconditionally, bypassing `ConfigBound` validation (so `FAE_MODEL_MODE` is writable if the crate were wired in). The M3 spec mandates an `is_protected_config_key()` denylist to close it; **that denylist does not exist in code yet.** **Hard rule:** `fae-metaopt` MUST NOT be wired into the daemon (no Cargo dependency, no `apply_change` call site) until the protected-key denylist exists and its tests pass. Wiring it first ships the live hole. Verify with: `grep -rn fae-metaopt crates/fae-daemon/` (must be empty) until the denylist lands.
+
 ## Release gate
 
 Do not claim production readiness unless all of the following are true:

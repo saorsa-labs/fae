@@ -126,7 +126,18 @@
 
 ---
 
-## M3 — MetaOpt learning  ⏳ MetaOpt Rust port DONE (merged `750a4a4a`); **ADR-008a ACCEPTED/MERGED (`ec856463`)** — M3 no longer blocked on the ADR; remaining gate is **G-M2 impl completion (reward/shadow §7/§8)**
+## M3 — MetaOpt learning  ⏳ **G-M3-spec PASSED v5** (spec implementation-ready); **M3 impl HELD — premature until the conductor is alive** (see Sequencing below)
+
+### Sequencing (decision 2026-06-24, advisor-directed)
+
+M3 is Fae learning to mutate her own routing recipes — that layer optimizes against a **reward signal**. The reward aggregator (§7) and shadow router (§8) that produce that signal are **dormant** (`#[allow(dead_code)]`, no calls from the live turn loop — verified zero refs from `executor.rs`/`session.rs`). Building self-mutation on a conductor producing no reward data is **building the roof before the walls**: M3 would optimize against nothing.
+
+**Dependency chain (the correct order):**
+1. **Wire M2 reward/shadow signal collection into the live loop** (local turns only — routing accuracy + user signals). This does NOT require the Stage-3 cloud-egress cutover (which stays gated). Lower-risk, makes the conductor observable, accrues real signal.
+2. **Real reward signal accrues** on actual turns.
+3. **Then M3**, with the BLOCKER-1 denylist as a **hard precondition** for ever wiring `fae-metaopt` into the daemon (wire it first → ship the live config-write hole).
+
+This ordering also respects the sequencing rule the BLOCKER created. The M3 spec remains a durable, well-earned milestone (5 adversarial rounds; dormant/offline/CLI-only/human-approves-every-promotion is exactly the right posture for autonomous self-mutation) — it is simply not the right thing to *build* next.
 
 **Prereqs (open Qs for David):**
 - [x] F-5: **ADR-008 amendment ACCEPTED + MERGED** (`ec856463`, owner-accepted 2026-06-23): `docs/adr/008a-conductor-recipe-surface-amendment.md` — Accepted (Amendment). Authorizes Rust-side `conductorRecipe` surface under **four** enforceable constraints (keep-or-narrow lane, budget-within-provisioned-cap, no gated locality/topology, **no `ModelMode` override**). Two-layer enforcement: Layer 1 proposal-structural (fae-metaopt), Layer 2 runtime-authoritative (M2 §5 gates). Cross-ADR dependency on the M2 §5.6 membrane-before-construction invariant (test-enforced). **M3 is no longer blocked on the ADR** — remaining M3 gate is G-M2 impl completion (reward/shadow §7/§8).
@@ -134,7 +145,9 @@
 - [x] **MetaOpt primitive ported** (commit `5b9275a3`, merged `750a4a4a`): `crates/fae-metaopt/` (~1500 lines). 4 existing surfaces (Directive/ConfigKnob/Skill/MemorySeed), hill-climbing loop, 6 trait seams, 3 intentional hardening points. Reviewer pass MERGE-READY (0 BLOCKER/MAJOR). Dormant + unwired. **NO ConductorRecipe variant** (now ADR-008a-authorized; lands in M3).
 
 **Spec:**
-- [x] **M3 spec — v5 PASSED** (`f3a1ed70`; G-M3-spec review run `d89f3738`, 2026-06-24). Five review rounds (v1→v5) folded 1 BLOCKER + 7 MAJOR + 1 NEW-MAJOR. The BLOCKER was real: `MetaOptimizer::apply_change`'s ConfigAdjustment path wrote unbounded config keys verbatim, so `FAE_MODEL_MODE` was reachable today — closed via `is_protected_config_key()` denylist with separator canonicalization. Design: dormant/offline/CLI-only; recipe-is-data-not-code; two-layer enforcement (Layer 1 validator + Layer 2 M2 §5 gates); `ConductorRecipePatch` (5 operators, `SwitchTopology` carries `chain_slots` for direct→chain construction) in `fae-metaopt`; `DaemonConductorRecipePort` adapter in `fae-daemon`; CAS apply/rollback (no TOCTOU); §5 prompt lint (incl. `no_tool_authority_expansion`); F-16 SOUL-drift (local-only held-out corpus + deterministic lint, model advisory-only). Spec at `docs/architecture/conductor-m3-metaopt-recipe-mutation-spec-2026-06-24.md`.
+- [x] **M3 spec — v5 PASSED** (`f3a1ed70`; G-M3-spec review run `d89f3738`, 2026-06-24). Five review rounds (v1→v5) folded 1 BLOCKER + 7 MAJOR + 1 NEW-MAJOR.
+  - **BLOCKER-1, honest framing (corrected post-review):** G-M3-spec found a *real* config-write weakness in `fae-metaopt::optimizer.rs` ConfigAdjustment — unlisted keys bypass `ConfigBound` validation and are written unconditionally at `write_config` (verified `optimizer.rs:309-323`). **It is NOT reachable in the running product** — `fae-metaopt` is dormant/unwired (zero refs from `fae-daemon`; not in its Cargo.toml). **It is NOT yet fixed in code** — no denylist exists; the M3 spec *mandates* `is_protected_config_key()` with separator canonicalization, and the fix ships with M3 implementation. **Hard sequencing constraint:** `fae-metaopt` must not be wired into the daemon until the denylist exists — wire it first and you ship the live hole.
+  - Design: dormant/offline/CLI-only; recipe-is-data-not-code; two-layer enforcement (Layer 1 validator + Layer 2 M2 §5 gates); `ConductorRecipePatch` (5 operators, `SwitchTopology` carries `chain_slots` for direct→chain construction) in `fae-metaopt`; `DaemonConductorRecipePort` adapter in `fae-daemon`; CAS apply/rollback (no TOCTOU); §5 prompt lint (incl. `no_tool_authority_expansion`); F-16 SOUL-drift (local-only held-out corpus + deterministic lint, model advisory-only). Spec at `docs/architecture/conductor-m3-metaopt-recipe-mutation-spec-2026-06-24.md`.
 - [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (per v5 spec §1.1, §2)
 - [ ] Apply/rollback transactional with CAS (v5 spec §2.2, §4); narrator copy (no router jargon)
 - [ ] **F-15:** `FaeConductorRecipe` runtime-asserts against `star`/`debate` (already compile-time-unreachable; serde deny_unknown_fields on DTOs)
