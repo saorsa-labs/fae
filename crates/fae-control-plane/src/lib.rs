@@ -261,6 +261,11 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
     let scopes: &'static [Scope] = match command {
         "host.ping" | "host.version" | "runtime.status" => &[Scope::StatusRead],
         "conversation.inject_text" | "audio.transcribe_fallback" => &[Scope::ConversationWrite],
+        // M2-live §3: explicit user-feedback signal on a prior turn (a write
+        // *about* a conversation — same scope family as inject_text). Two
+        // registration points (MAJOR-2): this table runs *before* dispatch;
+        // the handler arm is in fae-daemon `session.rs::dispatch`.
+        "conversation.feedback" => &[Scope::ConversationWrite],
         "conversation.subscribe" => &[Scope::ConversationRead],
         "audio.capture_start"
         | "audio.capture_stop"
@@ -875,6 +880,40 @@ mod tests {
         assert_eq!(
             authorize(&c, &cmd("totally.unknown"), 10),
             AuthzDecision::Deny(DenyReason::UnknownCommand)
+        );
+    }
+
+    // M2-live §3 (V5b): conversation.feedback is gated by ConversationWrite
+    // across BOTH registration points (MAJOR-2). Gate 1 — required_scopes()
+    // resolves the command (an unregistered command is denied UnknownCommand
+    // *before* dispatch — authorize() line 421-422). Gate 2 — a client lacking
+    // the scope is denied MissingScope. Mutation contract: delete the
+    // registration line in required_scopes() and the first test fails (returns
+    // None ⇒ UnknownCommand regardless of scopes held).
+    #[test]
+    fn conversation_feedback_scope_registered() {
+        // Gate 1 — the command resolves to ConversationWrite (not unknown).
+        assert_eq!(
+            required_scopes("conversation.feedback").map(|s| s.to_vec()),
+            Some(vec![Scope::ConversationWrite])
+        );
+    }
+
+    #[test]
+    fn conversation_feedback_allows_with_write_scope() {
+        let c = client(&[Scope::ConversationWrite], 1000, None);
+        assert_eq!(
+            authorize(&c, &cmd("conversation.feedback"), 10),
+            AuthzDecision::Allow
+        );
+    }
+
+    #[test]
+    fn conversation_feedback_denies_missing_scope() {
+        let c = client(&[Scope::StatusRead], 1000, None);
+        assert_eq!(
+            authorize(&c, &cmd("conversation.feedback"), 10),
+            AuthzDecision::Deny(DenyReason::MissingScope)
         );
     }
 

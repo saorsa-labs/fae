@@ -455,6 +455,9 @@ async fn dispatch(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResul
             }))
         }
         "conversation.inject_text" => inject_text(backends, cmd).await.map_err(Into::into),
+        // M2-live §3: explicit user-feedback signal (payload-based). Requires
+        // the conductor runtime (InstallKey + isolated ConductorStore).
+        "conversation.feedback" => record_feedback(backends, cmd).await,
         "audio.transcribe_fallback" => transcribe_fallback(backends, cmd).await.map_err(Into::into),
         // Open this connection's server-push event stream (voice spine V2). The
         // ack is the signal the transport uses to register the connection's sink
@@ -1523,6 +1526,82 @@ fn build_turn_context(cmd: &Command) -> crate::conductor::ConductorTurnContext {
         working_directory: None,
         deadline_ms: None,
     }
+}
+
+/// M2-live §3.1: payload for `conversation.feedback`. Strict —
+/// `signal`, and `rating`; any other key (including a free-text field) is
+/// rejected before the record is built (V6). `cmd.request_id` is *this* RPC's
+/// correlation id (response + audit); the prior turn is referenced by
+/// `target_request_id` in the payload.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FeedbackPayload {
+    /// Opaque id of the PRIOR inject_text turn this feedback targets.
+    target_request_id: String,
+    /// `"accept" | "reject" | "edit" | "rating"`.
+    signal: String,
+    /// Required iff `signal == "rating"`; `0..=5`.
+    rating: Option<u8>,
+}
+
+/// Validate the feedback payload into a [`crate::conductor::UserSignal`] (fail-
+/// closed). Returns the wire error code on any malformed input (§3.1):
+/// `unknown_signal` / `rating_missing` / `rating_out_of_range`.
+fn build_user_signal(
+    signal: &str,
+    rating: Option<u8>,
+) -> Result<crate::conductor::UserSignal, &'static str> {
+    match signal {
+        "accept" => Ok(crate::conductor::UserSignal::Accept),
+        "reject" => Ok(crate::conductor::UserSignal::Reject),
+        "edit" => Ok(crate::conductor::UserSignal::Edit),
+        "rating" => {
+            let value = rating.ok_or("rating_missing")?;
+            if value > 5 {
+                return Err("rating_out_of_range");
+            }
+            Ok(crate::conductor::UserSignal::Rating(value))
+        }
+        _ => Err("unknown_signal"),
+    }
+}
+
+/// M2-live §3.2: record an explicit user-feedback signal against a prior turn.
+/// Persists a `FeedbackRecord` (enum-only — **no user text**) to the *isolated*
+/// conductor store (`conductor_feedback.jsonl`), joined to the prior turn on
+/// `request_fingerprint` (F-4 continuity). **Not** best-effort (§3.2 step 3):
+/// a store write failure surfaces as an error so the client can retry — never
+/// silently drop a negative signal.
+async fn record_feedback(backends: &SessionBackends<'_>, cmd: &Command) -> CommandResult {
+    let runtime = match backends.conductor {
+        Some(rt) => rt,
+        None => return Err(CommandFailure::from("feedback_requires_conductor")),
+    };
+    // Parse + deny_unknown_fields. Unknown field ⇒ `unknown_field`; any other
+    // serde error (missing field, wrong type) ⇒ `invalid_feedback_payload`.
+    let payload: FeedbackPayload = match serde_json::from_value(cmd.payload.clone()) {
+        Ok(p) => p,
+        Err(err) => {
+            let code = if err.to_string().contains("unknown field") {
+                "unknown_field"
+            } else {
+                "invalid_feedback_payload"
+            };
+            return Err(CommandFailure::from(code));
+        }
+    };
+    let signal =
+        build_user_signal(&payload.signal, payload.rating).map_err(CommandFailure::from)?;
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    runtime
+        .record_feedback(&payload.target_request_id, signal, timestamp_ms)
+        .map_err(|err| {
+            tracing::warn!("conductor feedback write failed: {err}");
+            CommandFailure::from("feedback_store_failed")
+        })?;
+    Ok(serde_json::json!({ "recorded": true }))
 }
 
 /// Core conversation turn: FAE_DUMP → parse → `assistant.generating` event
@@ -3225,6 +3304,218 @@ mod tests {
         assert!(!events.contains("hello"), "no prompt text in telemetry");
         assert!(!receipts.contains("hello"), "no prompt text in receipt");
         assert!(!events.contains("gen1"), "no raw request_id in telemetry");
+    }
+
+    // ── M2-live Stage B (§3): conversation.feedback ──
+    //
+    // Harness mirrors AgentCommandHarness: owns every SessionBackends piece so
+    // `backends()` can borrow them. Keeps a clone of the isolated ConductorStore
+    // (ConductorStore is Clone — see `executor.rs::spawn_telemetry`) to read the
+    // feedback log back without re-opening the dir.
+    struct FeedbackHarness {
+        tmp: tempfile::TempDir,
+        store: crate::conductor::ConductorStore,
+        runtime: crate::conductor::ConductorRuntime,
+        engine: MockAdapter,
+        tts: fae_engine::MockTtsAdapter,
+        audio: AudioManager,
+        events: crate::events::EventBus,
+        playbacks: crate::events::PlaybackRegistry,
+        agents: crate::agents::AgentSessionRegistry,
+    }
+
+    impl FeedbackHarness {
+        fn new() -> Self {
+            use crate::conductor::{
+                ConductorRuntime, ConductorStore, InstallKey, RecipeSet, StaticDirectPolicy,
+                WorkerRegistry,
+            };
+            let tmp = tempfile::tempdir().expect("tempdir in test");
+            let install_key =
+                InstallKey::load_or_create(&tmp.path().join("install.key")).expect("key in test");
+            let store = ConductorStore::open(tmp.path().join("store")).expect("store in test");
+            let runtime = ConductorRuntime::new(
+                StaticDirectPolicy,
+                RecipeSet::default(),
+                WorkerRegistry::m1(),
+                store.clone(),
+                install_key,
+                false, // FAE_CONDUCTOR_CHAIN unset → chain disabled (F-3)
+            );
+            Self {
+                tmp,
+                store,
+                runtime,
+                engine: mock(),
+                tts: mock_tts(),
+                audio: AudioManager::new(),
+                events: crate::events::EventBus::new(),
+                playbacks: crate::events::PlaybackRegistry::new(),
+                agents: crate::agents::AgentSessionRegistry::new(),
+            }
+        }
+
+        fn backends(&self) -> SessionBackends<'_> {
+            SessionBackends {
+                engine: &self.engine,
+                asr_fallback: None,
+                tts: &self.tts,
+                audio: &self.audio,
+                events: &self.events,
+                playbacks: &self.playbacks,
+                agents: &self.agents,
+                conductor: Some(&self.runtime),
+                acp_runner: &REAL_ACP_RUNNER,
+            }
+        }
+
+        fn read_feedback(&self) -> Vec<crate::conductor::FeedbackRecord> {
+            self.store.read_feedback().expect("feedback read in test")
+        }
+
+        fn feedback_path(&self) -> std::path::PathBuf {
+            self.tmp
+                .path()
+                .join("store")
+                .join("conductor_feedback.jsonl")
+        }
+    }
+
+    fn feedback_cmd(payload: serde_json::Value) -> fae_control_plane::Command {
+        fae_control_plane::Command {
+            v: 2,
+            request_id: "fb-rpc".to_owned(),
+            command: "conversation.feedback".to_owned(),
+            payload,
+        }
+    }
+
+    // V5a — isolation + enum-only: feedback lands in the isolated conductor
+    // store; the persisted record carries a signal + fingerprinted join key,
+    // never the raw target id. The handler holds no memory-store handle, so zero
+    // memory writes are structural (the §5.2 grep gate pins the absence).
+    #[tokio::test]
+    async fn feedback_lands_in_isolated_store_enum_only() {
+        let harness = FeedbackHarness::new();
+        let cases: [(&str, &str, Option<u8>); 3] = [
+            ("turn-1", "accept", None),
+            ("turn-2", "reject", None),
+            ("turn-3", "rating", Some(5)),
+        ];
+        for (target, signal, rating) in cases {
+            let payload = match rating {
+                Some(n) => serde_json::json!({
+                    "target_request_id": target,
+                    "signal": signal,
+                    "rating": n,
+                }),
+                None => serde_json::json!({
+                    "target_request_id": target,
+                    "signal": signal,
+                }),
+            };
+            record_feedback(&harness.backends(), &feedback_cmd(payload))
+                .await
+                .expect("feedback recorded");
+        }
+        let rows = harness.read_feedback();
+        assert_eq!(rows.len(), 3, "three feedback rows persisted");
+        assert_eq!(rows[0].signal, crate::conductor::UserSignal::Accept);
+        assert_eq!(rows[1].signal, crate::conductor::UserSignal::Reject);
+        assert_eq!(rows[2].signal, crate::conductor::UserSignal::Rating(5));
+        // F-4 continuity: the raw target id never appears in the persisted log —
+        // only the fingerprinted join key (the caller's opaque id is hashed, not
+        // stored verbatim).
+        let raw = std::fs::read_to_string(harness.feedback_path()).expect("feedback file");
+        assert!(!raw.contains("turn-1"), "no raw target id in feedback log");
+        assert!(!raw.contains("turn-2"), "no raw target id in feedback log");
+    }
+
+    // V6 — strict payload: deny_unknown_fields rejects any extra key.
+    // Mutation contract: add a `comment: String` field to FeedbackPayload and
+    // this test fails (serde would accept the extra key instead of rejecting).
+    #[tokio::test]
+    async fn feedback_rejects_unknown_payload_field() {
+        let harness = FeedbackHarness::new();
+        let cmd = feedback_cmd(serde_json::json!({
+            "target_request_id": "turn-1",
+            "signal": "accept",
+            "comment": "great answer",
+        }));
+        let err = record_feedback(&harness.backends(), &cmd)
+            .await
+            .expect_err("unknown field rejected");
+        assert_eq!(err.code, "unknown_field");
+        assert!(harness.read_feedback().is_empty(), "nothing persisted");
+    }
+
+    // V6 — validation: unknown_signal / rating_missing / rating_out_of_range
+    // all fail closed, persisting nothing.
+    #[tokio::test]
+    async fn feedback_rejects_malformed_signal_and_rating() {
+        let harness = FeedbackHarness::new();
+        // unknown signal
+        let err = record_feedback(
+            &harness.backends(),
+            &feedback_cmd(serde_json::json!({ "target_request_id": "t", "signal": "love" })),
+        )
+        .await
+        .expect_err("unknown signal");
+        assert_eq!(err.code, "unknown_signal");
+        // rating signal with no rating value
+        let err = record_feedback(
+            &harness.backends(),
+            &feedback_cmd(serde_json::json!({ "target_request_id": "t", "signal": "rating" })),
+        )
+        .await
+        .expect_err("rating missing");
+        assert_eq!(err.code, "rating_missing");
+        // rating out of range (>5)
+        let err = record_feedback(
+            &harness.backends(),
+            &feedback_cmd(serde_json::json!({
+                "target_request_id": "t",
+                "signal": "rating",
+                "rating": 6
+            })),
+        )
+        .await
+        .expect_err("rating out of range");
+        assert_eq!(err.code, "rating_out_of_range");
+        assert!(harness.read_feedback().is_empty(), "nothing persisted");
+    }
+
+    // §3.2 — feedback requires the conductor runtime (InstallKey + isolated
+    // store). With no conductor wired, the command fails closed immediately.
+    #[tokio::test]
+    async fn feedback_requires_conductor_runtime() {
+        let engine = mock();
+        let tts = mock_tts();
+        let audio = AudioManager::new();
+        let events = crate::events::EventBus::new();
+        let playbacks = crate::events::PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: None,
+            acp_runner: &REAL_ACP_RUNNER,
+        };
+        let err = record_feedback(
+            &backends,
+            &feedback_cmd(serde_json::json!({
+                "target_request_id": "t",
+                "signal": "accept",
+            })),
+        )
+        .await
+        .expect_err("conductor required");
+        assert_eq!(err.code, "feedback_requires_conductor");
     }
 
     // ── M1 byte-identity, NaN-retry path ──

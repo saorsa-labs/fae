@@ -954,6 +954,32 @@ impl ConductorRuntime {
         });
     }
 
+    /// M2-live §3.2 step 2: record one explicit user-feedback signal against a
+    /// prior turn's `target_request_id`. **Not** best-effort (unlike passive
+    /// telemetry): feedback is an explicit user action, so a store write failure
+    /// propagates as an error the client can retry (§3.2 step 3 — never silently
+    /// drop a negative signal). `target_request_id` is fingerprinted with the
+    /// install key (F-4 continuity) and joins the prior turn's receipt/event/
+    /// shadow rows on `request_fingerprint`.
+    ///
+    /// Synchronous on purpose: this is a low-frequency RPC, not the
+    /// [`route_turn`](Self::run) hot path that V8 governs. `append_feedback` is
+    /// a single-line JSONL append.
+    pub(crate) fn record_feedback(
+        &self,
+        target_request_id: &str,
+        signal: crate::conductor::telemetry::UserSignal,
+        timestamp_ms: u64,
+    ) -> Result<(), crate::conductor::error::ConductorError> {
+        let request_fingerprint = self.fingerprint(target_request_id)?;
+        let record = crate::conductor::telemetry::FeedbackRecord {
+            request_fingerprint,
+            signal,
+            timestamp_ms,
+        };
+        self.store.append_feedback(&record)
+    }
+
     fn spawn_telemetry<F>(&self, work: F)
     where
         F: FnOnce(&ConductorStore) + Send + 'static,
