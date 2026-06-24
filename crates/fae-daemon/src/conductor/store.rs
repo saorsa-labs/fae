@@ -14,11 +14,15 @@ use std::path::{Path, PathBuf};
 
 use crate::conductor::error::ConductorError;
 use crate::conductor::recipe::FaeConductorRecipe;
-use crate::conductor::telemetry::{ConductorRouteEvent, RouteReceipt};
+use crate::conductor::telemetry::{
+    ConductorRouteEvent, FeedbackRecord, RouteReceipt, ShadowTurnRecord,
+};
 
 const EVENTS_FILE: &str = "conductor_route_events.jsonl";
 const RECEIPTS_FILE: &str = "conductor_receipts.jsonl";
 const BUDGET_USAGE_FILE: &str = "conductor_budget_usage.jsonl";
+const FEEDBACK_FILE: &str = "conductor_feedback.jsonl";
+const SHADOW_FILE: &str = "conductor_shadow.jsonl";
 const RECIPES_DIR: &str = "recipes";
 
 /// Append-only store. Cheap to clone (holds only a path).
@@ -86,6 +90,44 @@ impl ConductorStore {
         Ok(lines)
     }
 
+    /// Append one shadow-router turn record (§8). Decision-only records: never
+    /// user text, never executed decisions — only the decisions the deployed +
+    /// candidate policies *would have* made (see the shadow router's structural
+    /// no-egress guarantee). Joined to receipts on `request_fingerprint`.
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): wired when the shadow router enters the live loop
+    pub(crate) fn append_shadow_record(
+        &self,
+        record: &ShadowTurnRecord,
+    ) -> Result<(), ConductorError> {
+        append_jsonl(&self.dir.join(SHADOW_FILE), record)
+    }
+
+    /// Read all persisted shadow records (the reward aggregator's live window).
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): used when aggregate_reward reads the window
+    pub(crate) fn read_shadow_records(&self) -> Result<Vec<ShadowTurnRecord>, ConductorError> {
+        read_jsonl(&self.dir.join(SHADOW_FILE))
+    }
+
+    /// Append one explicit user-feedback row to the feedback log (§7 MAJOR-4).
+    /// Late-arriving feedback is NOT in the receipt (written at turn-end,
+    /// before feedback exists); it lives in its own JSONL and is joined to
+    /// receipts on `request_fingerprint` at reward scoring time.
+    ///
+    /// *M2 invariant:* the record carries enum-like tokens only, never user
+    /// text — enforced by the [`FeedbackRecord`] type.
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): wired when the UI capture surface lands
+    pub fn append_feedback(&self, record: &FeedbackRecord) -> Result<(), ConductorError> {
+        append_jsonl(&self.dir.join(FEEDBACK_FILE), record)
+    }
+
+    /// Read all persisted feedback rows. Missing file means a fresh store
+    /// (no feedback yet); a corrupt store directory is an error so the reward
+    /// aggregator can fail closed rather than silently drop negative signals.
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): used when aggregate_reward joins the window
+    pub(crate) fn read_feedback(&self) -> Result<Vec<FeedbackRecord>, ConductorError> {
+        read_jsonl(&self.dir.join(FEEDBACK_FILE))
+    }
+
     /// Persist a recipe version. Path: `recipes/<recipe_id>.v<version>.json`.
     /// Overwrites an exact (id, version) match (idempotent re-writes); never
     /// touches other versions. `recipe_id` is sanitized to a safe filename set.
@@ -135,6 +177,28 @@ fn append_jsonl<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Condu
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(line.as_bytes())?;
     Ok(())
+}
+
+/// Read a JSONL file into typed rows. A missing file means a fresh store
+/// (returns empty); a corrupt/partial line is an error so callers fail closed
+/// rather than silently dropping rows (e.g. a dropped negative feedback signal).
+fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>, ConductorError> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut rows = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row: T = serde_json::from_str(&line)?;
+        rows.push(row);
+    }
+    Ok(rows)
 }
 
 #[allow(dead_code)] // TODO(M2, 2026-06-23): budget reads fail closed when store unavailable

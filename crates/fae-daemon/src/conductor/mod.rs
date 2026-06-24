@@ -60,6 +60,16 @@ pub mod policy;
 pub mod pricing;
 pub mod prompts;
 pub mod recipe;
+/// M2 reward aggregator (spec §7). Landed dormant + test-covered; wired when
+/// the executor's live loop integrates the reward window. The self-judgment-
+/// advisory-only invariant (F-10) is structurally enforced + mutation-tested.
+#[allow(dead_code)] // TODO(M2, 2026-06-23): wired when the executor integrates the reward signal
+pub mod reward;
+/// M2 shadow router (spec §8). Decision-only + structurally no-egress (holds
+/// no CloudProvider/AcpAgentRunner handle). Landed dormant + test-covered;
+/// wired when the executor's live loop runs candidate policies alongside deployed.
+#[allow(dead_code)] // TODO(M2, 2026-06-23): wired when the executor integrates shadow routing
+pub mod shadow;
 pub mod store;
 pub mod telemetry;
 pub mod workers;
@@ -83,8 +93,15 @@ pub use recipe::{
     FaeConductorRecipe, OwnedRouteDecision, PrivacyLane, RecipeSet, RoleSlot, RouteFailure,
     StopPolicy, WorkerLocality, WorkerSelector,
 };
+pub use reward::{
+    aggregate_reward, OutcomeMetrics, Reward, RewardComponents, RewardSignals, SelfJudgment,
+};
+pub use shadow::{NamedPolicy, PromotionCandidate, ShadowRouter};
 pub use store::ConductorStore;
-pub use telemetry::{ConductorRouteEvent, RouteReceipt, TargetKind};
+pub use telemetry::{
+    CandidateDecision, ConductorRouteEvent, CorpusMatch, FeedbackRecord, RouteReceipt,
+    ShadowTurnRecord, TargetKind, UserSignal,
+};
 pub use workers::{WorkerRegistry, LOCAL_MODEL_WORKER_ID};
 
 /// Supported topology set for v1. Star/Debate are intentionally absent — they

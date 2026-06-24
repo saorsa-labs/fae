@@ -151,6 +151,96 @@ pub struct RouteReceipt {
     pub timestamp_ms: u64,
 }
 
+// --- M2 feedback signal (§7) ---
+//
+// Explicit user feedback joined to receipts on `request_fingerprint` at reward
+// scoring time. **M2 invariant (carried from ConductorRouteEvent): enum-like
+// tokens only, never user text or paraphrases.** A rating is a bounded int,
+// not prose. This keeps the isolated conductor store a non-side-channel for
+// personal content.
+
+/// Explicit user feedback for a routed turn. Late-arriving (the receipt is
+/// written at turn-end, before feedback exists); appended to a separate
+/// feedback log and joined to receipts on `request_fingerprint` at reward
+/// scoring time (§7 MAJOR-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserSignal {
+    /// User accepted the response as-is. Positive signal.
+    Accept,
+    /// User rejected the response. Strong negative signal.
+    Reject,
+    /// User edited the response. Mild negative signal (the route's output was
+    /// close but not right).
+    Edit,
+    /// User-supplied rating, `0..=5`. Neutral-to-positive depending on value.
+    Rating(u8),
+}
+
+impl UserSignal {
+    /// True if this signal is an explicit negative (reject or edit).
+    #[allow(dead_code)] // TODO(M2, 2026-06-23): surfaced in team-view / reward explainability
+    pub fn is_negative(self) -> bool {
+        matches!(self, Self::Reject | Self::Edit)
+    }
+}
+
+/// One row of the feedback log (`conductor_feedback.jsonl`). Joins to
+/// [`RouteReceipt`] / [`ConductorRouteEvent`] on `request_fingerprint`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedbackRecord {
+    pub request_fingerprint: RequestFingerprint,
+    pub signal: UserSignal,
+    /// Millis since epoch.
+    pub timestamp_ms: u64,
+}
+
+// --- M2 shadow-router records (§8) ---
+//
+// Persisted to the isolated conductor store (`conductor_shadow.jsonl`) by the
+// shadow router. These live here (not in `shadow.rs`) so `store.rs` can persist
+// them without a module cycle — telemetry owns all persisted conductor records.
+// **M2 invariant:** enum-like tokens + routing decisions only, never user text.
+
+/// The corpus entry a shadow turn matched, if any. Used to score deployed +
+/// candidate decisions against ground truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorpusMatch {
+    pub corpus_version: String,
+    pub entry_id: String,
+}
+
+/// One candidate's decision for a turn, plus whether it matched the corpus's
+/// ideal route. The decision is **never executed** (shadow = decision only).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateDecision {
+    /// The candidate policy id. **Token only — never user text.**
+    pub candidate_id: String,
+    /// The decision the candidate *would have* made. **Never executed.**
+    pub decision: crate::conductor::recipe::OwnedRouteDecision,
+    /// True if this decision matched the corpus's `ideal_route` (when matched).
+    pub matched_ideal: bool,
+}
+
+/// One turn's shadow record, written to the isolated conductor store. This is
+/// the row the reward aggregator's live window reads (§7). Joins to receipts /
+/// events on `request_fingerprint`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowTurnRecord {
+    pub request_fingerprint: RequestFingerprint,
+    /// The deployed policy's decision (the one actually executed through §5).
+    pub deployed_decision: crate::conductor::recipe::OwnedRouteDecision,
+    /// Whether the deployed decision matched the corpus ideal (when matched).
+    pub deployed_matched_ideal: bool,
+    /// Each candidate's decision (never executed) + match outcome.
+    pub candidates: Vec<CandidateDecision>,
+    /// The corpus entry this turn matched, if any (`None` ⇒ no ground truth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corpus_match: Option<CorpusMatch>,
+    /// Millis since epoch.
+    pub timestamp_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

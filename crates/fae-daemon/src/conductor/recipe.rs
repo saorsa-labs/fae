@@ -440,7 +440,7 @@ pub struct ConductorTurnContext {
 ///   ACP; per-class grant plus budget cap, revocable, auditable. *M2 spec.*
 /// - **Tier C — Always per-turn:** sensitive-data lane, cross-owner, PII, or
 ///   anything outside a standing grant. *M2 spec.*
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ApprovalClass {
     /// No approval needed (Tier A: on-device model only, genuinely zero egress).
     #[default]
@@ -463,7 +463,7 @@ pub enum ApprovalClass {
 ///
 /// M1's `StaticDirectPolicy` always emits `direct` + `local-model` +
 /// `ApprovalClass::None`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OwnedRouteDecision {
     /// Opaque; the executor HMACs it into the fingerprint. Never stored raw in
     /// telemetry (only its HMAC is).
