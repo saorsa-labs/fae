@@ -1529,6 +1529,7 @@ fn build_turn_context(cmd: &Command) -> crate::conductor::ConductorTurnContext {
 }
 
 /// M2-live §3.1: payload for `conversation.feedback`. Strict —
+/// `#[serde(deny_unknown_fields)]` accepts **only** `target_request_id`,
 /// `signal`, and `rating`; any other key (including a free-text field) is
 /// rejected before the record is built (V6). `cmd.request_id` is *this* RPC's
 /// correlation id (response + audit); the prior turn is referenced by
@@ -1546,15 +1547,26 @@ struct FeedbackPayload {
 
 /// Validate the feedback payload into a [`crate::conductor::UserSignal`] (fail-
 /// closed). Returns the wire error code on any malformed input (§3.1):
-/// `unknown_signal` / `rating_missing` / `rating_out_of_range`.
+/// `unknown_signal` / `rating_missing` / `rating_out_of_range` /
+/// `rating_unexpected` (`rating` present on a non-`rating` signal).
 fn build_user_signal(
     signal: &str,
     rating: Option<u8>,
 ) -> Result<crate::conductor::UserSignal, &'static str> {
     match signal {
-        "accept" => Ok(crate::conductor::UserSignal::Accept),
-        "reject" => Ok(crate::conductor::UserSignal::Reject),
-        "edit" => Ok(crate::conductor::UserSignal::Edit),
+        "accept" | "reject" | "edit" => {
+            // §3.1 "iff": `rating` is meaningful only for the `rating` signal.
+            // A stray rating on another signal is rejected (fail-closed strict
+            // payload) rather than silently ignored.
+            if rating.is_some() {
+                return Err("rating_unexpected");
+            }
+            Ok(match signal {
+                "accept" => crate::conductor::UserSignal::Accept,
+                "reject" => crate::conductor::UserSignal::Reject,
+                _ => crate::conductor::UserSignal::Edit,
+            })
+        }
         "rating" => {
             let value = rating.ok_or("rating_missing")?;
             if value > 5 {
@@ -3482,6 +3494,19 @@ mod tests {
         .await
         .expect_err("rating out of range");
         assert_eq!(err.code, "rating_out_of_range");
+        // stray rating on a non-rating signal (§3.1 "iff": rating is meaningful
+        // only for the rating signal — reject rather than silently ignore).
+        let err = record_feedback(
+            &harness.backends(),
+            &feedback_cmd(serde_json::json!({
+                "target_request_id": "t",
+                "signal": "accept",
+                "rating": 0
+            })),
+        )
+        .await
+        .expect_err("stray rating rejected");
+        assert_eq!(err.code, "rating_unexpected");
         assert!(harness.read_feedback().is_empty(), "nothing persisted");
     }
 

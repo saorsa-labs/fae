@@ -133,7 +133,7 @@ In this protocol, `cmd.request_id` is the **current RPC's** correlation/audit id
 
 - `target_request_id` is fingerprinted with the runtime's `InstallKey` to produce the `request_fingerprint` that joins the prior turn's receipt/event/shadow records (F-4 continuity).
 - Strict payload validation: parse into a struct with `#[serde(deny_unknown_fields)]` accepting **only** `target_request_id`, `signal`, `rating`. Unknown keys ⇒ `unknown_field` error. This does **not** mean user text "cannot enter the daemon" — the raw frame is still written to the **audit log** by the transport's fail-closed audit contract (every frame is). The honest, narrower claim: **the persisted `FeedbackRecord` is enum-only and contains no user text** (no free-text field exists in the validated struct).
-- `signal` ∈ {accept, reject, edit, rating}; `rating` required iff `signal == "rating"`, `0..=5` (u8). Malformed ⇒ `CpResponse::error` (`unknown_signal` / `rating_out_of_range` / `rating_missing` / `unknown_field`).
+- `signal` ∈ {accept, reject, edit, rating}; `rating` required iff `signal == "rating"`, `0..=5` (u8). Malformed ⇒ `CpResponse::error` (`unknown_signal` / `rating_out_of_range` / `rating_missing` / `rating_unexpected` / `unknown_field`). `rating_unexpected` = a stray `rating` on a non-`rating` signal (fail-closed strict payload — a client sending spurious rating likely has a bug).
 
 ### §3.2 Handler routing + scope (TWO registration points)
 

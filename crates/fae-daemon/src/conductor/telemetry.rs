@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::conductor::fingerprint::RequestFingerprint;
 use crate::conductor::recipe::{
-    ConductorRole, ConductorTaskClass, ConductorTopology, PrivacyLane, WorkerLocality,
+    ApprovalClass, ConductorRole, ConductorTaskClass, ConductorTopology, PrivacyLane,
+    WorkerLocality,
 };
 
 /// One routable target, flattened for telemetry/receipts. `LocalModel` etc. map
@@ -210,6 +211,39 @@ pub struct CorpusMatch {
     pub entry_id: String,
 }
 
+/// Telemetry-safe snapshot of a route decision, omitting the raw
+/// `request_id` (F-4). The full [`OwnedRouteDecision`] carries the opaque
+/// `request_id` because the executor HMACs it into the fingerprint during
+/// execution — but that id is **never** persisted raw. Correlation across
+/// persisted records is via [`RequestFingerprint`] only. Built at the
+/// shadow-capture boundary ([`ShadowRouter::evaluate_record`]) from a borrow of
+/// the live decision, so no raw id is ever serialized to the conductor store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TelemetryRouteDecision {
+    pub recipe_id: String,
+    pub topology: ConductorTopology,
+    pub worker_id: String,
+    pub task_class: ConductorTaskClass,
+    pub lane: PrivacyLane,
+    pub approval: ApprovalClass,
+    /// Short, static, audit-safe reason (e.g. `"static-direct-local"`).
+    pub reason: String,
+}
+
+impl From<&crate::conductor::recipe::OwnedRouteDecision> for TelemetryRouteDecision {
+    fn from(d: &crate::conductor::recipe::OwnedRouteDecision) -> Self {
+        Self {
+            recipe_id: d.recipe_id.clone(),
+            topology: d.topology,
+            worker_id: d.worker_id.clone(),
+            task_class: d.task_class,
+            lane: d.lane,
+            approval: d.approval.clone(),
+            reason: d.reason.clone(),
+        }
+    }
+}
+
 /// One candidate's decision for a turn, plus whether it matched the corpus's
 /// ideal route. The decision is **never executed** (shadow = decision only).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -217,7 +251,8 @@ pub struct CandidateDecision {
     /// The candidate policy id. **Token only — never user text.**
     pub candidate_id: String,
     /// The decision the candidate *would have* made. **Never executed.**
-    pub decision: crate::conductor::recipe::OwnedRouteDecision,
+    /// Telemetry-safe: no raw `request_id` (F-4).
+    pub decision: TelemetryRouteDecision,
     /// True if this decision matched the corpus's `ideal_route` (when matched).
     pub matched_ideal: bool,
 }
@@ -229,7 +264,9 @@ pub struct CandidateDecision {
 pub struct ShadowTurnRecord {
     pub request_fingerprint: RequestFingerprint,
     /// The deployed policy's decision (the one actually executed through §5).
-    pub deployed_decision: crate::conductor::recipe::OwnedRouteDecision,
+    /// Telemetry-safe: no raw `request_id` (F-4) — correlation is via
+    /// `request_fingerprint` only.
+    pub deployed_decision: TelemetryRouteDecision,
     /// Whether the deployed decision matched the corpus ideal (when matched).
     pub deployed_matched_ideal: bool,
     /// Each candidate's decision (never executed) + match outcome.
@@ -247,6 +284,49 @@ mod tests {
 
     fn fp() -> RequestFingerprint {
         RequestFingerprint("a".repeat(64))
+    }
+
+    // F-4 regression (oracle ea2dc52c BLOCKER-1): a ShadowTurnRecord built from
+    // an OwnedRouteDecision carrying a sentinel raw request_id must NOT leak that
+    // id when serialized. Correlation is via request_fingerprint only. Mutation
+    // contract: if TelemetryRouteDecision is reverted to embed the raw
+    // OwnedRouteDecision (or re-adds a request_id field), this fails.
+    #[test]
+    fn shadow_record_serialization_omits_raw_request_id() {
+        use crate::conductor::recipe::{
+            ApprovalClass, ConductorTaskClass, ConductorTopology, OwnedRouteDecision, PrivacyLane,
+        };
+        let raw = OwnedRouteDecision {
+            request_id: "SENTINEL-RAW-ID-NEVER-PERSIST".to_owned(),
+            recipe_id: "fae.static-direct.v1".to_owned(),
+            topology: ConductorTopology::Direct,
+            worker_id: "local-model".to_owned(),
+            task_class: ConductorTaskClass::Unknown,
+            lane: PrivacyLane::LocalOnly,
+            approval: ApprovalClass::None,
+            reason: "static-direct-local".to_owned(),
+        };
+        let record = ShadowTurnRecord {
+            request_fingerprint: fp(),
+            deployed_decision: TelemetryRouteDecision::from(&raw),
+            deployed_matched_ideal: false,
+            candidates: vec![CandidateDecision {
+                candidate_id: "cand".to_owned(),
+                decision: TelemetryRouteDecision::from(&raw),
+                matched_ideal: false,
+            }],
+            corpus_match: None,
+            timestamp_ms: 1_700_000_000_000,
+        };
+        let json = serde_json::to_string(&record).expect("ser in test");
+        assert!(
+            !json.contains("SENTINEL-RAW-ID-NEVER-PERSIST"),
+            "raw request_id leaked into serialized ShadowTurnRecord: {json}"
+        );
+        assert!(
+            !json.contains("request_id"),
+            "no request_id key at all: {json}"
+        );
     }
 
     #[test]

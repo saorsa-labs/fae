@@ -63,6 +63,7 @@ impl ConductorStore {
     /// than silently dropping outcome signal. Mirrors [`read_shadow_records`].
     #[allow(dead_code)] // TODO(M2-live, 2026-06-24): used when reward_snapshot reads the window
     pub(crate) fn read_receipts(&self) -> Result<Vec<RouteReceipt>, ConductorError> {
+        ensure_store_dir_available(&self.dir)?;
         read_jsonl(&self.dir.join(RECEIPTS_FILE))
     }
 
@@ -114,6 +115,7 @@ impl ConductorStore {
     /// Read all persisted shadow records (the reward aggregator's live window).
     #[allow(dead_code)] // TODO(M2, 2026-06-23): used when aggregate_reward reads the window
     pub(crate) fn read_shadow_records(&self) -> Result<Vec<ShadowTurnRecord>, ConductorError> {
+        ensure_store_dir_available(&self.dir)?;
         read_jsonl(&self.dir.join(SHADOW_FILE))
     }
 
@@ -134,6 +136,7 @@ impl ConductorStore {
     /// aggregator can fail closed rather than silently drop negative signals.
     #[allow(dead_code)] // TODO(M2, 2026-06-23): used when aggregate_reward joins the window
     pub(crate) fn read_feedback(&self) -> Result<Vec<FeedbackRecord>, ConductorError> {
+        ensure_store_dir_available(&self.dir)?;
         read_jsonl(&self.dir.join(FEEDBACK_FILE))
     }
 
@@ -368,5 +371,68 @@ mod tests {
         assert!(sanitize_id(".").is_err());
         assert!(sanitize_id("..").is_err());
         assert!(sanitize_id("good-id.v1").is_ok());
+    }
+
+    // V7 (oracle ea2dc52c MINOR-2): the three telemetry read seams fail closed
+    // on a corrupt/partial JSON line rather than silently dropping rows. A
+    // dropped row would be worst for feedback (a lost negative signal).
+    fn inject_corrupt_line(dir: &std::path::Path, file: &str) {
+        std::fs::write(dir.join(file), "{\"this is\": not valid json\n").unwrap();
+    }
+
+    #[test]
+    fn read_receipts_fails_closed_on_corrupt_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConductorStore::open(dir.path()).unwrap();
+        inject_corrupt_line(dir.path(), "conductor_receipts.jsonl");
+        assert!(store.read_receipts().is_err());
+    }
+
+    #[test]
+    fn read_shadow_records_fails_closed_on_corrupt_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConductorStore::open(dir.path()).unwrap();
+        inject_corrupt_line(dir.path(), "conductor_shadow.jsonl");
+        assert!(store.read_shadow_records().is_err());
+    }
+
+    #[test]
+    fn read_feedback_fails_closed_on_corrupt_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConductorStore::open(dir.path()).unwrap();
+        inject_corrupt_line(dir.path(), "conductor_feedback.jsonl");
+        assert!(store.read_feedback().is_err());
+    }
+
+    // MAJOR-1 (oracle ea2dc52c): a missing *file* on a fresh store is empty
+    // (legitimate), but a missing/corrupt store *directory* is an error — never
+    // silently return empty (which would drop every persisted row).
+    #[test]
+    fn fresh_store_missing_files_read_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConductorStore::open(dir.path()).unwrap();
+        assert!(store.read_receipts().unwrap().is_empty());
+        assert!(store.read_shadow_records().unwrap().is_empty());
+        assert!(store.read_feedback().unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_seams_fail_closed_when_store_dir_disappears() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConductorStore::open(dir.path()).unwrap();
+        // Simulate a corrupt/removed store directory (e.g. external deletion).
+        std::fs::remove_dir_all(dir.path()).unwrap();
+        assert!(
+            store.read_receipts().is_err(),
+            "receipts fail closed on missing dir"
+        );
+        assert!(
+            store.read_shadow_records().is_err(),
+            "shadow fail closed on missing dir"
+        );
+        assert!(
+            store.read_feedback().is_err(),
+            "feedback fail closed on missing dir"
+        );
     }
 }

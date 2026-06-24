@@ -60,7 +60,9 @@ use crate::conductor::fingerprint::RequestFingerprint;
 use crate::conductor::policy::ConductorRoutingPolicy;
 use crate::conductor::recipe::{ConductorTurnContext, OwnedRouteDecision};
 use crate::conductor::store::ConductorStore;
-use crate::conductor::telemetry::{CandidateDecision, CorpusMatch, ShadowTurnRecord};
+use crate::conductor::telemetry::{
+    CandidateDecision, CorpusMatch, ShadowTurnRecord, TelemetryRouteDecision,
+};
 
 /// A named candidate policy under shadow evaluation.
 pub struct NamedPolicy {
@@ -210,7 +212,9 @@ impl ShadowRouter {
                     .unwrap_or(false);
                 CandidateDecision {
                     candidate_id: named.id.clone(),
-                    decision,
+                    // F-4: snapshot the decision WITHOUT the raw request_id
+                    // (correlation is via request_fingerprint on the record).
+                    decision: TelemetryRouteDecision::from(&decision),
                     matched_ideal,
                 }
             })
@@ -218,7 +222,8 @@ impl ShadowRouter {
 
         ShadowTurnRecord {
             request_fingerprint,
-            deployed_decision,
+            // F-4: snapshot the deployed decision WITHOUT the raw request_id.
+            deployed_decision: TelemetryRouteDecision::from(&deployed_decision),
             deployed_matched_ideal,
             candidates,
             corpus_match: corpus_match.map(|entry| CorpusMatch {

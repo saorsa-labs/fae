@@ -1977,17 +1977,23 @@ mod tests {
 
     /// Read + parse the shadow log written under the test store dir.
     fn shadow_records(runtime: &TestRuntime) -> Vec<crate::conductor::telemetry::ShadowTurnRecord> {
-        let path = runtime
-            ._tmp
-            .path()
-            .join("store")
-            .join("conductor_shadow.jsonl");
-        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let content = shadow_raw(runtime);
         content
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| serde_json::from_str(line).expect("shadow record parses in test"))
             .collect()
+    }
+
+    /// Raw (unparsed) contents of the shadow log — for F-4 leak assertions the
+    /// parsed struct cannot catch (a leaked raw request_id survives parsing).
+    fn shadow_raw(runtime: &TestRuntime) -> String {
+        let path = runtime
+            ._tmp
+            .path()
+            .join("store")
+            .join("conductor_shadow.jsonl");
+        std::fs::read_to_string(path).unwrap_or_default()
     }
 
     /// V1 + V8: a routed local turn with shadow ON produces a shadow record and
@@ -2033,6 +2039,21 @@ mod tests {
             "exactly one shadow record per turn (zero candidates)"
         );
         assert!(records[0].candidates.is_empty(), "M2 ships zero candidates");
+
+        // F-4 file-level regression (oracle ea2dc52c BLOCKER-1): the raw shadow
+        // log must NOT carry the opaque request_id (correlation is via the
+        // fingerprint only) nor any prompt text. The parsed-struct read above
+        // cannot catch a leaked raw id that survives deserialization.
+        let raw = shadow_raw(&runtime);
+        assert!(!raw.is_empty(), "shadow file written");
+        assert!(
+            !raw.contains("req-shadow"),
+            "raw request_id leaked into conductor_shadow.jsonl: {raw}"
+        );
+        assert!(
+            !raw.contains("benign"),
+            "prompt text leaked into conductor_shadow.jsonl: {raw}"
+        );
         Ok(())
     }
 
@@ -2105,7 +2126,8 @@ mod tests {
         let records = shadow_records(&runtime);
         assert_eq!(records.len(), 1);
         assert_eq!(
-            records[0].deployed_decision, executed,
+            records[0].deployed_decision,
+            crate::conductor::telemetry::TelemetryRouteDecision::from(&executed),
             "shadow deployed decision must equal the executed decision (shared Arc)"
         );
         Ok(())
