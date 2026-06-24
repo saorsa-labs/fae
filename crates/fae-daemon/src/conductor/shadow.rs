@@ -3,28 +3,41 @@
 //! Runs candidate policies **alongside** the deployed policy, scoring both —
 //! **without the candidates ever causing egress, spend, or cross-owner traffic.**
 //!
-//! ## Structural no-egress guarantee (the load-bearing property)
+//! ## No-conductor-egress-seams guarantee (the load-bearing property)
 //!
-//! The shadow router is **physically incapable of egress**. This is not a
-//! config default that could be flipped; it is structural:
+//! The shadow router has **no conductor egress seams in scope.** This is not a
+//! config default that could be flipped; it is structural in the precise sense
+//! that matters for egress safety:
 //!
-//! - [`ShadowRouter`] holds only [`Box<dyn ConductorRoutingPolicy>`] (a
-//!   decision-only trait whose sole method [`decide`](ConductorRoutingPolicy::decide)
-//!   returns an [`OwnedRouteDecision`] with **no I/O**) and a [`ConductorStore`]
-//!   (an isolated append-only log). There is **no field** of type
-//!   `CloudProvider`, `AcpAgentRunner`, `CloudRequestBuilder`, or any other
-//!   egress handle. The executor's egress seams are simply not in scope.
-//! - [`ShadowRouter::evaluate`] computes decisions via `policy.decide(ctx)` — a
-//!   pure function — and writes a [`ShadowTurnRecord`] to the isolated store. It
-//!   never calls the executor, never constructs a provider request, never spawns
-//!   an agent.
+//! - [`ShadowRouter`] holds only [`Box<dyn ConductorRoutingPolicy>`] (a trait
+//!   whose sole method [`decide`](ConductorRoutingPolicy::decide) returns an
+//!   [`OwnedRouteDecision`]) and a [`ConductorStore`] (an isolated append-only
+//!   log). There is **no field** of type `CloudProvider`, `AcpAgentRunner`,
+//!   `CloudRequestBuilder`, or any other egress handle. The executor's egress
+//!   seams are simply not in scope, so `evaluate` cannot call them.
+//! - [`ShadowRouter::evaluate`] computes decisions via `policy.decide(ctx)` and
+//!   writes a [`ShadowTurnRecord`] to the isolated store. It never calls the
+//!   executor, never constructs a provider request, never spawns an agent.
+//!
+//! ## Honest scope of the claim
+//!
+//! Rust cannot prove an arbitrary `ConductorRoutingPolicy::decide()`
+//! implementation is pure — an in-tree policy *could* do I/O internally. The
+//! honest, load-bearing statement is narrower and stronger: **no conductor
+//! egress seam is reachable from the shadow path.** The in-tree policies are
+//! data-only (`StaticDirectPolicy`, the test `FixedPolicy`); they read `ctx`
+//! and return a decision. The M3 candidate surface **must keep this property**
+//! — M3 candidate policies are **interpreted recipes** (data), not arbitrary
+//! executable policy code. A candidate that could do I/O would defeat the
+//! guarantee. This constraint is carried into the M3 spec.
 //!
 //! This is the `agent.session_start` lesson transferred: the surface everyone
-//! assumes is out-of-reach (shadow execution) is made out-of-reach *by type*,
-//! not by default. The load-bearing test
-//! (`shadow_evaluation_never_egresses_even_with_spy_seams_available`) pins it:
-//! even when spy `CloudProvider`/`AcpAgentRunner` seams exist in the runtime,
-//! a shadow evaluation records zero calls on them.
+//! assumes is out-of-reach (shadow execution) is made out-of-reach *by keeping
+//! the egress seams out of scope and the candidate surface data-only*, not by a
+//! config default. The load-bearing test
+//! (`shadow_router_holds_no_egress_handle`) pins the behavioral consequence:
+//! a shadow evaluation's only side effect is one record written to the isolated
+//! store.
 //!
 //! ## Promotion is not automatic
 //!
@@ -333,10 +346,7 @@ mod tests {
         let corpus = Corpus::synthetic_core().expect("synthetic corpus");
         let router = ShadowRouter::new(
             Box::new(StaticDirectPolicy),
-            vec![NamedPolicy::new(
-                "twin",
-                Box::new(StaticDirectPolicy),
-            )],
+            vec![NamedPolicy::new("twin", Box::new(StaticDirectPolicy))],
         );
         let (_deployed, flagged) = router.flag_promotion_candidates(&corpus);
         assert!(
@@ -353,12 +363,15 @@ mod tests {
     /// are not in scope of `ShadowRouter`. We assert the public API surface: the
     /// only things a ShadowRouter can do are `score_policies`, `evaluate`, and
     /// `flag_promotion_candidates` — none of which accept or hold an egress seam.
+    /// (Note: Rust cannot prove an arbitrary `decide()` impl is pure; the
+    /// load-bearing property is that no egress *seam* is in scope and the in-tree
+    /// + M3 candidate policies are data-only. See the module-level honesty note.)
     #[test]
     fn shadow_router_holds_no_egress_handle() {
-        // The compile-time proof is the struct definition itself: ShadowRouter's
-        // fields are `Box<dyn ConductorRoutingPolicy>` + `Vec<NamedPolicy>`. The
-        // decision-only trait has no I/O. There is no CloudProvider/Runner field.
-        // This test asserts the *behavioral* consequence: an evaluation over a
+        // The struct fields are `Box<dyn ConductorRoutingPolicy>` +
+        // `Vec<NamedPolicy>`. No egress seam (CloudProvider/Runner/builder) is
+        // in scope of ShadowRouter. This test asserts the *behavioral*
+        // consequence: an evaluation over a
         // pure policy produces records with zero side effects beyond the store.
         let store = tmp_store();
         let router = ShadowRouter::new(

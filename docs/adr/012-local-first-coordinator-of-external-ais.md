@@ -38,12 +38,7 @@ trusted ⇒ stronger gating, with the PII membrane as the constant egress floor:
 
 ### Three load-bearing principles
 
-1. **The PII membrane is the security model.** Fae works *for her user's security*.
-   Every cloud-bound prompt — ACP agent, cloud API, or mesh peer — passes through
-   `fae-pii-membrane` (`should_block_remote_egress`) **before** it leaves the device;
-   secret-shaped content is blocked or redacted. This is how external-AI use is made
-   safe. It replaces voice identity (retired in S18; ADR-006 superseded) as Fae's
-   security posture, alongside `DamageControlPolicy` (ADR-005) for catastrophic local
+1. **Fae-as-local-coordinator + compartmentalization is the security model; the PII membrane is the constant credential/secret egress floor.** Fae works *for her user's security*. The trust boundary is Fae being local (principle 3: she is the sole integrator of the comprehensive view). Layered on top, the PII membrane is a defense-in-depth filter: every cloud-bound prompt — ACP agent, cloud API, or mesh peer — passes through `fae-pii-membrane` (`should_block_remote_egress`) **before** it leaves the device, so secret-shaped content is blocked or redacted even on a route Fae chose to delegate. This replaces voice identity (retired in S18; ADR-006 superseded) as Fae's security posture, alongside `DamageControlPolicy` (ADR-005) for catastrophic local
    operations.
 
    *Scope, stated honestly:* the membrane is a **credential/secret filter**, not a
