@@ -1,23 +1,23 @@
 # M3 — MetaOpt ConductorRecipe Mutation (spec v2)
 
-- **Status:** Proposed (spec v2) — awaits G-M3-spec re-review (`oracle` + `reviewer`).
-- **Date:** 2026-06-24 (v2 2026-06-24)
+- **Status:** Proposed (spec v3) — awaits G-M3-spec re-review (`oracle` + `reviewer`).
+- **Date:** 2026-06-24 (v3 2026-06-24)
 - **Owner:** David Irvine
 - **Authorizes:** ADR-008a (Accepted, `ec856463`) — the four enforceable constraints.
 - **Prereqs:** G-M2 impl PASSED (reward/shadow review-complete, `03d82169`). MetaOpt primitive ported + dormant (`750a4a4a`). Conductor recipe store versioned (`recipes/<id>.v<ver>.json`).
 - **Scope:** Add `ConductorRecipe` as the 5th MetaOptimization surface, with mutation operators, validation, rollback, and SOUL-drift gate. **Dormant/offline/CLI-only in M3** — no background scheduler, no live auto-deploy.
 
 > **v2 changelog (folds G-M3-spec v1 review run `3e771c6e` — 1 BLOCKER, 7 MAJOR):**
-> - **BLOCKER-1 fixed (§3.1):** the existing `MetaOptimizer::apply_change` ConfigAdjustment path writes unbounded config keys verbatim — `FAE_MODEL_MODE` was reachable today. v2 specifies an exhaustive `is_protected_config_key()` denylist applied *inside* `apply_change` before `write_config`, covering canonical keys + aliases, with alias-coverage tests.
-> - **MAJOR-1 fixed (§1.3):** full `MetaOptChange`/`MetaOptimizer` integration specified — `MetaOptChange::ConductorRecipePatch`, the optimizer's `recipe_port` field, the `apply_change` branch, and closure into the keep/rollback discipline.
-> - **MAJOR-2 fixed (§2):** role-slot-aware patch semantics. `SwapWorker` now names the role slot; `AdjustVerifier` specifies worker/prompt/schema source; **atomic patch batches** (one candidate recipe version) when a mutation needs multiple operators to stay valid (direct→chain requires topology + role slots + budget together). Every patch/batch must yield a `validate_for(V1Safe)`-passing post-state.
-> - **MAJOR-3 fixed (§2.1):** exact fanout formula + budget dimensions for the egress-multiplication re-check.
-> - **MAJOR-4 fixed (§5):** new `no_tool_authority_expansion` lint — role prompts may adjust decomposition/style/output, but may not grant/request tools, network, filesystem, or post-spawn autonomous behavior. Tool permission stays executor/ACP-policy-owned.
-> - **MAJOR-5 fixed (§4):** rollback revalidates against the *current* registry/caps/profile before re-activation, not just deserializes.
-> - **MAJOR-6 fixed (§6):** F-16 SOUL-drift eval is local-only/deterministic (fixed fixtures or pure-local generation, fixed seed) — never cloud/ACP. Test: `soul_drift_eval_never_egresses`.
-> - **MAJOR-7 fixed (§8):** M3 trigger is **CLI-only**. No scheduler task. An explicit assertion that no default scheduled MetaOpt-mutation task exists.
-> - **MINORs folded:** `#[serde(deny_unknown_fields)]` + conversion + serde-rejection tests (§9); prompt-lint canonicalization (NFKC, lowercase, zero-width strip, base64/hex/rot variants) (§5.1).
-> - **§11 Q4 resolved (§2.2):** atomic patch batch as one candidate version (replaces "separate versions"); rollback stays whole-version.
+> - **BLOCKER-1 fixed (§3.1):** `is_protected_config_key()` denylist at the top of the existing ConfigAdjustment arm (before `write_config`), covering canonical keys + aliases. **CONFIRMED-CLOSED in re-review (`81dafa80`).**
+> - **MAJOR-1, 4, 5, 6, 7 CONFIRMED-CLOSED in re-review.**
+> - MAJOR-2, MAJOR-3 required v3 refinement (see v3 changelog).
+>
+> **v3 changelog (folds G-M3-spec v2 re-review run `81dafa80` — 5 CONFIRMED-CLOSED, 2 STILL-OPEN, 1 NEW-MAJOR):**
+> - **MAJOR-2 closed (§2.3): direct→chain role-slot construction.** A direct recipe has only a Worker slot; `AdjustVerifier` adds only a Verifier; `SwitchTopology` carried no slot plan — so direct→chain could not construct the required Thinker→Worker→Verifier slots. v3 adds `SetRoleSlotPlan { plan: Vec<RoleSlotSpec> }` as a sixth data-only batch element: it lets a batch define the full target role-slot plan atomically. It is **not a new mutation operator in the ADR-008a sense** — it is the *construction surface* that makes `SwitchTopology` + `AdjustVerifier` composable; the post-state still must pass `validate_for(V1Safe)` and all four constraints. (Clarified as a batch-construction element, not a capability expansion.)
+> - **MAJOR-3 closed (§2.1): fanout formula field corrections.** Fixed the factual error: the field is `StopPolicy.max_correction_loops` (NOT `max_verifier_loops`). Added explicit comparison against `BudgetPolicy.max_cost_micros` and `max_role_calls`, the real cap fields.
+> - **NEW-MAJOR-1 closed (§2.2): atomic-batch invariants.** `validate_batch` rejects mixed `recipe_id`s; `apply_change` captures `prior_version` before `apply_batch` so the rollback closure is unambiguous. Tests: `batch_rejects_mixed_recipe_ids`, `apply_change_conductor_recipe_captures_prior_version_for_rollback`.
+> - **NEW-MINOR-1 closed (§1.1):** `deny_unknown_fields` on the patch enum + each variant.
+> - **NEW-MINOR-2 closed (§3.1):** protected-key matching canonicalizes separators (`-`/`_`/`.`/camelCase → single canonical form) before comparison, closing `model-mode`/`availability.mode` variants without alias-list growth.
 
 ---
 
@@ -40,27 +40,26 @@ M3 is the **protected-kernel surface**: autonomous mutation of the egress-affect
 
 /// A mutation a MetaOpt run may propose on a conductor recipe.
 /// DATA ONLY — the daemon adapter interprets this against FaeConductorRecipe.
-/// Maps to ADR-008a's five allowed operators. Role-slot-aware (MAJOR-2).
+/// Maps to ADR-008a's five allowed operators + one batch-construction element (v3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConductorRecipePatch {
     /// (ADR-008a op 1) Swap the worker in ONE role slot. `to_worker` must be
-    /// same-or-lower trust tier AND provisioned. Names the role slot explicitly
-    /// (recipes have per-role workers).
+    /// same-or-lower trust tier AND provisioned. Names the role slot explicitly.
     SwapWorker {
         recipe_id: String,
         role: ConductorRoleDto,
         to_worker: String,
     },
-    /// (ADR-008a op 2) Switch topology direct ↔ chain.
+    /// (ADR-008a op 2) Switch topology direct ↔ chain. **For direct→chain, pair
+    /// with `SetRoleSlotPlan` in the same batch** to construct the required
+    /// Thinker→Worker→Verifier slots (a direct recipe has only a Worker slot).
     SwitchTopology { recipe_id: String, to: ConductorTopologyDto },
     /// (ADR-008a op 3) Add or remove a Verifier role (chain only). Adding
-    /// requires the worker + prompt_template_id + output_schema the new slot
-    /// will use (no implicit defaults — the patch is explicit, auditable data).
+    /// requires the worker + prompt + schema the new slot will use.
     AdjustVerifier {
         recipe_id: String,
         action: VerifierAction,
-        /// When adding: the worker + prompt template the Verifier slot uses.
         worker: Option<String>,
         prompt_template_id: Option<String>,
         output_schema: Option<String>,
@@ -73,6 +72,30 @@ pub enum ConductorRecipePatch {
     },
     /// (ADR-008a op 5) Adjust budget. Downward always; upward within cap (§2.1).
     AdjustBudget { recipe_id: String, delta_micros_per_day: i64 },
+    /// (v3, NEW-MAJOR-1 fix) **Batch-construction element, not a new operator.**
+    /// Sets the full target role-slot plan atomically. Required for direct→chain
+    /// (a direct recipe's single Worker slot cannot become Thinker→Worker→Verifier
+    /// via `AdjustVerifier` alone, which only adds a Verifier). The post-state
+    /// MUST still pass `validate_for(V1Safe)` and all four constraints — this
+    /// element constructs slots; it does not widen capability. All workers named
+    /// in the plan must be provisioned + same-or-lower tier.
+    SetRoleSlotPlan { recipe_id: String, plan: Vec<RoleSlotSpec> },
+}
+
+/// A data-only spec for a role slot (used by `SetRoleSlotPlan`). Mirrors the
+/// daemon's `RoleSlot` minus the mutation internals. All fields explicit — no
+/// implicit defaults — so a batch is fully auditable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleSlotSpec {
+    pub role: ConductorRoleDto,
+    pub worker: String,
+    pub prompt_template_id: String,
+    /// The prompt body is set separately via `MutateRolePrompt`; here it is the
+    /// initial/template body for a newly-constructed slot.
+    pub prompt_template: String,
+    pub output_schema: Option<String>,
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,26 +174,35 @@ The patch surface plugs into the **existing** optimizer flow, not alongside it:
 | 4 | Mutate role prompt | `MutateRolePrompt { role, new_prompt }` | Lint-gated (§5). |
 | 5 | Adjust budget | `AdjustBudget { delta_micros_per_day }` | `delta < 0` always; `delta > 0` only if `current_cap + delta ≤ provisioned_cap(worker)`. |
 
-### 2.1 Egress-multiplication budget re-check (MAJOR-3 — exact formula)
+### 2.1 Egress-multiplication budget re-check (MAJOR-3 — exact formula, v3 field-corrected)
 
-When a patch (or batch) changes the post-state's role-slot count, the validator recomputes the worst-case per-turn cost and re-checks the budget. Exact dimensions:
+When a patch (or batch) changes the post-state's role-slot count, the validator recomputes the worst-case per-turn cost and re-checks the budget against the **real** `BudgetPolicy` + `StopPolicy` fields:
 
 - **Post-state role count** `n = post.role_slots.len()` (direct ⇒ 1; chain ⇒ up to 3).
-- **`BudgetPolicy.max_role_calls >= n`** — the recipe's own cap must accommodate the fanout. Violation ⇒ reject `PatchRejection::FanoutExceedsRoleCallCap`.
-- **Worst-case per-turn cost** = `Σ over role_slots of estimate_cost(slot.worker, prompt, max_output_tokens)`. If any slot's worker is **uncostable** (no pricing row), the budget check **fails closed** (`PatchRejection::UncostableWorkerInChain`) — an uncostable worker in a multiplied-fanout chain cannot be budget-gated, so it is rejected.
-- **Per-worker daily buckets:** if the post-state chain uses multiple distinct workers, the D2 per-worker daily buckets must each accommodate their slot's projected spend under the multiplied fanout.
-- **Interaction with `AggregationPolicy`/`StopPolicy`:** `max_verifier_loops` multiplies the Verifier slot's cost; the worst-case includes `max_verifier_loops + 1` Verifier calls. The validator reads the post-state `StopPolicy.max_verifier_loops` and folds it in.
+- **`BudgetPolicy.max_role_calls >= n`** — the recipe's own cap must accommodate the fanout. Violation ⇒ `PatchRejection::FanoutExceedsRoleCallCap`.
+- **Worst-case per-turn cost** = `Σ over role_slots of estimate_cost(slot.worker, prompt, max_output_tokens)`.
+  - **Verifier-loop multiplier (v3 correction):** the Verifier slot's cost is multiplied by `StopPolicy.max_correction_loops + 1` (the actual field name in `recipe.rs`; v2's `max_verifier_loops` was wrong). So worst-case Verifier contribution = `estimate_cost(verifier_worker, ...) * (post.stop.max_correction_loops + 1)`.
+  - **Uncostable-worker fail-closed:** if any slot's worker has no pricing row, the check **fails closed** (`PatchRejection::UncostableWorkerInChain`) — an uncostable worker in a multiplied-fanout chain cannot be budget-gated, so it is rejected.
+- **Cap comparisons (v3 — against the real fields):**
+  - `worst_case_cost <= BudgetPolicy.max_cost_micros.unwrap_or(u64::MAX)` — if exceeded ⇒ `PatchRejection::BudgetExceedsCostCap`.
+  - Per-worker daily buckets (D2): each distinct worker's projected daily spend under the multiplied fanout must fit its provisioned per-worker bucket.
+  - `BudgetPolicy.max_tokens` (if `Some`) must accommodate `Σ max_output_tokens * (verifier_multiplier where applicable)`.
+- **Interaction with `AggregationPolicy`:** does not change fanout (aggregation synthesizes the Verifier-approved answer); no extra cost term. `StopPolicy.stop_after_verifier` / `stop_on_budget_exhaustion` are respected by the executor at runtime (Layer 2), not re-checked here.
 
-**Tests:** `direct_to_chain_rechecks_budget_fanout`, `add_verifier_rechecks_budget`, `multi_worker_chain_per_bucket_check`, `uncostable_worker_in_chain_rejected`, `verifier_loops_multiplied_in_worst_case`.
+**Tests:** `direct_to_chain_rechecks_budget_fanout`, `add_verifier_rechecks_budget`, `multi_worker_chain_per_bucket_check`, `uncostable_worker_in_chain_rejected`, `verifier_loops_multiplied_in_worst_case` (uses `max_correction_loops`), `cost_cap_exceeded_rejected` (against `max_cost_micros`).
 
-### 2.2 Atomic patch batches (MAJOR-2 + §11 Q4)
+### 2.2 Atomic patch batches (MAJOR-2 + §11 Q4 + v3 NEW-MAJOR-1)
 
-A single mutation often needs multiple operators to keep the recipe valid: `direct → chain` requires topology switch **plus** adding Thinker/Worker/Verifier role slots **plus** possibly a budget adjustment. Applying these as separate versions would pass through an **invalid intermediate state** (chain with no role slots fails `validate_for(V1Safe)`).
+A single mutation often needs multiple operators to keep the recipe valid: `direct → chain` requires `SwitchTopology` **plus** `SetRoleSlotPlan` (Thinker/Worker/Verifier) **plus** possibly `AdjustBudget`. Applying these as separate versions would pass through an **invalid intermediate state** (chain with a single Worker slot fails `validate_for(V1Safe)`).
 
 - A batch is `Vec<ConductorRecipePatch>` applied **atomically as one new version**.
+- **Same-recipe invariant (v3 NEW-MAJOR-1):** every patch in a batch MUST target the **same `recipe_id`**. `validate_batch` rejects mixed recipe IDs ⇒ `PatchRejection::MixedRecipeIds`. (A batch is one recipe's mutation; multi-recipe coordination is not in M3.)
 - The validator runs `validate_batch` on the **projected post-state after ALL patches** — not per-patch. Intermediate states are never persisted.
-- Every batch's post-state MUST pass `FaeConductorRecipe::validate_for(RecipeProfile::V1Safe)`. An invalid post-state ⇒ `PatchRejection::InvalidPostState`.
+- Every batch's post-state MUST pass `FaeConductorRecipe::validate_for(RecipeProfile::V1Safe)`. Invalid post-state ⇒ `PatchRejection::InvalidPostState`.
+- **Prior-version capture (v3 NEW-MAJOR-1):** `MetaOptimizer::apply_change`'s `ConductorRecipePatch` arm captures `prior_version = recipe_port.current_recipe_summary(recipe_id).version` **before** calling `apply_batch`, so the returned rollback closure calls `recipe_port.rollback(recipe_id, prior_version)` unambiguously. (No reliance on `new_version - 1`, which would be wrong if another writer bumped the version concurrently.)
 - Rollback is whole-version (§4) — undoing a batch = rolling back one version.
+
+**Tests:** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_change_conductor_recipe_captures_prior_version_for_rollback`.
 
 ---
 
@@ -189,10 +221,10 @@ The validator rejects any patch/batch whose projected post-state would:
 
 The existing `MetaOptimizer::apply_change` ConfigAdjustment path writes **unbounded** keys verbatim (`optimizer.rs`: the `if let Some(bound)` check only bounds known keys; `FAE_MODEL_MODE` skips it and reaches `write_config`). This is a pre-existing latent hole that ADR-008a constraint #4 requires closed. **Closed in M3:**
 
-- New `is_protected_config_key(key: &str) -> bool` in `fae-metaopt/src/conductor_recipe.rs` (or a `protected_keys` module), called at the **top** of the ConfigAdjustment arm in `apply_change`, before any `write_config`. A protected key ⇒ `MetaOptError::ProtectedConfigKey(key)` (hard reject, no write).
-- **Exhaustive alias list** (canonical + known aliases), all lowercased + NFKC-normalized before comparison:
-  `fae_model_mode`, `model_mode`, `model.mode`, `conductor.model_mode`, `conductor.modelmode`, `availability_mode`, `availabilitymode`, `modelmode`.
-- **Tests:** one test per alias (`reject_model_mode_via_config_knob_<alias>`), plus a property test that any key containing the substring `model_mode` or `availability_mode` (post-normalization) is rejected — defends against future alias typos.
+- New `is_protected_config_key(key: &str) -> bool` in `fae-metaopt/src/conductor_recipe.rs`, called at the **top** of the ConfigAdjustment arm in `apply_change`, before any `write_config`. A protected key ⇒ `MetaOptError::ProtectedConfigKey(key)` (hard reject, no write).
+- **Canonicalization before matching (v3 NEW-MINOR-2):** the key is normalized to a canonical form before comparison: Unicode NFKC + lowercase + **separator canonicalization** (all of `-`, `_`, `.`, camelCase boundaries → a single separator e.g. `_`). This closes `model-mode` / `availability.mode` / `modelMode` variants without alias-list growth. The alias list is then the fallback for genuinely different spellings.
+- **Alias list** (post-canonicalization): `fae_model_mode`, `model_mode`, `conductor_model_mode`, `availability_mode`.
+- **Tests:** one test per alias, the property test (substring `model_mode` / `availability_mode` post-canormalization rejected), **and** separator-variant tests (`model-mode`, `availability.mode`, `modelMode` all rejected).
 - **Scope note:** this denylist is general — it protects *any* config key that controls egress/safety posture, not only model mode. Extensible to future protected keys (e.g. `piilocy_lane_default`) without changing the `apply_change` call site.
 
 **Layer 2 (runtime, authoritative — already built in M2):** the §5 gate pipeline re-asserts mode/membrane/budget/approval every turn regardless of recipe/config content. Even a config write that slipped Layer 1 cannot bypass egress: the mode is loaded from `ConductorEgress` at runtime, and the mode cap rejects unpermitted lanes. **Cross-ADR dependency:** the argument holds while the M2 §5.6 invariant (membrane-before-construction) holds — that test is a standing precondition (ADR-008a Risks).
@@ -302,9 +334,11 @@ Scoped `#[allow(dead_code)]` with `TODO(post-M3)` until the live loop lands.
 
 **Layer 1 (§3):** `reject_lane_widening`, `reject_budget_above_provisioned_cap`, `serde_rejects_forbidden_variants` (star/debate/trustedPeer/remoteAllowed), `reject_model_mode_mutation` (no variant names it), `reject_unprovisioned_worker_swap`, `reject_higher_tier_worker_swap`.
 
-**Fanout (§2.1):** `direct_to_chain_rechecks_budget_fanout`, `add_verifier_rechecks_budget`, `multi_worker_chain_per_bucket_check`, `uncostable_worker_in_chain_rejected`, `verifier_loops_multiplied_in_worst_case`.
+**Fanout (§2.1):** `direct_to_chain_rechecks_budget_fanout`, `add_verifier_rechecks_budget`, `multi_worker_chain_per_bucket_check`, `uncostable_worker_in_chain_rejected`, `verifier_loops_multiplied_in_worst_case` (uses `max_correction_loops`), `cost_cap_exceeded_rejected` (against `max_cost_micros`).
 
-**Atomic batches (§2.2):** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with no role slots), `batch_rollback_is_whole_version`.
+**Atomic batches (§2.2):** `batch_applied_as_one_version`, `invalid_post_state_rejected` (chain with a single Worker slot), `batch_rollback_is_whole_version`, `batch_rejects_mixed_recipe_ids`, `apply_change_conductor_recipe_captures_prior_version_for_rollback`.
+
+**Role-slot construction (§2.3):** `set_role_slot_plan_constructs_chain_slots` (direct→chain via `SwitchTopology`+`SetRoleSlotPlan` batch yields valid Thinker→Worker→Verifier), `set_role_slot_plan_rejects_unprovisioned_worker`.
 
 **Prompt lint (§5):** one per rule + `base64_secret_exfil_rejected`, `unicode_obfuscation_rejected`, `homoglyph_spacing_rejected`, `no_tool_authority_expansion_rejected`.
 
