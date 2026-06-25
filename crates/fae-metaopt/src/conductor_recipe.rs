@@ -23,6 +23,8 @@
 //! §5 runtime gate pipeline) remains authoritative regardless — this is the
 //! Layer 1 proposal-time closure.
 
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
 /// Canonicalize a config key for protected-key matching (M3 spec §3.1).
@@ -111,6 +113,247 @@ pub fn is_protected_config_key(key: &str) -> bool {
         .iter()
         .any(|needle| canon.contains(needle))
         || PROTECTED_KEY_ALIASES.iter().any(|alias| *alias == canon)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// M3-B: the ConductorRecipe mutation surface (data + port) — DORMANT PLUMBING
+// (spec §1.1, §1.3, §10). No daemon wiring; the port is None by default.
+// The four ADR-008a Layer-1 constraints + the budget-fanout re-check are enforced
+// by the daemon's `DaemonConductorRecipePort` adapter (M3-C, not yet built);
+// these types are the data-only contract the adapter validates against.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// A conductor topology the recipe surface can NAME. `star` / `debate` are
+/// **deliberately absent** — unnameable at the type level + `deny_unknown_fields`
+/// ⇒ serde fail-closed (ADR-008a constraint #3: no gated locality/topology).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConductorTopologyDto {
+    Direct,
+    Chain,
+}
+
+/// A recipe role the surface can NAME. Thinker / Worker / Verifier only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConductorRoleDto {
+    Thinker,
+    Worker,
+    Verifier,
+}
+
+/// Add or remove a Verifier role (chain only). (ADR-008a op 3.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum VerifierAction {
+    Add,
+    Remove,
+}
+
+/// A data-only spec for a role slot, carried by `SwitchTopology::chain_slots`
+/// when transitioning direct → chain. Mirrors the daemon's `RoleSlot` minus
+/// mutation internals. **The prompt body IS subject to the §5 prompt lint**
+/// (v4 fix — v3 left it unlinted); the daemon adapter enforces that at
+/// validate-time. All fields explicit + `deny_unknown_fields`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleSlotSpec {
+    pub role: ConductorRoleDto,
+    pub worker: String,
+    pub prompt_template_id: String,
+    pub prompt_template: String,
+    pub output_schema: Option<String>,
+    pub required: bool,
+}
+
+/// A mutation a MetaOpt run may propose on a conductor recipe.
+///
+/// **DATA ONLY** — the daemon adapter interprets this against the live
+/// `FaeConductorRecipe`. Maps to ADR-008a's five allowed operators. No variant
+/// names `ModelMode` (constraint #4) and none names `star`/`debate` (constraint
+/// #3); the protected-config-key denylist (above) closes the ConfigKnob path
+/// (§3.1).
+///
+/// `SwitchTopology` carries `chain_slots` when transitioning **to chain** (a
+/// direct recipe has only a Worker slot — the plan constructs the new slots);
+/// it is `None` when transitioning **to direct** (v4 folded the construction
+/// surface into topology transitions only — v3's standalone `SetRoleSlotPlan`
+/// was too broad).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConductorRecipePatch {
+    /// (ADR-008a op 1) Swap the worker in ONE role slot. `to_worker` must be
+    /// same-or-lower trust tier AND provisioned.
+    SwapWorker {
+        recipe_id: String,
+        role: ConductorRoleDto,
+        to_worker: String,
+    },
+    /// (ADR-008a op 2) Switch topology `direct ↔ chain`. `chain_slots` MUST be
+    /// `Some` with the full Thinker→Worker→Verifier plan when transitioning TO
+    /// chain; `None` when transitioning TO direct.
+    SwitchTopology {
+        recipe_id: String,
+        to: ConductorTopologyDto,
+        chain_slots: Option<Vec<RoleSlotSpec>>,
+    },
+    /// (ADR-008a op 3) Add or remove a Verifier role (chain only).
+    AdjustVerifier {
+        recipe_id: String,
+        action: VerifierAction,
+        worker: Option<String>,
+        prompt_template_id: Option<String>,
+        output_schema: Option<String>,
+    },
+    /// (ADR-008a op 4) Mutate a role-conditioned prompt. Lint-gated (§5).
+    MutateRolePrompt {
+        recipe_id: String,
+        role: ConductorRoleDto,
+        new_prompt: String,
+    },
+    /// (ADR-008a op 5) Adjust budget. Downward always; upward within cap (§2.1).
+    AdjustBudget {
+        recipe_id: String,
+        delta_micros_per_day: i64,
+    },
+}
+
+impl ConductorRecipePatch {
+    /// The recipe this patch targets. Batches require every patch to share this
+    /// (§2.2: `PatchRejection::MixedRecipeIds`).
+    pub fn recipe_id(&self) -> &str {
+        match self {
+            Self::SwapWorker { recipe_id, .. }
+            | Self::SwitchTopology { recipe_id, .. }
+            | Self::AdjustVerifier { recipe_id, .. }
+            | Self::MutateRolePrompt { recipe_id, .. }
+            | Self::AdjustBudget { recipe_id, .. } => recipe_id,
+        }
+    }
+}
+
+/// Why a patch / batch was rejected by Layer-1 validation (the daemon adapter).
+/// Surfaced to the human reviewer; the patch is never applied on rejection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum PatchRejection {
+    /// Post-state `privacy_lane` wider than current (constraint #1).
+    LaneWidening,
+    /// Post-state budget exceeds the worker's provisioned D2 ceiling (§2.1).
+    BudgetAboveProvisionedCap,
+    /// Recipe's `max_role_calls` cannot accommodate the post-state fanout (§2.1).
+    FanoutExceedsRoleCallCap,
+    /// Worst-case per-turn cost exceeds `max_cost_micros` (§2.1).
+    BudgetExceedsCostCap,
+    /// A worker in a multiplied-fanout chain has no pricing row (§2.1 fail-closed).
+    UncostableWorkerInChain,
+    /// A `to_worker` / chain-slot worker is not provisioned (registry + creds).
+    UnprovisionedWorker,
+    /// A `to_worker` is a higher trust tier than the slot's current worker.
+    HigherTierWorker,
+    /// A `MutateRolePrompt` failed the §5 deterministic prompt lint.
+    PromptLintFailed(String),
+    /// A batch mixed patches targeting different `recipe_id`s (§2.2).
+    MixedRecipeIds,
+    /// The projected post-state fails `validate_for(V1Safe)` (§2.2).
+    InvalidPostState(String),
+}
+
+/// The projected post-state summary returned by `validate_patch` / `validate_batch`.
+/// Counts + the topology + lane + budget ceiling — enough for a reviewer to see
+/// what the patch WOULD do without applying. No prompt bodies, no worker secrets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeSummary {
+    pub recipe_id: String,
+    pub version: u32,
+    pub topology: ConductorTopologyDto,
+    pub role_slot_count: u32,
+    pub privacy_lane: String,
+    pub budget_micros_per_day: u64,
+}
+
+/// Errors from the recipe port (apply / rollback / read). Distinct from
+/// `PatchRejection` (a validate-time rejection) — these are port-transport +
+/// CAS + persistence + revalidation failures.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RecipePortError {
+    /// `apply_batch` CAS: the active version ≠ `expected_base_version`. No write
+    /// (§2.2 v4 — closes the read-then-apply TOCTOU window).
+    #[error("wrong base version: expected {expected}, actual {actual}")]
+    WrongBaseVersion { expected: u32, actual: u32 },
+    /// `rollback` CAS: the active version ≠ `expected_current_version`. No write
+    /// — a rollback cannot clobber a concurrent writer's mutation (§4 v4).
+    #[error("wrong current version: expected {expected}, actual {actual}")]
+    WrongCurrentVersion { expected: u32, actual: u32 },
+    /// `rollback` target failed CURRENT revalidation (§4 — a recipe valid when
+    /// written may be unsafe now: worker de-provisioned, cap lowered, lane
+    /// tightened). The recipe stays at its current version.
+    #[error("rollback target invalid: {0}")]
+    RollbackTargetInvalid(String),
+    /// The recipe id does not resolve to an active recipe.
+    #[error("recipe not found: {0}")]
+    RecipeNotFound(String),
+    /// A Layer-1 validator rejected the patch / batch (carries the [`PatchRejection`]).
+    #[error("patch rejected: {0:?}")]
+    PatchRejected(PatchRejection),
+    /// The port's store I/O failed.
+    #[error("recipe store error: {0}")]
+    StoreError(String),
+}
+
+/// The port the daemon implements (`DaemonConductorRecipePort`, M3-C).
+/// `fae-metaopt` calls it; `fae-metaopt` does **not** import `FaeConductorRecipe`.
+///
+/// Apply / rollback are **CAS at both ends** (§1.3, §2.2, §4):
+/// - `apply_batch(recipe_id, expected_base_version, patches)` fails
+///   `WrongBaseVersion` if the active version ≠ `expected_base_version` (no write).
+/// - `rollback(recipe_id, expected_current_version, to_version)` only proceeds if
+///   the active version matches `expected_current_version` (no clobber).
+///
+/// `apply_batch` impls MUST call `validate_batch` first (defense-in-depth).
+#[async_trait]
+pub trait ConductorRecipePort: Send + Sync {
+    /// Validate a single patch against the four ADR-008a constraints WITHOUT
+    /// applying. Returns the projected post-state summary or a rejection.
+    async fn validate_patch(
+        &self,
+        patch: &ConductorRecipePatch,
+    ) -> Result<RecipeSummary, PatchRejection>;
+
+    /// Validate a BATCH atomically — the post-state after ALL patches applied.
+    /// Used when a mutation needs multiple operators to stay valid (§2.2).
+    async fn validate_batch(
+        &self,
+        patches: &[ConductorRecipePatch],
+    ) -> Result<RecipeSummary, PatchRejection>;
+
+    /// Apply a validated batch as ONE new recipe version (atomic). v4 CAS:
+    /// `expected_base_version` must match the active version or the apply fails
+    /// `Err(RecipePortError::WrongBaseVersion)` — no write. The impl MUST call
+    /// `validate_batch` first. Returns the new version.
+    async fn apply_batch(
+        &self,
+        recipe_id: &str,
+        expected_base_version: u32,
+        patches: &[ConductorRecipePatch],
+    ) -> Result<u32, RecipePortError>;
+
+    /// Roll back to a prior recipe version. Revalidates against the CURRENT
+    /// registry/caps/profile before re-activation (MAJOR-5). v4 CAS: the rollback
+    /// only proceeds if the active version matches `expected_current_version`.
+    async fn rollback(
+        &self,
+        recipe_id: &str,
+        expected_current_version: u32,
+        to_version: u32,
+    ) -> Result<(), RecipePortError>;
+
+    /// The active recipe's summary (version is the CAS base for apply / rollback).
+    async fn current_recipe_summary(
+        &self,
+        recipe_id: &str,
+    ) -> Result<RecipeSummary, RecipePortError>;
 }
 
 #[cfg(test)]
@@ -239,5 +482,113 @@ mod tests {
     #[test]
     fn empty_key_is_not_protected() {
         assert!(!is_protected_config_key(""));
+    }
+
+    // ── M3-B: DTO serde + deny_unknown_fields (constraint #3: star/debate unnameable) ──
+
+    #[test]
+    fn topology_dto_round_trips_direct_and_chain() -> Result<(), serde_json::Error> {
+        for topo in [ConductorTopologyDto::Direct, ConductorTopologyDto::Chain] {
+            let json = serde_json::to_string(&topo)?;
+            let back: ConductorTopologyDto = serde_json::from_str(&json)?;
+            assert_eq!(back, topo);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn topology_dto_rejects_star_and_debate() {
+        // star / debate are ABSENT from the DTO + deny_unknown_fields ⇒ serde
+        // fail-closed. ADR-008a constraint #3: gated topology is unnameable.
+        for forbidden in ["star", "debate", "Star", "remote_allowed"] {
+            let json = format!("\"{forbidden}\"");
+            let result: Result<ConductorTopologyDto, _> = serde_json::from_str(&json);
+            assert!(result.is_err(), "topology DTO must reject {forbidden:?}");
+        }
+    }
+
+    #[test]
+    fn role_dto_rejects_unknown_roles() -> Result<(), serde_json::Error> {
+        for forbidden in ["oracle", "planner", ""] {
+            let json = format!("\"{forbidden}\"");
+            let result: Result<ConductorRoleDto, _> = serde_json::from_str(&json);
+            assert!(result.is_err(), "role DTO must reject {forbidden:?}");
+        }
+        // The three allowed roles round-trip.
+        for role in [
+            ConductorRoleDto::Thinker,
+            ConductorRoleDto::Worker,
+            ConductorRoleDto::Verifier,
+        ] {
+            let json = serde_json::to_string(&role)?;
+            let back: ConductorRoleDto = serde_json::from_str(&json)?;
+            assert_eq!(back, role);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn patch_round_trips_each_operator() -> Result<(), serde_json::Error> {
+        let patches = vec![
+            ConductorRecipePatch::SwapWorker {
+                recipe_id: "r1".to_owned(),
+                role: ConductorRoleDto::Worker,
+                to_worker: "w-b".to_owned(),
+            },
+            ConductorRecipePatch::SwitchTopology {
+                recipe_id: "r1".to_owned(),
+                to: ConductorTopologyDto::Direct,
+                chain_slots: None,
+            },
+            ConductorRecipePatch::AdjustVerifier {
+                recipe_id: "r1".to_owned(),
+                action: VerifierAction::Add,
+                worker: Some("w-v".to_owned()),
+                prompt_template_id: Some("p".to_owned()),
+                output_schema: None,
+            },
+            ConductorRecipePatch::MutateRolePrompt {
+                recipe_id: "r1".to_owned(),
+                role: ConductorRoleDto::Thinker,
+                new_prompt: "think harder".to_owned(),
+            },
+            ConductorRecipePatch::AdjustBudget {
+                recipe_id: "r1".to_owned(),
+                delta_micros_per_day: -100,
+            },
+        ];
+        for patch in &patches {
+            let json = serde_json::to_string(patch)?;
+            let back: ConductorRecipePatch = serde_json::from_str(&json)?;
+            assert_eq!(&back, patch);
+            // Every patch reports its recipe_id.
+            assert_eq!(patch.recipe_id(), "r1");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn patch_dto_rejects_unknown_op_variant() {
+        // deny_unknown_fields on the internally-tagged enum ⇒ an unknown `op` is
+        // rejected. No op can name a forbidden topology/role/model_mode.
+        let json = r#"{"op":"override_model_mode","recipe_id":"r1"}"#;
+        let result: Result<ConductorRecipePatch, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "patch must reject unknown op");
+    }
+
+    #[test]
+    fn patch_dto_rejects_unknown_field_within_op() {
+        // A SwapWorker carrying an extra `privacy_lane` field is rejected — no
+        // smuggled lane widening via an unrecognized field.
+        let json = r#"{"op":"swap_worker","recipe_id":"r1","role":"worker","to_worker":"w","privacy_lane":"remote_allowed"}"#;
+        let result: Result<ConductorRecipePatch, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "patch must reject unknown field");
+    }
+
+    #[test]
+    fn role_slot_spec_rejects_unknown_field() {
+        let json = r#"{"role":"worker","worker":"w","prompt_template_id":"p","prompt_template":"x","required":true,"secret":"leak"}"#;
+        let result: Result<RoleSlotSpec, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "RoleSlotSpec must reject unknown field");
     }
 }

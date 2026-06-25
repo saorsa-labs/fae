@@ -19,7 +19,11 @@ pub mod optimizer;
 pub mod traits;
 pub mod types;
 
-pub use conductor_recipe::is_protected_config_key;
+pub use conductor_recipe::{
+    is_protected_config_key, ConductorRecipePatch, ConductorRecipePort, ConductorRoleDto,
+    ConductorTopologyDto, PatchRejection, RecipePortError, RecipeSummary, RoleSlotSpec,
+    VerifierAction,
+};
 pub use optimizer::MetaOptimizer;
 pub use traits::{
     BenchmarkRunner, ConfigPort, DirectivePort, HypothesisContext, HypothesisSource,

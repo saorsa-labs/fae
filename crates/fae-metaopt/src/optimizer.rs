@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::conductor_recipe::is_protected_config_key;
+use crate::conductor_recipe::{is_protected_config_key, ConductorRecipePort, RecipePortError};
 use crate::traits::{
     BenchmarkRunner, ConfigPort, DirectivePort, HypothesisContext, HypothesisSource,
     ImprovementStore, MemorySeedPort, SkillPort,
@@ -24,6 +24,13 @@ const MEMORY_SEED_STALE_AFTER_SECS: u64 = 30 * 24 * 3_600;
 type RollbackFuture = Pin<Box<dyn Future<Output = Result<(), MetaOptError>> + Send + 'static>>;
 type MetaOptRollback = Box<dyn FnOnce() -> RollbackFuture + Send + 'static>;
 
+/// Map a [`RecipePortError`] into a [`MetaOptError`]. Free function (not a
+/// method) so the rollback closure — which is `Send + 'static` and cannot borrow
+/// `&self` — can call it. (M3 spec §1.3.)
+fn port_err_to_meta(err: RecipePortError) -> MetaOptError {
+    MetaOptError::RecipePortError(err)
+}
+
 /// Dormant Rust port of the Swift `MetaOptimizer` actor.
 ///
 /// The optimizer hill-climbs over candidate changes: apply one change, run a
@@ -38,6 +45,9 @@ pub struct MetaOptimizer {
     config_port: Option<Arc<dyn ConfigPort>>,
     skill_port: Option<Arc<dyn SkillPort>>,
     memory_seed_port: Option<Arc<dyn MemorySeedPort>>,
+    /// M3 recipe-mutation port (None ⇒ `ConductorRecipePatch` changes error with
+    /// `RecipePortError`). Dormant: no daemon wiring yet (grep gate clean).
+    recipe_port: Option<Arc<dyn ConductorRecipePort>>,
     current_adapter_path: Option<String>,
     last_kept_rollback: Option<MetaOptRollback>,
     last_kept_description: Option<String>,
@@ -58,6 +68,7 @@ impl MetaOptimizer {
             config_port: None,
             skill_port: None,
             memory_seed_port: None,
+            recipe_port: None,
             current_adapter_path: None,
             last_kept_rollback: None,
             last_kept_description: None,
@@ -83,6 +94,13 @@ impl MetaOptimizer {
 
     pub fn set_memory_seed_port(&mut self, port: Arc<dyn MemorySeedPort>) {
         self.memory_seed_port = Some(port);
+    }
+
+    /// Wire the M3 conductor-recipe port. Required before any `ConductorRecipePatch`
+    /// change can be applied (otherwise the arm errors `RecipePortError`). Dormant:
+    /// no daemon calls this yet.
+    pub fn set_recipe_port(&mut self, port: Arc<dyn ConductorRecipePort>) {
+        self.recipe_port = Some(port);
     }
 
     pub fn set_current_adapter_path(&mut self, path: Option<String>) {
@@ -383,6 +401,66 @@ impl MetaOptimizer {
 
                 Ok(Box::new(move || {
                     Box::pin(async move { memory.delete_seed(&seed_id).await })
+                }))
+            }
+            MetaOptChange::ConductorRecipePatch { patches } => {
+                // M3 spec §1.3 — the recipe surface plugs into the existing
+                // keep/rollback discipline. validate_batch → apply_batch (CAS at
+                // the base) → a rollback closure that rolls back as one version
+                // (CAS at the current). A failed benchmark triggers the closure.
+                let recipe_port = self.recipe_port.clone().ok_or_else(|| {
+                    MetaOptError::RecipePortError(RecipePortError::StoreError(
+                        "ConductorRecipePort not configured".to_owned(),
+                    ))
+                })?;
+
+                if patches.is_empty() {
+                    return Err(MetaOptError::RecipePortError(RecipePortError::StoreError(
+                        "empty ConductorRecipePatch batch".to_owned(),
+                    )));
+                }
+
+                // Every patch MUST target the same recipe_id (§2.2).
+                let recipe_id = patches[0].recipe_id().to_owned();
+                if !patches.iter().all(|p| p.recipe_id() == recipe_id) {
+                    return Err(MetaOptError::PatchRejected(
+                        crate::conductor_recipe::PatchRejection::MixedRecipeIds,
+                    ));
+                }
+
+                // Defense-in-depth: validate the whole batch's projected post-state
+                // before reading the base version. (The adapter re-validates inside
+                // apply_batch too.)
+                recipe_port
+                    .validate_batch(patches)
+                    .await
+                    .map_err(MetaOptError::PatchRejected)?;
+
+                // CAS base: read the active version immediately before apply.
+                let summary = recipe_port
+                    .current_recipe_summary(recipe_id.as_str())
+                    .await
+                    .map_err(port_err_to_meta)?;
+                let base_version = summary.version;
+
+                // Apply as ONE new version. WrongBaseVersion ⇒ no write, surfaced
+                // to the reviewer (a concurrent mutation landed).
+                let new_version = recipe_port
+                    .apply_batch(recipe_id.as_str(), base_version, patches)
+                    .await
+                    .map_err(port_err_to_meta)?;
+
+                // Rollback closure: whole-version, CAS at the current version.
+                // If `new_version` is no longer active (another mutation landed),
+                // the rollback errors `WrongCurrentVersion` — surfaced, not silent.
+                let rollback_id = recipe_id.clone();
+                Ok(Box::new(move || {
+                    Box::pin(async move {
+                        recipe_port
+                            .rollback(&rollback_id, new_version, base_version)
+                            .await
+                            .map_err(port_err_to_meta)
+                    })
                 }))
             }
         }
@@ -1118,5 +1196,250 @@ mod tests {
             Some(&"0.7".to_owned())
         );
         Ok(())
+    }
+
+    // ── M3-B (spec §1.3): ConductorRecipePatch apply arm (dormant plumbing) ──
+    //
+    // These test the optimizer's recipe arm — validate_batch → apply_batch (CAS
+    // base) → rollback closure (CAS current). The port is a mock; the daemon
+    // adapter (DaemonConductorRecipePort) lands in M3-C.
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use crate::conductor_recipe::{
+        ConductorRecipePatch, ConductorRecipePort, ConductorTopologyDto, PatchRejection,
+        RecipePortError, RecipeSummary,
+    };
+
+    /// A minimal mock recipe port. Records validate/apply/rollback calls so the
+    /// optimizer's CAS ordering is observable. M3-C's DaemonConductorRecipePort
+    /// is the real impl.
+    struct MockRecipePort {
+        validate_calls: AtomicU64,
+        apply_calls: AtomicU64,
+        rollback_calls: AtomicU64,
+        base_version: u32,
+        // When Some, apply_batch returns WrongBaseVersion (simulates a concurrent writer).
+        wrong_base: Option<(u32, u32)>,
+    }
+
+    impl MockRecipePort {
+        fn new(base_version: u32) -> Arc<Self> {
+            Arc::new(Self {
+                validate_calls: AtomicU64::new(0),
+                apply_calls: AtomicU64::new(0),
+                rollback_calls: AtomicU64::new(0),
+                base_version,
+                wrong_base: None,
+            })
+        }
+        fn new_with_wrong_base(base_version: u32, wrong_base: (u32, u32)) -> Arc<Self> {
+            Arc::new(Self {
+                validate_calls: AtomicU64::new(0),
+                apply_calls: AtomicU64::new(0),
+                rollback_calls: AtomicU64::new(0),
+                base_version,
+                wrong_base: Some(wrong_base),
+            })
+        }
+        fn summary(recipe_id: &str, version: u32) -> RecipeSummary {
+            RecipeSummary {
+                recipe_id: recipe_id.to_owned(),
+                version,
+                topology: ConductorTopologyDto::Direct,
+                role_slot_count: 1,
+                privacy_lane: "local_only".to_owned(),
+                budget_micros_per_day: 1_000,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ConductorRecipePort for MockRecipePort {
+        async fn validate_patch(
+            &self,
+            _patch: &ConductorRecipePatch,
+        ) -> Result<RecipeSummary, PatchRejection> {
+            self.validate_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Self::summary("r1", self.base_version + 1))
+        }
+        async fn validate_batch(
+            &self,
+            _patches: &[ConductorRecipePatch],
+        ) -> Result<RecipeSummary, PatchRejection> {
+            self.validate_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Self::summary("r1", self.base_version + 1))
+        }
+        async fn apply_batch(
+            &self,
+            recipe_id: &str,
+            expected_base_version: u32,
+            _patches: &[ConductorRecipePatch],
+        ) -> Result<u32, RecipePortError> {
+            self.apply_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some((exp, act)) = self.wrong_base {
+                if expected_base_version == exp {
+                    return Err(RecipePortError::WrongBaseVersion {
+                        expected: exp,
+                        actual: act,
+                    });
+                }
+            }
+            assert_eq!(recipe_id, "r1");
+            assert_eq!(expected_base_version, self.base_version);
+            Ok(self.base_version + 1)
+        }
+        async fn rollback(
+            &self,
+            recipe_id: &str,
+            expected_current_version: u32,
+            to_version: u32,
+        ) -> Result<(), RecipePortError> {
+            self.rollback_calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(recipe_id, "r1");
+            assert_eq!(expected_current_version, self.base_version + 1);
+            assert_eq!(to_version, self.base_version);
+            Ok(())
+        }
+        async fn current_recipe_summary(
+            &self,
+            recipe_id: &str,
+        ) -> Result<RecipeSummary, RecipePortError> {
+            assert_eq!(recipe_id, "r1");
+            Ok(Self::summary("r1", self.base_version))
+        }
+    }
+
+    fn recipe_patch(recipe_id: &str) -> ConductorRecipePatch {
+        ConductorRecipePatch::AdjustBudget {
+            recipe_id: recipe_id.to_owned(),
+            delta_micros_per_day: -50,
+        }
+    }
+
+    // V-R1: a recipe patch applies via validate_batch → apply_batch (CAS base),
+    // returns a rollback closure, and the closure calls rollback (CAS current).
+    #[tokio::test]
+    async fn recipe_patch_applies_and_rolls_back_with_cas() -> Result<(), MetaOptError> {
+        let deps = Arc::new(NullMetaOptDeps::with_state(|_| {}).await);
+        let port = MockRecipePort::new(3);
+        let mut optimizer = NullMetaOptDeps::optimizer(&deps);
+        optimizer.set_recipe_port(port.clone());
+
+        let rollback = optimizer
+            .apply_change(&MetaOptChange::ConductorRecipePatch {
+                patches: vec![recipe_patch("r1")],
+            })
+            .await?;
+
+        // validate_batch ran once; apply_batch ran once (CAS base = 3).
+        assert_eq!(port.validate_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(port.apply_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(port.rollback_calls.load(Ordering::SeqCst), 0);
+
+        // The rollback closure rolls back as one version (CAS current = 4 → 3).
+        rollback().await?;
+        assert_eq!(port.rollback_calls.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    // V-R2: a batch with mixed recipe_ids is rejected BEFORE any port call
+    // (MixedRecipeIds, §2.2). No validate, no apply.
+    #[tokio::test]
+    async fn recipe_batch_rejects_mixed_recipe_ids() {
+        let deps = Arc::new(NullMetaOptDeps::with_state(|_| {}).await);
+        let port = MockRecipePort::new(1);
+        let mut optimizer = NullMetaOptDeps::optimizer(&deps);
+        optimizer.set_recipe_port(port.clone());
+
+        let result = optimizer
+            .apply_change(&MetaOptChange::ConductorRecipePatch {
+                patches: vec![recipe_patch("r1"), recipe_patch("r2")],
+            })
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(MetaOptError::PatchRejected(PatchRejection::MixedRecipeIds))
+            ),
+            "expected MixedRecipeIds"
+        );
+        assert_eq!(
+            port.validate_calls.load(Ordering::SeqCst),
+            0,
+            "no validate on mixed ids"
+        );
+        assert_eq!(
+            port.apply_calls.load(Ordering::SeqCst),
+            0,
+            "no apply on mixed ids"
+        );
+    }
+
+    // V-R3: an empty batch is rejected (no-op mutation). No port calls.
+    #[tokio::test]
+    async fn recipe_empty_batch_rejected() {
+        let deps = Arc::new(NullMetaOptDeps::with_state(|_| {}).await);
+        let port = MockRecipePort::new(1);
+        let mut optimizer = NullMetaOptDeps::optimizer(&deps);
+        optimizer.set_recipe_port(port.clone());
+
+        let result = optimizer
+            .apply_change(&MetaOptChange::ConductorRecipePatch { patches: vec![] })
+            .await;
+        assert!(matches!(result, Err(MetaOptError::RecipePortError(_))));
+        assert_eq!(port.apply_calls.load(Ordering::SeqCst), 0);
+    }
+
+    // V-R4: a recipe change with no port configured errors (dormant default).
+    #[tokio::test]
+    async fn recipe_change_errors_without_port() {
+        let deps = Arc::new(NullMetaOptDeps::with_state(|_| {}).await);
+        let optimizer = NullMetaOptDeps::optimizer(&deps);
+        // No set_recipe_port.
+        let result = optimizer
+            .apply_change(&MetaOptChange::ConductorRecipePatch {
+                patches: vec![recipe_patch("r1")],
+            })
+            .await;
+        assert!(matches!(result, Err(MetaOptError::RecipePortError(_))));
+    }
+
+    // V-R5: a WrongBaseVersion from apply_batch surfaces as RecipePortError
+    // (CAS — a concurrent writer landed). No rollback closure returned.
+    #[tokio::test]
+    async fn recipe_apply_wrong_base_version_surfaces() {
+        let deps = Arc::new(NullMetaOptDeps::with_state(|_| {}).await);
+        // Simulate: optimizer reads base=3, but apply sees actual=4 (concurrent).
+        let port = MockRecipePort::new_with_wrong_base(3, (3, 4));
+        let mut optimizer = NullMetaOptDeps::optimizer(&deps);
+        optimizer.set_recipe_port(port);
+        let result = optimizer
+            .apply_change(&MetaOptChange::ConductorRecipePatch {
+                patches: vec![recipe_patch("r1")],
+            })
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(MetaOptError::RecipePortError(
+                    RecipePortError::WrongBaseVersion {
+                        expected: 3,
+                        actual: 4
+                    }
+                ))
+            ),
+            "expected WrongBaseVersion {{ expected: 3, actual: 4 }}"
+        );
+    }
+
+    // V-R6: the new MetaOptChange/MetaOptSurface variants map correctly.
+    #[test]
+    fn conductor_recipe_change_maps_to_surface() {
+        use crate::types::{MetaOptChange, MetaOptSurface};
+        let change = MetaOptChange::ConductorRecipePatch {
+            patches: vec![recipe_patch("r1")],
+        };
+        assert_eq!(change.surface(), MetaOptSurface::ConductorRecipe);
     }
 }

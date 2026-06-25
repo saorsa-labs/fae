@@ -138,6 +138,17 @@ M3 is Fae learning to mutate her own routing recipes — that layer optimizes ag
 3. **Then M3**, with the BLOCKER-1 denylist as a **hard precondition** for ever wiring `fae-metaopt` into the daemon (wire it first → ship the live config-write hole).
 4. **The content-aware task classifier is on M3's critical path for the routing dimension** (owner insight 2026-06-24, recorded in [`conductor-m2-reward-shadow-live-wiring-spec-2026-06-24.md`](../architecture/conductor-m2-reward-shadow-live-wiring-spec-2026-06-24.md) §2.6). The M2-live-wiring milestone accrues **proxy** signal (outcome: latency/cost/failures; user: accept/reject) which discriminates routing choices indirectly — but routing *accuracy* is neutral until a classifier populates `feature_predicates` (F-4 content-blindness forbids reading the prompt today, so every turn is `task_class::Unknown` ⇒ `corpus_match = None`). M3's core job is mutating routing recipes; the dimension that *directly* measures "did we route well" is the one that's absent. **Therefore the classifier is elevated from "someday" to "sequenced near/with M3"** — without it, M3 optimizes routing against proxies and plateaus. It touches the content-blind boundary deliberately and is its own small milestone, but it is a **dependency for the routing dimension of M3**, not a nice-to-have.
 
+   > **HARD GATE — classifier before any LIVE mutation (owner directive 2026-06-25):**
+   > The content-aware task classifier is a **hard prerequisite for any live mutation loop**.
+   > M3 ships **dormant / offline / CLI-only / human-approves-every-promotion** (spec §0)
+   > precisely to keep mutation OFF the live path until the classifier lands. Without
+   > it, a live optimizer would mutate routing recipes against proxy signal only and
+   > plateau — routing accuracy stays neutral because F-4 forbids reading the prompt.
+   > **Therefore: NO live auto-deploy, NO scheduler task, NO default route mutation
+   > until the classifier exists.** The classifier is its own content-boundary
+   > milestone (touches the content-blind line deliberately). M3-A/B/C ship as
+   > dormant plumbing under this gate; the live loop is a post-M3 gated step.
+
 This ordering also respects the sequencing rule the BLOCKER created. The M3 spec remains a durable, well-earned milestone (5 adversarial rounds; dormant/offline/CLI-only/human-approves-every-promotion is exactly the right posture for autonomous self-mutation) — it is simply not the right thing to *build* next.
 
 **Prereqs (open Qs for David):**

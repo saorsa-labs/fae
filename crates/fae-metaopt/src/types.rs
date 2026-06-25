@@ -109,6 +109,9 @@ pub enum MetaOptSurface {
     Skill,
     /// Seed a strategic meta-memory via the memory seam.
     MemorySeed,
+    /// Mutate a conductor routing recipe (M3; ADR-008a). DATA ONLY — the daemon
+    /// adapter interprets a `ConductorRecipePatch` batch against the live recipe.
+    ConductorRecipe,
 }
 
 /// A concrete change to apply to a mutable surface.
@@ -131,6 +134,12 @@ pub enum MetaOptChange {
     },
     /// Insert a strategic fact into memory that shapes recall-driven behavior.
     MemorySeedInsertion { text: String, tags: Vec<String> },
+    /// Apply a batch of conductor-recipe patches as ONE new atomic recipe version
+    /// (M3; spec §1.3, §2.2). A batch is a single `MetaOptChange` — applied
+    /// atomically, rolled back as one version. Every patch must share a recipe_id.
+    ConductorRecipePatch {
+        patches: Vec<crate::conductor_recipe::ConductorRecipePatch>,
+    },
 }
 
 impl MetaOptChange {
@@ -141,6 +150,7 @@ impl MetaOptChange {
             Self::ConfigAdjustment { .. } => MetaOptSurface::ConfigKnob,
             Self::SkillCreation { .. } => MetaOptSurface::Skill,
             Self::MemorySeedInsertion { .. } => MetaOptSurface::MemorySeed,
+            Self::ConductorRecipePatch { .. } => MetaOptSurface::ConductorRecipe,
         }
     }
 }
@@ -374,4 +384,11 @@ pub enum MetaOptError {
     /// Failed to generate candidate hypotheses.
     #[error("hypothesis source error: {0}")]
     HypothesisSourceError(String),
+    /// A conductor-recipe patch / batch failed Layer-1 validation (M3 spec §3).
+    #[error("conductor recipe patch rejected: {0:?}")]
+    PatchRejected(crate::conductor_recipe::PatchRejection),
+    /// A conductor-recipe port operation failed (CAS mismatch, store I/O,
+    /// rollback revalidation). M3 spec §1.3 / §2.2 / §4.
+    #[error("conductor recipe port error: {0}")]
+    RecipePortError(crate::conductor_recipe::RecipePortError),
 }
