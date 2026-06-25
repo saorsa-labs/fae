@@ -14,10 +14,12 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+pub mod conductor_recipe;
 pub mod optimizer;
 pub mod traits;
 pub mod types;
 
+pub use conductor_recipe::is_protected_config_key;
 pub use optimizer::MetaOptimizer;
 pub use traits::{
     BenchmarkRunner, ConfigPort, DirectivePort, HypothesisContext, HypothesisSource,

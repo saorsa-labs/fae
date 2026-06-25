@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::conductor_recipe::is_protected_config_key;
 use crate::traits::{
     BenchmarkRunner, ConfigPort, DirectivePort, HypothesisContext, HypothesisSource,
     ImprovementStore, MemorySeedPort, SkillPort,
@@ -302,6 +303,17 @@ impl MetaOptimizer {
                 old_value,
                 new_value,
             } => {
+                // BLOCKER-1 (M3 spec §3.1): reject protected config keys at the TOP
+                // of the arm — before port resolution, bounds lookup, and any write.
+                // The bounds check below only fires for keys in `ConfigBound::all()`;
+                // an unlisted key would otherwise be written verbatim — a latent hole
+                // that goes live the moment fae-metaopt is wired into the daemon.
+                // Conservative reject (spec §11 Q2): a false positive on a protected
+                // pattern is correct; never bypass the gate.
+                if is_protected_config_key(key) {
+                    return Err(MetaOptError::ProtectedConfigKey(key.clone()));
+                }
+
                 let config = self.config_port.clone().ok_or_else(|| {
                     MetaOptError::ConfigChangeError("Config writer not configured".to_owned())
                 })?;
@@ -994,6 +1006,117 @@ mod tests {
         let message = optimizer.rollback_last_change().await;
         assert!(message.starts_with("Done"));
         assert_eq!(deps.snapshot().await.directive, "base");
+        Ok(())
+    }
+
+    // ── M3-A (BLOCKER-1, spec §3.1): protected-config-key denylist ──
+
+    // V-B1a: a protected key is rejected with ProtectedConfigKey AND performs no
+    // write (the NullMetaOptDeps config port is the spy — a rejected apply must not
+    // land the key in state.config). This is the load-bearing guard; mutation-tested
+    // (comment out the guard → the write happens → this test fails).
+    #[tokio::test]
+    async fn protected_config_key_rejected_with_no_write() -> Result<(), MetaOptError> {
+        let deps = Arc::new(
+            NullMetaOptDeps::with_state(|state| {
+                state
+                    .config
+                    .insert("llm.temperature".to_owned(), "0.7".to_owned());
+            })
+            .await,
+        );
+        let optimizer = NullMetaOptDeps::optimizer(&deps);
+
+        let result = optimizer
+            .apply_change(&MetaOptChange::ConfigAdjustment {
+                key: "model_mode".to_owned(),
+                old_value: "local".to_owned(),
+                new_value: "agent".to_owned(),
+            })
+            .await;
+
+        assert!(
+            matches!(result, Err(MetaOptError::ProtectedConfigKey(ref k)) if k.as_str() == "model_mode"),
+            "expected ProtectedConfigKey(model_mode)"
+        );
+
+        // Spy: no write occurred.
+        let snapshot = deps.snapshot().await;
+        assert!(
+            !snapshot.config.contains_key("model_mode"),
+            "protected key must not be written"
+        );
+        // An unrelated bounded key is untouched.
+        assert_eq!(
+            snapshot.config.get("llm.temperature"),
+            Some(&"0.7".to_owned())
+        );
+        Ok(())
+    }
+
+    // V-B1b: the denylist closes obfuscation variants — separator + case forms of
+    // `model_mode` / `availability_mode` are rejected too (canonicalization, §3.1).
+    #[tokio::test]
+    async fn protected_config_key_rejects_separator_and_case_variants() {
+        let deps = Arc::new(NullMetaOptDeps::with_state(|_| {}).await);
+        let optimizer = NullMetaOptDeps::optimizer(&deps);
+
+        for key in [
+            "model-mode",
+            "modelMode",
+            "availability.mode",
+            "AvailabilityMode",
+            "FAE_MODEL_MODE",
+            "conductor_model_mode",
+            "my_model_mode_flag",
+        ] {
+            let result = optimizer
+                .apply_change(&MetaOptChange::ConfigAdjustment {
+                    key: key.to_owned(),
+                    old_value: "a".to_owned(),
+                    new_value: "b".to_owned(),
+                })
+                .await;
+            assert!(
+                matches!(result, Err(MetaOptError::ProtectedConfigKey(_))),
+                "expected {key:?} rejected as protected"
+            );
+            assert!(
+                !deps.snapshot().await.config.contains_key(key),
+                "{key:?} must not be written"
+            );
+        }
+    }
+
+    // V-B1c: regression — a normal bounded key still applies (the denylist is
+    // additive; it must not over-reject legitimate knobs).
+    #[tokio::test]
+    async fn normal_config_key_still_applies() -> Result<(), MetaOptError> {
+        let deps = Arc::new(
+            NullMetaOptDeps::with_state(|state| {
+                state
+                    .config
+                    .insert("llm.temperature".to_owned(), "0.7".to_owned());
+            })
+            .await,
+        );
+        let optimizer = NullMetaOptDeps::optimizer(&deps);
+        let rollback = optimizer
+            .apply_change(&MetaOptChange::ConfigAdjustment {
+                key: "llm.temperature".to_owned(),
+                old_value: "0.7".to_owned(),
+                new_value: "0.5".to_owned(),
+            })
+            .await?;
+        assert_eq!(
+            deps.snapshot().await.config.get("llm.temperature"),
+            Some(&"0.5".to_owned())
+        );
+        rollback().await?;
+        assert_eq!(
+            deps.snapshot().await.config.get("llm.temperature"),
+            Some(&"0.7".to_owned())
+        );
         Ok(())
     }
 }

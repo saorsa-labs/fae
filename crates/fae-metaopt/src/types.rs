@@ -356,6 +356,12 @@ pub enum MetaOptError {
     /// Failed to apply a config change.
     #[error("config change error: {0}")]
     ConfigChangeError(String),
+    /// A protected config key (controls egress/safety posture — e.g. `model_mode` /
+    /// `availability_mode`) was targeted for mutation. Hard reject — no write.
+    /// (BLOCKER-1, M3 spec §3.1: Layer 1 proposal-time closure. The M2 §5 Layer 2
+    /// runtime gates remain authoritative regardless of config content.)
+    #[error("protected config key rejected: {0}")]
+    ProtectedConfigKey(String),
     /// Failed to create, activate, or delete a skill.
     #[error("skill error: {0}")]
     SkillError(String),

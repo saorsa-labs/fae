@@ -1965,6 +1965,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tokio",
+ "unicode-normalization",
  "uuid 1.23.2",
 ]
 
