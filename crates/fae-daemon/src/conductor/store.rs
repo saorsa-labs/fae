@@ -213,7 +213,6 @@ fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>, Con
     Ok(rows)
 }
 
-#[allow(dead_code)] // TODO(M2, 2026-06-23): budget reads fail closed when store unavailable
 fn ensure_store_dir_available(dir: &Path) -> Result<(), ConductorError> {
     let metadata = std::fs::metadata(dir)?;
     if !metadata.is_dir() {
