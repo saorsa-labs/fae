@@ -32,6 +32,15 @@ clean:
 guard-no-rust:
     @echo 'guard-no-rust retired by ADR-011 (2026-06-22); headless Rust core is canonical'
 
+# M3 boundary guard (2026-06-26): machine-enforce the fae-metaopt ↔ fae-daemon
+# boundary. fae-metaopt is reachable from the daemon ONLY via the offline/CLI
+# mutation path (allowlisted in the script); fae-metaopt must never import
+# fae_daemon. Runs in ci-linux.yml; runnable locally. Promoted to CI at the
+# moment fae-metaopt becomes wired (M3-C2), when the invariant goes from
+# "structurally impossible to violate" to "load-bearing".
+guard-metaopt-boundary:
+    bash scripts/ci/guard-metaopt-boundary.sh
+
 # Full validation (build + test)
 check: build test
     @echo "✓ All checks passed"
