@@ -58,6 +58,10 @@ pub mod executor;
 pub mod fingerprint;
 pub mod policy;
 pub mod pricing;
+/// M3 §5 deterministic prompt-mutation lint. Dormant — called by the recipe
+/// validator (M3-C2) when validating a `MutateRolePrompt` patch.
+#[allow(dead_code)] // TODO(M3-C2): wired when DaemonConductorRecipePort validates op 4
+pub mod prompt_lint;
 pub mod prompts;
 pub mod recipe;
 /// M2 reward aggregator (spec §7). **Capture is wired** (Stage A

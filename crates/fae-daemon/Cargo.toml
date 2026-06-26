@@ -30,6 +30,8 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 async-trait.workspace = true
 base64 = { workspace = true }
+# NFKC normalization for the M3 prompt-mutation lint (§5.1 canonicalization).
+unicode-normalization = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
