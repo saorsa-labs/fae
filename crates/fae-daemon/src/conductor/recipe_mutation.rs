@@ -38,9 +38,12 @@
 //!
 //! [`DaemonConductorRecipePort`] resolves the "current recipe" via
 //! [`ConductorStore::load_latest_recipe`] (a max-version scan, no head pointer).
-//! `apply_batch` / `rollback` are **fail-closed stubs** returning
-//! [`RecipePortError::StoreError`]: the CAS write path is M3-C3. `validate_*` and
-//! `current_recipe_summary` are live and read-only.
+//! `apply_batch` / `rollback` perform **CAS-at-both-ends** writes (§1.3, §4):
+//! load-latest → version-match check → validate → `store_recipe_new_version`
+//! (a **no-overwrite** `create_new` write — fails `AlreadyExists` if a concurrent
+//! writer landed the version first, mapped to `WrongBaseVersion`). Each mutation
+//! appends a **prompt-free** audit line (`RecipeMutationRecord`: version lineage +
+//! patch kinds only, never prompt bodies — F-4) to `conductor_recipe_mutations.jsonl`.
 //!
 //! `validate_*` returns [`PatchRejection`] (not [`RecipePortError`]) per the trait;
 //! a missing recipe during validation therefore maps to
@@ -49,6 +52,7 @@
 //! [`RecipePortError::RecipeNotFound`].
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use fae_metaopt::{
@@ -62,6 +66,8 @@ use super::recipe::{
     RecipeProfile, RoleSlot, WorkerSelector,
 };
 use super::store::ConductorStore;
+use super::telemetry::{RecipeMutationKind, RecipeMutationRecord};
+use super::ConductorError;
 
 // ─── DTO → domain mapping ─────────────────────────────────────────────────────
 //
@@ -343,6 +349,74 @@ fn build_chain_slots(
     Ok(built)
 }
 
+// ── C3 helpers: persistence, audit, activation validation ─────────────────────
+
+/// Operator name for the audit record (matches the serde `op` tag, snake_case).
+/// Prompt-free: only the KIND, never the payload (F-4).
+fn patch_kind(patch: &ConductorRecipePatch) -> &'static str {
+    match patch {
+        ConductorRecipePatch::SwapWorker { .. } => "swap_worker",
+        ConductorRecipePatch::SwitchTopology { .. } => "switch_topology",
+        ConductorRecipePatch::AdjustVerifier { .. } => "adjust_verifier",
+        ConductorRecipePatch::MutateRolePrompt { .. } => "mutate_role_prompt",
+        ConductorRecipePatch::AdjustBudget { .. } => "adjust_budget",
+    }
+}
+
+/// Wall-clock millis since epoch for audit timestamps. Returns 0 if the clock is
+/// before epoch (impossible in practice; fail-safe, not fail-closed — a 0 ts is
+/// benign in an audit line whereas erroring would abort a valid mutation).
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Activation validation for a recipe about to become the head (rollback target,
+/// or the projected post-state of an apply). Stricter than `project_batch`'s
+/// per-patch lint: it lints EVERY role-slot prompt body (an old recipe may carry
+/// prompts that were never linted, or that a future lint rule change would now
+/// reject), then runs `validate_for(V1Safe)`. No economics.
+fn validate_activation(recipe: &FaeConductorRecipe) -> Result<(), PatchRejection> {
+    for slot in &recipe.role_slots {
+        lint_prompt(&slot.prompt_template).map_err(lint_to_rejection)?;
+    }
+    recipe
+        .validate_for(RecipeProfile::V1Safe)
+        .map_err(|e| PatchRejection::InvalidPostState(e.to_string()))?;
+    Ok(())
+}
+
+/// A concurrent-writer race during `store_recipe_new_version` (create_new fails
+/// `AlreadyExists`) maps to the caller-appropriate CAS error: `WrongBaseVersion`
+/// for apply (the CAS token is `expected_base_version`) or `WrongCurrentVersion`
+/// for rollback (the CAS token is `expected_current_version`). Anything else is a
+/// store fault. Split into two helpers so the variant matches the CAS semantics.
+fn apply_write_cas_err(e: ConductorError, expected: u32) -> RecipePortError {
+    match e {
+        ConductorError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists => {
+            RecipePortError::WrongBaseVersion {
+                expected,
+                actual: expected.wrapping_add(1),
+            }
+        }
+        other => RecipePortError::StoreError(other.to_string()),
+    }
+}
+
+fn rollback_write_cas_err(e: ConductorError, expected: u32) -> RecipePortError {
+    match e {
+        ConductorError::Io(io) if io.kind() == std::io::ErrorKind::AlreadyExists => {
+            RecipePortError::WrongCurrentVersion {
+                expected,
+                actual: expected.wrapping_add(1),
+            }
+        }
+        other => RecipePortError::StoreError(other.to_string()),
+    }
+}
+
 /// Project the post-state of applying `patches` to `base`, enforcing every
 /// per-operator gate and a final `validate_for(V1Safe)` on the whole post-state.
 /// Pure (no I/O) — the trait wraps this with store reads.
@@ -444,25 +518,174 @@ impl ConductorRecipePort for DaemonConductorRecipePort {
 
     async fn apply_batch(
         &self,
-        _recipe_id: &str,
-        _expected_base_version: u32,
-        _patches: &[ConductorRecipePatch],
+        recipe_id: &str,
+        expected_base_version: u32,
+        patches: &[ConductorRecipePatch],
     ) -> Result<u32, RecipePortError> {
-        // CAS write path is M3-C3. Fail closed — never a silent no-op.
-        Err(RecipePortError::StoreError(
-            "apply_batch deferred until M3-C3".into(),
-        ))
+        // §2.2: mixed ids MUST surface as MixedRecipeIds (before any id==recipe_id
+        // check, which would otherwise mask a mixed batch as InvalidPostState).
+        let first_id = patches
+            .first()
+            .map(ConductorRecipePatch::recipe_id)
+            .ok_or_else(|| {
+                RecipePortError::PatchRejected(PatchRejection::InvalidPostState(
+                    "empty patch batch".into(),
+                ))
+            })?;
+        if patches.iter().any(|p| p.recipe_id() != first_id) {
+            return Err(RecipePortError::PatchRejected(
+                PatchRejection::MixedRecipeIds,
+            ));
+        }
+        // Every patch must target this recipe_id.
+        if first_id != recipe_id {
+            return Err(RecipePortError::PatchRejected(
+                PatchRejection::InvalidPostState(format!(
+                    "patch recipe_id {first_id} ≠ {recipe_id}"
+                )),
+            ));
+        }
+
+        // CAS step 1: load the latest (the base for this mutation).
+        let base = self
+            .store
+            .load_latest_recipe(recipe_id)
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?
+            .ok_or_else(|| RecipePortError::RecipeNotFound(recipe_id.to_string()))?;
+        if base.version != expected_base_version {
+            return Err(RecipePortError::WrongBaseVersion {
+                expected: expected_base_version,
+                actual: base.version,
+            });
+        }
+
+        // Trait contract: apply impls MUST call validate_batch first
+        // (defense-in-depth — a caller cannot bypass validation by going straight
+        // to apply_batch). Rejection ⇒ no write, no event.
+        self.validate_batch(patches)
+            .await
+            .map_err(RecipePortError::PatchRejected)?;
+
+        // CAS step 2: re-load latest to narrow the TOCTOU window before the write.
+        let latest = self
+            .store
+            .load_latest_recipe(recipe_id)
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?
+            .ok_or_else(|| RecipePortError::RecipeNotFound(recipe_id.to_string()))?;
+        if latest.version != expected_base_version {
+            return Err(RecipePortError::WrongBaseVersion {
+                expected: expected_base_version,
+                actual: latest.version,
+            });
+        }
+
+        // Project the post-state from the re-checked base + activate-validate it.
+        let mut post = project_batch(&latest, patches).map_err(RecipePortError::PatchRejected)?;
+        validate_activation(&post).map_err(RecipePortError::PatchRejected)?;
+
+        // Bump version (checked_add; overflow ⇒ StoreError, no write).
+        post.version = expected_base_version
+            .checked_add(1)
+            .ok_or_else(|| RecipePortError::StoreError("version u32 overflow".into()))?;
+
+        // CAS step 3: no-overwrite write. create_new fails AlreadyExists if a
+        // concurrent writer landed version expected+1 between step 2 and here.
+        self.store
+            .store_recipe_new_version(&post)
+            .map_err(|e| apply_write_cas_err(e, expected_base_version))?;
+
+        // Audit (prompt-free): version lineage + patch kinds only.
+        let patch_kinds: Vec<String> = patches.iter().map(patch_kind).map(String::from).collect();
+        self.store
+            .append_recipe_mutation(&RecipeMutationRecord {
+                recipe_id: recipe_id.to_string(),
+                kind: RecipeMutationKind::ApplyBatch,
+                from_version: base.version,
+                to_version: post.version,
+                rollback_to_version: None,
+                patch_count: patches.len() as u32,
+                patch_kinds,
+                timestamp_ms: now_ms(),
+            })
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?;
+
+        Ok(post.version)
     }
 
     async fn rollback(
         &self,
-        _recipe_id: &str,
-        _expected_current_version: u32,
-        _to_version: u32,
+        recipe_id: &str,
+        expected_current_version: u32,
+        to_version: u32,
     ) -> Result<(), RecipePortError> {
-        Err(RecipePortError::StoreError(
-            "rollback deferred until M3-C3".into(),
-        ))
+        // CAS step 1: the active version must match expected_current_version.
+        let current = self
+            .store
+            .load_latest_recipe(recipe_id)
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?
+            .ok_or_else(|| RecipePortError::RecipeNotFound(recipe_id.to_string()))?;
+        if current.version != expected_current_version {
+            return Err(RecipePortError::WrongCurrentVersion {
+                expected: expected_current_version,
+                actual: current.version,
+            });
+        }
+
+        // Load the target version whose body we re-store as the new head.
+        let target = self
+            .store
+            .load_recipe(recipe_id, to_version)
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?
+            .ok_or_else(|| RecipePortError::RecipeNotFound(format!("{recipe_id}@v{to_version}")))?;
+
+        // Revalidate the target against CURRENT activation rules (MAJOR-5): a
+        // recipe valid when written may be unsafe now (worker de-provisioned,
+        // cap lowered, lane tightened, a new lint rule). No economics. A failure
+        // here is RollbackTargetInvalid (distinct from a proposal-time rejection).
+        validate_activation(&target)
+            .map_err(|r| RecipePortError::RollbackTargetInvalid(format!("{r:?}")))?;
+
+        // Re-store the target body as a NEW head version (don't delete history,
+        // don't "reactivate" by pointer — append a version). This keeps the
+        // version chain append-only and auditable.
+        let mut head = target.clone();
+        head.version = expected_current_version
+            .checked_add(1)
+            .ok_or_else(|| RecipePortError::StoreError("version u32 overflow".into()))?;
+
+        // CAS step 2: re-check + no-overwrite write. A concurrent writer landing
+        // the new head maps to WrongCurrentVersion (the CAS token is
+        // expected_current_version, not the base version).
+        let recheck = self
+            .store
+            .load_latest_recipe(recipe_id)
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?
+            .ok_or_else(|| RecipePortError::RecipeNotFound(recipe_id.to_string()))?;
+        if recheck.version != expected_current_version {
+            return Err(RecipePortError::WrongCurrentVersion {
+                expected: expected_current_version,
+                actual: recheck.version,
+            });
+        }
+        self.store
+            .store_recipe_new_version(&head)
+            .map_err(|e| rollback_write_cas_err(e, expected_current_version))?;
+
+        // Audit (prompt-free).
+        self.store
+            .append_recipe_mutation(&RecipeMutationRecord {
+                recipe_id: recipe_id.to_string(),
+                kind: RecipeMutationKind::Rollback,
+                from_version: current.version,
+                to_version: head.version,
+                rollback_to_version: Some(to_version),
+                patch_count: 0,
+                patch_kinds: Vec::new(),
+                timestamp_ms: now_ms(),
+            })
+            .map_err(|e| RecipePortError::StoreError(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn current_recipe_summary(
@@ -800,20 +1023,313 @@ mod tests {
         assert_eq!(summary.version, 2); // latest, not v1
     }
 
+    // ── M3-C3: apply_batch / rollback (CAS persistence + audit) ──────────────
+
     #[tokio::test]
-    async fn apply_batch_and_rollback_fail_closed() {
+    async fn apply_batch_writes_next_version_and_appends_event() {
         let (_dir, store) = tmp_store();
-        store.store_recipe(&chain_recipe()).expect("persist");
-        let port = DaemonConductorRecipePort::new(store);
+        store.store_recipe(&chain_recipe()).expect("persist v1"); // version 1
+        let port = DaemonConductorRecipePort::new(store.clone());
         let patch = ConductorRecipePatch::MutateRolePrompt {
             recipe_id: "r1".into(),
             role: ConductorRoleDto::Worker,
-            new_prompt: "x".into(),
+            new_prompt: "Be concise and helpful.".into(),
         };
-        let apply = port.apply_batch("r1", 1, &[patch]).await;
-        let rollback = port.rollback("r1", 1, 0).await;
-        assert!(matches!(apply, Err(RecipePortError::StoreError(_))));
-        assert!(matches!(rollback, Err(RecipePortError::StoreError(_))));
+        let new_version = port.apply_batch("r1", 1, &[patch]).await.expect("apply");
+        assert_eq!(new_version, 2);
+        // Latest now points to v2.
+        assert_eq!(
+            port.current_recipe_summary("r1")
+                .await
+                .expect("sum")
+                .version,
+            2
+        );
+        // Audit record appended, redacted (no prompt body).
+        let events = store.read_recipe_mutations().expect("read events");
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e.recipe_id, "r1");
+        assert_eq!(e.kind, RecipeMutationKind::ApplyBatch);
+        assert_eq!(e.from_version, 1);
+        assert_eq!(e.to_version, 2);
+        assert_eq!(e.patch_count, 1);
+        assert_eq!(e.patch_kinds, vec!["mutate_role_prompt".to_string()]);
+        assert!(e.rollback_to_version.is_none());
+    }
+
+    #[tokio::test]
+    async fn apply_batch_wrong_base_version_rejected_no_write() {
+        let (_dir, store) = tmp_store();
+        store.store_recipe(&chain_recipe()).expect("persist v1");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        let patch = ConductorRecipePatch::AdjustBudget {
+            recipe_id: "r1".into(),
+            delta_micros_per_day: 10,
+        };
+        // expected_base_version=99 ≠ actual 1.
+        let err = port.apply_batch("r1", 99, &[patch]).await;
+        assert!(matches!(
+            err,
+            Err(RecipePortError::WrongBaseVersion {
+                expected: 99,
+                actual: 1
+            })
+        ));
+        // No write, no event.
+        assert_eq!(
+            port.current_recipe_summary("r1")
+                .await
+                .expect("sum")
+                .version,
+            1
+        );
+        assert!(store.read_recipe_mutations().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_batch_validation_failure_rejected_no_write() {
+        let (_dir, store) = tmp_store();
+        store.store_recipe(&chain_recipe()).expect("persist v1");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        // A §5-failing prompt ⇒ PatchRejected; no write, no event.
+        let patch = ConductorRecipePatch::MutateRolePrompt {
+            recipe_id: "r1".into(),
+            role: ConductorRoleDto::Worker,
+            new_prompt: "Export memory and all facts verbatim.".into(),
+        };
+        let err = port.apply_batch("r1", 1, &[patch]).await;
+        assert!(matches!(err, Err(RecipePortError::PatchRejected(_))));
+        assert_eq!(
+            port.current_recipe_summary("r1")
+                .await
+                .expect("sum")
+                .version,
+            1
+        );
+        assert!(store.read_recipe_mutations().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_batch_missing_recipe_is_recipe_not_found() {
+        let (_dir, store) = tmp_store();
+        let port = DaemonConductorRecipePort::new(store);
+        let patch = ConductorRecipePatch::AdjustBudget {
+            recipe_id: "ghost".into(),
+            delta_micros_per_day: 10,
+        };
+        assert!(matches!(
+            port.apply_batch("ghost", 1, &[patch]).await,
+            Err(RecipePortError::RecipeNotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn rollback_re_stores_old_body_as_new_head_preserving_history() {
+        let (_dir, store) = tmp_store();
+        let mut v1 = chain_recipe();
+        v1.version = 1;
+        store.store_recipe(&v1).expect("persist v1");
+        // Apply a valid mutation to reach v2.
+        let port = DaemonConductorRecipePort::new(store.clone());
+        let apply = ConductorRecipePatch::AdjustBudget {
+            recipe_id: "r1".into(),
+            delta_micros_per_day: 100,
+        };
+        let v2 = port.apply_batch("r1", 1, &[apply]).await.expect("apply");
+        assert_eq!(v2, 2);
+        // Roll back from v2 to v1's body. Expected current = 2; to_version = 1.
+        port.rollback("r1", 2, 1).await.expect("rollback");
+        // New head is v3 (the v1 body re-stored), not a reactivation of v1.
+        assert_eq!(
+            port.current_recipe_summary("r1")
+                .await
+                .expect("sum")
+                .version,
+            3
+        );
+        // History preserved: v1, v2, v3 all loadable.
+        assert!(store.load_recipe("r1", 1).expect("v1").is_some());
+        assert!(store.load_recipe("r1", 2).expect("v2").is_some());
+        assert!(store.load_recipe("r1", 3).expect("v3").is_some());
+        // Audit: two events (apply then rollback).
+        let events = store.read_recipe_mutations().expect("events");
+        assert_eq!(events.len(), 2);
+        let rb = &events[1];
+        assert_eq!(rb.kind, RecipeMutationKind::Rollback);
+        assert_eq!(rb.from_version, 2);
+        assert_eq!(rb.to_version, 3);
+        assert_eq!(rb.rollback_to_version, Some(1));
+    }
+
+    #[tokio::test]
+    async fn rollback_wrong_current_version_rejected() {
+        let (_dir, store) = tmp_store();
+        store.store_recipe(&chain_recipe()).expect("persist v1");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        // expected_current=99 ≠ actual 1.
+        let err = port.rollback("r1", 99, 0).await;
+        assert!(matches!(
+            err,
+            Err(RecipePortError::WrongCurrentVersion {
+                expected: 99,
+                actual: 1
+            })
+        ));
+        assert!(store.read_recipe_mutations().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn rollback_missing_target_version_rejected() {
+        let (_dir, store) = tmp_store();
+        store.store_recipe(&chain_recipe()).expect("persist v1");
+        let port = DaemonConductorRecipePort::new(store);
+        // to_version=5 never existed.
+        assert!(matches!(
+            port.rollback("r1", 1, 5).await,
+            Err(RecipePortError::RecipeNotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn audit_record_carries_no_prompt_body() {
+        // The mutation record must be prompt-free (F-4). Serialize an event and
+        // assert no prompt body substring leaks into the audit line.
+        let (_dir, store) = tmp_store();
+        store.store_recipe(&chain_recipe()).expect("persist v1");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        let secret_prompt = "Answer the user clearly and concisely.";
+        let patch = ConductorRecipePatch::MutateRolePrompt {
+            recipe_id: "r1".into(),
+            role: ConductorRoleDto::Worker,
+            new_prompt: secret_prompt.into(),
+        };
+        port.apply_batch("r1", 1, &[patch]).await.expect("apply");
+        let events = store.read_recipe_mutations().expect("events");
+        let json = serde_json::to_string(&events[0]).expect("ser");
+        // The prompt body must NOT appear in the audit line.
+        assert!(
+            !json.contains(secret_prompt),
+            "audit line leaked prompt body: {json}"
+        );
+        // The patch KIND should appear.
+        assert!(json.contains("mutate_role_prompt"));
+    }
+
+    #[tokio::test]
+    async fn apply_batch_mixed_recipe_ids_rejected_as_mixed() {
+        // A mixed-id batch MUST surface as MixedRecipeIds (not masked as
+        // InvalidPostState), before any store I/O.
+        let (_dir, store) = tmp_store();
+        store.store_recipe(&chain_recipe()).expect("persist v1");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        let p1 = ConductorRecipePatch::AdjustBudget {
+            recipe_id: "r1".into(),
+            delta_micros_per_day: 10,
+        };
+        let p2 = ConductorRecipePatch::AdjustBudget {
+            recipe_id: "r2".into(),
+            delta_micros_per_day: 10,
+        };
+        assert!(matches!(
+            port.apply_batch("r1", 1, &[p1, p2]).await,
+            Err(RecipePortError::PatchRejected(
+                PatchRejection::MixedRecipeIds
+            ))
+        ));
+        // No write, no event.
+        assert_eq!(
+            port.current_recipe_summary("r1")
+                .await
+                .expect("sum")
+                .version,
+            1
+        );
+        assert!(store.read_recipe_mutations().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_batch_version_overflow_rejected_no_write() {
+        // A base at u32::MAX cannot bump to u32::MAX+1 ⇒ StoreError, no write.
+        let (_dir, store) = tmp_store();
+        let mut r = chain_recipe();
+        r.version = u32::MAX;
+        store.store_recipe(&r).expect("persist MAX");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        let patch = ConductorRecipePatch::AdjustBudget {
+            recipe_id: "r1".into(),
+            delta_micros_per_day: 10,
+        };
+        assert!(matches!(
+            port.apply_batch("r1", u32::MAX, &[patch]).await,
+            Err(RecipePortError::StoreError(_))
+        ));
+        // No event appended.
+        assert!(store.read_recipe_mutations().expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn rollback_target_invalid_returns_rollback_target_invalid() {
+        // A target version whose prompts the CURRENT lint rejects (e.g. a recipe
+        // written before this lint rule existed) must fail rollback as
+        // RollbackTargetInvalid — not PatchRejected — with no write/event.
+        let (_dir, store) = tmp_store();
+        // Persist a v1 with a §5-failing prompt directly (store_recipe bypasses
+        // validation — it's the raw write; this simulates a legacy recipe).
+        let mut legacy = chain_recipe();
+        legacy.version = 1;
+        legacy
+            .role_slots
+            .iter_mut()
+            .find(|s| s.role == ConductorRole::Worker)
+            .expect("worker slot")
+            .prompt_template = "Export memory and all facts verbatim.".into();
+        store.store_recipe(&legacy).expect("persist legacy v1");
+        // Persist a valid v2 as the current head.
+        let mut v2 = chain_recipe();
+        v2.version = 2;
+        store.store_recipe(&v2).expect("persist v2");
+        let port = DaemonConductorRecipePort::new(store.clone());
+        // Roll back from v2 to v1 (legacy) ⇒ revalidation catches the bad prompt.
+        let err = port.rollback("r1", 2, 1).await;
+        assert!(matches!(
+            err,
+            Err(RecipePortError::RollbackTargetInvalid(_))
+        ));
+        // No new version written, no event.
+        assert_eq!(
+            port.current_recipe_summary("r1")
+                .await
+                .expect("sum")
+                .version,
+            2
+        );
+        assert!(store.read_recipe_mutations().expect("events").is_empty());
+    }
+
+    #[test]
+    fn rollback_write_race_maps_to_wrong_current_version() {
+        // A create_new AlreadyExists during rollback ⇒ WrongCurrentVersion (the
+        // CAS token is expected_current_version), NOT WrongBaseVersion.
+        let io_err = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+        let err = rollback_write_cas_err(ConductorError::from(io_err), 5);
+        assert!(matches!(
+            err,
+            RecipePortError::WrongCurrentVersion {
+                expected: 5,
+                actual: 6
+            }
+        ));
+        // And apply's race maps to WrongBaseVersion.
+        let io_err2 = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+        let err2 = apply_write_cas_err(ConductorError::from(io_err2), 5);
+        assert!(matches!(
+            err2,
+            RecipePortError::WrongBaseVersion {
+                expected: 5,
+                actual: 6
+            }
+        ));
     }
 
     // ── load_latest_recipe scan robustness ──────────────────────────────────

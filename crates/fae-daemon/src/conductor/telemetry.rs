@@ -278,6 +278,47 @@ pub struct ShadowTurnRecord {
     pub timestamp_ms: u64,
 }
 
+// --- M3-C3 recipe-mutation audit records (§4) ---
+//
+// Persisted to the isolated conductor store (`conductor_recipe_mutations.jsonl`)
+// by `DaemonConductorRecipePort::apply_batch` / `rollback`. **Prompt-free** (F-4):
+// the record carries only version lineage + patch KINDS, never prompt bodies —
+// the full recipe (prompts included) lives in the version files under `recipes/`,
+// and a mutation is re-derivable by diffing `from_version` ↔ `to_version`.
+
+/// Whether a recipe mutation was an apply (forward) or a rollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecipeMutationKind {
+    /// `apply_batch`: a validated patch batch promoted to a new version.
+    ApplyBatch,
+    /// `rollback`: a prior version re-stored as a new head version.
+    Rollback,
+}
+
+/// A redacted audit line for one recipe mutation (apply or rollback).
+/// `patch_kinds` are the operator names (e.g. `"mutate_role_prompt"`), NOT the
+/// patch payloads — prompt bodies never enter this record (F-4 / privacy).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipeMutationRecord {
+    pub recipe_id: String,
+    pub kind: RecipeMutationKind,
+    /// The active version BEFORE this mutation.
+    pub from_version: u32,
+    /// The new head version written by this mutation.
+    pub to_version: u32,
+    /// For rollbacks: the version whose body was re-stored. `None` for apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_to_version: Option<u32>,
+    /// Number of patches in the batch (0 for rollback).
+    pub patch_count: u32,
+    /// Operator names only (e.g. `"swap_worker"`, `"mutate_role_prompt"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patch_kinds: Vec<String>,
+    /// Millis since epoch.
+    pub timestamp_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::conductor::error::ConductorError;
 use crate::conductor::recipe::FaeConductorRecipe;
 use crate::conductor::telemetry::{
-    ConductorRouteEvent, FeedbackRecord, RouteReceipt, ShadowTurnRecord,
+    ConductorRouteEvent, FeedbackRecord, RecipeMutationRecord, RouteReceipt, ShadowTurnRecord,
 };
 
 const EVENTS_FILE: &str = "conductor_route_events.jsonl";
@@ -23,6 +23,7 @@ const RECEIPTS_FILE: &str = "conductor_receipts.jsonl";
 const BUDGET_USAGE_FILE: &str = "conductor_budget_usage.jsonl";
 const FEEDBACK_FILE: &str = "conductor_feedback.jsonl";
 const SHADOW_FILE: &str = "conductor_shadow.jsonl";
+const MUTATIONS_FILE: &str = "conductor_recipe_mutations.jsonl";
 const RECIPES_DIR: &str = "recipes";
 
 /// Append-only store. Cheap to clone (holds only a path).
@@ -140,6 +141,26 @@ impl ConductorStore {
         read_jsonl(&self.dir.join(FEEDBACK_FILE))
     }
 
+    /// Append a redacted recipe-mutation audit line (M3-C3). The record is
+    /// prompt-free (F-4): only version lineage + patch KINDS are persisted.
+    #[allow(dead_code)] // M3-C3: DaemonConductorRecipePort calls this on apply/rollback
+    pub(crate) fn append_recipe_mutation(
+        &self,
+        record: &RecipeMutationRecord,
+    ) -> Result<(), ConductorError> {
+        ensure_store_dir_available(&self.dir)?;
+        append_jsonl(&self.dir.join(MUTATIONS_FILE), record)
+    }
+
+    /// Read all recipe-mutation audit rows (tests + future reviewer surface).
+    #[allow(dead_code)] // M3-C3: exercised in tests; the reviewer UI surfaces it later
+    pub(crate) fn read_recipe_mutations(
+        &self,
+    ) -> Result<Vec<RecipeMutationRecord>, ConductorError> {
+        ensure_store_dir_available(&self.dir)?;
+        read_jsonl(&self.dir.join(MUTATIONS_FILE))
+    }
+
     /// Persist a recipe version. Path: `recipes/<recipe_id>.v<version>.json`.
     /// Overwrites an exact (id, version) match (idempotent re-writes); never
     /// touches other versions. `recipe_id` is sanitized to a safe filename set.
@@ -155,6 +176,35 @@ impl ConductorStore {
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json)?;
         std::fs::rename(&tmp, &path)?;
+        Ok(path)
+    }
+
+    /// Persist a NEW recipe version with **no-overwrite** semantics (M3-C3 CAS).
+    /// Unlike [`store_recipe`](Self::store_recipe) (which overwrites an exact
+    /// (id, version) match for idempotent re-writes), this FAILS if the target
+    /// file already exists — closing the CAS race where a concurrent writer's
+    /// version-N could be clobbered. The recipe's `version` must already be set
+    /// to the intended new version by the caller.
+    #[allow(dead_code)] // M3-C3: DaemonConductorRecipePort::apply_batch / rollback
+    pub(crate) fn store_recipe_new_version(
+        &self,
+        recipe: &FaeConductorRecipe,
+    ) -> Result<PathBuf, ConductorError> {
+        let safe_id = sanitize_id(&recipe.id)?;
+        let path = self
+            .dir
+            .join(RECIPES_DIR)
+            .join(format!("{safe_id}.v{}.json", recipe.version));
+        let json = serde_json::to_vec_pretty(recipe)?;
+        // `create_new(true)`: the open fails (AlreadyExists) if the file is
+        // present — the CAS guarantee. No temp+rename: rename would overwrite,
+        // defeating the create_new guard.
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
+        use std::io::Write;
+        file.write_all(&json)?;
         Ok(path)
     }
 
