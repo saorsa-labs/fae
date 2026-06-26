@@ -1911,6 +1911,7 @@ dependencies = [
  "fae-control-plane",
  "fae-engine",
  "fae-envelope-gate",
+ "fae-metaopt",
  "fae-pii-membrane",
  "futures-util",
  "getrandom 0.2.17",

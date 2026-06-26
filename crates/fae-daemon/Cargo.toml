@@ -18,6 +18,10 @@ fae-envelope-gate = { path = "../fae-envelope-gate" }
 fae-engine = { path = "../fae-engine" }
 fae-acp = { path = "../fae-acp" }
 fae-pii-membrane = { path = "../fae-pii-membrane" }
+# M3-C2: fae-metaopt reaches the daemon ONLY via conductor/recipe_mutation.rs
+# (the recipe validator) + the future CLI. The CI boundary guard
+# (scripts/ci/guard-metaopt-boundary.sh) keeps it out of the live turn loop.
+fae-metaopt = { path = "../fae-metaopt" }
 serde = { workspace = true }
 serde_json.workspace = true
 thiserror.workspace = true

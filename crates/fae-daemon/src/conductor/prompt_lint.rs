@@ -99,6 +99,9 @@ const ZERO_WIDTH_CHARS: &[char] = &[
 /// NOTE: for blob extraction (base64/hex), use [`nfkc_and_strip`] instead —
 /// lowercasing corrupts case-sensitive base64. This function is the keyword-
 /// scanning canonical form.
+#[allow(dead_code)] // named keyword-scan canonicalizer; lint_prompt inlines the
+                    // two-form split (case-preserved nfkc for blobs + lowercased for keywords) to
+                    // avoid recomputing nfkc_and_strip. Retained for future keyword-rule callers.
 pub(crate) fn canonicalize(prompt: &str) -> String {
     nfkc_and_strip(prompt).to_ascii_lowercase()
 }

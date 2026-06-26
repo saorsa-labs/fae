@@ -58,12 +58,19 @@ pub mod executor;
 pub mod fingerprint;
 pub mod policy;
 pub mod pricing;
-/// M3 §5 deterministic prompt-mutation lint. Dormant — called by the recipe
-/// validator (M3-C2) when validating a `MutateRolePrompt` patch.
-#[allow(dead_code)] // TODO(M3-C2): wired when DaemonConductorRecipePort validates op 4
+/// M3 §5 deterministic prompt-mutation lint. Called by the recipe validator
+/// (`recipe_mutation::apply_one`) when validating a `MutateRolePrompt` patch or
+/// a `SwitchTopology` chain-slot prompt body.
 pub mod prompt_lint;
 pub mod prompts;
 pub mod recipe;
+/// M3-C2 daemon-side `ConductorRecipePort` adapter (Layer-1 validation).
+/// Dormant plumbing: constructed nowhere outside its tests. NOT wired into the
+/// executor / turn loop / scheduler / CLI — the CI boundary guard keeps
+/// fae-metaopt reachable only via this module (+ future CLI). Mutation stays
+/// offline/CLI-only until the content-aware classifier lands (hard gate).
+#[allow(dead_code)] // TODO(M3-C4): CLI `fae conductor metaopt-run --recipe` constructs it
+pub mod recipe_mutation;
 /// M2 reward aggregator (spec §7). **Capture is wired** (Stage A
 /// `route_turn` → `capture_shadow`) and **the reward is now consumable**
 /// (Stage C `ConductorRuntime::reward_snapshot` joins the live window and

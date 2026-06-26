@@ -177,6 +177,65 @@ impl ConductorStore {
         let recipe = serde_json::from_slice(&bytes)?;
         Ok(Some(recipe))
     }
+
+    /// Load the highest-numbered version for a recipe — the CAS base for recipe
+    /// mutation (`current_recipe_summary` / `apply_batch`'s `expected_base_version`).
+    /// `None` if no versions exist (a recipe never persisted).
+    ///
+    /// Scans `recipes/<safe_id>.v<digits>.json`, picks the max version, delegates
+    /// to [`load_recipe`](Self::load_recipe). **No head-pointer file**: the scan is
+    /// crash-safe (the version files ARE the truth) and the recipes dir is small —
+    /// fine for dormant/CLI M3 volume. A head pointer would add a second file to
+    /// keep in sync for no benefit at this scale.
+    ///
+    /// Security: reuses [`sanitize_id`] (path-traversal-safe), globs only the exact
+    /// `<safe_id>.v` prefix + `<digits>.json` suffix. A crafted filename cannot
+    /// spoof a higher version (digits-only `u32` parse) and a prefix-colliding id
+    /// (`foo` vs `foo2`) cannot bleed (the `.` after `safe_id` bounds the match).
+    #[allow(dead_code)] // exercised in unit tests; M3-C2 recipe validation surfaces it
+    pub fn load_latest_recipe(
+        &self,
+        recipe_id: &str,
+    ) -> Result<Option<FaeConductorRecipe>, ConductorError> {
+        let safe_id = sanitize_id(recipe_id)?;
+        let dir = self.dir.join(RECIPES_DIR);
+        let read = match std::fs::read_dir(&dir) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let prefix = format!("{safe_id}.");
+        let mut best: Option<u32> = None;
+        for entry in read {
+            let entry = entry?;
+            // Bind the OsString: `.to_str()` borrows it, so it must outlive `name`.
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            // Match `<safe_id>.v<digits>.json` exactly.
+            let Some(rest) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(digits) = rest.strip_prefix("v").and_then(|r| r.strip_suffix(".json")) else {
+                continue;
+            };
+            // Fail closed: a file matching the version shape (`<safe_id>.v*.json`)
+            // with a non-`u32` version is corruption / tampering, not a legitimate
+            // sibling (the store's read_jsonl shares this fail-closed posture). A
+            // non-matching file (e.g. `<safe_id>.metadata.json`) hit `continue` above.
+            let version = digits.parse::<u32>().map_err(|_| {
+                ConductorError::Path(format!(
+                    "corrupt recipe version file (non-numeric version): {name}"
+                ))
+            })?;
+            best = Some(best.map_or(version, |b| b.max(version)));
+        }
+        match best {
+            Some(version) => self.load_recipe(recipe_id, version),
+            None => Ok(None),
+        }
+    }
 }
 
 fn append_jsonl<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), ConductorError> {
