@@ -243,7 +243,15 @@ mod millis {
 
 /// A complete, serializable routing recipe. Pure data — the unit MetaOpt
 /// mutates (M3) and the gate evaluates (M2).
+///
+/// `deny_unknown_fields` (F-15) closes a forward-compat serde hole: without it, an
+/// unknown top-level field (`"star_mode": true`, `"debate_v2": ...`) is silently
+/// accepted, and a future code change reading it would honor attacker/
+/// mutation-injected metadata. Star/Debate topologies are already compile-time-
+/// unreachable (the enum has only `Direct`/`Chain`); this is defense-in-depth at
+/// the struct boundary so a crafted JSON can't smuggle unknown metadata either.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FaeConductorRecipe {
     pub id: String,
     pub version: u32,
@@ -737,9 +745,43 @@ mod tests {
 
     #[test]
     fn serde_rejects_unknown_topology() {
-        // F-15: star/debate fail-closed on deserialization.
+        // F-15: star/debate fail-closed on deserialization (enum level).
         let bad = r#"{"topology":"star"}"#;
         assert!(serde_json::from_str::<ConductorTopology>(bad).is_err());
+    }
+
+    #[test]
+    fn serde_recipe_rejects_star_topology() {
+        // F-15: a FULL recipe carrying topology="star" must fail at the recipe
+        // struct boundary (not just the enum). Generates a valid recipe JSON via
+        // to_value, mutates topology, then deserializes — exercises the struct.
+        let mut v = serde_json::to_value(direct_recipe()).expect("serialize in test");
+        v["topology"] = serde_json::json!("star");
+        let err = serde_json::from_value::<FaeConductorRecipe>(v);
+        assert!(err.is_err(), "star topology must be rejected: {err:?}");
+    }
+
+    #[test]
+    fn serde_recipe_rejects_debate_topology() {
+        // F-15: debate topology rejected at the recipe struct boundary.
+        let mut v = serde_json::to_value(direct_recipe()).expect("serialize in test");
+        v["topology"] = serde_json::json!("debate");
+        let err = serde_json::from_value::<FaeConductorRecipe>(v);
+        assert!(err.is_err(), "debate topology must be rejected: {err:?}");
+    }
+
+    #[test]
+    fn serde_recipe_rejects_unknown_field() {
+        // F-15: the deny_unknown_fields proof. A valid recipe plus one extra
+        // top-level field must fail — serde's forward-compat default would
+        // otherwise silently accept attacker/mutation-injected metadata.
+        let mut v = serde_json::to_value(direct_recipe()).expect("serialize in test");
+        v["star_mode"] = serde_json::json!(true);
+        let err = serde_json::from_value::<FaeConductorRecipe>(v);
+        assert!(
+            err.is_err(),
+            "unknown top-level field must be rejected: {err:?}"
+        );
     }
 
     #[test]

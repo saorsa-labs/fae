@@ -1,8 +1,11 @@
 # Fae App Release Validation Contract
 
-Last updated: June 11, 2026
+Last updated: June 27, 2026
 
-This is the canonical end-to-end validation contract for shipping Fae.
+This is the canonical end-to-end validation contract for shipping Fae. It is the
+**single** release-validation artifact: it carries both the release-readiness
+checklist and the step-by-step live scenario script (the former standalone
+CoWork-era scenario script was removed in the Great Cleanup and absorbed here).
 
 Do not mark Fae, a model change, a prompt change, a routing change, a tool-policy change, or a UI refresh as release-ready unless this contract has been executed against the real app and the relevant scripted phases have passed.
 
@@ -23,6 +26,7 @@ Run this full contract when any of the following changes:
 - accidental restoration of Cowork/canvas as product UI surfaces
 - legacy dual-model or concierge compatibility changes
 - settings that affect loaded models, policy, or diagnostics
+- **learned-conductor surfaces: routing policy/recipes, reward aggregation, shadow routing, the content-aware task classifier, recipe mutation, or the fae-metaopt boundary**
 - any release candidate build
 
 ## Required environment

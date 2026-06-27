@@ -41,6 +41,12 @@ guard-no-rust:
 guard-metaopt-boundary:
     bash scripts/ci/guard-metaopt-boundary.sh
 
+# M5: release-validation gates (F-6 enforcement + F-9 doc-drift prevention).
+# Run the PR attestation self-test + the AGENTS-ref docs guard.
+guard-release-validation:
+    python3 scripts/ci/guard-release-validation-pr.py --self-test
+    python3 scripts/ci/guard-release-validation-docs.py
+
 # Full validation (build + test)
 check: build test
     @echo "✓ All checks passed"

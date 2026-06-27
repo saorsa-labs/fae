@@ -1,0 +1,45 @@
+name: Release validation
+
+# F-6 enforcement (M5). Two lightweight, dependency-free checks run on EVERY PR
+# (no path filter — the attestation must appear even for a docs-only fix):
+#   1. PR-body release-validation attestation (exactly one of N/A | done | blocker).
+#   2. Docs guard: AGENTS.md checklist references resolve; PR template present.
+#
+# Heavy cargo gates (fmt/clippy/test/workspace-check/fae-metaopt) stay in
+# ci-linux.yml, which has path filters so docs-only PRs don't burn runner minutes.
+#
+# Branch protection: make this workflow's jobs a REQUIRED check (owner-configured
+# GitHub setting — it cannot be set from a commit).
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+    branches: [main]
+  push:
+    branches: [main]
+
+# Do NOT add pull_request_target (privilege-escalation hazard).
+
+concurrency:
+  group: release-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-attestation:
+    name: PR release-validation attestation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check PR body carries exactly one release-validation disposition
+        run: python3 scripts/ci/guard-release-validation-pr.py
+
+  docs-guard:
+    name: AGENTS checklist refs + PR template
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert AGENTS.md checklist references resolve + template present
+        run: python3 scripts/ci/guard-release-validation-docs.py

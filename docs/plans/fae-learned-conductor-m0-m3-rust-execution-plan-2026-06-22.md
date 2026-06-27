@@ -99,7 +99,7 @@
 ## M2 — Reward & eval + shadow routing  ⏳ D2+D7 DONE; **G-M2-spec PASSED** (spec v2.1 `ffa0819e`); M2 wiring UNBLOCKED
 
 **Spec:**
-- [ ] `routing_accuracy` eval dimension + reward aggregator (reject self-judgment-only — F-10)
+- [x] `routing_accuracy` eval dimension + reward aggregator (reject self-judgment-only — F-10) — **M4 classifier (`acdd04af`) unblocked this**: `corpus_match` flips `None→Some` now that turns carry real `task_class`+`feature_predicates`. The reward aggregator (M2) accrues outcome signal; the classifier populates the routing-accuracy dimension. F-8 budget-governance + audit-logging WPs landed in M0b/M1.
 - [ ] **F-8:** shadow router depends on budget-governance + audit-logging WPs from M0b/M1
 - [ ] Shadow router: route-decision-only by default; local-only execution under strict budget; **never** remote/paid/cross-owner
 - [x] **F-11:** eval corpus methodology documented (single-annotator = David, versioned, known limitation) — *landed in `eval.rs` module docs (WP-D7)*
@@ -172,7 +172,7 @@ This ordering also respects the sequencing rule the BLOCKER created. The M3 spec
   - Design: dormant/offline/CLI-only; recipe-is-data-not-code; two-layer enforcement (Layer 1 validator + Layer 2 M2 §5 gates); `ConductorRecipePatch` (5 operators, `SwitchTopology` carries `chain_slots` for direct→chain construction) in `fae-metaopt`; `DaemonConductorRecipePort` adapter in `fae-daemon`; CAS apply/rollback (no TOCTOU); §5 prompt lint (incl. `no_tool_authority_expansion`); F-16 SOUL-drift (local-only held-out corpus + deterministic lint, model advisory-only). Spec at `docs/architecture/conductor-m3-metaopt-recipe-mutation-spec-2026-06-24.md`.
 - [ ] `MetaOptSurface::ConductorRecipe` + mutation operators (per v5 spec §1.1, §2)
 - [ ] Apply/rollback transactional with CAS (v5 spec §2.2, §4); narrator copy (no router jargon)
-- [ ] **F-15:** `FaeConductorRecipe` runtime-asserts against `star`/`debate` (already compile-time-unreachable; serde deny_unknown_fields on DTOs)
+- [x] **F-15:** `FaeConductorRecipe` `#[serde(deny_unknown_fields)]` + recipe-level star/debate/unknown-field rejection tests (M5-C, `conductor-m5-...-spec`). Star/Debate remain compile-time-unreachable (enum = Direct/Chain only); the struct-level deny is defense-in-depth against crafted-JSON metadata smuggling. Existing enum-level test retained.
 - [ ] **F-16:** SOUL-drift proxy metric + periodic review trigger (v5 spec §6)
 - [x] **G-M3-spec review: `oracle`** — **PASSED v5** (run `d89f3738`). 5 rounds: v1 FAIL (1 BLOCKER + 7 MAJOR), v2 FAIL (5 closed, 2 open + 1 new), v3 FAIL (MAJOR-3 closed, MAJOR-2 too-broad + TOCTOU), v4 FAIL (MAJOR-2 closed via fold, §4 contradiction), v5 PASS. All 9 findings closed.
 
@@ -187,6 +187,11 @@ This ordering also respects the sequencing rule the BLOCKER created. The M3 spec
 ## After M3 — remaining work (captured, ADR-gated)
 
 - **M4** Tier-1 same-owner x0x sync (`delegate_to_mesh`) — Rust x0x crate; **F-2 egress membrane (named WP `ConductorEgressMembrane`) must close first**; **F-13** server↔pipeline contract; **F-14** x0x crate API confirmed.
-- **M5** Hardening + enforced release-validation CI gate (F-6); doc-drift fix (F-9).
+- [x] **M5** Hardening + enforced release-validation CI gate (F-6); doc-drift fix (F-9). **COMPLETE** — spec `docs/architecture/conductor-m5-release-validation-hardening-spec-2026-06-27.md`:
+  - **F-9**: removed AGENTS.md ref to nonexistent `main-and-cowork-live-test-scenarios.md`; checklist notes itself as the single canonical artifact; conductor surfaces added to the mandatory-when trigger list.
+  - **F-6**: enforced PR attestation gate (`.github/PULL_REQUEST_TEMPLATE.md` + `scripts/ci/guard-release-validation-pr.py` exactly-one-of N/A|done|blocker, self-tested) + `.github/workflows/release-validation.yml` (every PR, no path filter). Branch-protection "required check" is an owner-configured GitHub setting (not a code artifact) — called out honestly in the spec.
+  - **F-15**: `deny_unknown_fields` + 3 recipe-level tests.
+  - **M5-D**: CI now runs `cargo check --workspace --all-targets` + fae-metaopt clippy/tests (previously only fae-daemon+fae-engine).
+  - F-16 (SOUL-drift metric) remains **deferred**: the classifier prerequisite is now satisfied, but F-16 still needs an explicit SOUL-drift metric + periodic-review-trigger milestone (and possibly a scheduler task). It is NOT implied that live mutation or scheduler behavior is now open — that remains a separate owner-gated decision.
 - **M6** Async own-fleet (x0x-symphony) + shared intelligence (signed candidate priors; never raw memory).
 - **ADR-gated:** cross-owner grants; MLS group sharing; trained coordinator model; peer-memory ingestion; auto-paid providers; async beyond same-owner spike.
