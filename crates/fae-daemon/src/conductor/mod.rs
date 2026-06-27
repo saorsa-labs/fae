@@ -56,6 +56,12 @@ pub mod error;
 pub mod eval;
 pub mod executor;
 pub mod fingerprint;
+/// M3-C4 offline recipe-mutation CLI (`fae-daemon conductor metaopt-run --recipe`).
+/// Matches the `--offline-turn` pattern: an early branch in `main.rs` dispatches
+/// here. The ONLY production construction site for [`DaemonConductorRecipePort`]
+/// (otherwise tests-only). Human-in-the-loop: apply requires `--yes`.
+#[allow(dead_code)] // constructed via main.rs dispatch; not referenced elsewhere in the crate
+pub mod metaopt_cli;
 pub mod policy;
 pub mod pricing;
 /// M3 §5 deterministic prompt-mutation lint. Called by the recipe validator
@@ -64,12 +70,12 @@ pub mod pricing;
 pub mod prompt_lint;
 pub mod prompts;
 pub mod recipe;
-/// M3-C2 daemon-side `ConductorRecipePort` adapter (Layer-1 validation).
-/// Dormant plumbing: constructed nowhere outside its tests. NOT wired into the
-/// executor / turn loop / scheduler / CLI — the CI boundary guard keeps
-/// fae-metaopt reachable only via this module (+ future CLI). Mutation stays
-/// offline/CLI-only until the content-aware classifier lands (hard gate).
-#[allow(dead_code)] // TODO(M3-C4): CLI `fae conductor metaopt-run --recipe` constructs it
+/// M3-C2 daemon-side `ConductorRecipePort` adapter (Layer-1 validation +
+/// M3-C3 CAS apply/rollback). Constructed by the offline CLI
+/// ([`metaopt_cli`]) — still NOT wired into the executor / turn loop / scheduler.
+/// The CI boundary guard keeps fae-metaopt reachable only via this module +
+/// [`metaopt_cli`]. Mutation stays offline/CLI-only until the content-aware
+/// classifier lands (hard gate).
 pub mod recipe_mutation;
 /// M2 reward aggregator (spec §7). **Capture is wired** (Stage A
 /// `route_turn` → `capture_shadow`) and **the reward is now consumable**

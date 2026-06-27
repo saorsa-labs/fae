@@ -86,6 +86,25 @@ async fn main() -> DaemonResult<()> {
         return Ok(());
     }
 
+    // M3-C4: offline recipe-mutation CLI (`conductor metaopt-run --recipe ...`).
+    // Same pattern as `--offline-turn`: a manual-args early branch that exits
+    // before the server/runtime starts. The ONLY production construction site
+    // for DaemonConductorRecipePort. Human-in-the-loop: apply requires `--yes`.
+    // Mutation stays offline/CLI-only; NO scheduler / executor / session wiring.
+    {
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        if argv.first().is_some_and(|s| s == "conductor")
+            && argv.get(1).is_some_and(|s| s == "metaopt-run")
+        {
+            let parsed = conductor::metaopt_cli::MetaoptArgs::parse(argv.into_iter().skip(2))?;
+            let conductor_data_dir = data_directory()?.join("conductor");
+            let store = Arc::new(conductor::ConductorStore::open(conductor_data_dir)?);
+            let outcome = conductor::metaopt_cli::run(parsed, store).await?;
+            println!("{outcome}");
+            return Ok(());
+        }
+    }
+
     init_tracing();
     println!("fae-daemon (Phase 1, chunk 2a) — protocol v{PROTOCOL_VERSION}");
 

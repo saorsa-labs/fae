@@ -1,12 +1,14 @@
-//! M3-C2 — the daemon-side `ConductorRecipePort` adapter (Layer-1 validation).
+//! M3-C2/M3-C4 — the daemon-side `ConductorRecipePort` adapter (Layer-1
+//! validation + CAS apply/rollback) and its ONLY production caller, the offline
+//! CLI ([`crate::conductor::metaopt_cli`]).
 //!
-//! **This is dormant plumbing** (spec §10): the port is constructed nowhere
-//! outside its own tests. It is NOT wired into the executor, the turn loop, the
-//! scheduler, or the CLI. Mutation stays offline / CLI-only / human-approves-
-//! every-promotion until the content-aware classifier (a hard prerequisite,
-//! owner directive 2026-06-25) lands. The CI boundary guard
+//! **Mutation stays offline/CLI-only** (spec §0): the port is constructed only
+//! by tests and by the offline CLI — it is NOT wired into the executor, the turn
+//! loop, the scheduler, or the control-plane. Mutation stays offline / CLI-only /
+//! human-approves-every-promotion until the content-aware classifier (a hard
+//! prerequisite, owner directive 2026-06-25) lands. The CI boundary guard
 //! (`scripts/ci/guard-metaopt-boundary.sh`) keeps `fae_metaopt` reachable from
-//! fae-daemon ONLY via this file (+ the future CLI), never from the live path.
+//! fae-daemon ONLY via this file + `metaopt_cli.rs`, never from the live path.
 //!
 //! ## What this module does
 //!

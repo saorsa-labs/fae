@@ -44,8 +44,9 @@ fail=0
 
 ALLOWED_FAEDAEMON_REFS=(
   "crates/fae-daemon/src/conductor/recipe_mutation.rs"
-  # M3-C4 (CLI command) will add the metaopt-run subcommand's source file here,
-  # e.g.: "crates/fae-daemon/src/cli/metaopt.rs"
+  "crates/fae-daemon/src/conductor/metaopt_cli.rs"
+  # M3-C4 (CLI command) is the offline `conductor metaopt-run` driver above;
+  # it dispatches from main.rs but the fae_metaopt refs live only in these two files.
 )
 
 is_allowed() {

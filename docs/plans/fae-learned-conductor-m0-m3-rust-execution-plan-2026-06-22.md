@@ -149,6 +149,16 @@ M3 is Fae learning to mutate her own routing recipes — that layer optimizes ag
    > milestone (touches the content-blind line deliberately). M3-A/B/C ship as
    > dormant plumbing under this gate; the live loop is a post-M3 gated step.
 
+> **F-16 (SOUL drift) scope resolution (M3-C4, decision 2026-06-26):**
+> The single-prompt identity/SOUL guard is **already** M3-C1's
+> `check_soul_framing_dropped` (its doc: "the actual F-16 threat — a mutation
+> that rewrites identity"). The F-16 **SOUL-drift metric** (proxy metric +
+> periodic review trigger) is **deferred**: it is temporal/measurement work
+> needing a reward signal or a scheduler task (both blocked — a periodic
+> trigger would drift toward scheduler/live behavior, gated by the classifier
+> hard gate above). M3-C4 ships the offline CLI driver only; the F-16 metric is
+> post-M3 measurement work, not a prompt-lint extension.
+
 This ordering also respects the sequencing rule the BLOCKER created. The M3 spec remains a durable, well-earned milestone (5 adversarial rounds; dormant/offline/CLI-only/human-approves-every-promotion is exactly the right posture for autonomous self-mutation) — it is simply not the right thing to *build* next.
 
 **Prereqs (open Qs for David):**
