@@ -522,6 +522,15 @@ pub enum RouteFailure {
         used: u64,
         window_ms: u64,
     },
+    /// A mesh-delegated (`OwnerFleet`) route failed at the peer. M4: carries
+    /// the worker id + the prompt-free outcome label (`mesh_timeout`,
+    /// `mesh_peer_unreachable`, etc.) — never user text. Every non-`Completed`
+    /// `MeshOutcomeKind` maps here and fail-closes to direct-local.
+    #[allow(dead_code)] // M4-D: constructed by the mesh dispatch path
+    MeshDelegationFailed {
+        worker_id: String,
+        outcome_label: String,
+    },
 }
 
 /// The loaded recipe set, keyed by id. The executor looks up `recipe_id`

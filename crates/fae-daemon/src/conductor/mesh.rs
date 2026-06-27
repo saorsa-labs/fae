@@ -190,6 +190,11 @@ pub(crate) mod test_support {
         /// Number of times `delegate` was called (for the F-2 "mesh port not
         /// invoked when the membrane blocks" proof in M4-D).
         pub calls: std::sync::atomic::AtomicUsize,
+        /// The last request handed to `delegate` (Mutex for interior mutability
+        /// across the async boundary). `None` until the first call. M4-D tests
+        /// assert prompt_slice / mesh_request_id != conductor request_id /
+        /// peer_worker_id from this.
+        pub last_request: std::sync::Mutex<Option<MeshDelegationRequest>>,
     }
 
     impl MockMeshDelegationPort {
@@ -199,6 +204,7 @@ pub(crate) mod test_support {
                 outcome_kind: MeshOutcomeKind::Completed,
                 answer: Some(answer.into()),
                 calls: std::sync::atomic::AtomicUsize::new(0),
+                last_request: std::sync::Mutex::new(None),
             }
         }
 
@@ -209,6 +215,7 @@ pub(crate) mod test_support {
                 outcome_kind: kind,
                 answer: None,
                 calls: std::sync::atomic::AtomicUsize::new(0),
+                last_request: std::sync::Mutex::new(None),
             }
         }
 
@@ -223,6 +230,11 @@ pub(crate) mod test_support {
             request: MeshDelegationRequest,
         ) -> Pin<Box<dyn Future<Output = MeshDelegationOutcome> + Send + 'a>> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Capture the request so M4-D tests can inspect what crossed the
+            // boundary (prompt slice, fresh mesh_request_id, peer worker id).
+            if let Ok(mut guard) = self.last_request.lock() {
+                *guard = Some(request.clone());
+            }
             let answer = self.answer.clone();
             let kind = self.outcome_kind;
             Box::pin(async move {

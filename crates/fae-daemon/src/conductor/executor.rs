@@ -40,6 +40,11 @@ use crate::session::{inject_text_core, run_turn, SessionBackends};
 use fae_control_plane::Command;
 use fae_engine::{ChatMessage, ChatRequest, ProviderAdapter, Role};
 
+use crate::conductor::mesh::{
+    ConductorMeshDelegationPort, MeshDelegationOutcome, MeshDelegationRequest, MeshOutcomeKind,
+    UnavailableMeshDelegationPort,
+};
+
 const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 1024;
 
 /// Structured result from the egress membrane. Labels only; never matched text.
@@ -166,6 +171,10 @@ pub struct ConductorEgress {
     membrane: Arc<dyn PiiMembrane>,
     cloud_request_builder: Arc<dyn CloudRequestBuilder>,
     cloud_provider: Arc<dyn CloudProvider>,
+    /// M4-D: the mesh delegation port (OwnerFleet lane). Production uses
+    /// [`UnavailableMeshDelegationPort`] (fail-closed); tests inject a mock via
+    /// [`Self::with_components_and_mesh`].
+    mesh_port: Arc<dyn ConductorMeshDelegationPort>,
 }
 
 impl ConductorEgress {
@@ -202,6 +211,33 @@ impl ConductorEgress {
         cloud_request_builder: Arc<dyn CloudRequestBuilder>,
         cloud_provider: Arc<dyn CloudProvider>,
     ) -> Self {
+        // Default mesh port is the fail-closed production default — so the
+        // existing `with_components` call sites stay dormant without touching
+        // them. M4-D tests inject a mock via `with_components_and_mesh`.
+        Self::with_components_and_mesh(
+            mode,
+            budget,
+            pricing,
+            membrane,
+            cloud_request_builder,
+            cloud_provider,
+            Arc::new(UnavailableMeshDelegationPort),
+        )
+    }
+
+    /// M4-D: inject a mesh delegation port (tests). Production uses
+    /// [`Self::production`] / [`Self::with_components`], which default to
+    /// [`UnavailableMeshDelegationPort`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_components_and_mesh(
+        mode: ModelMode,
+        budget: BudgetGovernor,
+        pricing: ProviderPricingTable,
+        membrane: Arc<dyn PiiMembrane>,
+        cloud_request_builder: Arc<dyn CloudRequestBuilder>,
+        cloud_provider: Arc<dyn CloudProvider>,
+        mesh_port: Arc<dyn ConductorMeshDelegationPort>,
+    ) -> Self {
         Self {
             mode,
             budget,
@@ -209,6 +245,7 @@ impl ConductorEgress {
             membrane,
             cloud_request_builder,
             cloud_provider,
+            mesh_port,
         }
     }
 }
@@ -436,7 +473,29 @@ impl ConductorRuntime {
                 };
                 (wire, outcome)
             }
-            ConductorTopology::Direct => self.run_cloud_direct(decision, backends, cmd).await,
+            ConductorTopology::Direct => match decision.lane {
+                PrivacyLane::LocalOnly => {
+                    // Unreachable: the `if LocalOnly` arm above handles this.
+                    // Defense-in-depth if the match arms are reordered.
+                    self.run_cloud_direct(decision, backends, cmd).await
+                }
+                PrivacyLane::CloudBacked => self.run_cloud_direct(decision, backends, cmd).await,
+                PrivacyLane::OwnerFleet => self.run_mesh_direct(decision, backends, cmd).await,
+                // TrustedPeer / RemoteAllowed: not implemented (M6+/ADR-gated).
+                // Fail closed rather than flowing through the cloud path.
+                lane => {
+                    self.fail_closed_direct(
+                        decision,
+                        backends,
+                        cmd,
+                        RouteFailure::RecipeDisabled {
+                            recipe_id: decision.recipe_id.clone(),
+                            reason: format!("{lane:?} lane not implemented"),
+                        },
+                    )
+                    .await
+                }
+            },
             ConductorTopology::Chain => {
                 if !self.chain_enabled {
                     return self
@@ -458,8 +517,21 @@ impl ConductorRuntime {
                             .await;
                     }
                     self.run_chain(decision, backends, cmd, decision.lane).await
-                } else {
+                } else if decision.lane == PrivacyLane::CloudBacked {
                     self.run_cloud_chain(decision, backends, cmd).await
+                } else {
+                    // Mesh-chain and unimplemented lanes (M6+/ADR-gated) are
+                    // NOT routed to the cloud chain. Fail closed explicitly.
+                    self.fail_closed_direct(
+                        decision,
+                        backends,
+                        cmd,
+                        RouteFailure::RecipeDisabled {
+                            recipe_id: decision.recipe_id.clone(),
+                            reason: format!("chain+{:?} lane not implemented", decision.lane),
+                        },
+                    )
+                    .await
                 }
             }
         }
@@ -492,6 +564,111 @@ impl ConductorRuntime {
             Err(CloudRoleCallFailure::ProviderFailed(failure)) => {
                 self.fail_closed_direct_with_success(decision, backends, cmd, failure, Some(false))
                     .await
+            }
+        }
+    }
+
+    /// M4-D: delegate a direct `OwnerFleet` route to the mesh port. Runs the
+    /// non-local preflight (§5.3 membrane → §5.4 budget → §5.5 approval) BEFORE
+    /// the port call, so the port receives only a post-gate slice and the gate
+    /// pipeline is never bypassed. Mesh budget is governance-only (token/timeout
+    /// estimate, NO cost — economics deferred). Every non-`Completed` outcome
+    /// (incl. `TransportError` from the dormant production default) fails closed
+    /// to direct-local.
+    async fn run_mesh_direct(
+        &self,
+        decision: &OwnedRouteDecision,
+        backends: &SessionBackends<'_>,
+        cmd: &Command,
+    ) -> (Result<Value, &'static str>, TurnOutcome) {
+        let prompt = prompt_from_command(cmd);
+        let max_output_tokens = max_output_tokens_from_command(cmd);
+
+        // 5.3 PII membrane — the ConductorEgressMembrane (F-2 authority).
+        // Runs before the port call so a credential-shaped prompt is blocked
+        // BEFORE the slice crosses the mesh boundary. This is the load-bearing
+        // egress invariant, identical to the cloud path.
+        let membrane = self.egress.membrane.scan_for_remote_egress(&prompt);
+        if membrane.block_remote_egress {
+            return self
+                .fail_closed_direct(
+                    decision,
+                    backends,
+                    cmd,
+                    RouteFailure::PrivacyBlocked {
+                        level: membrane.level,
+                        labels: membrane.labels,
+                    },
+                )
+                .await;
+        }
+
+        // 5.4 Budget — governance caps bind (turn-count/timeout/wall-clock);
+        // cost/pricing is deferred per owner directive. Mesh budget must NOT
+        // depend on ProviderPricingTable (a peer's model may be unpriced), so
+        // cost_micros is 0; but wall_clock_ms uses the recipe's timeout so the
+        // governor's wall-clock cap genuinely binds (governance, not billing).
+        let mesh_estimate = CostEstimate {
+            cost_micros: 0, // no cost authority (economics deferred)
+            wall_clock_ms: self.mesh_timeout_ms(decision),
+            input_tokens: u64::try_from(prompt.chars().count() / 4).unwrap_or(u64::MAX),
+            output_tokens: max_output_tokens,
+        };
+        if let Some(failure) = self
+            .egress
+            .budget
+            .check(decision, &mesh_estimate)
+            .into_route_failure()
+        {
+            return self
+                .fail_closed_direct(decision, backends, cmd, failure)
+                .await;
+        }
+
+        // 5.5 Approval — provisioned StandingGrant is the consent for a
+        // same-owner fleet worker (ADR-012 principle 2).
+        if let Err(failure) = self.assert_non_local_approval(decision) {
+            return self
+                .fail_closed_direct(decision, backends, cmd, failure)
+                .await;
+        }
+
+        // 5.6 Delegate. mesh_request_id is FRESH (never the conductor
+        // request_id) so the peer can't correlate turns across time.
+        let request = MeshDelegationRequest {
+            mesh_request_id: self.fresh_mesh_request_id(decision),
+            peer_worker_id: decision.worker_id.clone(),
+            prompt_slice: prompt.clone(),
+            max_output_tokens: u32::try_from(max_output_tokens).unwrap_or(u32::MAX),
+            timeout_ms: self.mesh_timeout_ms(decision),
+        };
+        let outcome: MeshDelegationOutcome = self.egress.mesh_port.delegate(request).await;
+        match outcome.outcome_kind {
+            MeshOutcomeKind::Completed if outcome.answer.is_some() => {
+                let value = wire_value_from_text(&outcome.answer.unwrap_or_default());
+                let turn_outcome = TurnOutcome {
+                    success: true,
+                    fallback: false,
+                    fallback_reason: None,
+                    target_kind: self.target_kind_for_worker(&decision.worker_id),
+                    privacy_lane: decision.lane,
+                    cost_micros: None, // mesh carries no cost (economics deferred)
+                };
+                (Ok(value), turn_outcome)
+            }
+            // Every non-Completed outcome (incl. TransportError from the dormant
+            // production default) fails closed to direct-local.
+            kind => {
+                self.fail_closed_direct(
+                    decision,
+                    backends,
+                    cmd,
+                    RouteFailure::MeshDelegationFailed {
+                        worker_id: decision.worker_id.clone(),
+                        outcome_label: kind.as_label().to_string(),
+                    },
+                )
+                .await
             }
         }
     }
@@ -1128,6 +1305,33 @@ impl ConductorRuntime {
         drop(tokio::task::spawn_blocking(move || work(&store)));
     }
 
+    /// The recipe's budget timeout in ms, or a conservative default. Used as the
+    /// mesh delegation deadline + the budget wall-clock estimate.
+    fn mesh_timeout_ms(&self, decision: &OwnedRouteDecision) -> u64 {
+        self.recipes
+            .get(&decision.recipe_id)
+            .map(|r| u64::try_from(r.budget.timeout.as_millis()).unwrap_or(30_000))
+            .unwrap_or(30_000)
+    }
+
+    /// A FRESH per-delegation correlation id for mesh requests — NEVER the
+    /// conductor `request_id` (which is stable across telemetry and would let a
+    /// peer correlate turns across time). Derived from the HMAC fingerprint of
+    /// the conductor request_id + the worker id, so it's unique per
+    /// (turn, peer) yet unlinkable to the conductor's internal id space.
+    fn fresh_mesh_request_id(&self, decision: &OwnedRouteDecision) -> String {
+        // Composite input: the HMAC is over the opaque request_id (F-4 — no user
+        // text) plus the worker id, so two peers seeing the same turn get
+        // different ids, and the same (turn, peer) is stable for idempotency.
+        let composite = format!("mesh:{}:{}", decision.request_id, decision.worker_id);
+        match self.install_key.fingerprint(&composite) {
+            Ok(fp) => format!("mesh:{}", fp.0),
+            // Fallback: still composite + unlinkable to the raw request_id.
+            // Never returns the raw conductor request_id.
+            Err(_) => format!("mesh:{}:unkeyed", decision.worker_id),
+        }
+    }
+
     fn target_kind_for_worker(&self, worker_id: &str) -> TargetKind {
         self.workers
             .locality(worker_id)
@@ -1180,6 +1384,12 @@ fn route_failure_display(f: &RouteFailure) -> String {
                 "budget exceeded (dimension={dimension:?}, limit={limit}, attempted={attempted}, used={used}, window_ms={window_ms})"
             )
         }
+        RouteFailure::MeshDelegationFailed {
+            worker_id,
+            outcome_label,
+        } => {
+            format!("mesh delegation failed (worker={worker_id:?}, {outcome_label})")
+        }
     }
 }
 
@@ -1200,6 +1410,18 @@ fn actual_from_estimate(estimate: &CostEstimate) -> ActualCost {
         input_tokens: estimate.input_tokens,
         output_tokens: estimate.output_tokens,
     }
+}
+
+/// Build the user-facing wire `Value` from a plain text answer, mirroring the
+/// cloud path's `CloudRoleOutput.value` shape (`{text, tool_calls, finish_reason}`)
+/// so downstream consumers (`text_from_value`, the session) treat mesh and cloud
+/// answers identically. M4: mesh answers carry no tool calls.
+fn wire_value_from_text(text: &str) -> Value {
+    serde_json::json!({
+        "text": text,
+        "tool_calls": Vec::<Value>::new(),
+        "finish_reason": "stop",
+    })
 }
 
 fn text_from_value(value: &Value) -> String {
@@ -1318,6 +1540,21 @@ mod tests {
         BudgetLimits {
             max_cost_micros_per_call: 1_000_000,
             max_wall_clock_ms_per_call: 0,
+            max_daily_cost_micros: 10_000_000,
+            daily_window: Duration::from_millis(DEFAULT_DAILY_WINDOW_MS),
+        }
+    }
+
+    /// M4: a budget that permits OwnerFleet mesh routes. The default
+    /// [`budget_limits`] sets `max_wall_clock_ms_per_call: 0` (the cloud path's
+    /// estimate carries wall_clock_ms: 0, so it passes). The mesh governance
+    /// estimate uses the recipe's real timeout, so it needs a nonzero wall-clock
+    /// cap to pass — reflecting that governance caps (turn-count/timeout) bind
+    /// mesh while cost is deferred.
+    fn mesh_friendly_budget_limits() -> BudgetLimits {
+        BudgetLimits {
+            max_cost_micros_per_call: 1_000_000,
+            max_wall_clock_ms_per_call: 60_000,
             max_daily_cost_micros: 10_000_000,
             daily_window: Duration::from_millis(DEFAULT_DAILY_WINDOW_MS),
         }
@@ -1732,14 +1969,111 @@ mod tests {
         Ok(())
     }
 
+    /// Build an OwnerFleet test runtime with an injectable mesh port. M4-D
+    /// acceptance tests share this; M4-A keeps its inline construction (it
+    /// only needs the membrane proof). Returns the runtime + the fleet worker
+    /// id + recipe id (for constructing a decision).
+    fn ownerfleet_runtime(
+        mesh_port: Arc<dyn ConductorMeshDelegationPort>,
+        membrane: Arc<dyn PiiMembrane>,
+    ) -> Result<
+        (
+            ConductorRuntime,
+            tempfile::TempDir,
+            &'static str,
+            &'static str,
+        ),
+        Box<dyn Error>,
+    > {
+        const FLEET_WORKER_ID: &str = "fleet:peer-laptop";
+        const RECIPE_ID: &str = "recipe-fleet";
+        let fleet_worker = WorkerSelector {
+            id: FLEET_WORKER_ID.to_string(),
+            kind: "fleet".to_string(),
+            locality: WorkerLocality::OwnerFleet,
+            capabilities: vec!["coding".to_string()],
+            provider: None,
+            model: Some("qwen3.5-32b".to_string()),
+            trust_scope: None,
+        };
+        let recipes = RecipeSet::from_iter([(
+            RECIPE_ID.to_string(),
+            FaeConductorRecipe {
+                id: RECIPE_ID.to_string(),
+                version: 1,
+                task_class: ConductorTaskClass::Coding,
+                feature_predicates: Vec::new(),
+                allowed_workers: vec![fleet_worker.clone()],
+                privacy_lane: PrivacyLane::OwnerFleet,
+                topology: ConductorTopology::Direct,
+                role_slots: vec![RoleSlot {
+                    role: ConductorRole::Worker,
+                    worker: fleet_worker,
+                    prompt_template_id: "direct".to_string(),
+                    prompt_template: "Answer.".to_string(),
+                    output_schema: None,
+                    required: true,
+                }],
+                budget: BudgetPolicy {
+                    max_turns: 3,
+                    max_role_calls: 3,
+                    timeout: Duration::from_millis(30_000),
+                    max_tokens: None,
+                    max_cost_micros: None,
+                },
+                escalation: EscalationPolicy {
+                    min_confidence_to_stay_local: 0.5,
+                    allow_acp: true,
+                    allow_mesh: true,
+                },
+                aggregation: AggregationPolicy {
+                    mode: AggregationMode::FirstAnswer,
+                    require_verifier_approval: false,
+                },
+                stop: StopPolicy {
+                    stop_after_verifier: true,
+                    stop_on_budget_exhaustion: true,
+                    max_correction_loops: 0,
+                },
+            },
+        )]);
+        let mut workers = WorkerRegistry::m1();
+        workers.register_owner_fleet(FLEET_WORKER_ID, true);
+        let tmp = tempfile::tempdir()?;
+        let store = ConductorStore::open(tmp.path().join("store"))?;
+        let install_key = InstallKey::load_or_create(&tmp.path().join("install.key"))?;
+        let budget = BudgetGovernor::new(store.clone(), mesh_friendly_budget_limits());
+        let (builder, _builder_calls) = CountingBuilder::new();
+        let (provider, _provider_calls) = CountingProvider::new(Vec::new());
+        let egress = ConductorEgress::with_components_and_mesh(
+            ModelMode::LocalSymphony,
+            budget,
+            ProviderPricingTable::empty(),
+            membrane,
+            builder,
+            provider,
+            mesh_port,
+        );
+        let runtime = ConductorRuntime::new_with_egress(
+            StaticDirectPolicy,
+            recipes,
+            workers,
+            store,
+            install_key,
+            false,
+            egress,
+        )
+        .with_shadow();
+        Ok((runtime, tmp, FLEET_WORKER_ID, RECIPE_ID))
+    }
+
     /// M4-A (F-2): an `OwnerFleet` route carrying a credential-shaped prompt is
     /// blocked by the `ConductorEgressMembrane` at §5.3 BEFORE any remote-egress
     /// dispatch — proving the same-owner mesh lane is membrane-covered today,
     /// structurally (via the named authority), not incidentally. The route is
     /// constructed to clear the earlier gates (mode cap under `LocalSymphony`, +
     /// a provisioned OwnerFleet worker with a matching standing grant) so it
-    /// genuinely reaches the membrane, then fails closed to direct-local. The
-    /// mesh-port-not-invoked assertion lands in M4-D (the port does not exist yet).
+    /// genuinely reaches the membrane, then fails closed to direct-local.
     #[tokio::test]
     async fn ownerfleet_credential_prompt_blocked_before_remote_dispatch(
     ) -> Result<(), Box<dyn Error>> {
@@ -1891,6 +2225,404 @@ mod tests {
         assert!(
             budget_usage.is_empty(),
             "budget must not record: {budget_usage}"
+        );
+        Ok(())
+    }
+
+    /// M4-D: happy path — a non-secret OwnerFleet route after clearing §5 gates
+    /// delegates through the mesh port exactly once, returns the peer's answer,
+    /// and does NOT fall back. Verifies mesh_request_id != conductor request_id
+    /// (no stable cross-turn id leaks to the peer).
+    #[tokio::test]
+    async fn ownerfleet_route_delegates_through_mesh_port() -> Result<(), Box<dyn Error>> {
+        use crate::conductor::mesh::test_support::MockMeshDelegationPort;
+        let mesh = Arc::new(MockMeshDelegationPort::completed("peer answered"));
+        let mesh_ref = mesh.clone();
+        let (runtime, _tmp, worker, recipe) =
+            ownerfleet_runtime(mesh, Arc::new(ConductorEgressMembrane))?;
+        let cmd = command("req-fleet-ok", "summarize the rust async book");
+        let decision = decision(
+            "req-fleet-ok",
+            recipe,
+            worker,
+            ConductorTopology::Direct,
+            PrivacyLane::OwnerFleet,
+            ApprovalClass::StandingGrant("fleet-grant".to_string()),
+        );
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let audio = AudioManager::new();
+        let events = EventBus::new();
+        let playbacks = PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "mesh turn must succeed: {:?}", wire.err());
+        assert!(!outcome.fallback, "no fallback on mesh success");
+        assert_eq!(outcome.privacy_lane, PrivacyLane::OwnerFleet);
+        // The port was invoked exactly once.
+        assert_eq!(mesh_ref.call_count(), 1);
+        // ...with the post-membrane slice, the right peer worker, and a FRESH
+        // mesh_request_id (never the conductor request_id).
+        let last = mesh_ref
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("mesh port was called");
+        assert_eq!(last.prompt_slice, "summarize the rust async book");
+        assert_eq!(last.peer_worker_id, worker);
+        assert_ne!(
+            last.mesh_request_id, decision.request_id,
+            "mesh_request_id must NOT be the conductor request_id (metadata hygiene)"
+        );
+        assert!(last.mesh_request_id.starts_with("mesh:"));
+        // The answer reaches the wire in the cloud-mirrored shape ({text,...}).
+        let value = wire.unwrap();
+        assert_eq!(
+            value.get("text").and_then(|v| v.as_str()),
+            Some("peer answered")
+        );
+        Ok(())
+    }
+
+    /// M4-D: F-2 integration proof — an OwnerFleet route with a credential
+    /// prompt is blocked by the membrane AND the mesh port is NEVER invoked
+    /// (call-count 0). This is the strong F-2 guarantee now that the port exists.
+    #[tokio::test]
+    async fn ownerfleet_credential_prompt_mesh_port_not_invoked() -> Result<(), Box<dyn Error>> {
+        use crate::conductor::mesh::test_support::MockMeshDelegationPort;
+        let mesh = Arc::new(MockMeshDelegationPort::completed("should not be reached"));
+        let mesh_ref = mesh.clone();
+        let (runtime, _tmp, worker, recipe) =
+            ownerfleet_runtime(mesh, Arc::new(ConductorEgressMembrane))?;
+        let cmd = command(
+            "req-fleet-leak",
+            "please review this sk-abcdefghijklmnopqrstuvwxyz",
+        );
+        let decision = decision(
+            "req-fleet-leak",
+            recipe,
+            worker,
+            ConductorTopology::Direct,
+            PrivacyLane::OwnerFleet,
+            ApprovalClass::StandingGrant("fleet-grant".to_string()),
+        );
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let audio = AudioManager::new();
+        let events = EventBus::new();
+        let playbacks = PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "fail-closed direct-local still answers");
+        assert!(outcome.fallback, "must fail-closed (fallback)");
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("privacy membrane blocked")));
+        // The strong F-2 proof: the mesh port was NEVER called.
+        assert_eq!(
+            mesh_ref.call_count(),
+            0,
+            "mesh port must not be invoked when membrane blocks"
+        );
+        Ok(())
+    }
+
+    /// M4-D: the dormant production default — with UnavailableMeshDelegationPort,
+    /// an OwnerFleet route degrades to direct-local (no mock ever answers a real
+    /// turn). This is the dormancy guarantee.
+    #[tokio::test]
+    async fn ownerfleet_no_port_configured_fails_closed() -> Result<(), Box<dyn Error>> {
+        use crate::conductor::mesh::UnavailableMeshDelegationPort;
+        let (runtime, _tmp, worker, recipe) = ownerfleet_runtime(
+            Arc::new(UnavailableMeshDelegationPort),
+            Arc::new(ConductorEgressMembrane),
+        )?;
+        let cmd = command("req-fleet-noport", "summarize the rust async book");
+        let decision = decision(
+            "req-fleet-noport",
+            recipe,
+            worker,
+            ConductorTopology::Direct,
+            PrivacyLane::OwnerFleet,
+            ApprovalClass::StandingGrant("fleet-grant".to_string()),
+        );
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let audio = AudioManager::new();
+        let events = EventBus::new();
+        let playbacks = PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "fail-closed direct-local still answers");
+        assert!(outcome.fallback, "no-port OwnerFleet must fail-closed");
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("mesh delegation failed")));
+        Ok(())
+    }
+
+    /// M4-D: mesh failure (timeout/unreachable/denied) fail-closes to direct-local.
+    #[tokio::test]
+    async fn ownerfleet_mesh_failure_fails_closed() -> Result<(), Box<dyn Error>> {
+        use crate::conductor::mesh::{test_support::MockMeshDelegationPort, MeshOutcomeKind};
+        for kind in [
+            MeshOutcomeKind::Timeout,
+            MeshOutcomeKind::PeerUnreachable,
+            MeshOutcomeKind::Denied,
+            MeshOutcomeKind::TransportError,
+        ] {
+            let mesh = Arc::new(MockMeshDelegationPort::failing(kind));
+            let (runtime, _tmp, worker, recipe) =
+                ownerfleet_runtime(mesh, Arc::new(ConductorEgressMembrane))?;
+            let req_id = format!("req-fleet-fail-{kind:?}");
+            let cmd = command(&req_id, "summarize the rust async book");
+            let decision = decision(
+                &req_id,
+                recipe,
+                worker,
+                ConductorTopology::Direct,
+                PrivacyLane::OwnerFleet,
+                ApprovalClass::StandingGrant("fleet-grant".to_string()),
+            );
+            let engine = MockAdapter::new("local");
+            let tts = MockTtsAdapter::new("tts");
+            let audio = AudioManager::new();
+            let events = EventBus::new();
+            let playbacks = PlaybackRegistry::new();
+            let agents = crate::agents::AgentSessionRegistry::new();
+            let backends = SessionBackends {
+                engine: &engine,
+                asr_fallback: None,
+                tts: &tts,
+                audio: &audio,
+                events: &events,
+                playbacks: &playbacks,
+                agents: &agents,
+                conductor: Some(&runtime),
+                acp_runner: &crate::session::REAL_ACP_RUNNER,
+            };
+            let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+            assert!(wire.is_ok(), "{kind:?}: fail-closed must still answer");
+            assert!(outcome.fallback, "{kind:?}: must fail-closed");
+            assert!(
+                outcome
+                    .fallback_reason
+                    .as_deref()
+                    .is_some_and(|r| r.contains("mesh delegation failed")),
+                "{kind:?}: reason={:?}",
+                outcome.fallback_reason
+            );
+        }
+        Ok(())
+    }
+
+    /// M4-D: Chain + OwnerFleet is NOT routed to the cloud chain — it fails
+    /// closed explicitly (mesh-chain is unimplemented; a future slice). Must not
+    /// call the cloud builder/provider OR the mesh port.
+    #[tokio::test]
+    async fn ownerfleet_chain_topology_fails_closed_without_egress() -> Result<(), Box<dyn Error>> {
+        use crate::conductor::mesh::test_support::MockMeshDelegationPort;
+        let mesh = Arc::new(MockMeshDelegationPort::completed("should not be reached"));
+        let mesh_ref = mesh.clone();
+        const FLEET_WORKER_ID: &str = "fleet:peer-laptop";
+        let fleet_worker = WorkerSelector {
+            id: FLEET_WORKER_ID.to_string(),
+            kind: "fleet".to_string(),
+            locality: WorkerLocality::OwnerFleet,
+            capabilities: vec!["coding".to_string()],
+            provider: None,
+            model: Some("qwen3.5-32b".to_string()),
+            trust_scope: None,
+        };
+        let chain_recipe = FaeConductorRecipe {
+            id: "recipe-fleet-chain".to_string(),
+            version: 1,
+            task_class: ConductorTaskClass::Coding,
+            feature_predicates: Vec::new(),
+            allowed_workers: vec![fleet_worker.clone()],
+            privacy_lane: PrivacyLane::OwnerFleet,
+            topology: ConductorTopology::Chain,
+            role_slots: [
+                ConductorRole::Thinker,
+                ConductorRole::Worker,
+                ConductorRole::Verifier,
+            ]
+            .iter()
+            .zip(["think", "work", "verify"])
+            .map(|(role, name)| RoleSlot {
+                role: *role,
+                worker: fleet_worker.clone(),
+                prompt_template_id: name.to_string(),
+                prompt_template: name.to_string(),
+                output_schema: None,
+                required: true,
+            })
+            .collect(),
+            budget: BudgetPolicy {
+                max_turns: 3,
+                max_role_calls: 3,
+                timeout: Duration::from_millis(30_000),
+                max_tokens: None,
+                max_cost_micros: None,
+            },
+            escalation: EscalationPolicy {
+                min_confidence_to_stay_local: 0.5,
+                allow_acp: true,
+                allow_mesh: true,
+            },
+            aggregation: AggregationPolicy {
+                mode: AggregationMode::FirstAnswer,
+                require_verifier_approval: false,
+            },
+            stop: StopPolicy {
+                stop_after_verifier: true,
+                stop_on_budget_exhaustion: true,
+                max_correction_loops: 0,
+            },
+        };
+        let recipes = RecipeSet::from_iter([("recipe-fleet-chain".to_string(), chain_recipe)]);
+        let mut workers = WorkerRegistry::m1();
+        workers.register_owner_fleet(FLEET_WORKER_ID, true);
+        let tmp = tempfile::tempdir()?;
+        let store = ConductorStore::open(tmp.path().join("store"))?;
+        let install_key = InstallKey::load_or_create(&tmp.path().join("install.key"))?;
+        let budget = BudgetGovernor::new(store.clone(), mesh_friendly_budget_limits());
+        let (builder, _builder_calls) = CountingBuilder::new();
+        let (provider, _provider_calls) = CountingProvider::new(Vec::new());
+        let egress = ConductorEgress::with_components_and_mesh(
+            ModelMode::LocalSymphony,
+            budget,
+            ProviderPricingTable::empty(),
+            Arc::new(ConductorEgressMembrane),
+            builder,
+            provider,
+            mesh,
+        );
+        let runtime = ConductorRuntime::new_with_egress(
+            StaticDirectPolicy,
+            recipes,
+            workers,
+            store,
+            install_key,
+            true, // chain_enabled, but Chain+OwnerFleet still fails closed.
+            egress,
+        )
+        .with_shadow();
+        let cmd = command("req-fleet-chain", "summarize the rust async book");
+        let decision = decision(
+            "req-fleet-chain",
+            "recipe-fleet-chain",
+            FLEET_WORKER_ID,
+            ConductorTopology::Chain,
+            PrivacyLane::OwnerFleet,
+            ApprovalClass::StandingGrant("fleet-grant".to_string()),
+        );
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let audio = AudioManager::new();
+        let events = EventBus::new();
+        let playbacks = PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "fail-closed direct-local still answers");
+        assert!(outcome.fallback, "Chain+OwnerFleet must fail-closed");
+        assert!(outcome
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("chain+OwnerFleet lane not implemented")));
+        assert_eq!(
+            mesh_ref.call_count(),
+            0,
+            "mesh port must not be called for chain+OwnerFleet"
+        );
+        Ok(())
+    }
+
+    /// M4-D regression: CloudBacked direct still uses the cloud path (builder +
+    /// provider both called) after the dispatch split — the split didn't divert
+    /// cloud routes to mesh or local.
+    #[tokio::test]
+    async fn cloudblackbacked_still_uses_cloud_path_after_dispatch_split(
+    ) -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::AllAvailable,
+            topology: ConductorTopology::Direct,
+            provisioned: true,
+            pricing: cloud_pricing(CODEX_CLOUD_WORKER_ID),
+            membrane: Arc::new(ConductorEgressMembrane),
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        let cmd = command("req-cloud-regress", "what is 2+2");
+        let decision = decision(
+            "req-cloud-regress",
+            "recipe-cloud",
+            CODEX_CLOUD_WORKER_ID,
+            ConductorTopology::Direct,
+            PrivacyLane::CloudBacked,
+            ApprovalClass::StandingGrant("grant".to_string()),
+        );
+        let backends = runtime.backends();
+        let (wire, outcome) = runtime.runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "cloud turn must succeed: {:?}", wire.err());
+        assert!(!outcome.fallback, "cloud direct must not fallback");
+        assert!(
+            builder_calls.load(Ordering::SeqCst) > 0,
+            "cloud builder must be called"
+        );
+        assert!(
+            provider_calls.load(Ordering::SeqCst) > 0,
+            "cloud provider must be called"
         );
         Ok(())
     }
