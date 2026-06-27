@@ -52,6 +52,14 @@
 )]
 
 pub mod budget;
+/// M4 — content-aware task classifier. The designated F-4/n boundary-crossing
+/// surface: the ONE conductor component that reads prompt text. Emits labels only
+/// (task_class + allowlisted predicates + source); everything else stays
+/// content-blind. Dormant plumbing (M4-A): constructed nowhere outside its tests
+/// until M4-B wires it into `session::build_turn_context`. No LLM/mistralrs/async/
+/// cloud — deterministic rule-based MVP; the trait is the upgrade surface.
+#[allow(dead_code)] // TODO(M4-B): wire into session::build_turn_context
+pub mod classifier;
 pub mod error;
 pub mod eval;
 pub mod executor;

@@ -749,8 +749,8 @@ mod tests {
         };
         let draft = RealSampleDraft {
             id: "real.credential.001".to_string(),
-            task_class: ConductorTaskClass::Coding,
-            feature_predicates: vec!["credential_shaped_fixture".to_string()],
+            task_class: ConductorTaskClass::PersonalData,
+            feature_predicates: vec!["credential_shaped".to_string()],
             privacy_lane: PrivacyLane::RemoteAllowed,
             available_workers: Vec::new(),
             ideal_route: route_label(
