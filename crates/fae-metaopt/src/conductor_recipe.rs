@@ -27,6 +27,18 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
+/// Zero-width / invisible chars that survive NFKC and could split or hide a
+/// protected token (e.g. `mod\u{200b}el_mode`). Stripped after NFKC in
+/// [`canonicalize_config_key`]. Mirrors the prompt lint's `ZERO_WIDTH_CHARS`
+/// (fae-daemon); duplicated here because fae-metaopt is a pure leaf and must
+/// not import fae-daemon (the reverse-direction boundary guard is zero-refs).
+const ZERO_WIDTH_CHARS: &[char] = &[
+    '\u{200b}', // zero-width space
+    '\u{200c}', // zero-width non-joiner
+    '\u{200d}', // zero-width joiner
+    '\u{feff}', // zero-width no-break space (BOM)
+];
+
 /// Canonicalize a config key for protected-key matching (M3 spec §3.1).
 ///
 /// Pipeline: Unicode **NFKC** → split on separators (`-`, `_`, `.`, any
@@ -46,7 +58,12 @@ use unicode_normalization::UnicodeNormalization;
 /// sufficient for the threat model.
 pub(crate) fn canonicalize_config_key(key: &str) -> String {
     let nfkc: String = key.nfkc().collect();
-    let chars: Vec<char> = nfkc.chars().collect();
+    // Strip zero-width / invisible chars AFTER NFKC — they survive NFKC and would
+    // otherwise split or hide a protected token (e.g. `mod\u{200b}el_mode`).
+    let chars: Vec<char> = nfkc
+        .chars()
+        .filter(|&ch| !ZERO_WIDTH_CHARS.contains(&ch))
+        .collect();
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     // Last non-separator ORIGINAL char (case preserved). Reset on a separator so a
@@ -404,6 +421,30 @@ mod tests {
             canonicalize_config_key("ｍｏｄｅｌ＿ｍｏｄｅ"),
             "model_mode"
         );
+    }
+
+    #[test]
+    fn canonicalize_strips_zero_width_in_protected_keys() {
+        // Zero-width chars (U+200B/C/D, U+FEFF) survive NFKC. Without stripping
+        // they would split `model_mode` into `mod` + `el_mode` (or similar),
+        // letting an obfuscated protected key slip past the denylist. Each form
+        // here MUST canonicalize to a form containing `model_mode` / the alias,
+        // and is_protected_config_key MUST return true.
+        assert_eq!(canonicalize_config_key("mod\u{200b}el_mode"), "model_mode");
+        assert_eq!(canonicalize_config_key("model_\u{200b}mode"), "model_mode");
+        assert_eq!(canonicalize_config_key("\u{feff}model_mode"), "model_mode");
+        assert_eq!(
+            canonicalize_config_key("availability\u{200d}_mode"),
+            "availability_mode"
+        );
+        // Uppercase + zero-width (case + invisibles together).
+        assert_eq!(canonicalize_config_key("MODEL\u{200c}_MODE"), "model_mode");
+        // The denylist catches every obfuscated protected form.
+        assert!(is_protected_config_key("mod\u{200b}el_mode"));
+        assert!(is_protected_config_key("fae\u{200d}_model_mode"));
+        assert!(is_protected_config_key("availability\u{feff}_mode"));
+        // And a non-protected key is still NOT protected after stripping.
+        assert!(!is_protected_config_key("max\u{200b}_turns"));
     }
 
     #[test]

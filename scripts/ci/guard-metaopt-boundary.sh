@@ -82,6 +82,40 @@ else
   echo "[guard-metaopt-boundary] fae-daemon → fae_metaopt: clean (refs confined to allowlist)."
 fi
 
+# ── Check 1.5: no `pub use` re-exports in boundary files (laundering vector) ─
+#
+# The allowlist permits PRIVATE `use fae_metaopt::...` imports in the two files
+# above. It must NOT permit `pub use` re-exports, because a re-export moves the
+# symbol OFF its `fae_metaopt` lexical path — e.g. a `pub use
+# fae_metaopt::ConductorRecipePatch` in recipe_mutation.rs would let a FORBIDDEN
+# file write `crate::conductor::recipe_mutation::ConductorRecipePatch` with NO
+# `fae_metaopt` string on that line, blinding check 1. Alias laundering
+# (`use fae_metaopt as meta; pub use meta::X;`) has the same effect with no
+# `fae_metaopt` token on the `pub use` line at all. Forbidding ANY `pub use` in
+# these files closes both vectors; neither file needs to re-export anything
+# (they define their own types). A `pub(crate)`/`pub(super)` re-export is
+# identical for laundering purposes and is caught by the same pattern.
+
+echo "[guard-metaopt-boundary] checking boundary files for pub re-exports (laundering)..."
+
+reexport_violations=0
+for f in "${ALLOWED_FAEDAEMON_REFS[@]}"; do
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    echo "[guard-metaopt-boundary]   VIOLATION (pub re-export in boundary file): $f:$line"
+    reexport_violations=$((reexport_violations + 1))
+  done < <(grep -nE '^[[:space:]]*pub(\([^)]*\))?[[:space:]]+use[[:space:]]+' "$f" || true)
+done
+
+if [ "$reexport_violations" -gt 0 ]; then
+  echo "[guard-metaopt-boundary] $reexport_violations pub re-export(s) in boundary file(s)."
+  echo "[guard-metaopt-boundary] Boundary files may PRIVATELY use fae_metaopt but must NOT re-export it"
+  echo "[guard-metaopt-boundary] (a re-export moves the symbol off its fae_metaopt path, blinding check 1)."
+  fail=1
+else
+  echo "[guard-metaopt-boundary] boundary files: clean (no pub re-exports)."
+fi
+
 # ── Check 2: fae-metaopt → fae_daemon (zero refs, hard) ───────────────────────
 
 echo "[guard-metaopt-boundary] checking fae-metaopt → fae_daemon (must be zero)..."
