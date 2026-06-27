@@ -49,6 +49,13 @@ _REQUIRED_FIELD = {
 # option's following block (the block ends at the NEXT checkbox or end of body).
 _CHECKBOX_LINE = re.compile(r"^\s*-\s*\[[ xX]\]\s*(.*)$")
 
+# A markdown section header (`#`..`######`). Also bounds an option's block, so a
+# field label in a LATER section (e.g. `## Summary`) cannot satisfy the selected
+# option. This matters for the LAST attestation option, whose next checkbox lives
+# in a FOLLOWING section (`## Change type`); without header-bounding its block
+# would span `## Summary` and a `Blocker/issue:` there could mask a placeholder.
+_SECTION_HEADER = re.compile(r"^\s*#{1,6}\s")
+
 
 def _strip_html_comments(text: str) -> str:
     """Remove `<!-- ... -->` placeholders so a bare template comment counts as empty."""
@@ -70,13 +77,16 @@ def _find_checked(lines: list[str]) -> list[tuple[str, int]]:
 def _option_block(lines: list[str], checked_idx: int) -> str:
     """Return the text of the checked option's following block.
 
-    The block runs from the checked line through the NEXT checkbox line
-    (exclusive) or end of body — so a field label elsewhere (e.g. in the PR
-    Summary) cannot satisfy a placeholder in the selected option (locality).
+    The block runs from the checked line through the NEXT checkbox line OR the
+    next markdown section header (exclusive), or end of body — so a field label
+    elsewhere (e.g. in the PR `## Summary`, which follows the attestation block)
+    cannot satisfy a placeholder in the selected option (locality). Bounding on
+    section headers as well as checkboxes is what protects the LAST attestation
+    option, whose next checkbox lives in a following section.
     """
     block: list[str] = [lines[checked_idx]]
     for line in lines[checked_idx + 1:]:
-        if _CHECKBOX_LINE.match(line):
+        if _CHECKBOX_LINE.match(line) or _SECTION_HEADER.match(line):
             break
         block.append(line)
     return "\n".join(block)
@@ -215,6 +225,22 @@ Reason: docs-only
       Reason: <!-- placeholder -->
 """
 
+# Locality regression for the LAST attestation option (blocker): its own
+# `Blocker/issue:` field is omitted, and the only one lives in a FOLLOWING
+# `## Summary` section. Before header-bounding, the blocker block ran to the next
+# checkbox (in `## Change type`), wrongly absorbing the Summary field and PASSING.
+# Header-bounding makes this FAIL. Mirrors the real PR template order:
+# attestation → `## Summary` → `## Change type` checkboxes.
+_INVALID_BLOCKER_CROSS_SECTION = """## Release validation
+- [x] Release validation: blocker — this PR is intentionally NOT release-ready.
+
+## Summary
+Blocker/issue: https://github.com/saorsa-labs/fae/issues/2
+
+## Change type
+- [ ] Rust (crates/)
+"""
+
 _FIXTURES = [
     ("valid-N/A", _VALID_NA, True),
     ("valid-done", _VALID_DONE, True),
@@ -228,6 +254,7 @@ _FIXTURES = [
     ("invalid-blocker-placeholder", _INVALID_BLOCKER_PLACEHOLDER, False),
     ("invalid-na-no-field", _INVALID_NA_NO_FIELD, False),
     ("invalid-na-cross-section", _INVALID_NA_CROSS_SECTION, False),
+    ("invalid-blocker-cross-section", _INVALID_BLOCKER_CROSS_SECTION, False),
 ]
 
 
