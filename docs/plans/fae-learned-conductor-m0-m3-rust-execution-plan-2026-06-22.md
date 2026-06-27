@@ -186,7 +186,11 @@ This ordering also respects the sequencing rule the BLOCKER created. The M3 spec
 
 ## After M3 — remaining work (captured, ADR-gated)
 
-- **M4** Tier-1 same-owner x0x sync (`delegate_to_mesh`) — Rust x0x crate; **F-2 egress membrane (named WP `ConductorEgressMembrane`) must close first**; **F-13** server↔pipeline contract; **F-14** x0x crate API confirmed.
+- [x] **M4** Tier-1 same-owner x0x sync (`delegate_to_mesh`). **COMPLETE (dormant)** — spec `docs/architecture/conductor-m4-ownerfleet-x0x-sync-spec-2026-06-27.md`; F-14 snapshot `docs/architecture/conductor-m4-f14-x0x-api-snapshot.md`:
+  - **F-2** closed: `ConductorEgressMembrane` (renamed from `RealPiiMembrane`) is the named F-2 authority; OwnerFleet + credential prompt ⇒ blocked at §5.3 + mesh port call-count 0 (proven).
+  - **F-14** confirmed: read the actual crates — `x0x@a6fce96` (v0.26.0) is transport-only (no LLM); `x0x-compute@c9f765b` is the OpenAI-compatible chat-completion contract (`RuntimeAdapter::chat_completion`, `POST /v1/openai/chat/completions`), Phase 2a skeleton runtime.
+  - **F-13** closed: async-ready `ConductorMeshDelegationPort` (pure conductor types; x0x stays out — `guard-mesh-boundary.sh`, mutation-tested). `UnavailableMeshDelegationPort` is the production fail-closed default; `MockMeshDelegationPort` is `#[cfg(test)]`-only. Executor dispatch splits by lane: OwnerFleet → `run_mesh_direct` (§5 membrane→budget→approval→port); mesh_request_id is fresh HMAC of composite input (never the raw request_id).
+  - **M4 ships dormant:** zero new network egress, no x0x dep. Real transport (REST to localhost `x0x-computed`) is M4-E, blocked on x0x-compute's real model backend.
 - [x] **M5** Hardening + enforced release-validation CI gate (F-6); doc-drift fix (F-9). **COMPLETE** — spec `docs/architecture/conductor-m5-release-validation-hardening-spec-2026-06-27.md`:
   - **F-9**: removed AGENTS.md ref to nonexistent `main-and-cowork-live-test-scenarios.md`; checklist notes itself as the single canonical artifact; conductor surfaces added to the mandatory-when trigger list.
   - **F-6**: enforced PR attestation gate (`.github/PULL_REQUEST_TEMPLATE.md` + `scripts/ci/guard-release-validation-pr.py` exactly-one-of N/A|done|blocker, self-tested) + `.github/workflows/release-validation.yml` (every PR, no path filter). Branch-protection "required check" is an owner-configured GitHub setting (not a code artifact) — called out honestly in the spec.
