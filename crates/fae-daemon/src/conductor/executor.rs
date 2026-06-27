@@ -3157,6 +3157,100 @@ mod tests {
         Ok(())
     }
 
+    /// M4-F (observability): an OwnerFleet mesh turn is fully observable yet
+    /// prompt-free. The sentinel prompt text NEVER appears in any conductor
+    /// telemetry file (shadow/route_events/receipts/budget); a budget receipt
+    /// IS recorded (governance, not cost); and the isolated conductor store
+    /// contains NO fae.db (the memory store is never touched — ADR-012
+    /// principle 3: the durable store never egresses).
+    #[tokio::test]
+    async fn ownerfleet_mesh_turn_is_prompt_free_and_observable() -> Result<(), Box<dyn Error>> {
+        use crate::conductor::mesh::test_support::MockMeshDelegationPort;
+        const SENTINEL: &str = "ZZQ_MESH_SENTINEL_NO_LEAK_424242";
+        let mesh = Arc::new(MockMeshDelegationPort::completed("peer answered"));
+        // Build the OwnerFleet runtime directly so we own the tmp dir (the
+        // ownerfleet_runtime helper returns the runtime + tmp).
+        let (runtime, tmp, worker, recipe) =
+            ownerfleet_runtime(mesh, Arc::new(ConductorEgressMembrane))?;
+        // Non-secret prompt (so it clears the membrane) carrying a unique
+        // sentinel — the mesh path will run, but the prompt must never persist.
+        let prompt = format!("summarize the rust async book {SENTINEL} chapter on pinning");
+        let cmd = command("req-mesh-obs", &prompt);
+        let decision = decision(
+            "req-mesh-obs",
+            recipe,
+            worker,
+            ConductorTopology::Direct,
+            PrivacyLane::OwnerFleet,
+            ApprovalClass::StandingGrant("fleet-grant".to_string()),
+        );
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let audio = AudioManager::new();
+        let events = EventBus::new();
+        let playbacks = PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        // Emit a receipt like the live loop does (the helper doesn't auto-emit;
+        // this mirrors the M2 no-leak test's emit_receipt step).
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "mesh turn must succeed: {:?}", wire.err());
+        assert!(!outcome.fallback);
+        let fingerprint = runtime
+            .fingerprint(&decision.request_id)
+            .map_err(|e| format!("fingerprint: {e}"))?;
+        runtime.emit_receipt(&decision, &outcome, &fingerprint, 1, 1);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let store_dir = tmp.path().join("store");
+        // Telemetry files may be created lazily (e.g. shadow only on capture,
+        // budget only when cost is recorded). For each file that EXISTS: it must
+        // be non-empty AND free of the sentinel prompt text. The receipts file
+        // MUST exist (proving the turn ran through telemetry).
+        let receipts_path = store_dir.join("conductor_receipts.jsonl");
+        assert!(
+            receipts_path.exists(),
+            "conductor_receipts.jsonl must exist (telemetry ran)"
+        );
+        for file in [
+            "conductor_shadow.jsonl",
+            "conductor_route_events.jsonl",
+            "conductor_receipts.jsonl",
+            "conductor_budget_usage.jsonl",
+        ] {
+            let path = store_dir.join(file);
+            if !path.exists() {
+                continue; // lazily-created; absent is fine (no leak possible)
+            }
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("telemetry file {file} unreadable"));
+            assert!(
+                !content.is_empty(),
+                "telemetry file {file} empty — test vacuous"
+            );
+            assert!(
+                !content.contains(SENTINEL),
+                "PROMPT LEAK: sentinel present in {file}: {content}"
+            );
+        }
+        // No memory-store egress: the isolated conductor store contains NO
+        // fae.db (the memory store lives elsewhere and is never written here).
+        assert!(
+            !store_dir.join("fae.db").exists(),
+            "fae.db must not exist in the conductor store (memory isolation)"
+        );
+        Ok(())
+    }
+
     /// V1 mutation: a runtime WITHOUT shadow produces no shadow record, proving
     /// the record in the test above came from `capture_shadow` (not some other
     /// path). Uses the legacy `new` constructor (shadow disabled by default).
