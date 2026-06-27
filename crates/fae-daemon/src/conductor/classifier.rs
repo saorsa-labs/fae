@@ -111,6 +111,10 @@ pub enum ClassifierSource {
 }
 
 impl ClassifierSource {
+    /// Canonical serialized form. Intended for shadow telemetry (which classifier
+    /// produced a record) — NOT yet wired this slice (deferred to avoid an
+    /// event/receipt schema change); the live context carries no source field.
+    #[allow(dead_code)] // TODO(follow-up): attach to ShadowTurnRecord telemetry
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -711,6 +715,98 @@ mod tests {
     #[test]
     fn source_tag_present() {
         assert_eq!(classify("hi").source, ClassifierSource::RuleBasedV1);
+    }
+
+    // ── M4-B acceptance: policy authority invariant (§5.5) ────────────────────
+
+    /// Build a ConductorTurnContext from a classified prompt (mirrors what
+    /// session::build_turn_context_with_classifier produces).
+    fn ctx_from_prompt(prompt: &str) -> crate::conductor::recipe::ConductorTurnContext {
+        use crate::conductor::recipe::{ConductorTurnContext, PrivacyLane};
+        let cls = RuleBasedTurnClassifier.classify(prompt);
+        ConductorTurnContext {
+            request_id: "req".to_string(),
+            task_class: cls.task_class,
+            feature_predicates: cls.feature_predicates,
+            privacy_lane: PrivacyLane::LocalOnly,
+            available_workers: Vec::new(),
+            working_directory: None,
+            deadline_ms: None,
+        }
+    }
+
+    #[test]
+    fn static_direct_policy_authority_fields_unchanged_by_classification() {
+        // The no-egress-change proof: classifying the context does NOT change any
+        // authority-carrying field of the route decision (StaticDirectPolicy is
+        // M1-inert to task_class). `task_class` is metadata and is EXPECTED to
+        // differ — it is explicitly excluded from the equality assertion.
+        use crate::conductor::policy::{ConductorRoutingPolicy, StaticDirectPolicy};
+        let policy = StaticDirectPolicy;
+        let classified = ctx_from_prompt("my password is hunter2, classify me");
+        let unknown = ctx_from_prompt("");
+        // Sanity: the two contexts really do differ in task_class (the point).
+        assert_ne!(classified.task_class, unknown.task_class);
+        assert!(!classified.feature_predicates.is_empty());
+        let d_cls = policy.decide(&classified);
+        let d_unk = policy.decide(&unknown);
+        // Authority-carrying fields MUST be identical.
+        assert_eq!(d_cls.recipe_id, d_unk.recipe_id);
+        assert_eq!(d_cls.topology, d_unk.topology);
+        assert_eq!(d_cls.worker_id, d_unk.worker_id);
+        assert_eq!(d_cls.lane, d_unk.lane);
+        assert_eq!(d_cls.approval, d_unk.approval);
+        assert_eq!(d_cls.reason, d_unk.reason);
+    }
+
+    // ── M4-B acceptance: corpus_match flips None → Some (§5.4) ────────────────
+
+    #[test]
+    fn classified_context_flips_corpus_match_none_to_some() {
+        // The degenerate-dimension unlock: a content-blind context (Unknown + [])
+        // matches ZERO corpus entries; the classified context (PersonalData +
+        // credential_shaped) matches an entry sharing the EXACT predicate string.
+        use crate::conductor::eval::{
+            Corpus, CorpusEntry, CorpusEntrySource, IdealApprovalLabel, IdealRouteLabel,
+        };
+        use crate::conductor::recipe::ConductorTopology;
+        use crate::conductor::shadow::match_corpus_entry;
+        let entry = CorpusEntry {
+            id: "e1".to_string(),
+            source: CorpusEntrySource::SyntheticCore,
+            task_class: ConductorTaskClass::PersonalData,
+            feature_predicates: vec!["credential_shaped".to_string()],
+            privacy_lane: crate::conductor::recipe::PrivacyLane::LocalOnly,
+            available_workers: Vec::new(),
+            ideal_route: IdealRouteLabel {
+                recipe_id: "r".to_string(),
+                topology: ConductorTopology::Direct,
+                worker_id: "w".to_string(),
+                approval: IdealApprovalLabel::None,
+            },
+            redacted_text_excerpt: None,
+            membrane: None,
+        };
+        let corpus = Corpus {
+            schema_version: 1,
+            corpus_version: "test".to_string(),
+            annotator: "test".to_string(),
+            notes: None,
+            entries: vec![entry],
+        };
+        // Content-blind baseline: Unknown + [] ⇒ no match.
+        let unknown = ctx_from_prompt("");
+        assert!(match_corpus_entry(&corpus, &unknown).is_none());
+        // Classified: PersonalData + credential_shaped ⇒ Some (exact-string match).
+        let classified = ctx_from_prompt("my password is hunter2");
+        assert_eq!(classified.task_class, ConductorTaskClass::PersonalData);
+        let matched = match_corpus_entry(&corpus, &classified);
+        assert!(matched.is_some(), "classified context must match");
+        assert_eq!(matched.unwrap().id, "e1");
+    }
+
+    #[test]
+    fn source_as_str_canonical() {
         assert_eq!(ClassifierSource::RuleBasedV1.as_str(), "rule-based-v1");
     }
 }

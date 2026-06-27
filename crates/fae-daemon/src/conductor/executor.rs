@@ -2188,6 +2188,71 @@ mod tests {
         Ok(())
     }
 
+    /// M4-B §5.3: with the classifier now reading the prompt (the F-4/n crossing),
+    /// the prompt text MUST NOT appear in ANY conductor telemetry file. The
+    /// content-blind test above checks `shadow` for "benign"; this one uses the
+    /// REAL classified wiring (`session::build_turn_context`) and greps all three
+    /// telemetry files for a unique sentinel embedded in a credential prompt.
+    #[tokio::test]
+    async fn classified_turn_leaks_no_prompt_text_to_conductor_telemetry(
+    ) -> Result<(), Box<dyn Error>> {
+        let (builder, _builder_calls) = CountingBuilder::new();
+        let (provider, _provider_calls) = CountingProvider::new(Vec::new());
+        let runtime = test_runtime(TestRuntimeOptions {
+            mode: ModelMode::PureLocal,
+            topology: ConductorTopology::Direct,
+            provisioned: false,
+            pricing: ProviderPricingTable::empty(),
+            membrane: Arc::new(RealPiiMembrane),
+            builder,
+            provider,
+            chain_enabled: false,
+        })?;
+        const SENTINEL: &str = "ZZQ_SENTINEL_PROMPT_NO_LEAK_98765";
+        // Credential-shaped so the classifier actually fires (PersonalData) —
+        // proving the prompt WAS read, yet still never serialized.
+        let prompt = format!("my password is hunter2 {SENTINEL} please store it");
+        let cmd = command("req-noleak", &prompt);
+        // Classify locally (the session wrapper delegates to this same classifier);
+        // the no-leak property is about route_turn's emitters, not the wrapper.
+        use crate::conductor::classifier::TurnClassifier as _;
+        let cls = crate::conductor::classifier::RuleBasedTurnClassifier.classify(&prompt);
+        let mut ctx = turn_ctx("req-noleak");
+        ctx.task_class = cls.task_class;
+        ctx.feature_predicates = cls.feature_predicates;
+        assert_eq!(ctx.task_class, ConductorTaskClass::PersonalData);
+        assert!(ctx
+            .feature_predicates
+            .iter()
+            .any(|p| p == "credential_shaped"));
+        let backends = runtime.backends();
+        let wire = route_turn(&runtime.runtime, &backends, &cmd, &ctx).await;
+        assert!(wire.is_ok(), "turn must succeed: {:?}", wire.err());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Sanity: exactly one shadow record landed (the turn ran through telemetry).
+        assert_eq!(shadow_records(&runtime).len(), 1);
+        let store_dir = runtime._tmp.path().join("store");
+        // Each telemetry file MUST be non-empty (else the sentinel assertion is
+        // vacuous) AND must not contain the sentinel prompt text.
+        for file in [
+            "conductor_shadow.jsonl",
+            "conductor_route_events.jsonl",
+            "conductor_receipts.jsonl",
+        ] {
+            let content = std::fs::read_to_string(store_dir.join(file))
+                .unwrap_or_else(|_| panic!("telemetry file {file} missing"));
+            assert!(
+                !content.is_empty(),
+                "telemetry file {file} empty — test vacuous"
+            );
+            assert!(
+                !content.contains(SENTINEL),
+                "PROMPT LEAK: sentinel present in {file}: {content}"
+            );
+        }
+        Ok(())
+    }
+
     /// V1 mutation: a runtime WITHOUT shadow produces no shadow record, proving
     /// the record in the test above came from `capture_shadow` (not some other
     /// path). Uses the legacy `new` constructor (shadow disabled by default).

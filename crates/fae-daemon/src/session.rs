@@ -1516,14 +1516,42 @@ async fn inject_text(
 }
 
 /// Build the conductor turn context from a command. Content-blind: carries the
-/// opaque `request_id` and non-content metadata only — **no prompt text** is
-/// read (F-4, and the policy's content-blindness guarantee).
+/// Build the live turn context for a `conversation.inject_text` turn.
+///
+/// M4: the context is now **content-classified** — the designated
+/// [`crate::conductor::classifier`] reads `cmd.payload.text` (the ONE F-4/n
+/// boundary crossing) and emits a `task_class` + allowlisted `feature_predicates`.
+/// The **policy** stays content-blind: it consumes the label, never the prompt.
+/// A missing/non-text payload classifies to `Unknown + []` (fail-closed).
+/// Delegates to [`build_turn_context_with_classifier`] with the default
+/// rule-based classifier.
 fn build_turn_context(cmd: &Command) -> crate::conductor::ConductorTurnContext {
-    use crate::conductor::recipe::{ConductorTaskClass, PrivacyLane};
+    build_turn_context_with_classifier(cmd, &crate::conductor::classifier::RuleBasedTurnClassifier)
+}
+
+/// Build a turn context using an injected classifier (the test seam). Extracts
+/// `cmd.payload.text` (same extraction as `parse_tts_payload`), classifies it, and
+/// populates the context's existing `task_class` + `feature_predicates` fields.
+/// No new fields on [`ConductorTurnContext`]; the classifier's `source` stays on
+/// the [`TurnClassification`] — it is NOT persisted in M4-B (future shadow
+/// telemetry may carry it; the live context carries no source field).
+fn build_turn_context_with_classifier(
+    cmd: &Command,
+    classifier: &impl crate::conductor::classifier::TurnClassifier,
+) -> crate::conductor::ConductorTurnContext {
+    use crate::conductor::recipe::PrivacyLane;
+    // Absent / non-text payload ⇒ empty prompt ⇒ classifier fails closed to
+    // Unknown + [] (no behavior change for non-inject_text commands).
+    let prompt = cmd
+        .payload
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let cls = classifier.classify(prompt);
     crate::conductor::ConductorTurnContext {
         request_id: cmd.request_id.clone(),
-        task_class: ConductorTaskClass::Unknown,
-        feature_predicates: Vec::new(),
+        task_class: cls.task_class,
+        feature_predicates: cls.feature_predicates,
         privacy_lane: PrivacyLane::LocalOnly,
         available_workers: Vec::new(),
         working_directory: None,
@@ -1977,6 +2005,50 @@ mod tests {
             command: command.to_owned(),
             payload,
         }
+    }
+
+    // ── M4-B: the production build_turn_context wiring (classifies payload.text) ──
+
+    #[test]
+    fn build_turn_context_classifies_credential_prompt() {
+        use crate::conductor::recipe::ConductorTaskClass;
+        let cmd = command_named(
+            "conversation.inject_text",
+            serde_json::json!({ "text": "my password is hunter2 please store it" }),
+        );
+        let ctx = build_turn_context(&cmd);
+        assert_eq!(ctx.task_class, ConductorTaskClass::PersonalData);
+        assert!(ctx
+            .feature_predicates
+            .iter()
+            .any(|p| p == "credential_shaped"));
+        assert_eq!(ctx.request_id, "r1");
+    }
+
+    #[test]
+    fn build_turn_context_missing_text_fails_closed() {
+        use crate::conductor::recipe::ConductorTaskClass;
+        // No `text` field ⇒ empty prompt ⇒ fail-closed to Unknown + [].
+        let cmd = command_named(
+            "conversation.inject_text",
+            serde_json::json!({ "voice": "en" }),
+        );
+        let ctx = build_turn_context(&cmd);
+        assert_eq!(ctx.task_class, ConductorTaskClass::Unknown);
+        assert!(ctx.feature_predicates.is_empty());
+    }
+
+    #[test]
+    fn build_turn_context_non_text_payload_fails_closed() {
+        use crate::conductor::recipe::ConductorTaskClass;
+        // `text` present but not a string ⇒ fail-closed.
+        let cmd = command_named(
+            "conversation.inject_text",
+            serde_json::json!({ "text": 12345 }),
+        );
+        let ctx = build_turn_context(&cmd);
+        assert_eq!(ctx.task_class, ConductorTaskClass::Unknown);
+        assert!(ctx.feature_predicates.is_empty());
     }
 
     #[derive(Default)]

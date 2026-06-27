@@ -96,7 +96,7 @@ pub struct PromotionCandidate {
 /// Does this turn's context match a corpus entry? A simple match: same task
 /// class and the entry's feature predicates are a subset of the context's. This
 /// is intentionally conservative — only score turns we have ground truth for.
-fn match_corpus_entry<'a>(
+pub(crate) fn match_corpus_entry<'a>(
     corpus: &'a Corpus,
     ctx: &ConductorTurnContext,
 ) -> Option<&'a crate::conductor::eval::CorpusEntry> {
