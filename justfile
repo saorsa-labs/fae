@@ -47,6 +47,10 @@ guard-release-validation:
     python3 scripts/ci/guard-release-validation-pr.py --self-test
     python3 scripts/ci/guard-release-validation-docs.py
 
+# M4: conductor↔x0x mesh boundary (dormant — no x0x dep/import).
+guard-mesh-boundary:
+    bash scripts/ci/guard-mesh-boundary.sh
+
 # Full validation (build + test)
 check: build test
     @echo "✓ All checks passed"

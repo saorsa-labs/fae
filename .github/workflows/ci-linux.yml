@@ -102,6 +102,9 @@ jobs:
       - name: "Guard: fae-metaopt boundary (mutation stays offline/CLI-only)"
         run: bash scripts/ci/guard-metaopt-boundary.sh
 
+      - name: "Guard: conductor↔x0x mesh boundary (M4 dormant, no x0x dep/import)"
+        run: bash scripts/ci/guard-mesh-boundary.sh
+
       - name: Build fae-daemon (native)
         working-directory: crates
         run: env -u RUSTFLAGS cargo build -p fae-daemon --all-features

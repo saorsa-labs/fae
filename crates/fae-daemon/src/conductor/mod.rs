@@ -63,6 +63,16 @@ pub mod error;
 pub mod eval;
 pub mod executor;
 pub mod fingerprint;
+/// M4-C mesh delegation port — the `OwnerFleet` (same-owner x0x) rung of ADR-012's
+/// trust gradient. The async-ready `ConductorMeshDelegationPort` + prompt-free
+/// DTOs. Dormant in M4: M4-D will wire production to use
+/// `UnavailableMeshDelegationPort` (fail-closed; defined here, not yet
+/// constructed by runtime); tests inject `MockMeshDelegationPort`. Real
+/// transport (REST to a localhost `x0x-computed` daemon) is M4-E, blocked on
+/// x0x-compute's real backend. x0x types NEVER cross this boundary
+/// (guard-mesh-boundary.sh).
+#[allow(dead_code)] // M4-D executor dispatch + tests are the callers; not yet wired in production
+pub mod mesh;
 /// M3-C4 offline recipe-mutation CLI (`fae-daemon conductor metaopt-run --recipe`).
 /// Matches the `--offline-turn` pattern: an early branch in `main.rs` dispatches
 /// here. The ONLY production construction site for [`DaemonConductorRecipePort`]
