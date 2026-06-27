@@ -3201,36 +3201,45 @@ mod tests {
             conductor: Some(&runtime),
             acp_runner: &crate::session::REAL_ACP_RUNNER,
         };
-        // Emit a receipt like the live loop does (the helper doesn't auto-emit;
-        // this mirrors the M2 no-leak test's emit_receipt step).
-        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
-        assert!(wire.is_ok(), "mesh turn must succeed: {:?}", wire.err());
-        assert!(!outcome.fallback);
+        // The mesh path is only reachable via run() with a hand-built OwnerFleet
+        // decision: StaticDirectPolicy::decide always returns LocalOnly (M1-
+        // inert), so route_turn() — which calls decide() — never produces an
+        // OwnerFleet decision. To exercise the FULL telemetry surface (not just
+        // receipts), we manually emit event + receipt + shadow, mirroring exactly
+        // what route_turn does for a normal turn (executor.rs:1499-1507). This
+        // makes "observable" honest: all three conductor telemetry files are
+        // written and checked for the sentinel.
         let fingerprint = runtime
             .fingerprint(&decision.request_id)
             .map_err(|e| format!("fingerprint: {e}"))?;
-        runtime.emit_receipt(&decision, &outcome, &fingerprint, 1, 1);
+        let ts = now_ms();
+        runtime.emit_event(&decision, &fingerprint, ts);
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        assert!(wire.is_ok(), "mesh turn must succeed: {:?}", wire.err());
+        assert!(!outcome.fallback);
+        runtime.emit_receipt(&decision, &outcome, &fingerprint, 1, ts + 1);
+        // A context for shadow capture (label-only by design — F-4).
+        let mut ctx = turn_ctx("req-mesh-obs");
+        ctx.task_class = ConductorTaskClass::Coding;
+        runtime.capture_shadow(&ctx, fingerprint, ts + 2);
         tokio::time::sleep(Duration::from_millis(50)).await;
         let store_dir = tmp.path().join("store");
-        // Telemetry files may be created lazily (e.g. shadow only on capture,
-        // budget only when cost is recorded). For each file that EXISTS: it must
-        // be non-empty AND free of the sentinel prompt text. The receipts file
-        // MUST exist (proving the turn ran through telemetry).
-        let receipts_path = store_dir.join("conductor_receipts.jsonl");
-        assert!(
-            receipts_path.exists(),
-            "conductor_receipts.jsonl must exist (telemetry ran)"
-        );
+        // The three conductor telemetry files the mesh turn wrote MUST all exist
+        // (event + receipt + shadow were all emitted), be non-empty, and be free
+        // of the sentinel prompt text. budget_usage is intentionally NOT in this
+        // set: run_mesh_direct enforces the budget GATE (§5.4) but records no
+        // cost (economics deferred per owner directive 2026-06-26; a dormant
+        // mesh path with no real transport has no usage to persist).
         for file in [
             "conductor_shadow.jsonl",
             "conductor_route_events.jsonl",
             "conductor_receipts.jsonl",
-            "conductor_budget_usage.jsonl",
         ] {
             let path = store_dir.join(file);
-            if !path.exists() {
-                continue; // lazily-created; absent is fine (no leak possible)
-            }
+            assert!(
+                path.exists(),
+                "telemetry file {file} must exist (we emitted it)"
+            );
             let content = std::fs::read_to_string(&path)
                 .unwrap_or_else(|_| panic!("telemetry file {file} unreadable"));
             assert!(
