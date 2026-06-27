@@ -50,17 +50,26 @@ pub struct MembraneVerdict {
     pub labels: Vec<String>,
 }
 
-/// Spy-able membrane seam. Production uses [`RealPiiMembrane`], which calls the
-/// canonical `fae-pii-membrane` functions. Tests can count calls to prove
-/// LocalOnly no-ops without replacing the real membrane in the invariant test.
+/// Spy-able membrane seam. Production uses [`ConductorEgressMembrane`] — the
+/// named F-2 egress authority — which wraps the canonical
+/// `fae_pii_membrane::should_block_remote_egress` (block decision) and
+/// `fae_pii_membrane::scan` (structured labels only). Tests can inject a spy
+/// to count calls (e.g. to prove LocalOnly no-ops, or that a credential
+/// prompt blocks before any remote-egress dispatch) without replacing the real
+/// membrane in the invariant test.
 pub trait PiiMembrane: Send + Sync {
     fn scan_for_remote_egress(&self, text: &str) -> MembraneVerdict;
 }
 
+/// The F-2 egress authority: the single named surface every remote-egress lane
+/// (`CloudBacked` + `OwnerFleet`) routes through before any provider request is
+/// constructed. This makes the §5.3 invariant structural, not an incidental
+/// call-site convention. (Renamed from `RealPiiMembrane` in M4-A to name F-2;
+/// the behavior is unchanged — it delegates to `fae-pii-membrane`.)
 #[derive(Debug, Default)]
-pub struct RealPiiMembrane;
+pub struct ConductorEgressMembrane;
 
-impl PiiMembrane for RealPiiMembrane {
+impl PiiMembrane for ConductorEgressMembrane {
     fn scan_for_remote_egress(&self, text: &str) -> MembraneVerdict {
         // Load-bearing order: the egress authority is consulted before this
         // function returns any data that could be used to construct a provider
@@ -173,7 +182,7 @@ impl ConductorEgress {
             mode,
             budget,
             pricing,
-            Arc::new(RealPiiMembrane),
+            Arc::new(ConductorEgressMembrane),
             Arc::new(DefaultCloudRequestBuilder),
             Arc::new(MockCloudProvider),
         )
@@ -1674,7 +1683,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: true,
             pricing: cloud_pricing(CODEX_CLOUD_WORKER_ID),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder,
             provider,
             chain_enabled: false,
@@ -1720,6 +1729,169 @@ mod tests {
                 .join("conductor_receipts.jsonl"),
         )?;
         assert!(receipts.contains("privacy membrane blocked"));
+        Ok(())
+    }
+
+    /// M4-A (F-2): an `OwnerFleet` route carrying a credential-shaped prompt is
+    /// blocked by the `ConductorEgressMembrane` at §5.3 BEFORE any remote-egress
+    /// dispatch — proving the same-owner mesh lane is membrane-covered today,
+    /// structurally (via the named authority), not incidentally. The route is
+    /// constructed to clear the earlier gates (mode cap under `LocalSymphony`, +
+    /// a provisioned OwnerFleet worker with a matching standing grant) so it
+    /// genuinely reaches the membrane, then fails closed to direct-local. The
+    /// mesh-port-not-invoked assertion lands in M4-D (the port does not exist yet).
+    #[tokio::test]
+    async fn ownerfleet_credential_prompt_blocked_before_remote_dispatch(
+    ) -> Result<(), Box<dyn Error>> {
+        let (builder, builder_calls) = CountingBuilder::new();
+        let (provider, provider_calls) = CountingProvider::new(Vec::new());
+        // A provisioned same-owner fleet worker (the OwnerFleet lane). Real mesh
+        // transport is dormant; this exercises the registry/egress-gate path only.
+        const FLEET_WORKER_ID: &str = "fleet:peer-laptop";
+        let fleet_worker = WorkerSelector {
+            id: FLEET_WORKER_ID.to_string(),
+            kind: "fleet".to_string(),
+            locality: WorkerLocality::OwnerFleet,
+            capabilities: vec!["coding".to_string()],
+            provider: None,
+            model: Some("qwen3.5-32b".to_string()),
+            trust_scope: None,
+        };
+        let recipes = RecipeSet::from_iter([(
+            "recipe-fleet".to_string(),
+            FaeConductorRecipe {
+                id: "recipe-fleet".to_string(),
+                version: 1,
+                task_class: ConductorTaskClass::Coding,
+                feature_predicates: Vec::new(),
+                allowed_workers: vec![fleet_worker.clone()],
+                privacy_lane: PrivacyLane::OwnerFleet,
+                topology: ConductorTopology::Direct,
+                role_slots: vec![RoleSlot {
+                    role: ConductorRole::Worker,
+                    worker: fleet_worker.clone(),
+                    prompt_template_id: "direct".to_string(),
+                    prompt_template: "Answer.".to_string(),
+                    output_schema: None,
+                    required: true,
+                }],
+                budget: BudgetPolicy {
+                    max_turns: 3,
+                    max_role_calls: 3,
+                    timeout: Duration::from_millis(30_000),
+                    max_tokens: None,
+                    max_cost_micros: None,
+                },
+                escalation: EscalationPolicy {
+                    min_confidence_to_stay_local: 0.5,
+                    allow_acp: true,
+                    allow_mesh: true,
+                },
+                aggregation: AggregationPolicy {
+                    mode: AggregationMode::FirstAnswer,
+                    require_verifier_approval: false,
+                },
+                stop: StopPolicy {
+                    stop_after_verifier: true,
+                    stop_on_budget_exhaustion: true,
+                    max_correction_loops: 0,
+                },
+            },
+        )]);
+        let mut workers = WorkerRegistry::m1();
+        workers.register_owner_fleet(FLEET_WORKER_ID, true);
+        let tmp = tempfile::tempdir()?;
+        let store = ConductorStore::open(tmp.path().join("store"))?;
+        let install_key = InstallKey::load_or_create(&tmp.path().join("install.key"))?;
+        let budget = BudgetGovernor::new(store.clone(), budget_limits());
+        let egress = ConductorEgress::with_components(
+            // LocalSymphony permits OwnerFleet (verified: mode_permits_lane).
+            ModelMode::LocalSymphony,
+            budget,
+            ProviderPricingTable::empty(),
+            Arc::new(ConductorEgressMembrane),
+            builder,
+            provider,
+        );
+        let runtime = ConductorRuntime::new_with_egress(
+            StaticDirectPolicy,
+            recipes,
+            workers,
+            store,
+            install_key,
+            false,
+            egress,
+        )
+        .with_shadow();
+        // Credential-shaped prompt: the membrane must block it at §5.3.
+        let cmd = command(
+            "req-fleet-secret",
+            "please review this sk-abcdefghijklmnopqrstuvwxyz",
+        );
+        let decision = decision(
+            "req-fleet-secret",
+            "recipe-fleet",
+            FLEET_WORKER_ID,
+            ConductorTopology::Direct,
+            PrivacyLane::OwnerFleet,
+            ApprovalClass::StandingGrant("fleet-grant".to_string()),
+        );
+        // Backends for the fail-closed direct-local path (the turn must reach
+        // inject_text_core, which needs backends, but must NOT reach a cloud call).
+        let engine = MockAdapter::new("local");
+        let tts = MockTtsAdapter::new("tts");
+        let audio = AudioManager::new();
+        let events = EventBus::new();
+        let playbacks = PlaybackRegistry::new();
+        let agents = crate::agents::AgentSessionRegistry::new();
+        let backends = SessionBackends {
+            engine: &engine,
+            asr_fallback: None,
+            tts: &tts,
+            audio: &audio,
+            events: &events,
+            playbacks: &playbacks,
+            agents: &agents,
+            conductor: Some(&runtime),
+            acp_runner: &crate::session::REAL_ACP_RUNNER,
+        };
+        let (wire, outcome) = runtime.run(&decision, &backends, &cmd).await;
+        // The user still gets an answer (fail-closed direct-local), but the turn
+        // is a fallback: the membrane blocked before any remote dispatch.
+        assert!(wire.is_ok());
+        assert_eq!(
+            builder_calls.load(Ordering::SeqCst),
+            0,
+            "no cloud request built"
+        );
+        assert_eq!(
+            provider_calls.load(Ordering::SeqCst),
+            0,
+            "no provider call made"
+        );
+        assert!(
+            outcome.fallback,
+            "OwnerFleet route must fail-closed (fallback)"
+        );
+        assert!(
+            outcome
+                .fallback_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("privacy membrane blocked")),
+            "expected privacy-membrane-blocked reason, got: {:?}",
+            outcome.fallback_reason
+        );
+        // Budget never ran (membrane is §5.3, before budget §5.4).
+        let budget_usage = std::fs::read_to_string(
+            tmp.path()
+                .join("store")
+                .join("conductor_budget_usage.jsonl"),
+        )
+        .unwrap_or_default();
+        assert!(
+            budget_usage.is_empty(),
+            "budget must not record: {budget_usage}"
+        );
         Ok(())
     }
 
@@ -1776,7 +1948,7 @@ mod tests {
                 topology: ConductorTopology::Chain,
                 provisioned: true,
                 pricing: cloud_pricing(CODEX_CLOUD_WORKER_ID),
-                membrane: Arc::new(RealPiiMembrane),
+                membrane: Arc::new(ConductorEgressMembrane),
                 builder,
                 provider,
                 chain_enabled: true,
@@ -1935,7 +2107,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: true,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder,
             provider,
             chain_enabled: false,
@@ -1973,7 +2145,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: true,
             pricing: cloud_pricing(CODEX_CLOUD_WORKER_ID),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: builder.clone(),
             provider: provider.clone(),
             chain_enabled: false,
@@ -2005,7 +2177,7 @@ mod tests {
                 topology: ConductorTopology::Direct,
                 provisioned,
                 pricing: cloud_pricing(CODEX_CLOUD_WORKER_ID),
-                membrane: Arc::new(RealPiiMembrane),
+                membrane: Arc::new(ConductorEgressMembrane),
                 builder,
                 provider,
                 chain_enabled: false,
@@ -2060,7 +2232,7 @@ mod tests {
                 topology: ConductorTopology::Direct,
                 provisioned: true,
                 pricing,
-                membrane: Arc::new(RealPiiMembrane),
+                membrane: Arc::new(ConductorEgressMembrane),
                 builder,
                 provider,
                 chain_enabled: false,
@@ -2141,7 +2313,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder,
             provider,
             chain_enabled: false,
@@ -2203,7 +2375,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder,
             provider,
             chain_enabled: false,
@@ -2307,7 +2479,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: CountingBuilder::new().0,
             provider: CountingProvider::new(Vec::new()).0,
             chain_enabled: false,
@@ -2339,7 +2511,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: CountingBuilder::new().0,
             provider: CountingProvider::new(Vec::new()).0,
             chain_enabled: false,
@@ -2390,7 +2562,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: CountingBuilder::new().0,
             provider: CountingProvider::new(Vec::new()).0,
             chain_enabled: false,
@@ -2423,7 +2595,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: CountingBuilder::new().0,
             provider: CountingProvider::new(Vec::new()).0,
             chain_enabled: false,
@@ -2463,7 +2635,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: CountingBuilder::new().0,
             provider: CountingProvider::new(Vec::new()).0,
             chain_enabled: false,
@@ -2504,7 +2676,7 @@ mod tests {
             topology: ConductorTopology::Direct,
             provisioned: false,
             pricing: ProviderPricingTable::empty(),
-            membrane: Arc::new(RealPiiMembrane),
+            membrane: Arc::new(ConductorEgressMembrane),
             builder: CountingBuilder::new().0,
             provider,
             chain_enabled: false,

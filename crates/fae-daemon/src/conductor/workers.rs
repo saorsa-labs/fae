@@ -85,6 +85,23 @@ impl WorkerRegistry {
         );
     }
 
+    /// Add a vetted same-owner fleet worker (x0x peer, the `OwnerFleet` lane).
+    /// M4: the conductor treats a provisioned `OwnerFleet` worker as
+    /// standing-grantable (Tier B), exactly like a credentialed cloud worker —
+    /// the provisioning IS the consent (ADR-012 principle 2). Real mesh
+    /// transport is dormant (M4-E); this registration is the policy/registry
+    /// surface the gate pipeline consults.
+    #[allow(dead_code)] // exercised in unit tests; M4-D executor dispatch wires production startup
+    pub fn register_owner_fleet(&mut self, id: impl Into<String>, provisioned: bool) {
+        self.workers.insert(
+            id.into(),
+            WorkerRegistration {
+                locality: WorkerLocality::OwnerFleet,
+                provisioned,
+            },
+        );
+    }
+
     /// Whether `id` is a known, vetted worker.
     pub fn contains(&self, id: &str) -> bool {
         self.workers.contains_key(id)
