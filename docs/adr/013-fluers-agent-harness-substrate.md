@@ -1,8 +1,8 @@
 # ADR-013: Fluers as Fae's Agent-Harness Substrate
 
-- **Status:** Proposed (spike S19 **Stage 1 PASSED + reviewer-verified 2026-06-28**;
-  recommendation PROCEED-WITH-B with 4 tracked caveats; Stage 2 live-engine turn +
-  human sign-off owed before Accepted)
+- **Status:** **Accepted 2026-06-28** (owner sign-off; spike S19 **Stage 1 + Stage 2
+  reviewer-verified** — Seam 2 confirmed on a real llama.cpp turn; PROCEED-WITH-B with
+  5 tracked caveats — see "Spike outcome" below)
 - **Date:** 2026-06-28
 - **Decision owners:** David Irvine
 - **Reviewers:** TBD
@@ -142,6 +142,35 @@ relocation with behaviour parity, (R2) splitting the 8-layer per-tool governance
 (R3) the new server-initiated tool channel, (R4) two-pass audio, (R5) the
 Swift-only `<tool_program>` JSC path. These are what the spike must surface.
 
+### Spike outcome (S19, 2026-06-28; reviewer-verified, not reported)
+
+Both stages passed and were re-run by the reviewer (not trusted from the agent report):
+
+- **Stage 1 (CI-safe, mock provider):** all four seams green — `ConductorProvider`
+  shape, the generic `ToolPolicy` hook (consulted in **both** sequential and parallel
+  tool paths — no concurrency bypass), governed `ReadTool` with a path-escape denied
+  daemon-side, `RemoteSwiftTool` round-trip, per-turn `TurnSink` receipts, `max_turns`
+  parity. fae spike 5/5 nextest; fluers 139/139 (was 137; +2 policy tests, no consumer
+  regressions); clippy `-D warnings` clean both.
+- **Stage 2 (live `fae-engine`/llama.cpp):** **Seam 2 CONFIRMED** on a real Gemma-4 E4B
+  QAT turn through `fluers::run_agent` — the model emitted a real `read` tool call, the
+  governed tool read the file, and turn 2's answer quoted the file sentinel (only
+  knowable by reading it). Reviewer re-ran the live example independently (exit 0).
+- **The one engine gap → caveat #5 (first engine task for B):** `fae-engine`'s
+  `ChatMessage` is text-only (no `tool_call_id` / native `assistant.tool_calls`), so the
+  tool-result *return* path currently text-flattens results into a `User` turn. The
+  forward path is fully native. **Before B ships the lane, extend
+  `fae-engine`'s `ChatMessage`/`build_chat_body` to emit native OpenAI
+  `assistant.tool_calls` + `tool` messages with `tool_call_id`.** Bounded engine work;
+  fluers' side of the seam is clean.
+
+**The 5 tracked caveats for B** (post-P9, per the approved sequencing — B preempts
+M6-Async, M6-E orthogonal): (1) loop-parity guards as a `TurnSink` + thinking-
+suppression in `ConductorProvider::invoke` (no fluers-core change); (2) L7
+Reversibility/ReceiptStore → a fluers around-tool hook or keep in Swift behind
+`RemoteSwiftTool`; (3) the server-initiated daemon→Swift tool channel (A3-shaped);
+(4) `Confirm` UX rides that channel; (5) native `tool_call_id` in `fae-engine` (above).
+
 ## Consequences
 
 ### Positive
@@ -215,7 +244,9 @@ Swift-only `<tool_program>` JSC path. These are what the spike must surface.
 
 ## Notes for AI-assisted work
 
-This ADR is **Proposed**. AI tools may draft and refine it but **must not mark it
-Accepted without human review**. Accepted ADRs are immutable — supersede, don't
-edit. The Vision B commitment specifically must not be treated as approved until
-the spike reports and a human accepts.
+This ADR is **Accepted** (owner sign-off 2026-06-28, after spike S19 Stage 1 + Stage 2
+were reviewer-verified). Accepted ADRs are **immutable** — to change this decision,
+write a superseding ADR; do not edit this one. Vision B is now approved to schedule per
+the agreed sequencing (B preempts M6-Async; M6-E orthogonal; entry gate = M6-Intel done
++ conductor surfaces stable/P9 + no conductor-internals milestone concurrently in
+flight). The 5 tracked caveats above are B's known scope.

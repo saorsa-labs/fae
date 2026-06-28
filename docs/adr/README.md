@@ -16,7 +16,7 @@
 | [010](010-llamacpp-sidecar-vs-inprocess.md) | llama.cpp via `llama-server` Sidecar, not In-Process FFI | Accepted | 2026-06-18 |
 | [011](011-headless-rust-core-runtime.md) | Headless Rust Core as Canonical Runtime | Accepted | 2026-06-22 |
 | [012](012-local-first-coordinator-of-external-ais.md) | Fae as Local-First Coordinator of External AIs ("Head Butler") | Accepted | 2026-06-24 |
-| [013](013-fluers-agent-harness-substrate.md) | Fluers as Fae's Agent-Harness Substrate | **Proposed** (Vision B gated on spike S19) | 2026-06-28 |
+| [013](013-fluers-agent-harness-substrate.md) | Fluers as Fae's Agent-Harness Substrate | Accepted | 2026-06-28 |
 
 ## Conventions
 

@@ -1,9 +1,10 @@
 # Spike S19 — Fluers harness substrate de-risk (Vision B gate)
 
 - **Date:** 2026-06-28
-- **Status:** Stage 1 COMPLETE + reviewer-verified (2026-06-28). Recommendation:
-  **PROCEED WITH B, with 4 tracked caveats.** Stage 2 (live `fae-engine` turn)
-  still owed before final ADR-013 sign-off. See "## Outcome" below.
+- **Status:** Stage 1 + Stage 2 COMPLETE + reviewer-verified (2026-06-28).
+  **Seam 2 CONFIRMED on a live llama.cpp turn → ADR-013 ACCEPTED (owner sign-off).**
+  PROCEED WITH B, **5 tracked caveats** (the 5th = native `tool_call_id` in
+  `fae-engine`, the first engine task). See "## Outcome" below.
 - **Gates:** ADR-013 Vision B (daemon-on-fluers). A is committed regardless; this
   spike decides whether B proceeds.
 - **Owner / reviewer:** main session is REVIEWER — verifies against **live output +
@@ -279,6 +280,27 @@ Branches (uncommitted, not for merge): fluers `spike/fae-toolpolicy`, fae
 4. `Confirm` UX rides that channel (the `ToolPolicy::Confirm` verdict is plumbed but
    has no confirmation channel in-loop yet).
 
-**Still owed before final ADR-013 sign-off:** Stage 2 — one real `fae-engine`
-(llama.cpp) turn through `run_agent` to confirm Seam 2's `ChatRequest`/`ChatEvent`
-↔ fluers mapping for real. Run on a daemon-capable machine (owner / reviewer).
+### Stage 2 — live `fae-engine` turn (DONE + reviewer-re-run, 2026-06-28)
+
+Driver: agent `S19stage2` (general-purpose) on an M5 Max. Added `EngineProvider:
+fluers_core::ModelProvider` (lib.rs +226) over a real `LlamaServerAdapter`, plus
+`examples/live_engine_turn.rs`. **Seam 2 CONFIRMED.**
+
+**Reviewer re-ran the live example independently** (`cd crates && env -u RUSTFLAGS
+FAE_DEV=1 FAE_MODELS_LOCK=off SPIKE_TRACE=1 cargo run -p fae-substrate-spike --example
+live_engine_turn`, exit 0):
+- Live `llama-server` on :18100, `Chat format: peg-gemma4`, real eval timings.
+- Turn 1: the real Gemma-4 E4B QAT model emitted `ToolCall name=read args={"path":"note.txt"}`.
+- The governed `ReadTool` read the temp file; turn 2's answer quoted the sentinel
+  `GLASGOW-HERON-1742` — only knowable by actually reading the file.
+- Stage 1 mock nextest still 5/5.
+- (Op note: cargo runs from `crates/`, not the repo root — root is the Swift project.)
+
+**Finding → caveat #5 (first engine task for B):** the tool-result *return* path is
+text-flattened (carried as a `User` turn) because `fae-engine`'s `ChatMessage` is
+text-only — no `tool_call_id` / native `assistant.tool_calls`. The forward path is fully
+native. Extend `fae-engine`'s `ChatMessage`/`build_chat_body` to emit native OpenAI
+`assistant.tool_calls` + `tool` messages with `tool_call_id` before B ships the lane.
+
+**ADR-013 → Accepted (owner sign-off 2026-06-28).** Spike branches stay reference-only
+(not for merge).
