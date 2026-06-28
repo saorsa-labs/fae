@@ -1,6 +1,11 @@
 # ADR-013 Vision A — Slice A2 scope: the governed daemon ToolHost
 
-> **Status:** OWNER-SIGNED rev 4 (2026-06-29). Rev 2 incorporated the oracle
+> **Status:** rev 4 (2026-06-29) — **reviewer-approved**; the **owner explicitly
+> accepted the networked→`safe` scope deviation (2026-06-29)**. Other §7 items
+> (Q1 A2-pre, Q2 audit file, Q3 deferred-to-A3, Q4 fail-closed) are
+> **reviewer-recommended** and owner-ratified by accepting this merge — they were
+> not separately owner-signed (provenance corrected at merge; earlier revs
+> overstated "owner-signed"). Rev 2 incorporated the oracle
 > scope review (`a9f83f11`, NOT READY → fixed): BLOCKER-1 (full egress gate:
 > mode+PII+provisioning, not PII-only), MAJOR-1 (per-tool path extractors incl.
 > glob/grep), MAJOR-2 (explicit risk-class→scope table), MAJOR-3 (A3 internal
