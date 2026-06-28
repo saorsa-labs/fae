@@ -16,8 +16,9 @@
 //! guards (those protect the conductor core from x0x/metaopt deps; fluers is the
 //! sanctioned substrate, and toolhost depends one-way on conductor governance).
 //!
-//! See `docs/plans/vision-a-a2-toolhost-scope-2026-06-29.md` (owner-signed rev 3)
-//! for the full design, the §4.1/§4.2 traps, and the open questions.
+//! See `docs/plans/vision-a-a2-toolhost-scope-2026-06-29.md` (reviewer-approved;
+//! owner accepted the networked→`safe` scope deviation 2026-06-29) for the full
+//! design, the §4.1/§4.2 traps, and the open questions.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
