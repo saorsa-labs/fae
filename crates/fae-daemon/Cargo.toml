@@ -18,6 +18,12 @@ fae-envelope-gate = { path = "../fae-envelope-gate" }
 fae-engine = { path = "../fae-engine" }
 fae-acp = { path = "../fae-acp" }
 fae-pii-membrane = { path = "../fae-pii-membrane" }
+# ADR-013 Vision A (A1): fluers as the daemon tool/skill execution substrate.
+# Git-dep (pinned to v0.2.0 in [workspace.dependencies]) — NOT a path-dep, so CI
+# needs no sibling checkout. A2 builds the governed ToolHost on top; today this
+# only proves the dep resolves + the A2 foundation types are reachable.
+fluers-core = { workspace = true }
+fluers-runtime = { workspace = true }
 # M3-C2: fae-metaopt reaches the daemon ONLY via conductor/recipe_mutation.rs
 # (the recipe validator) + the future CLI. The CI boundary guard
 # (scripts/ci/guard-metaopt-boundary.sh) keeps it out of the live turn loop.

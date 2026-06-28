@@ -41,6 +41,15 @@ mod events;
 mod offline_turn;
 mod server_request;
 mod session;
+/// ADR-013 Vision A — the daemon tool/skill execution host (fluers substrate).
+/// Dormant in A1: wiring + reachability proof only. A2 builds the governed
+/// ToolHost (fluers native tools + Skills over `SessionEnv`, behind a Fae
+/// `ToolPolicy` impl = control-plane + DamageControl + PathPolicy + egress
+/// membrane). Lives OUTSIDE `conductor/` (it's execution, not routing) and is
+/// intentionally not covered by the mesh boundary guard (which protects the
+/// conductor core from x0x-family deps; fluers is the sanctioned substrate).
+#[allow(dead_code)]
+mod toolhost;
 mod transport;
 
 const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;

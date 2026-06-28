@@ -1913,6 +1913,8 @@ dependencies = [
  "fae-envelope-gate",
  "fae-metaopt",
  "fae-pii-membrane",
+ "fluers-core",
+ "fluers-runtime",
  "futures-util",
  "getrandom 0.2.17",
  "hex",
@@ -2065,6 +2067,44 @@ dependencies = [
  "num-traits",
  "rand 0.9.4",
  "rand_distr 0.5.1",
+]
+
+[[package]]
+name = "fluers-core"
+version = "0.2.1"
+source = "git+https://github.com/saorsa-labs/fluers?rev=15d15d84e0339cd28caf63e28e24b2fd9f2119df#15d15d84e0339cd28caf63e28e24b2fd9f2119df"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid 1.23.2",
+]
+
+[[package]]
+name = "fluers-runtime"
+version = "0.2.1"
+source = "git+https://github.com/saorsa-labs/fluers?rev=15d15d84e0339cd28caf63e28e24b2fd9f2119df#15d15d84e0339cd28caf63e28e24b2fd9f2119df"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "fluers-core",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid 1.23.2",
 ]
 
 [[package]]

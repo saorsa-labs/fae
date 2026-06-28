@@ -54,6 +54,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 # these instead of hand-rolling the wire format.
 agent-client-protocol = "0.14"
 agent-client-protocol-tokio = "0.11"
+# ADR-013 Vision A: fluers is Fae's daemon-side tool/skill execution substrate.
+# Git-dep pinned to a rev (NOT a path-dep) so CI needs no sibling `../fluers`
+# checkout (S19 coupling finding). v0.2.1 ships the generic `ToolPolicy`
+# governance hook (A0) with proptest demoted to a dev-dependency (no test-only
+# crates in the daemon's production tree). A1 = wiring only; A2 builds the Fae
+# ToolPolicy impl + native tools + Skills on top. Pinned to the v0.2.1 release
+# commit (annotated tag → commit 15d15d8).
+fluers-core = { git = "https://github.com/saorsa-labs/fluers", rev = "15d15d84e0339cd28caf63e28e24b2fd9f2119df" }
+fluers-runtime = { git = "https://github.com/saorsa-labs/fluers", rev = "15d15d84e0339cd28caf63e28e24b2fd9f2119df" }
 
 [profile.release]
 opt-level = 3
