@@ -37,6 +37,7 @@ hmac = { workspace = true }
 hex = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true }
 futures-util = { workspace = true }
 async-trait.workspace = true
 base64 = { workspace = true }
