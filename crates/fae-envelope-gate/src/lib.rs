@@ -8,6 +8,14 @@
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
 
+// M6-A (2026-06-27): the gate is a dumb, schema-versioned, signature-checked
+// CARRIER. It must stay schema-agnostic — it does not (and must not) depend on
+// fae-daemon. M6-Intel adds one closed kind (`ConductorGateReceiptPrior`) and
+// two narrow accessors on `AcceptedEnvelope` (`created_at_ms`, `prior_payload`)
+// so fae-daemon can (a) enforce a TTL and (b) deserialize the carrier payload
+// into its own `GateReceiptPriorPayload` with `deny_unknown_fields` on ITS
+// side. The gate never learns the payload shape; the conductor owns it.
+
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -44,6 +52,13 @@ pub enum EnvelopeKind {
     ConsentRevocation,
     MemoryShareOffer,
     PresenceUpdate,
+    /// M6-Intel (2026-06-27): a conductor shared-intelligence prior — a signed,
+    /// scoped, TTL'd, aggregate gate-receipt exported from one node's routing
+    /// telemetry. Backwards-compatible enum extension: old nodes that don't
+    /// know this variant reject it as `InvalidJson` (the desired fail-closed
+    /// behavior for a forward-rolling fleet). The gate stays schema-agnostic;
+    /// fae-daemon owns the payload schema and deserialization.
+    ConductorGateReceiptPrior,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +145,26 @@ impl AcceptedEnvelope {
 
     pub fn kind(&self) -> &EnvelopeKind {
         &self.envelope.kind
+    }
+
+    /// The envelope's creation timestamp (millis since epoch). Part of the
+    /// signed envelope, so not forgeable once signatures are real. M6-Intel
+    /// uses this for its TTL gate (future-date check first, then age).
+    pub fn created_at_ms(&self) -> u64 {
+        self.envelope.created_at_ms
+    }
+
+    /// Read-only access to the carrier `payload`, as a `serde_json::Value`
+    /// reference. M6-Intel (and any future kind owner) deserializes this into
+    /// its OWN payload type on its side — the gate never learns the schema.
+    /// Returns the payload for ANY accepted kind; callers must check [`kind()`]
+    /// and deserialize defensively (`deny_unknown_fields` + size cap) before
+    /// trusting the contents. This preserves the gate's schema-agnosticism and
+    /// the dependency direction (fae-daemon → fae-envelope-gate, never back).
+    ///
+    /// [`kind()`]: AcceptedEnvelope::kind
+    pub fn prior_payload(&self) -> Option<&serde_json::Value> {
+        Some(&self.envelope.payload)
     }
 
     /// Peer text is exposed only for the policy-review layer. Callers must not
@@ -359,6 +394,102 @@ mod tests {
         let raw = valid_envelope_json()?;
         let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
         assert_eq!(accepted.peer_text_for_policy_review(), Some("hello"));
+        Ok(())
+    }
+
+    // ── M6-A (2026-06-27): the new ConductorGateReceiptPrior kind + accessors ──
+
+    fn prior_envelope_json(
+        created_at_ms: u64,
+        payload: serde_json::Value,
+    ) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&PeerEnvelope {
+            schema_version: SUPPORTED_SCHEMA_VERSION,
+            kind: EnvelopeKind::ConductorGateReceiptPrior,
+            envelope_id: "prior-1".to_owned(),
+            sender_id: "peer-1".to_owned(),
+            created_at_ms,
+            payload,
+            signature: SignatureProof {
+                algorithm: "ml-dsa-65".to_owned(),
+                public_key_id: "pk-1".to_owned(),
+                signature_b64: "placeholder".to_owned(),
+            },
+        })
+    }
+
+    #[test]
+    fn conductor_prior_kind_round_trips_through_gate() -> Result<(), Box<dyn std::error::Error>> {
+        // The new kind is a first-class EnvelopeKind: it parses, is accepted by
+        // the gate (signature permitting), and kind() reads back correctly.
+        let payload = serde_json::json!({
+            "topology": "direct",
+            "privacy_lane": "owner_fleet",
+            "success": true
+        });
+        let raw = prior_envelope_json(1_700_000_000_000, payload)?;
+        let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
+        assert_eq!(accepted.kind(), &EnvelopeKind::ConductorGateReceiptPrior);
+        assert_eq!(accepted.envelope_id(), "prior-1");
+        assert_eq!(accepted.sender_id(), "peer-1");
+        Ok(())
+    }
+
+    #[test]
+    fn created_at_ms_accessor_returns_signed_timestamp() -> Result<(), Box<dyn std::error::Error>> {
+        // The TTL gate (M6-C) depends on this being the envelope's signed
+        // created_at_ms, surfaced verbatim.
+        let raw = prior_envelope_json(1_700_000_000_000, serde_json::json!({}))?;
+        let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
+        assert_eq!(accepted.created_at_ms(), 1_700_000_000_000);
+        Ok(())
+    }
+
+    #[test]
+    fn prior_payload_returns_read_only_carrier_value() -> Result<(), Box<dyn std::error::Error>> {
+        // The accessor returns the carrier payload as a read-only Value, for
+        // ANY accepted kind — the conductor owns deserialization on its side.
+        // prior_payload() is &self.envelope.payload, which is non-optional, so
+        // it always returns Some for an accepted envelope; assert the Option
+        // itself equals Some(&payload) (no extraction/clone needed).
+        let payload = serde_json::json!({
+            "topology": "chain",
+            "privacy_lane": "local_only",
+            "success": false,
+            "fallback": true
+        });
+        let raw = prior_envelope_json(1_700_000_000_000, payload.clone())?;
+        let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
+        assert_eq!(
+            accepted.prior_payload(),
+            Some(&payload),
+            "accessor must return the carrier payload verbatim, for an accepted envelope"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prior_payload_works_for_direct_message_kind_too() -> Result<(), Box<dyn std::error::Error>> {
+        // The accessor is kind-agnostic by design (the gate is schema-agnostic);
+        // it returns the payload regardless of kind. Callers check kind().
+        let raw = valid_envelope_json()?;
+        let (accepted, _) = parse_and_gate(&raw, &AcceptAllSignatureVerifier)?;
+        let payload = accepted
+            .prior_payload()
+            .map(|v| v.get("text").and_then(|t| t.as_str()).unwrap_or(""));
+        assert_eq!(payload, Some("hello"));
+        Ok(())
+    }
+
+    #[test]
+    fn conductor_prior_kind_with_unknown_variant_still_rejected(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Backwards-compat / forward-rolling-fleet guarantee: a completely
+        // unknown kind string is rejected as InvalidJson (serde deny on the
+        // closed enum). This is the fail-closed behavior the spec relies on.
+        let raw = valid_envelope_json()?.replace("direct_message", "conductor_evil_prior");
+        let result = parse_and_gate(&raw, &AcceptAllSignatureVerifier);
+        assert!(matches!(result, Err(GateError::InvalidJson(_))));
         Ok(())
     }
 }
