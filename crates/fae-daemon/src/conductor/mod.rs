@@ -63,6 +63,16 @@ pub mod error;
 pub mod eval;
 pub mod executor;
 pub mod fingerprint;
+/// M6-Intel: shared intelligence as signed candidate priors. M6-B surface is
+/// the EXPORT sanitizer + unsigned-preview writer — projects a `RouteReceipt`
+/// onto the §3.1 closed allowlist (total projection; denylisted fields
+/// structurally absent), bounds + token-validates exported `String`s, buckets
+/// latency, and emits a `PeerEnvelope`-shaped JSON the gate re-parses on import
+/// (M6-C). Dormant: no production caller until M6-C/D. v1 is export-only +
+/// import-rejects-all (no accepting unsigned priors); real ML-DSA-65 is M6-E.
+/// Local file write only — no network egress, never `fae.db`.
+#[allow(dead_code)] // M6-B dormant; callers land in M6-C (import) / M6-D (sink).
+pub mod intel;
 /// M4-C mesh delegation port — the `OwnerFleet` (same-owner x0x) rung of ADR-012's
 /// trust gradient. The async-ready `ConductorMeshDelegationPort` + prompt-free
 /// DTOs. Dormant in M4: M4-D will wire production to use
