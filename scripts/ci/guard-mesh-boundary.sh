@@ -56,24 +56,31 @@ fail=0
 # known forms — so a hypothetical `x0x-foo` would also be caught.
 echo "[guard-mesh-boundary] checking fae Cargo.toml files for x0x-family deps..."
 cargo_violations=0
-# Match an x0x-family crate as a Cargo dep line (not a path/comment). Cargo dep
-# lines look like `x0x = ...` / `x0x-symphony-core = ...`. Scan BOTH the
-# workspace root (crates/Cargo.toml) and every member (crates/*/Cargo.toml) so
-# a dep snuck in at the workspace level is caught.
+# Match an x0x-family crate as a Cargo dep in TWO forms (review 08dab3c4, MAJOR:
+# a key-only regex missed renamed deps). Scan BOTH the workspace root
+# (crates/Cargo.toml) and every member (crates/*/Cargo.toml) so a dep snuck in
+# at the workspace level is caught.
+#   Pattern 1 (key):   `x0x... =`           — a direct dep key.
+#   Pattern 2 (value): `x0x..."`           — the crate name inside double quotes,
+#                        which is how `package = "..."`, `path = "..."`, and
+#                        `git = "..."` name a crate. Closes the renamed/aliased
+#                        dep bypass: `mesh_symphony = { package = "x0x-..." }`.
+# The closing `"` anchor keeps this from false-positive on prose comments
+# (e.g. `// x0x-symphony is deferred` has no `"` right after the crate name).
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   echo "[guard-mesh-boundary]   VIOLATION (Cargo): $line"
   cargo_violations=$((cargo_violations + 1))
-done < <(grep -rEn '^[[:space:]]*x0x(-compute|_compute|-symphony|_symphony|-symphony-core|_symphony_core)?[[:space:]]*=' crates/Cargo.toml crates/*/Cargo.toml || true)
+done < <(grep -rEn -e '^[[:space:]]*x0x(-compute|_compute|-symphony|_symphony|-symphony-core|_symphony_core)?[[:space:]]*=' -e 'x0x(-compute|_compute|-symphony|_symphony|-symphony-core|_symphony_core)?"' crates/Cargo.toml crates/*/Cargo.toml || true)
 
 if [ "$cargo_violations" -gt 0 ]; then
-  echo "[guard-mesh-boundary] $cargo_violations forbidden x0x-family Cargo dependency/dependencies."
+  echo "[guard-mesh-boundary] $cargo_violations forbidden x0x-family Cargo dependency/dependencies (direct key OR renamed package/path/git)."
   echo "[guard-mesh-boundary] M4/M6 are dormant: real transport (M4-E) is blocked on x0x-compute's"
   echo "[guard-mesh-boundary] real backend; M6-Async will speak pure conductor types behind its own port."
   echo "[guard-mesh-boundary] A future REST adapter must NOT be a crate dep in the conductor core."
   fail=1
 else
-  echo "[guard-mesh-boundary] Cargo: clean (no x0x-family deps)."
+  echo "[guard-mesh-boundary] Cargo: clean (no x0x-family deps, direct or renamed)."
 fi
 
 # ── Check 2: no external-mesh IMPORTS in the conductor core ──────────────────
