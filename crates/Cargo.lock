@@ -2071,8 +2071,8 @@ dependencies = [
 
 [[package]]
 name = "fluers-core"
-version = "0.2.1"
-source = "git+https://github.com/saorsa-labs/fluers?rev=15d15d84e0339cd28caf63e28e24b2fd9f2119df#15d15d84e0339cd28caf63e28e24b2fd9f2119df"
+version = "0.3.0"
+source = "git+https://github.com/saorsa-labs/fluers?rev=1a3f75a5706732e65d6492cf6d219107fde78b68#1a3f75a5706732e65d6492cf6d219107fde78b68"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2091,8 +2091,8 @@ dependencies = [
 
 [[package]]
 name = "fluers-runtime"
-version = "0.2.1"
-source = "git+https://github.com/saorsa-labs/fluers?rev=15d15d84e0339cd28caf63e28e24b2fd9f2119df#15d15d84e0339cd28caf63e28e24b2fd9f2119df"
+version = "0.3.0"
+source = "git+https://github.com/saorsa-labs/fluers?rev=1a3f75a5706732e65d6492cf6d219107fde78b68#1a3f75a5706732e65d6492cf6d219107fde78b68"
 dependencies = [
  "async-trait",
  "chrono",

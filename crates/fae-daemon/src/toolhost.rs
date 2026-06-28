@@ -1,9 +1,10 @@
 //! ADR-013 Vision A — the daemon tool/skill execution host (fluers substrate).
 //!
 //! **A1 (this commit): wiring + reachability proof only.** `fae-daemon` now
-//! depends on `fluers-core` + `fluers-runtime` as a **git-dep pinned to v0.2.1**
+//! depends on `fluers-core` + `fluers-runtime` as a **git-dep pinned to v0.3.0**
 //! (NOT a path-dep — so CI needs no sibling `../fluers` checkout; S19 coupling
-//! finding). v0.2.1 ships the generic `ToolPolicy` governance hook landed in A0.
+//! finding). v0.3.0 ships the generic `ToolPolicy` hook (A0) + the `edit` tool
+//! and non-truncating `read_file_full` (A2-pre).
 //! The [`WITNESS`] const type-checks the A2 foundation types, so a missing or
 //! renamed export in fluers fails `cargo check` HERE, not silently in A2.
 //!
