@@ -1,18 +1,23 @@
 # ADR-013 Vision A — Slice A2 scope: the governed daemon ToolHost
 
-> **Status:** OWNER-SIGNED rev 3 (2026-06-29). Rev 2 incorporated the oracle
+> **Status:** OWNER-SIGNED rev 4 (2026-06-29). Rev 2 incorporated the oracle
 > scope review (`a9f83f11`, NOT READY → fixed): BLOCKER-1 (full egress gate:
 > mode+PII+provisioning, not PII-only), MAJOR-1 (per-tool path extractors incl.
 > glob/grep), MAJOR-2 (explicit risk-class→scope table), MAJOR-3 (A3 internal
-> API seam), MAJOR-4 (SkillHost split resolved to A2.5), MINOR-1/2. Rev 3 folds
+> API seam), MAJOR-4 (SkillHost split resolved to A2.5), MINOR-1/2. Rev 3 folded
 > the owner sign-off decisions (§7: Q1/Q2/Q4 resolved, Q3 deferred to A3 with
-> leans) + the grep-optional-`paths` nuance (§5.2 step 3, §8). Second oracle
-> pass deliberately skipped (source-grounding > LLM re-read; oracle reserved
-> for A2-body code review, same bar as A0/M6-B).
+> leans) + the grep-optional-`paths` nuance (§5.2 step 3, §8). Rev 4 records the
+> post-implementation acceptance of the networked→`safe` scope deviation
+> (§5.2 table + note): oracle code review `ec0c3a17` (CONDITIONAL, no BLOCKER)
+> flagged that the table's `dangerous` made the step-5 egress gate unreachable;
+> owner accepted `safe + egress gate` as the authorization model for networked
+> tools. Second oracle pass on the scope was skipped (source-grounding > LLM
+> re-read); the oracle was spent on the A2-body code instead.
 > **Authority:** ADR-013 (Accepted, `c64e9476`) → Vision A kickoff
 > (`docs/plans/vision-a-toolhost-kickoff-2026-06-28.md`).
 > **Depends on:** A0 (fluers `ToolPolicy` hook, released v0.2.0 `fcd044a`) ✅;
-> A1 (fae-daemon git-dep pinned to v0.2.0) ⏳ under review.
+> A1 (fae-daemon git-dep, now pinned to fluers **v0.3.0** `1a3f75a`) ✅ merged;
+> A2-pre (generic fluers `edit` + `read_file_full`, v0.3.0) ✅ merged+tagged.
 > **Proven reference:** `crates/fae-substrate-spike/src/lib.rs` (spike S19,
 > reviewer-verified; reference-only, NOT for merge).
 
@@ -166,8 +171,24 @@ pub struct ToolHostGovernance {
    | `write` | `Write` | `tool.execute_dangerous` | `input["path"]` | ConfirmRequired→Deny (§4.1) |
    | `edit` | `Write` | `tool.execute_dangerous` | `input["path"]` | A2-pre (fluers v0.3) |
    | `bash` | `Shell` | `tool.execute_dangerous` | n/a | ConfirmRequired→Deny + DamageControl |
-   | (networked stub) | `Networked` | `tool.execute_dangerous` | n/a | **all fail-closed until §5.4 wrapper exists** |
+   | (networked stub) | `Networked` | `tool.execute_safe` ✏️rev4 | n/a | egress gate IS the authorization (see note below) |
    | any other | `Unknown` | — | — | **Deny** (deny-until-classified) |
+
+   > **✏️ Rev 4 deviation (owner-accepted, post oracle `ec0c3a17`):** networked
+   > tools map to `tool.execute_safe`, NOT `tool.execute_dangerous`. The signed
+   > table (rev 3) said `dangerous`, but that made the §5.2 step-5 egress gate
+   > **structurally unreachable**: `authorize()` returns `ConfirmRequired` for
+   > any dangerous command when the client holds the scope (control-plane
+   > `lib.rs`), and we map `ConfirmRequired`→`Deny` (§4.1); an unscoped client
+   > hits `MissingScope`. Either way step 5 (egress) is dead code — contradicting
+   > "egress wired from day one." A networked tool's risk is *egress* (data
+   > leaving the device, gated by the membrane), not local destruction (gated by
+   > the confirm flow), so the egress gate is the correct authorization. Safe
+   > today: `DisabledGate` (the A2 prod default) denies ALL networked tools. A
+   > future safe-scoped client + an allowing adapter still needs mode-on +
+   > PII-clean + provisioned-worker (the 3 gates). OPEN-Q3 may yet introduce a
+   > dedicated `Scope::ToolExecuteNetworked` in A3; until then `safe`+gate is
+   > the model.
 
 2. **Control-plane `authorize`** with the mapped command (`tool.execute_safe` or
    `tool.execute_dangerous` per the table — OPEN-Q3 on exact names). Map:
