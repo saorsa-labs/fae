@@ -12,8 +12,19 @@ Paths outside the default root are therefore **denied with a helpful error**;
 multi-root/session-pool is deferred. This *simplifies* Layer 3 and removes the
 "card for non-default path" logic from rev0.
 
-**Status:** advisor-rev1. Implement **3a only** (workspace + auto-root) + targeted
-tests, run `DaemonToolHostTests`, before touching routing (3b).
+**Status:** advisor-rev1 → **3a IMPLEMENTED + advisor-approved** (4 review rounds,
+`a30431ab`). Auto-approve-of-a-root-path converged to READY. 3b (routing) next,
+as a minimal `read`-only slice.
+
+**Final invariants (implemented, stricter than rev1 after review):**
+- `defaultAwareHandler`: `call_id` raw==trimmed + non-empty; `path` raw==trimmed +
+  non-empty + **absolute**; canonical-EXACT match + marker present; `tool.confirm`
+  NEVER auto-approved. (`isCleanNonBlank` / `isCleanAbsolutePath` helpers.)
+- `DaemonToolHostSession.setRoot(path:handler:)` is **private**; binds
+  `approvedRootPath` only on `ok==true` with a clean-absolute daemon-RETURNED
+  `result.root` (not the requested path). `ok:true` with missing/whitespace/relative
+  root leaves it nil → `ensureDefaultRooted` throws.
+- Tests: `DaemonToolHostTests` 27/27.
 
 ---
 
@@ -237,7 +248,20 @@ Swift sends **root-relative paths only** to the daemon:
 
 ## 8. Hand-back
 
-Implement **3a only**: `FaeWorkspaceProvider` + `provision` + `DaemonToolHostSession
-.ensureDefaultRooted/executeInDefaultWorkspace` + `defaultAwareHandler` + tests
-1-6,8 (7 lands with 3b's path-normalization). Gate: `DaemonToolHostTests` green +
-new tests green. Then 3b (routing classifier + arg normalization + path checks).
+**3a COMPLETE + advisor-approved** (`6805938b` → `a30431ab`, 4 review rounds):
+FaeWorkspace provider/provision/marker + defaultAwareHandler +
+ensureDefaultRooted/executeInDefaultWorkspace + 27/27 DaemonToolHostTests.
+
+**3b (next) — minimal `read`-only routing slice** (per advisor signoff):
+1. Route **only `read`** to the daemon initially.
+2. `write`/`edit` stay dangerous-classed, not enabled until Layer 4; `bash`
+   stays local/denied (highest blast radius; substring denylist ≠ shell safety).
+3. Insert before the Swift DamageControl user-approval path, AFTER deterministic
+   gates (tool-mode, proactive-allowlist, step-limit) — avoid double approval.
+4. Root-relative path normalization for `read`: reject absolute, `..`, and symlink
+   escapes; canonicalize existing path, assert under `rootPath()`.
+5. Tests first: valid default-root read routes to daemon; absolute/`..`/symlink
+   denied; non-routed tools preserve local behavior; session reused.
+
+Root-source footgun (§1) is structural: the root is always the provisioned default
+— never inferred from a requested file path.
