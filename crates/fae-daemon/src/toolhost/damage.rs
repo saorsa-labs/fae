@@ -127,19 +127,24 @@ fn rm_wipes_root(toks: &[&str]) -> bool {
     false
 }
 
-/// `git clean` with force + ignored/dirs AND NO path target — i.e. it wipes
-/// the whole workspace (untracked files + dirs + ignored). `git clean -fdx
-/// ./subdir` is scoped (only cleans `./subdir`) and is NOT a workspace wipe —
-/// it proceeds to the per-call confirm. Reordered/combined flags are caught by
-/// scanning every flag token; a positional path arg means it's scoped.
+/// `git clean` with force + ignored/dirs whose target is the whole workspace
+/// (no path arg, OR an explicit root target `.`, `./`, `*`, `./*`). Scoped
+/// forms (`git clean -fdx ./subdir`, `git clean -fd build/`) only clean a
+/// subdir → NOT a workspace wipe, they proceed to the per-call confirm.
+/// Reordered/combined flags are caught by scanning every flag token.
 fn git_clean_wipes(toks: &[&str]) -> bool {
     let mut i = 0;
     while i + 1 < toks.len() {
         if toks[i] == "git" && toks[i + 1] == "clean" {
             let mut has_f = false;
             let mut has_broad = false;
-            let mut has_path_target = false;
+            let mut has_any_target = false;
+            let mut target_is_workspace_root = false;
             for &t in &toks[i + 2..] {
+                if t == "--" {
+                    // end-of-options; what follows is a positional target.
+                    continue;
+                }
                 if let Some(flags) = t
                     .strip_prefix('-')
                     .filter(|s| !s.is_empty() && !s.starts_with('-'))
@@ -150,15 +155,19 @@ fn git_clean_wipes(toks: &[&str]) -> bool {
                     if flags.contains('d') || flags.contains('x') {
                         has_broad = true;
                     }
-                } else if t == "--" {
-                    // end-of-options; what follows is a path target.
                 } else if !t.starts_with('-') {
-                    // A positional path argument → scoped, not a workspace wipe.
-                    has_path_target = true;
+                    // A positional path argument. `git clean` defaults to `.`
+                    // when no target is given — that's a workspace wipe. An
+                    // EXPLICIT root target (`.`, `./`, `*`, `./*`) is ALSO a
+                    // wipe; a subdir (`./subdir`, `build/`) is scoped.
+                    has_any_target = true;
+                    if matches!(unquote(t), "." | "./" | "*" | "./*") {
+                        target_is_workspace_root = true;
+                    }
                 }
             }
-            // Wipe ONLY if force + broad AND no path target (defaults to `.`).
-            return has_f && has_broad && !has_path_target;
+            // Wipe if force + broad AND (defaults to `.` OR targets the root).
+            return has_f && has_broad && (!has_any_target || target_is_workspace_root);
         }
         i += 1;
     }
@@ -238,6 +247,10 @@ mod tests {
         assert!(is_workspace_wipe("git clean -fdx"));
         assert!(is_workspace_wipe("git clean -xfd")); // reordered
         assert!(is_workspace_wipe("git clean -fd -x")); // split
+                                                        // oracle MAJOR-1 (2nd pass): explicit workspace-root targets ARE wipes.
+        assert!(is_workspace_wipe("git clean -fdx ."));
+        assert!(is_workspace_wipe("git clean -xfd ./"));
+        assert!(is_workspace_wipe("git clean -fdx -- ."));
         assert!(is_workspace_wipe("git reset --hard"));
     }
 
