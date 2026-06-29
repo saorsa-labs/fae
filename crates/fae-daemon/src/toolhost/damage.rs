@@ -155,6 +155,16 @@ fn git_clean_wipes(toks: &[&str]) -> bool {
                     // end-of-options; what follows is a positional target.
                     continue;
                 }
+                // Long `--force` is documented alongside `-f` (only -f has a
+                // long form; -d/-x do not — `git clean --dirs` errors). Handle
+                // the negation `--no-force` explicitly so it doesn't count.
+                if t == "--force" {
+                    has_f = true;
+                    continue;
+                }
+                if t == "--no-force" {
+                    continue;
+                }
                 if let Some(flags) = t
                     .strip_prefix('-')
                     .filter(|s| !s.is_empty() && !s.starts_with('-'))
@@ -265,6 +275,11 @@ mod tests {
         assert!(is_workspace_wipe("git clean -fdx :/"));
         assert!(is_workspace_wipe("git clean -fdx ':/*'"));
         assert!(is_workspace_wipe("git clean -fdx ':(top)'"));
+        // oracle 4d47ac1b: documented long --force is equivalent to -f.
+        assert!(is_workspace_wipe("git clean --force -d -x"));
+        assert!(is_workspace_wipe("git clean --force -d"));
+        assert!(is_workspace_wipe("git clean --force -x"));
+        assert!(is_workspace_wipe("git clean --force -dx .")); // long + root target
         assert!(is_workspace_wipe("git reset --hard"));
     }
 
@@ -280,7 +295,9 @@ mod tests {
         assert!(!is_workspace_wipe("git clean -fd ./tmp"));
         assert!(!is_workspace_wipe("git clean -fdx build/"));
         assert!(!is_workspace_wipe("git clean -fdx :/src")); // scoped pathspec
-                                                             // Benign commands.
+        assert!(!is_workspace_wipe("git clean --force -dx ./tmp")); // long, scoped
+        assert!(!is_workspace_wipe("git clean --no-force -dx")); // negation ≠ force
+                                                                 // Benign commands.
         assert!(!is_workspace_wipe("cargo build"));
         assert!(!is_workspace_wipe("ls -la"));
         assert!(!is_workspace_wipe("rm file.txt")); // not recursive
