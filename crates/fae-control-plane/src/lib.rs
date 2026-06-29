@@ -353,6 +353,14 @@ impl ClientClass {
                     // delegation at the Fae tool layer before it reaches here
                     // (gap A1).
                     Scope::AgentExecute,
+                    // A3-Swift Q7a: the governed daemon ToolHost is reachable from
+                    // the live Swift client. Safe portable tools (read/glob/grep,
+                    // path-contained + read-only) run in the per-session daemon
+                    // sandbox. Dangerous tools (write/edit/bash) still require
+                    // `ToolExecuteDangerous` (Q7b, server-side opt-in — a
+                    // client-side toggle is not the boundary) plus an owner
+                    // confirm; proven at the execute_governed level.
+                    Scope::ToolExecuteSafe,
                 ]
             }
             ClientClass::CliDiagnostic | ClientClass::BrowserDiagnostic => vec![Scope::StatusRead],
@@ -1303,6 +1311,9 @@ mod tests {
         assert!(frontend.contains(&Scope::AudioCapture));
         assert!(frontend.contains(&Scope::AudioPlayback));
         assert!(frontend.contains(&Scope::ConversationWrite));
+        // A3-Swift Q7a: safe portable tools are now daemon-reachable.
+        assert!(frontend.contains(&Scope::ToolExecuteSafe));
+        // Dangerous tools stay opt-in (Q7b) — never granted by default.
         assert!(!frontend.contains(&Scope::ToolExecuteDangerous));
         assert!(!frontend.contains(&Scope::MemoryWrite));
     }

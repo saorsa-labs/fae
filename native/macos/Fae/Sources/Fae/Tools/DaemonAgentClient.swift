@@ -148,6 +148,12 @@ enum DaemonAgentClient {
             return readFile(params: params)
         case "fs.write":
             return writeFile(params: params)
+        case "tool.confirm":
+            // A3-Swift: the governed daemon ToolHost asks the owner to approve a
+            // dangerous tool before it runs in the per-session sandbox. The
+            // reply must be EXACTLY {approved, call_id} (the daemon's parser is
+            // strict deny_unknown_fields; any extra field denies).
+            return await handleToolConfirm(params: params)
         default:
             return ["error": "unsupported server request: \(method)"]
         }
@@ -196,6 +202,83 @@ enum DaemonAgentClient {
                 return ["error": "could not write \(path): \(error.localizedDescription)"]
             }
         }
+    }
+
+    // MARK: - ToolHost execution (A3-Swift)
+
+    /// Execute a portable/native tool in the governed daemon ToolHost. Uses the
+    /// SERVER-REQUEST-AWARE round-trip (BLOCKER-1): a dangerous tool emits a
+    /// `tool.confirm` server-request that the plain `roundTrip` would SKIP (the
+    /// daemon would park forever awaiting the reply → deadlock). `handleServerRequest`
+    /// answers `tool.confirm` on this same connection.
+    ///
+    /// `handleServerRequest` is shared with the agent-delegation lane, so a
+    /// `tool.confirm` and a `permission.request`/`fs.*` can both be answered on
+    /// one connection.
+    static func toolhostExecute(tool: String, input: [String: Any]) async throws -> [String: Any] {
+        let response = try await callHandlingServerRequests(
+            command: "toolhost.execute",
+            payload: ["tool": tool, "input": input],
+            onServerRequest: { _, method, params in
+                await handleServerRequest(method: method, params: params)
+            })
+        return (response["result"] as? [String: Any]) ?? [:]
+    }
+
+    /// `tool.confirm` (A3-Swift): surface the daemon's bounded, redacted
+    /// `ConfirmRequest` on the governance card and return the owner's decision.
+    /// `params` carries tool/call_id/risk_class/reason/detail — NEVER the tool's
+    /// full input or file contents. The reply is the strict two-field shape the
+    /// daemon's parser expects.
+    static func handleToolConfirm(params: [String: Any]) async -> [String: Any] {
+        // `call_id` is mandatory (the daemon echoes it defensively). Missing or
+        // malformed params ⇒ deny (fail-closed; never prompt without a way to
+        // bind the reply to the request).
+        guard let callID = params["call_id"] as? String, !callID.isEmpty else {
+            return ["approved": false]
+        }
+        let tool = (params["tool"] as? String) ?? "a tool"
+        let risk = (params["risk_class"] as? String) ?? "dangerous"
+        let message = toolConfirmMessage(
+            tool: tool, risk: risk, detail: params["detail"])
+        // Test seam: `ToolConfirmDecisionOverride` (nil in production) lets unit
+        // tests fix the card's decision without a UI. Production leaves it nil
+        // and shows the real governance card via `requestApproval`.
+        let approved: Bool
+        if let override = await ToolConfirmDecisionOverride.shared.get() {
+            approved = override
+        } else {
+            approved = await requestApproval(
+                title: "Fae wants to run a tool",
+                message: message)
+        }
+        // Strict two-field reply — matches the daemon's deny_unknown_fields
+        // parser. An extra key here would flip approval into a malformed-deny.
+        return ["approved": approved, "call_id": callID]
+    }
+
+    /// Compose a REDACTED confirmation message from the bounded `ConfirmRequest`.
+    /// Never echoes file contents, `old_text`, or `new_text` — only the path,
+    /// the incoming byte count, whether an existing file is overwritten, and a
+    /// bounded command preview. All fields are already server-bounded.
+    static func toolConfirmMessage(tool: String, risk: String, detail: Any?) -> String {
+        guard let detail = detail as? [String: Any] else {
+            return "Fae wants to run \(tool) (\(risk)). Allow?"
+        }
+        // `detail` is an externally-tagged enum: {"WriteEdit": {...}} or
+        // {"Shell": {...}} (mirrors the Rust ConfirmDetail serde shape).
+        if let writeEdit = detail["WriteEdit"] as? [String: Any] {
+            let path = (writeEdit["path"] as? String) ?? "(unknown path)"
+            let newBytes = writeEdit["new_bytes"] as? Int ?? 0
+            let oldExists = writeEdit["old_exists"] as? Bool ?? false
+            let verb = oldExists ? "overwrite" : "write"
+            return "Fae wants to \(verb) \(path) (\(newBytes) bytes). Allow?"
+        }
+        if let shell = detail["Shell"] as? [String: Any] {
+            let preview = (shell["command_preview"] as? String) ?? "(no preview)"
+            return "Fae wants to run: `\(preview)`. Allow?"
+        }
+        return "Fae wants to run \(tool) (\(risk)). Allow?"
     }
 
     /// The id of the option that approves (kind/name contains "allow"), else the
@@ -341,9 +424,19 @@ enum DaemonAgentClient {
     /// Open an authenticated connection, send one command frame, and return the
     /// validated response. Throws `DaemonAgentClientError.daemonUnavailable`
     /// when no daemon endpoints are published.
-    private static func call(
+    static func call(
         command: String, payload: [String: Any]
     ) async throws -> [String: Any] {
+        // BLOCKER-1 (A3): `toolhost.execute` MUST use the server-request-aware
+        // path (`callHandlingServerRequests` / `toolhostExecute`). It emits a
+        // `tool.confirm` server-request that the plain `roundTrip` below would
+        // SKIP (the daemon parks forever awaiting the reply → deadlock). Refuse
+        // it here so it can never be misrouted onto the plain path.
+        if command == "toolhost.execute" {
+            throw DaemonAgentClientError.agentFailed(
+                "toolhost.execute requires the server-request-aware round-trip (BLOCKER-1)"
+            )
+        }
         guard let endpoints = await DaemonEndpointStore.shared.current() else {
             throw DaemonAgentClientError.daemonUnavailable
         }
@@ -380,4 +473,17 @@ enum DaemonAgentClient {
         let raw = try await connection.roundTrip(frame: authFrame, expectRequestID: "a0")
         _ = try DaemonWire.unwrapResponse(raw)
     }
+}
+
+/// Test-only decision override for the `tool.confirm` governance card (A3-Swift).
+/// `handleToolConfirm` consults this before showing the real card; production
+/// leaves it `nil` (the real `requestApproval` card is shown). Unit tests set it
+/// so the handler is deterministic without a UI. It is a no-op in production.
+actor ToolConfirmDecisionOverride {
+    static let shared = ToolConfirmDecisionOverride()
+    private var decision: Bool?
+
+    func set(_ approved: Bool) { decision = approved }
+    func get() -> Bool? { decision }
+    func clear() { decision = nil }
 }

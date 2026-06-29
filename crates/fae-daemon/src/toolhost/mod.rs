@@ -835,7 +835,10 @@ mod tests {
         let conf = FakeConfirmation::approve();
         for (tool, input) in [
             ("write", json!({"path":"out.txt","content":"x"})),
-            ("edit", json!({"path":"a.txt","old_text":"a","new_text":"b"})),
+            (
+                "edit",
+                json!({"path":"a.txt","old_text":"a","new_text":"b"}),
+            ),
             ("bash", json!({"command":"echo hi"})),
         ] {
             let r = host
@@ -862,7 +865,10 @@ mod tests {
             .read_file_full(std::path::Path::new("out.txt"), 1)
             .await
             .is_ok();
-        assert!(!wrote, "write must not have executed without the dangerous scope");
+        assert!(
+            !wrote,
+            "write must not have executed without the dangerous scope"
+        );
     }
 
     #[tokio::test]
