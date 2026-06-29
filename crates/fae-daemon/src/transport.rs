@@ -315,29 +315,78 @@ async fn handle_connection(
                             sink.send_line(response_line(&response)?);
                             continue;
                         }
-                        // Lazy-init the per-session sandbox on first use.
+                        // A3→B: lazy-init the ToolHost, binding the APPROVED durable
+                        // root if one was set (else the ephemeral temp sandbox).
+                        // The root_state transition is atomic under its lock; the
+                        // async ToolHost::new runs AFTER the lock drops. root_state
+                        // is Pending-only-denied above (we're past that check).
                         if toolhost.is_none() {
-                            match tempfile::tempdir() {
-                                Ok(dir) => {
-                                    match ToolHost::new(
-                                        dir.path().to_path_buf(),
+                            // Decide the root + mode + temp guard from root_state.
+                            enum Plan {
+                                Temp,
+                                Durable(std::path::PathBuf),
+                            }
+                            let plan = {
+                                use crate::toolhost::root_confirm::ToolRootState;
+                                let mut st = root_state.lock().await;
+                                match &*st {
+                                    ToolRootState::ApprovedRoot { path } => {
+                                        let p = std::path::PathBuf::from(path);
+                                        *st = ToolRootState::InitializedDurable {
+                                            path: p.to_string_lossy().into_owned(),
+                                        };
+                                        Plan::Durable(p)
+                                    }
+                                    // Unset (or any non-pending non-approved) → temp sandbox.
+                                    _ => {
+                                        *st = ToolRootState::InitializedTemp;
+                                        Plan::Temp
+                                    }
+                                }
+                            };
+                            match plan {
+                                Plan::Durable(path) => {
+                                    match ToolHost::new_durable(
+                                        path,
                                         Limits::default(),
                                         Arc::clone(&conductor_store),
                                     )
                                     .await
                                     {
-                                        Ok(h) => {
-                                            toolhost = Some(Arc::new(h));
-                                            tool_root = Some(dir);
-                                        }
+                                        Ok(h) => toolhost = Some(Arc::new(h)),
                                         Err(e) => {
-                                            eprintln!("fae-daemon: toolhost init failed: {e}");
+                                            eprintln!(
+                                                "fae-daemon: durable toolhost init failed: {e}"
+                                            );
+                                            // Revert so a later attempt can retry.
+                                            let mut st = root_state.lock().await;
+                                            *st =
+                                                crate::toolhost::root_confirm::ToolRootState::Unset;
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    eprintln!("fae-daemon: toolhost sandbox init failed: {e}");
-                                }
+                                Plan::Temp => match tempfile::tempdir() {
+                                    Ok(dir) => {
+                                        match ToolHost::new(
+                                            dir.path().to_path_buf(),
+                                            Limits::default(),
+                                            Arc::clone(&conductor_store),
+                                        )
+                                        .await
+                                        {
+                                            Ok(h) => {
+                                                toolhost = Some(Arc::new(h));
+                                                tool_root = Some(dir);
+                                            }
+                                            Err(e) => {
+                                                eprintln!("fae-daemon: toolhost init failed: {e}");
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("fae-daemon: toolhost sandbox init failed: {e}");
+                                    }
+                                },
                             }
                         }
                         if let Some(host) = toolhost.as_ref() {

@@ -52,6 +52,74 @@ pub fn is_catastrophic_command(command: &str) -> bool {
     PATTERNS.iter().any(|p| lower.contains(p))
 }
 
+/// (A3→B) Workspace-wipe patterns — catastrophic ONLY under a DURABLE root
+/// (they destroy real project files). Under the ephemeral temp sandbox these
+/// are harmless (the tempdir is deleted on close anyway). Checked in
+/// `FaeToolPolicy::evaluate` BEFORE the confirm (scope §6.2: a social-
+/// engineered approve can't authorize a workspace wipe). Mutation-guarded.
+///
+/// The `rm` check is TOKEN-AWARE: `rm -rf .` (target = `.`) wipes the
+/// workspace, but `rm -rf ./target/debug` (target = `./target/debug`) does NOT
+/// — a substring match can't tell them apart, so we scan tokens. The git/find
+/// patterns are specific enough to match as substrings (`find ./sub -delete`
+/// does not contain `find . -delete`).
+///
+/// Honest (advisor #6): this is a high-signal denylist, NOT complete shell
+/// safety. Obfuscation (`rm -rf ${PWD}`, a script, quoted globs) can bypass it.
+/// Defense is layered: containment + this denylist + the per-call confirm.
+#[must_use]
+pub fn is_workspace_wipe(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    // git nukes + find-based recursive delete — substring match is safe here
+    // (`find ./sub -delete` / `git clean -fdx ./tmp` are rare scoped forms; an
+    // over-block denies safely, the owner re-runs without the destructive flag).
+    if lower.contains("git reset --hard")
+        || lower.contains("git clean -fdx")
+        || lower.contains("find . -delete")
+    {
+        return true;
+    }
+    // `rm` with recursive+force flags whose TARGET is the workspace itself
+    // (`.`, `./`, `*`, `./*`) — not a subdir like `./target/debug`.
+    rm_targets_workspace(&lower)
+}
+
+/// Token-scan for an `rm` invocation with recursive+force flags whose first
+/// positional target is the workspace root itself (`.`, `./`, `*`, `./*`).
+/// Handles `sudo rm`, combined flags (`-rf`/`-fr`), and separate `-r`/`-f`.
+fn rm_targets_workspace(lower: &str) -> bool {
+    // Split on shell separators so `echo x; rm -rf .` is caught in the second
+    // chunk. (Naive — not a real shell parser; high-signal only.)
+    for chunk in lower.split([';', '|', '&', '\n']) {
+        let toks: Vec<&str> = chunk.split_whitespace().collect();
+        // Find `rm`, skipping a leading `sudo`.
+        let rm_idx = toks.iter().position(|t| *t == "rm");
+        let Some(mut k) = rm_idx else { continue };
+        k += 1;
+        let mut has_r = false;
+        let mut has_f = false;
+        while k < toks.len() {
+            let t = toks[k];
+            if let Some(flags) = t
+                .strip_prefix('-')
+                .filter(|s| !s.is_empty() && !s.starts_with('-'))
+            {
+                if flags.contains('r') {
+                    has_r = true;
+                }
+                if flags.contains('f') {
+                    has_f = true;
+                }
+                k += 1;
+                continue;
+            }
+            // First positional argument = the target.
+            return has_r && has_f && matches!(t, "." | "./" | "*" | "./*");
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +148,36 @@ mod tests {
         assert!(!is_catastrophic_command("rm -rf ./target/debug/artifact"));
         // `~/projects` does not trip the root-delete patterns.
         assert!(!is_catastrophic_command("rm -rf ~/projects/old"));
+    }
+
+    // --- A3→B: workspace-wipe denylist (durable-root only) ---
+
+    #[test]
+    fn workspace_wipe_flags_each_pattern() {
+        assert!(is_workspace_wipe("rm -rf ."));
+        assert!(is_workspace_wipe("rm -rf ./"));
+        assert!(is_workspace_wipe("rm -fr ."));
+        assert!(is_workspace_wipe("rm -rf *"));
+        assert!(is_workspace_wipe("rm -rf ./*"));
+        assert!(is_workspace_wipe("find . -delete"));
+        assert!(is_workspace_wipe("git clean -fdx"));
+        assert!(is_workspace_wipe("git reset --hard"));
+        // Obfuscation that the token scan still catches.
+        assert!(is_workspace_wipe("sudo rm -rf ."));
+        assert!(is_workspace_wipe("rm -r -f .")); // separate flags
+        assert!(is_workspace_wipe("echo hi; rm -rf .")); // chained
+    }
+
+    #[test]
+    fn workspace_wipe_allows_scoped_deletes() {
+        // A scoped subdir delete is NOT a workspace wipe (token-aware: the
+        // target is `./target/debug`, not `.`).
+        assert!(!is_workspace_wipe("rm -rf ./target/debug"));
+        assert!(!is_workspace_wipe("rm -rf build/"));
+        assert!(!is_workspace_wipe("rm -rf *.txt")); // glob with suffix, not bare `*`
+                                                     // Benign commands.
+        assert!(!is_workspace_wipe("cargo build"));
+        assert!(!is_workspace_wipe("ls -la"));
+        assert!(!is_workspace_wipe("rm file.txt")); // not recursive
     }
 }

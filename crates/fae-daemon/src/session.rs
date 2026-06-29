@@ -1211,16 +1211,18 @@ pub async fn run_authorized_toolhost_set_root(
                         "refused: path does not exist or is too broad (home/system root) to contain damage",
                     );
                 };
-                // 2. Atomically check-and-set PendingRootConfirm.
+                // 2. Atomically check-and-set PendingRootConfirm. set_root is only
+                //    valid from `Unset` — an already-approved or initialized
+                //    root is immutable for the session.
                 let blocked = {
                     let mut st = root_state.lock().await;
-                    if st.is_initialized() {
-                        Some("root_already_initialized")
-                    } else if st.is_pending() {
-                        Some("root_initialization_pending")
-                    } else {
-                        *st = ToolRootState::PendingRootConfirm;
-                        None
+                    match &*st {
+                        ToolRootState::Unset => {
+                            *st = ToolRootState::PendingRootConfirm;
+                            None
+                        }
+                        ToolRootState::PendingRootConfirm => Some("root_initialization_pending"),
+                        _ => Some("root_already_initialized"),
                     }
                 };
                 if let Some(code) = blocked {

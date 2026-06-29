@@ -116,6 +116,9 @@ pub struct ToolHost {
     audit: Arc<dyn ToolHostAudit>,
     egress: Arc<dyn ToolEgressGate>,
     clock: Arc<dyn ToolHostClock>,
+    /// (A3→B) Temp sandbox vs durable workspace — drives the workspace-wipe
+    /// damage control in `evaluate`.
+    root_mode: crate::toolhost::policy::RootMode,
 }
 
 impl ToolHost {
@@ -140,6 +143,26 @@ impl ToolHost {
             Arc::new(ConductorStoreAudit::new(store)),
             Arc::new(DisabledGate),
             Arc::new(SystemToolHostClock),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await
+    }
+
+    /// (A3→B) Build a host over an owner-approved DURABLE workspace root.
+    /// Enables the workspace-wipe damage control (rm -rf . etc. deny before
+    /// confirm). Use [`ToolHost::new`] for the ephemeral temp sandbox.
+    pub async fn new_durable(
+        root: PathBuf,
+        limits: Limits,
+        store: Arc<ConductorStore>,
+    ) -> Result<Self, ToolHostError> {
+        Self::with_wiring(
+            root,
+            limits,
+            Arc::new(ConductorStoreAudit::new(store)),
+            Arc::new(DisabledGate),
+            Arc::new(SystemToolHostClock),
+            crate::toolhost::policy::RootMode::DurableWorkspace,
         )
         .await
     }
@@ -151,6 +174,7 @@ impl ToolHost {
         audit: Arc<dyn ToolHostAudit>,
         egress: Arc<dyn ToolEgressGate>,
         clock: Arc<dyn ToolHostClock>,
+        root_mode: crate::toolhost::policy::RootMode,
     ) -> Result<Self, ToolHostError> {
         let env = Arc::new(
             LocalSessionEnv::new(root, limits)
@@ -173,6 +197,7 @@ impl ToolHost {
             audit,
             egress,
             clock,
+            root_mode,
         })
     }
 
@@ -190,6 +215,7 @@ impl ToolHost {
             egress: Arc::clone(&self.egress),
             now_ms: self.clock.now_ms(),
             call_id: req.call_id.clone(),
+            root_mode: self.root_mode,
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
         let ctx = InvokeContext {
@@ -243,6 +269,7 @@ impl ToolHost {
             egress: Arc::clone(&self.egress),
             now_ms: self.clock.now_ms(),
             call_id: req.call_id.clone(),
+            root_mode: self.root_mode,
         });
         let policy = FaeToolPolicy::new(Arc::clone(&gov));
         let ev = policy.evaluate(&req.tool, &req.input).await;
@@ -394,6 +421,7 @@ mod tests {
             egress,
             now_ms: FixedClock.now_ms(),
             call_id: "call-1".into(),
+            root_mode: crate::toolhost::policy::RootMode::TempSandbox,
         })
     }
 
@@ -696,6 +724,29 @@ mod tests {
             audit_dyn,
             egress,
             Arc::new(FixedClock),
+            crate::toolhost::policy::RootMode::TempSandbox,
+        )
+        .await
+        .expect("host");
+        (host, dir)
+    }
+
+    async fn fresh_durable_host(
+        audit: Arc<CapturingAudit>,
+        egress: Arc<dyn ToolEgressGate>,
+    ) -> (ToolHost, tempfile::TempDir) {
+        // A ToolHost bound to a DURABLE root (RootMode::DurableWorkspace) — the
+        // workspace-wipe damage control is active. The "project" is a real
+        // tempdir (treated as a durable workspace for the test).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let audit_dyn: Arc<dyn ToolHostAudit> = audit;
+        let host = ToolHost::with_wiring(
+            dir.path().to_path_buf(),
+            Limits::default(),
+            audit_dyn,
+            egress,
+            Arc::new(FixedClock),
+            crate::toolhost::policy::RootMode::DurableWorkspace,
         )
         .await
         .expect("host");
@@ -945,6 +996,73 @@ mod tests {
             "catastrophic bash must deny WITHOUT prompting"
         );
         assert_eq!(audit.snapshot()[0].reason, "damage_control");
+    }
+
+    // --- A3→B: durable-root workspace-wipe damage control ---
+
+    #[tokio::test]
+    async fn durable_workspace_wipe_denies_without_prompting() {
+        // Under a DURABLE root, `rm -rf .` is catastrophic (real files) and
+        // denies BEFORE the confirm (scope §6.2). A FakeConfirmation that WOULD
+        // approve proves the gate ran first.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) =
+            fresh_durable_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req(dangerous_client(), "bash", json!({"command":"rm -rf ."})),
+                &conf,
+            )
+            .await
+            .expect_err("workspace wipe must deny");
+        match err {
+            ToolHostError::Denied(reason) => {
+                assert_eq!(reason, "workspace_wipe_blocked", "got: {reason}")
+            }
+            other => panic!("expected Denied(workspace_wipe_blocked), got {other:?}"),
+        }
+        assert!(
+            !conf.was_called(),
+            "workspace wipe must deny WITHOUT prompting"
+        );
+        assert_eq!(audit.snapshot()[0].reason, "workspace_wipe_blocked");
+    }
+
+    #[tokio::test]
+    async fn durable_scoped_delete_proceeds_to_confirm() {
+        // A scoped subdir delete is NOT a workspace wipe → it reaches the confirm.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) =
+            fresh_durable_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        host.execute_governed(
+            req(
+                dangerous_client(),
+                "bash",
+                json!({"command":"rm -rf ./target/debug"}),
+            ),
+            &conf,
+        )
+        .await
+        .expect("scoped delete should proceed + run after confirm");
+        assert!(conf.was_called(), "a scoped delete must reach the confirm");
+    }
+
+    #[tokio::test]
+    async fn temp_mode_workspace_wipe_is_not_blocked() {
+        // Under the TEMP sandbox, `rm -rf .` is harmless (deleted on close) — the
+        // workspace-wipe gate does NOT apply. It reaches the confirm normally.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        host.execute_governed(
+            req(dangerous_client(), "bash", json!({"command":"rm -rf ."})),
+            &conf,
+        )
+        .await
+        .expect("temp-mode wipe should proceed (not blocked by workspace_wipe)");
+        assert!(conf.was_called(), "temp-mode wipe reaches the confirm");
     }
 
     #[tokio::test]

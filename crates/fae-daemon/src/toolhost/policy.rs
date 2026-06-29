@@ -48,8 +48,18 @@ use fluers_core::{PolicyVerdict, ToolPolicy};
 use serde_json::Value;
 
 use crate::toolhost::audit::{AuditDecision, ToolHostAudit, ToolHostAuditRecord};
-use crate::toolhost::damage::is_catastrophic_command;
+use crate::toolhost::damage::{is_catastrophic_command, is_workspace_wipe};
 use crate::toolhost::egress::{EgressDecision, ToolEgressGate};
+
+/// (A3→B) Whether the ToolHost root is the ephemeral temp sandbox or an
+/// owner-approved durable workspace directory. Drives the workspace-wipe
+/// damage control: `is_workspace_wipe` patterns are catastrophic ONLY under a
+/// durable root (a temp-sandbox wipe is harmless — deleted on close anyway).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootMode {
+    TempSandbox,
+    DurableWorkspace,
+}
 
 /// The risk profile assigned to a tool name. Each variant fixes its scope
 /// command, path-extraction behavior, and which downstream gates apply.
@@ -206,6 +216,9 @@ pub struct ToolHostGovernance {
     pub(crate) now_ms: u64,
     /// The tool-call id (audit correlation).
     pub(crate) call_id: String,
+    /// (A3→B) Temp sandbox vs durable workspace — drives the workspace-wipe
+    /// damage control.
+    pub(crate) root_mode: RootMode,
 }
 
 /// The internal (non-fluers) evaluation outcome — richer than
@@ -295,6 +308,12 @@ impl FaeToolPolicy {
             if let Some(cmd_str) = input.get("command").and_then(Value::as_str) {
                 if is_catastrophic_command(cmd_str) {
                     return Evaluated::deny(risk_label, "damage_control");
+                }
+                // A3→B: under a DURABLE root, workspace-wipe commands (rm -rf .,
+                // git clean -fdx, ...) are catastrophic (real files) — deny BEFORE
+                // the confirm (scope §6.2). Under the temp sandbox they're harmless.
+                if self.gov.root_mode == RootMode::DurableWorkspace && is_workspace_wipe(cmd_str) {
+                    return Evaluated::deny(risk_label, "workspace_wipe_blocked");
                 }
             }
         }
