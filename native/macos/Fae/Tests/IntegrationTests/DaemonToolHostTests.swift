@@ -243,6 +243,126 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertTrue(msg.contains("echo hi"), "shell message should show the bounded preview")
     }
 
+    // MARK: workspace.confirm_root handler (B-Swift Layer 1)
+
+    /// The plain `call()` helper must ALSO REFUSE `toolhost.set_root` — it emits
+    /// a `workspace.confirm_root` server-request that the plain round-trip would
+    /// drop (BLOCKER-1, same class as toolhost.execute). Structural guard against
+    /// a future caller misrouting the command. (oracle MINOR-1 precedent:
+    /// assert the SPECIFIC error, not any error.)
+    func testPlainCallRefusesToolhostSetRoot() async {
+        do {
+            _ = try await DaemonAgentClient.call(command: "toolhost.set_root", payload: ["path": "/tmp/x"])
+            XCTFail("call() must refuse toolhost.set_root")
+        } catch DaemonAgentClientError.agentFailed(let message) {
+            XCTAssertTrue(
+                message.contains("server-request-aware"),
+                "expected the BLOCKER-1 guard message, got: \(message)")
+            XCTAssertTrue(
+                message.contains("toolhost.set_root"),
+                "guard message must name the blocked command")
+        } catch {
+            XCTFail("expected agentFailed (the BLOCKER-1 guard), got \(error)")
+        }
+    }
+
+    /// The strict two-field `{approved, call_id}` reply shape B-Rust's parser
+    /// requires (call_id is mandatory in B-Rust). Tested via the PURE builder —
+    /// no card, no global state (oracle MAJOR-1 precedent).
+    func testWorkspaceConfirmRootReplyShape() {
+        let reply = DaemonAgentClient.workspaceConfirmRootReply(callID: "root-1", approved: true)
+        XCTAssertEqual(reply["approved"] as? Bool, true)
+        XCTAssertEqual(reply["call_id"] as? String, "root-1")
+        XCTAssertEqual(reply.count, 2, "reply must be exactly {approved, call_id}")
+
+        let denied = DaemonAgentClient.workspaceConfirmRootReply(callID: "root-2", approved: false)
+        XCTAssertEqual(denied["approved"] as? Bool, false)
+        XCTAssertEqual(denied["call_id"] as? String, "root-2")
+        XCTAssertEqual(denied.count, 2)
+    }
+
+    /// Missing `call_id` ⇒ deny fail-closed BEFORE any card is shown. B-Rust
+    /// requires call_id; a missing/blank id can't bind the reply to the request.
+    func testWorkspaceConfirmRootDeniesOnMissingCallID() async {
+        let reply = await DaemonAgentClient.handleWorkspaceConfirmRoot(
+            params: ["path": "/Users/me/proj", "note": "be careful"])
+        XCTAssertEqual(reply["approved"] as? Bool, false)
+        // A blank call_id is returned (never nil) so the strict 2-field shape holds.
+        XCTAssertEqual(reply["call_id"] as? String, "")
+    }
+
+    /// The root-approval message is composed ONLY from the canonical path + the
+    /// fixed blast-radius note — never a directory listing or file contents. A
+    /// sentinel planted in a hypothetical extra field must never appear.
+    func testWorkspaceConfirmRootMessageIsRedacted() {
+        let secret = "SUPER_SECRET_TOKEN_42"
+        let msg = DaemonAgentClient.workspaceConfirmRootMessage(
+            path: "/Users/me/projects/fae",
+            note: "Fae can read, write, and run commands inside this folder.")
+        XCTAssertFalse(msg.contains(secret), "message must never echo directory contents")
+        XCTAssertTrue(msg.contains("/Users/me/projects/fae"), "message must show the canonical path")
+        XCTAssertTrue(msg.contains("workspace"), "message must frame it as a workspace grant")
+        XCTAssertTrue(msg.contains("session"), "message must note the grant is session-scoped")
+    }
+
+    /// The BLOCKER-1 loopback proof for `toolhost.set_root`: a `workspace.
+    /// confirm_root` server-request arriving BEFORE the final response is
+    /// answered on the same server-request-aware round-trip (the plain
+    /// round-trip would drop it → daemon deadlock). Mirrors the toolhost.execute
+    /// proof. (B-Swift note: in production set_root + execute must share a
+    /// persistent connection — DaemonToolHostSession. This proves the wire half.)
+    func testAwareRoundTripAnswersWorkspaceConfirmRootBeforeResponse() async throws {
+        let peer = try FakeDaemonPeer.listen()
+        let connection = DaemonSocketConnection(queueLabel: "fae.test.toolhost-root")
+        try connection.connect(to: peer.path)
+        defer { connection.close() }
+
+        let frame = try DaemonWire.encodeFrame(
+            requestID: "r",
+            command: "toolhost.set_root",
+            payload: ["path": "/Users/me/projects/fae"])
+
+        actor Seen { var method: String? = nil; func set(method: String) { self.method = method } }
+        let seen = Seen()
+        let roundTrip = Task { () -> [String: Any] in
+            try await connection.roundTrip(frame: frame, expectRequestID: "r") { _, method, params in
+                await seen.set(method: method)
+                // Mirror the real handler: echo call_id, approve.
+                return ["approved": true, "call_id": params["call_id"] as? String ?? ""]
+            }
+        }
+
+        let client = try peer.accept()
+        _ = try client.recv()  // the set_root request Swift sent
+
+        // Send a workspace.confirm_root server-request BEFORE the final response.
+        let confirmLine = """
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"r","path":"/Users/me/projects/fae","note":"Fae can read, write, and run commands inside this folder."}}
+        """
+        try client.send(confirmLine)
+
+        // Read Swift's reply: strict two-field result bound to the request.
+        let replyLine = try await recvWithTimeout(client)
+        let reply = try XCTUnwrap(JSONSerialization.jsonObject(with: replyLine.data(using: .utf8)!) as? [String: Any])
+        XCTAssertEqual(reply["server_request_id"] as? String, "sr-root")
+        let result = try XCTUnwrap(reply["result"] as? [String: Any])
+        XCTAssertEqual(result["approved"] as? Bool, true)
+        XCTAssertEqual(result["call_id"] as? String, "r")
+        XCTAssertEqual(result.count, 2, "root reply must carry only approved + call_id")
+
+        // Send the final set_root response.
+        try client.send("""
+        {"v":2,"request_id":"r","ok":true,"result":{"root":"/Users/me/projects/fae"}}
+        """)
+
+        // The round-trip MUST complete (no deadlock) within the bound.
+        let response = try await withTimeout(roundTrip)
+        XCTAssertEqual(response["request_id"] as? String, "r")
+        XCTAssertEqual(response["ok"] as? Bool, true)
+        let method = await seen.method
+        XCTAssertEqual(method, "workspace.confirm_root", "onServerRequest must be invoked for workspace.confirm_root")
+    }
+
     // MARK: helpers
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {

@@ -154,6 +154,13 @@ enum DaemonAgentClient {
             // reply must be EXACTLY {approved, call_id} (the daemon's parser is
             // strict deny_unknown_fields; any extra field denies).
             return await handleToolConfirm(params: params)
+        case "workspace.confirm_root":
+            // B-Swift: the daemon asks the owner to approve a DURABLE workspace
+            // root (a real project dir). DISTINCT from tool.confirm — this
+            // authorizes a PLACE once per session, not a tool per call. The
+            // reply is the strict {approved, call_id} shape (call_id is REQUIRED
+            // in B-Rust; a missing/blank call_id denies fail-closed).
+            return await handleWorkspaceConfirmRoot(params: params)
         default:
             return ["error": "unsupported server request: \(method)"]
         }
@@ -283,6 +290,56 @@ enum DaemonAgentClient {
             return "Fae wants to run: `\(preview)`. Allow?"
         }
         return "Fae wants to run \(tool) (\(risk)). Allow?"
+    }
+
+    // MARK: - Durable workspace root approval (B-Swift)
+
+    /// `workspace.confirm_root` (B-Swift): surface the daemon's bounded root-
+    /// approval request on the governance card and return the owner's decision.
+    /// DISTINCT from `tool.confirm` — the owner authorizes a PLACE (once per
+    /// session), not a tool per call. `params` carries `call_id` + the
+    /// canonicalized absolute `path` + a fixed blast-radius `note`. NEVER the
+    /// directory's contents. The reply is the strict `{approved, call_id}` shape
+    /// B-Rust's parser requires (call_id is mandatory; missing ⇒ deny).
+    static func handleWorkspaceConfirmRoot(params: [String: Any]) async -> [String: Any] {
+        // `call_id` is mandatory (B-Rust requires it; a missing/blank id can't
+        // bind the reply to the request ⇒ deny fail-closed, never prompt).
+        guard let callID = params["call_id"] as? String, !callID.isEmpty else {
+            return ["approved": false, "call_id": ""]
+        }
+        let path = (params["path"] as? String) ?? "(unknown path)"
+        let note = (params["note"] as? String) ?? ""
+        let message = workspaceConfirmRootMessage(path: path, note: note)
+        // Production: the real governance card. NO test override (oracle MAJOR-1
+        // precedent from A3-Swift — a global mutable auto-approve actor was a
+        // structural bypass footgun; removed). The strict reply shape is
+        // unit-tested via the pure `workspaceConfirmRootReply` builder below.
+        let approved = await requestApproval(
+            title: "Fae wants a workspace folder",
+            message: message)
+        return workspaceConfirmRootReply(callID: callID, approved: approved)
+    }
+
+    /// Build the STRICT two-field `workspace.confirm_root` reply
+    /// `{approved, call_id}`. Pure (no card, no global state) — this is what
+    /// unit tests assert the shape against (oracle MAJOR-1 precedent: the test
+    /// seam is a pure function, not a mutable actor). Matches B-Rust's
+    /// `deny_unknown_fields` parser exactly — any extra field denies.
+    static func workspaceConfirmRootReply(callID: String, approved: Bool) -> [String: Any] {
+        ["approved": approved, "call_id": callID]
+    }
+
+    /// Compose a REDACTED root-approval message from the bounded request: the
+    /// canonicalized absolute directory path + the fixed blast-radius note.
+    /// NEVER echoes directory contents or a file listing. All fields are
+    /// already server-bounded + canonicalized.
+    static func workspaceConfirmRootMessage(path: String, note: String) -> String {
+        var message = "Fae wants to use this folder as its workspace:\n\(path)"
+        if !note.isEmpty {
+            message += "\n\(note)"
+        }
+        message += "\n\nAllow? (this lasts for the session.)"
+        return message
     }
 
     /// The id of the option that approves (kind/name contains "allow"), else the
@@ -431,14 +488,18 @@ enum DaemonAgentClient {
     static func call(
         command: String, payload: [String: Any]
     ) async throws -> [String: Any] {
-        // BLOCKER-1 (A3): `toolhost.execute` MUST use the server-request-aware
-        // path (`callHandlingServerRequests` / `toolhostExecute`). It emits a
-        // `tool.confirm` server-request that the plain `roundTrip` below would
-        // SKIP (the daemon parks forever awaiting the reply → deadlock). Refuse
-        // it here so it can never be misrouted onto the plain path.
-        if command == "toolhost.execute" {
+        // BLOCKER-1 (A3+B): `toolhost.execute` AND `toolhost.set_root` MUST
+        // use the server-request-aware path (`callHandlingServerRequests`).
+        // `toolhost.execute` emits a `tool.confirm` server-request; `set_root`
+        // emits a `workspace.confirm_root` server-request. The plain `roundTrip`
+        // below would SKIP either (the daemon parks forever awaiting the reply
+        // → deadlock). Refuse both here so neither can be misrouted onto the
+        // plain path. (B-Swift note: set_root + execute must also share a
+        // persistent connection — see DaemonToolHostSession. A one-shot
+        // call here would also lose the per-connection approved root.)
+        if command == "toolhost.execute" || command == "toolhost.set_root" {
             throw DaemonAgentClientError.agentFailed(
-                "toolhost.execute requires the server-request-aware round-trip (BLOCKER-1)"
+                "\(command) requires the server-request-aware round-trip (BLOCKER-1)"
             )
         }
         guard let endpoints = await DaemonEndpointStore.shared.current() else {

@@ -1,9 +1,24 @@
 # ADR-013 Vision A — Slice A3→B: owner-approved durable workspace root
 
-> **Status:** SCOPE rev 2 — **owner-signed-off (2026-06-29: Option B)**,
-> advisor-reviewed (rev 1: 7 corrections; rev 2: implementation-structure pass).
+> **Status:** SCOPE rev 3 — **owner-signed-off (2026-06-29: Option B)**,
+> advisor-reviewed (rev 1: 7 corrections; rev 2: implementation-structure pass;
+> rev 3: B-Swift implementation pass — persistent-connection invariant).
 > This relaxes A3 §5's "never cwd/home/project as the root" under explicit
-> owner governance. A3-Swift Layer 1 merged (`9cad5c23`); B-Rust now in flight.
+> owner governance. A3-Swift Layer 1 merged (`9cad5c23`); B-Rust merged
+> (`57a98a5c`); B-Swift in flight.
+>
+> **Rev 3 folds the B-Swift implementation pass (advisor, 2026-06-29):**
+> CRITICAL — B-Rust's `root_state` is **per transport connection**
+> (`transport.rs:163`, a local inside `handle_connection`). The A3-Swift
+> one-shot pattern (`toolhostExecute` opens/auths/closes per call) BREAKS a
+> durable root: `set_root` on connection A then `execute` on connection B
+> loses the approved root (B starts at `Unset`). Therefore **B-Swift requires
+> a persistent ToolHost connection actor** that does `set_root` + `execute`
+> on the SAME socket (authenticate once → set_root once → reuse for execute).
+> Plus: edit arg translation (`old_string`/`new_string` → `old_text`/`new_text`);
+> Q7b `ToolExecuteDangerous` provisioning via a new env (`FAE_TOOLHOST_
+> DANGEROUS_TOOLS=1`, default off, server-side — a Swift flag is not authority);
+> and a root-source decision (do NOT infer the root from requested file paths).
 >
 > **Rev 2 folds the implementation-structure pass:** Q6 RESOLVED (provision
 > `ToolWorkspaceGrant` default-off via `FAE_TOOLHOST_WORKSPACE_GRANT=1` at daemon
@@ -234,6 +249,49 @@ classified. (Networked explicitly denied — no silent egress.)
 - **B-Swift:** the root-approval card + `toolhost.set_root` Swift call (server-
   request-aware) + the routing helper + `PipelineCoordinator` integration + Q7b
   scope provisioning + human-in-the-loop confirm testing. **After B-Rust green.**
+
+### B-Swift sub-split (rev 3, advisor-directed)
+
+The persistent-connection invariant (rev 3) reshapes B-Swift into layers:
+
+1. **Layer 1 — protocol/client (safe mechanism, no live exposure):**
+   `handleServerRequest` gains `case "workspace.confirm_root"`;
+   `handleWorkspaceConfirmRoot(params:)` (fail-closed on missing `call_id`;
+   strict `{approved, call_id}` reply — `call_id` is now required in B-Rust);
+   pure `workspaceConfirmRootReply(callID:approved:)` builder; redacted root
+   message (canonical path + blast-radius note only, never contents); the
+   BLOCKER-1 guard in `call()` extended to refuse `toolhost.set_root` on the
+   plain round-trip (same class as `toolhost.execute`).
+2. **Layer 2 — persistent ToolHost session actor** (the architectural
+   prerequisite): a new `DaemonToolHostSession` actor owning ONE
+   `DaemonSocketConnection` — authenticate once → `set_root` once → reuse the
+   SAME socket for `execute`. Serializes calls via actor isolation; resets on
+   daemon-unavailable / root-denial / auth-failure / close. Shares the
+   server-request handler so `workspace.confirm_root` + `tool.confirm` both
+   work on the live connection. **Without this, `set_root`+`execute` on
+   separate connections loses the approved root.**
+3. **Layer 3 — pure routing + argument normalization** (after Layer 1-2 green):
+   a classifier (`portableDaemonSafe | portableDaemonDangerous | localSwift |
+   deniedNetworked`) + arg translation — esp. **edit**: Swift `old_string`/
+   `new_string` → daemon `old_text`/`new_text`; paths relative to the approved
+   root (absolute-under-root → relative; absolute-outside/`..` → do not route).
+   Inserted at the `ToolExecutor.executeInner` convergence point (before
+   `tool.execute`).
+4. **Layer 4 — provisioning:** `ToolExecuteDangerous` via a new env
+   `FAE_TOOLHOST_DANGEROUS_TOOLS=1` (default off, server-side in `main.rs`,
+   same pattern as `FAE_TOOLHOST_WORKSPACE_GRANT`). Until it lands, route SAFE
+   tools only; dangerous stays local or denies (a Swift flag is not authority).
+5. **Layer 5 — integration tests:** reply shape, missing-call-id deny, BLOCKER-1
+   refusal, the `workspace.confirm_root` loopback, persistent-session `set_root`+
+   `execute`, no-root safe-tool no-route, root-approved read hits real project,
+   dangerous-without-scope denies without prompting, networked denied.
+
+**Stopping point (owner decision required):** implement Layer 1 + Layer 2 first
+(mechanism, inert). Routing (Layer 3) needs a **root-source decision** — do NOT
+infer the root from requested file paths (a "read ~/.ssh/config" must never
+become "approve ~/.ssh as root"). Options: (a) Fae asks the user for a project
+   dir at session setup; (b) a config/settings value; (c) cwd. Stop and surface
+   this to the owner before Layer 3.
 
 ## 9. Test plan (highlights — each mutation-guarded)
 - Root-not-approved → owner-facing file tools do NOT route to the daemon (Swift-local or `workspace_root_required`); they never hit the temp sandbox silently.
