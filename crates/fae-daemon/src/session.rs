@@ -1063,6 +1063,98 @@ pub async fn run_authorized_agent_prompt(
     }
 }
 
+/// The governed `toolhost.execute` handler (ADR-013 Vision A / A3, scope §4).
+/// Two-tier auth: the outer `toolhost.execute → ToolExecuteSafe` scope (checked
+/// here) is the envelope permission to call the host at all; the inner per-tool
+/// policy ([`FaeToolPolicy`](crate::toolhost::policy::FaeToolPolicy)) re-checks
+/// `tool.execute_safe` / `tool.execute_dangerous` per call and runs the
+/// path/damage/egress gates + the `tool.confirm` round-trip.
+///
+/// Spawned by the transport read loop (like [`run_authorized_agent_prompt`])
+/// so the `tool.confirm` round-trip does not block it — the loop keeps draining
+/// the client's `{server_request_id, result}` replies (BLOCKER-1).
+pub async fn run_authorized_toolhost_execute(
+    record: &ClientRecord,
+    cmd: &Command,
+    toolhost: &crate::toolhost::ToolHost,
+    confirmation: &dyn crate::toolhost::confirm::ToolConfirmation,
+    cancel: tokio_util::sync::CancellationToken,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    let decision = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &decision,
+    );
+    let response = match &decision {
+        AuthzDecision::Allow => match parse_toolhost_payload(&cmd.payload) {
+            Ok((tool, input)) => {
+                let req = crate::toolhost::ToolHostRequest {
+                    client: record.clone(),
+                    tool,
+                    input,
+                    call_id: cmd.request_id.clone(),
+                    cancel,
+                };
+                match toolhost.execute_governed(req, confirmation).await {
+                    Ok(result) => Response::ok(
+                        &cmd.request_id,
+                        serde_json::to_value(&result.output).unwrap_or(serde_json::Value::Null),
+                    ),
+                    Err(err) => toolhost_error_response(&cmd.request_id, err),
+                }
+            }
+            Err(msg) => Response::error(&cmd.request_id, "bad_request", &msg),
+        },
+        // `toolhost.execute` maps to a safe scope; ConfirmRequired here is not
+        // expected, but fail closed regardless.
+        AuthzDecision::ConfirmRequired => Response::error(
+            &cmd.request_id,
+            "confirm_required",
+            "toolhost.execute authorization requires confirmation",
+        ),
+        AuthzDecision::Deny(reason) => {
+            Response::error(&cmd.request_id, reason.code(), "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// Parse the `toolhost.execute` payload `{tool, input}` (reject unknown fields).
+fn parse_toolhost_payload(
+    payload: &serde_json::Value,
+) -> Result<(String, serde_json::Value), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ToolhostPayload {
+        tool: String,
+        input: serde_json::Value,
+    }
+    let parsed: ToolhostPayload = serde_json::from_value(payload.clone())
+        .map_err(|e| format!("invalid toolhost.execute payload: {e}"))?;
+    Ok((parsed.tool, parsed.input))
+}
+
+/// Map a [`ToolHostError`](crate::toolhost::ToolHostError) to a wire response.
+fn toolhost_error_response(request_id: &str, err: crate::toolhost::ToolHostError) -> Response {
+    use crate::toolhost::ToolHostError;
+    let (code, message) = match &err {
+        ToolHostError::Denied(reason) => ("forbidden", reason.clone()),
+        ToolHostError::UnknownTool(name) => ("tool_failed", format!("tool not registered: {name}")),
+        ToolHostError::Tool(msg) => ("tool_failed", msg.clone()),
+        ToolHostError::Sandbox(msg) => ("sandbox_error", msg.clone()),
+    };
+    Response::error(request_id, code, &message)
+}
+
 /// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).
 /// Requires `AgentExecute`.
 fn agent_cancel(
@@ -3906,5 +3998,174 @@ mod tests {
         let err = info_push(&backends, &cmd).await.expect_err("must reject");
         assert_eq!(err, "bad_request");
         assert_eq!(bus.subscriber_count(), 0, "no publish on rejection");
+    }
+
+    // -----------------------------------------------------------------------
+    // A3 toolhost.execute handler (run_authorized_toolhost_execute)
+    // -----------------------------------------------------------------------
+
+    fn tool_client(scopes: &[Scope]) -> ClientRecord {
+        ClientRecord {
+            client_id: "test".into(),
+            class: ClientClass::TestHarness,
+            scopes: scopes.iter().copied().collect(),
+            issued_at_ms: 0,
+            expires_at_ms: u64::MAX,
+            revoked_at_ms: None,
+            display_name: "Test".into(),
+        }
+    }
+
+    async fn test_tool_host() -> (std::sync::Arc<crate::toolhost::ToolHost>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store =
+            crate::conductor::ConductorStore::open(dir.path().join("store")).expect("store");
+        let host = crate::toolhost::ToolHost::new(
+            dir.path().join("sandbox").to_path_buf(),
+            fluers_runtime::Limits::default(),
+            std::sync::Arc::new(store),
+        )
+        .await
+        .expect("host");
+        (std::sync::Arc::new(host), dir)
+    }
+
+    #[tokio::test]
+    async fn toolhost_handler_missing_safe_scope_denies_at_outer_gate() {
+        // No ToolExecuteSafe ⇒ the outer authorize denies before any tool runs
+        // (the inner policy is never reached).
+        let (host, _dir) = test_tool_host().await;
+        let conf = crate::toolhost::confirm::FakeConfirmation::approve();
+        let record = tool_client(&[]);
+        let cmd = Command {
+            v: 2,
+            request_id: "r1".into(),
+            command: "toolhost.execute".into(),
+            payload: serde_json::json!({"tool":"read","input":{"path":"a.txt"}}),
+        };
+        let outcome = run_authorized_toolhost_execute(
+            &record,
+            &cmd,
+            &host,
+            &conf,
+            tokio_util::sync::CancellationToken::new(),
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(!outcome.response.ok, "must deny without the safe scope");
+        assert!(
+            !conf.was_called(),
+            "must not prompt before the outer scope clears"
+        );
+    }
+
+    #[tokio::test]
+    async fn toolhost_handler_bad_payload_rejected() {
+        let (host, _dir) = test_tool_host().await;
+        let conf = crate::toolhost::confirm::FakeConfirmation::approve();
+        let record = tool_client(&[Scope::ToolExecuteSafe]);
+        let cmd = Command {
+            v: 2,
+            request_id: "r1".into(),
+            command: "toolhost.execute".into(),
+            payload: serde_json::json!({"not_tool": true}),
+        };
+        let outcome = run_authorized_toolhost_execute(
+            &record,
+            &cmd,
+            &host,
+            &conf,
+            tokio_util::sync::CancellationToken::new(),
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(!outcome.response.ok);
+        // bad_request, not forbidden/confirm.
+        assert!(outcome
+            .response
+            .error
+            .as_ref()
+            .is_some_and(|e| e.code == "bad_request"));
+    }
+
+    #[tokio::test]
+    async fn toolhost_execute_confirm_roundtrip_completes_no_deadlock() {
+        // BLOCKER-1: toolhost.execute runs SPAWNED (not awaited inline). The
+        // tool.confirm server-request parks on the requester until the read
+        // loop resolves the reply. This proves the round-trip completes — while
+        // the spawned task awaits confirm, THIS test (standing in for the read
+        // loop) reads the tool.confirm frame + resolves it. If the handler were
+        // awaited inline, this would deadlock (the reply frame could never be
+        // read).
+        use tokio::io::{duplex, AsyncBufReadExt, BufReader};
+
+        let (client, server) = duplex(8192);
+        let (sink, _writer) = crate::events::ConnSink::spawn(server);
+        let requester = ServerRequester::new(std::sync::Arc::clone(&sink));
+        let (host, _dir) = test_tool_host().await;
+        let confirm = std::sync::Arc::new(
+            crate::toolhost::confirm::ServerRequestConfirmation::new(requester.clone()),
+        );
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolExecuteDangerous]);
+        let cmd = Command {
+            v: 2,
+            request_id: "r1".into(),
+            command: "toolhost.execute".into(),
+            payload: serde_json::json!({"tool":"write","input":{"path":"out.txt","content":"hi"}}),
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        // Spawn the handler exactly as transport.rs does (NOT awaited inline).
+        let host_c = std::sync::Arc::clone(&host);
+        let confirm_c = std::sync::Arc::clone(&confirm);
+        let handle = tokio::spawn(async move {
+            run_authorized_toolhost_execute(
+                &record,
+                &cmd,
+                &host_c,
+                confirm_c.as_ref(),
+                cancel,
+                0,
+                "ev".into(),
+            )
+            .await
+        });
+
+        // Read loop: drain the tool.confirm server-request the handler emitted.
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .expect("read tool.confirm frame");
+        let frame: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("parse tool.confirm frame");
+        assert_eq!(
+            frame["method"], "tool.confirm",
+            "expected a tool.confirm server-request, got: {frame}"
+        );
+        let sr_id = frame["server_request_id"]
+            .as_str()
+            .expect("server_request_id");
+
+        // Resolve the reply (approved) — as the read loop does on a
+        // `{server_request_id, result}` frame.
+        requester.resolve(
+            sr_id,
+            serde_json::json!({"approved": true, "call_id": "r1"}),
+        );
+
+        // The handler completes — no deadlock.
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("handler did not complete (deadlock?)")
+            .expect("join");
+        assert!(
+            outcome.response.ok,
+            "write should succeed after confirm; got: {:?}",
+            outcome.response
+        );
     }
 }

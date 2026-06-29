@@ -9,17 +9,27 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use fae_audio::AudioManager;
 use fae_control_plane::{append_audit_jsonl, ClientRegistry, Command, Response, Scope};
 use fae_engine::{ProviderAdapter, TtsAdapter};
+use fluers_runtime::Limits;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use crate::agents::AgentSessionRegistry;
+use crate::conductor::ConductorStore;
 use crate::events::{ConnSink, EventBus, EventSink, PlaybackRegistry};
 use crate::server_request::{ServerReply, ServerRequester};
-use crate::session::{handle_frame, run_authorized_agent_prompt, SessionBackends, SessionState};
+use crate::session::{
+    handle_frame, run_authorized_agent_prompt, run_authorized_toolhost_execute, SessionBackends,
+    SessionState,
+};
+use crate::toolhost::confirm::ServerRequestConfirmation;
+use crate::toolhost::ToolHost;
 use crate::{next_event_id, now_ms};
 
 /// Reject any single NDJSON frame larger than this **before authentication**.
@@ -51,6 +61,7 @@ pub async fn serve_unix(
     playbacks: PlaybackRegistry,
     agents: AgentSessionRegistry,
     conductor: Arc<crate::conductor::ConductorRuntime>,
+    conductor_store: Arc<ConductorStore>,
 ) -> std::io::Result<()> {
     // Clear any stale socket left by a previous run (bind fails on EADDRINUSE).
     match std::fs::remove_file(&socket_path) {
@@ -78,6 +89,7 @@ pub async fn serve_unix(
         let playbacks = playbacks.clone();
         let agents = agents.clone();
         let conductor = Arc::clone(&conductor);
+        let conductor_store = Arc::clone(&conductor_store);
         tokio::spawn(async move {
             if let Err(error) = handle_connection(
                 stream,
@@ -91,6 +103,7 @@ pub async fn serve_unix(
                 &playbacks,
                 &agents,
                 conductor,
+                conductor_store,
             )
             .await
             {
@@ -114,6 +127,7 @@ async fn handle_connection(
     playbacks: &PlaybackRegistry,
     agents: &AgentSessionRegistry,
     conductor: Arc<crate::conductor::ConductorRuntime>,
+    conductor_store: Arc<ConductorStore>,
 ) -> std::io::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -127,6 +141,40 @@ async fn handle_connection(
     let requester = ServerRequester::new(Arc::clone(&sink));
     let mut state = SessionState::Unauthenticated;
     let mut line = String::new();
+
+    // A3: per-session ephemeral tool sandbox (owner Q2 — eager at session start,
+    // torn down on close). The root is a `tempfile::TempDir` guard held HERE so
+    // it is deleted on close, AFTER in-flight tool tasks are cancelled (scope
+    // §5.1 / oracle MAJOR-2). Networked tools still deny (DisabledGate; the
+    // real 3-gate egress adapter is A2.5/P7).
+    let session_cancel = CancellationToken::new();
+    let mut tool_tasks: JoinSet<()> = JoinSet::new();
+    let confirm = Arc::new(ServerRequestConfirmation::new(requester.clone()));
+    let tool_root = match tempfile::tempdir() {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("fae-daemon: toolhost sandbox init failed: {e}");
+            None
+        }
+    };
+    let toolhost: Option<Arc<ToolHost>> = match &tool_root {
+        Some(dir) => {
+            match ToolHost::new(
+                dir.path().to_path_buf(),
+                Limits::default(),
+                Arc::clone(&conductor_store),
+            )
+            .await
+            {
+                Ok(h) => Some(Arc::new(h)),
+                Err(e) => {
+                    eprintln!("fae-daemon: toolhost init failed: {e}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
     let result: std::io::Result<()> = async {
         loop {
@@ -205,6 +253,55 @@ async fn handle_connection(
                         });
                         continue;
                     }
+                    // A3: `toolhost.execute` — spawned like `agent.prompt` (BLOCKER-1) so the
+                    // `tool.confirm` round-trip doesn't block the read loop.
+                    // Tracked in `tool_tasks` (not fire-and-forget) so close can
+                    // cancel + await before the sandbox root drops (scope §5.1).
+                    if cmd.command == "toolhost.execute" {
+                        if let Some(host) = toolhost.as_ref() {
+                            let record = record.clone();
+                            let host = Arc::clone(host);
+                            let confirm = Arc::clone(&confirm);
+                            let cancel = session_cancel.clone();
+                            let audit_path_t = audit_path.to_path_buf();
+                            let sink_t = Arc::clone(&sink);
+                            tool_tasks.spawn(async move {
+                                let outcome = run_authorized_toolhost_execute(
+                                    &record,
+                                    &cmd,
+                                    &host,
+                                    confirm.as_ref(),
+                                    cancel,
+                                    now,
+                                    event_id,
+                                )
+                                .await;
+                                if append_audit_jsonl(&audit_path_t, &outcome.audit).is_err() {
+                                    let response = Response::error(
+                                        &outcome.response.request_id,
+                                        "audit_error",
+                                        "audit write failed",
+                                    );
+                                    if let Ok(line) = response_line(&response) {
+                                        sink_t.send_line(line);
+                                    }
+                                    return;
+                                }
+                                if let Ok(line) = response_line(&outcome.response) {
+                                    sink_t.send_line(line);
+                                }
+                            });
+                        } else {
+                            // Sandbox init failed at session start — deny fail-closed.
+                            let response = Response::error(
+                                &cmd.request_id,
+                                "sandbox_error",
+                                "toolhost sandbox unavailable",
+                            );
+                            sink.send_line(response_line(&response)?);
+                        }
+                        continue;
+                    }
                 }
             }
 
@@ -259,6 +356,19 @@ async fn handle_connection(
         }
     }
     .await;
+
+    // A3 close-cancels (scope §5.1 / oracle MAJOR-2): cancel in-flight tool
+    // tasks + drain them BEFORE the sandbox root (`tool_root`) drops, so a
+    // spawned task never reads/writes a root that's been deleted under it. The
+    // cancel propagates to each tool's `InvokeContext` (SIGTERM for shell); the
+    // drain is bounded (a task ignoring cancel can't hang the close), and any
+    // straggler is hard-aborted as a last resort.
+    session_cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        while tool_tasks.join_next().await.is_some() {}
+    })
+    .await;
+    tool_tasks.shutdown().await;
 
     // Dropping every strong ref to the sink closes the writer channel; the task
     // flushes any queued frames (including a final error response) and exits.

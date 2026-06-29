@@ -290,6 +290,12 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         "tool.list" => &[Scope::ToolRead],
         "tool.execute_safe" => &[Scope::ToolExecuteSafe],
         "tool.execute_dangerous" => &[Scope::ToolExecuteDangerous],
+        // ADR-013 Vision A (A3): the governed daemon ToolHost. The outer scope is
+        // the envelope permission to *call the host at all*; the inner
+        // per-tool policy (FaeToolPolicy) re-checks tool.execute_safe /
+        // tool.execute_dangerous per call. Two registration points (MAJOR-2):
+        // this table runs before dispatch; the handler spawns in transport.rs.
+        "toolhost.execute" => &[Scope::ToolExecuteSafe],
         "scheduler.list" => &[Scope::SchedulerRead],
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
@@ -1096,6 +1102,20 @@ mod tests {
             .default_scopes()
             .contains(&Scope::ModelManagement));
         assert!(required_scopes("engine.unknown").is_none());
+    }
+
+    #[test]
+    fn toolhost_execute_requires_safe_scope() {
+        // A3 (ADR-013): the outer envelope permission for the governed daemon
+        // ToolHost. The inner per-tool policy re-checks tool.execute_safe /
+        // tool.execute_dangerous per call. Two registration points (MAJOR-2):
+        // this table runs before dispatch; the handler spawns in transport.rs.
+        assert_eq!(
+            required_scopes("toolhost.execute"),
+            Some(&[Scope::ToolExecuteSafe][..])
+        );
+        // An unregistered command is denied UnknownCommand before dispatch.
+        assert!(required_scopes("toolhost.unknown").is_none());
     }
 
     #[test]

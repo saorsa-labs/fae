@@ -45,6 +45,7 @@ base64 = { workspace = true }
 unicode-normalization = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# A3: per-session ephemeral tool sandbox root (tempfile::TempDir guard).
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"

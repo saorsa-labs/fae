@@ -225,6 +225,10 @@ async fn main() -> DaemonResult<()> {
         // No recipes loaded in M1; nothing to warn about. The guard lives here
         // for M2/M3 to populate when recipe loading lands.
     }
+    // A3: a clone of the conductor store for the per-session ToolHost audit sink
+    // (toolhost_audit.jsonl). Cloned BEFORE `new_with_egress` moves the original;
+    // both handles point at the same on-disk store dir.
+    let toolhost_store = Arc::new(conductor_store.clone());
     let conductor_runtime = Arc::new(
         conductor::ConductorRuntime::new_with_egress(
             conductor_policy,
@@ -282,6 +286,7 @@ async fn main() -> DaemonResult<()> {
         playbacks,
         agents,
         conductor_runtime,
+        toolhost_store,
     )
     .await?;
     Ok(())
