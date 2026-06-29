@@ -91,6 +91,16 @@ fn unquote(t: &str) -> &str {
     t.trim_matches(|c| c == '"' || c == '\'')
 }
 
+/// `true` if a positional path target resolves to the whole workspace root
+/// (not a subdir). Covers shell-root forms (`.`, `./`, `*`, `./*`) AND git
+/// pathspec root selectors (`:/`, `:/*`, `:(top)`) — the latter are native
+/// `git clean` root selectors (oracle f1be873d), not shell obfuscation.
+/// A subdir target (`./subdir`, `build/`, `:/src`) is NOT a workspace root.
+#[must_use]
+fn is_workspace_root_target(t: &str) -> bool {
+    matches!(t, "." | "./" | "*" | "./*" | ":/" | ":/*" | ":(top)")
+}
+
 /// `rm` with recursive+force flags whose TARGET is the workspace itself
 /// (`.`, `./`, `*`, `./*`). Handles `sudo rm`, combined (`-rf`/`-fr`) and
 /// separate (`-r`/`-f`) flags, the `--` end-of-options marker, and quoted
@@ -122,7 +132,7 @@ fn rm_wipes_root(toks: &[&str]) -> bool {
             continue;
         }
         // First positional argument = the target (quote-stripped).
-        return has_r && has_f && matches!(unquote(t), "." | "./" | "*" | "./*");
+        return has_r && has_f && is_workspace_root_target(unquote(t));
     }
     false
 }
@@ -161,7 +171,7 @@ fn git_clean_wipes(toks: &[&str]) -> bool {
                     // EXPLICIT root target (`.`, `./`, `*`, `./*`) is ALSO a
                     // wipe; a subdir (`./subdir`, `build/`) is scoped.
                     has_any_target = true;
-                    if matches!(unquote(t), "." | "./" | "*" | "./*") {
+                    if is_workspace_root_target(unquote(t)) {
                         target_is_workspace_root = true;
                     }
                 }
@@ -182,7 +192,7 @@ fn find_wipes_root(toks: &[&str]) -> bool {
     while i < toks.len() {
         if toks[i] == "find" && i + 1 < toks.len() {
             let root = unquote(toks[i + 1]);
-            if matches!(root, "." | "./" | "*") && toks[i + 2..].contains(&"-delete") {
+            if is_workspace_root_target(root) && toks[i + 2..].contains(&"-delete") {
                 return true;
             }
         }
@@ -251,6 +261,10 @@ mod tests {
         assert!(is_workspace_wipe("git clean -fdx ."));
         assert!(is_workspace_wipe("git clean -xfd ./"));
         assert!(is_workspace_wipe("git clean -fdx -- ."));
+        // oracle f1be873d: native git pathspec root selectors ARE wipes.
+        assert!(is_workspace_wipe("git clean -fdx :/"));
+        assert!(is_workspace_wipe("git clean -fdx ':/*'"));
+        assert!(is_workspace_wipe("git clean -fdx ':(top)'"));
         assert!(is_workspace_wipe("git reset --hard"));
     }
 
@@ -264,7 +278,9 @@ mod tests {
                                                      // Scoped find/git clean.
         assert!(!is_workspace_wipe("find ./subdir -delete"));
         assert!(!is_workspace_wipe("git clean -fd ./tmp"));
-        // Benign commands.
+        assert!(!is_workspace_wipe("git clean -fdx build/"));
+        assert!(!is_workspace_wipe("git clean -fdx :/src")); // scoped pathspec
+                                                             // Benign commands.
         assert!(!is_workspace_wipe("cargo build"));
         assert!(!is_workspace_wipe("ls -la"));
         assert!(!is_workspace_wipe("rm file.txt")); // not recursive
