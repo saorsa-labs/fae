@@ -1,9 +1,19 @@
 # ADR-013 Vision A — Slice A3→B: owner-approved durable workspace root
 
-> **Status:** SCOPE rev 1 — **direction chosen by owner (2026-06-29: Option B)**,
-> advisor-reviewed (2026-06-29, 7 corrections folded in). This relaxes A3 §5's
-> "never cwd/home/project as the root" under explicit owner governance. It
-> changes a security invariant, so the model must be signed off before B-Rust.
+> **Status:** SCOPE rev 2 — **owner-signed-off (2026-06-29: Option B)**,
+> advisor-reviewed (rev 1: 7 corrections; rev 2: implementation-structure pass).
+> This relaxes A3 §5's "never cwd/home/project as the root" under explicit
+> owner governance. A3-Swift Layer 1 merged (`9cad5c23`); B-Rust now in flight.
+>
+> **Rev 2 folds the implementation-structure pass:** Q6 RESOLVED (provision
+> `ToolWorkspaceGrant` default-off via `FAE_TOOLHOST_WORKSPACE_GRANT=1` at daemon
+> startup — never a client-supplied payload as authority); Q3 RESOLVED (`git
+> clean -fdx` / `git reset --hard` deny-before-confirm); a per-connection root
+> STATE MACHINE (`Unset`/`PendingRootConfirm`/`ApprovedRoot`/`InitializedTemp`/
+> `InitializedDurable`) under `tokio::sync::Mutex` (no std-mutex-across-awaits);
+> a structural root-safety guard (reject `/`, filesystem roots, the home dir);
+> late-set_root → `root_already_initialized`; execute-while-pending →
+> `root_initialization_pending`.
 >
 > **Rev 1 folds the advisor pass:** no-root ⇒ NO daemon routing (not a tempdir
 > fallback); root grant and `ToolExecuteDangerous` stay DECOUPLED (safe tools
@@ -244,15 +254,18 @@ classified. (Networked explicitly denied — no silent egress.)
 - **OPEN-Q2 (RESOLVED, advisor #2):** root grant and `ToolExecuteDangerous` are
   DECOUPLED. Safe tools route with just a root; dangerous waits for explicit
   provisioning.
-- **OPEN-Q3:** `git clean -fdx` / `git reset --hard` — deny-before-confirm (lean)
-  vs high-bar confirm?
+- **OPEN-Q3 (RESOLVED, rev 2):** `git clean -fdx` / `git reset --hard` →
+  deny-before-confirm (irreversible, same blast class as `rm -rf .`).
 - **OPEN-Q4:** critical-file overwrite (Cargo.toml etc.) — rely on confirm's
   `old_exists` (lean) vs a deny?
 - **OPEN-Q5:** persistent per-project root grant (survives sessions) — follow-on
   to the per-session minimal slice?
-- **OPEN-Q6 (advisor #3):** the exact `ToolWorkspaceGrant` provisioning surface —
-  lean is a `session.authenticate` capability bound to the bootstrap token; the
-  concrete handshake needs fleshing in B-Rust.
+- **OPEN-Q6 (RESOLVED, advisor #3 + rev 2):** provisioning = a daemon-startup
+  env opt-in `FAE_TOOLHOST_WORKSPACE_GRANT=1` (default off) that adds
+  `ToolWorkspaceGrant` to the bootstrap `SwiftFrontend` client's scopes at
+  registration (`main.rs`, precedent `FAE_CONDUCTOR_CHAIN`). Owner-controlled,
+  server-side, never a client-supplied `session.authenticate` payload as
+  authority. Off by default ⇒ `toolhost.set_root` denies at the scope gate.
 
 ## 11. Acceptance (B done when)
 1. An owner can approve a durable workspace root via a DISTINCT card (not the

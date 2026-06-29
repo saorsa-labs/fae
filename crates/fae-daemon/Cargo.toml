@@ -47,5 +47,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 # A3: per-session ephemeral tool sandbox root (tempfile::TempDir guard).
 tempfile = "3"
+dirs = "2"
 
 [dev-dependencies]

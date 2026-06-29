@@ -7,6 +7,7 @@
 //! the same control-plane-first discipline the workspace was built on.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use fae_audio::AudioManager;
@@ -1153,6 +1154,128 @@ fn toolhost_error_response(request_id: &str, err: crate::toolhost::ToolHostError
         ToolHostError::Sandbox(msg) => ("sandbox_error", msg.clone()),
     };
     Response::error(request_id, code, &message)
+}
+
+/// `toolhost.set_root` (A3→B): bind an owner-approved durable workspace directory
+/// as this session's ToolHost root. Two gates: the outer `ToolWorkspaceGrant`
+/// scope (provisioned default-OFF via `FAE_TOOLHOST_WORKSPACE_GRANT`), then a
+/// distinct daemon-initiated `workspace.confirm_root` card approving the
+/// SPECIFIC canonical path. SPAWNED by the transport read loop (BLOCKER-1: the
+/// confirm round-trip must not block draining the client's reply).
+///
+/// Lifecycle: validates the path (exists, directory, blast-radius-safe) BEFORE
+/// prompting; sets `PendingRootConfirm`; on approval stores `ApprovedRoot` (the
+/// ToolHost is created lazily on the next `toolhost.execute`). Late set_root (a
+/// ToolHost already exists) denies `root_already_initialized`; a second set_root
+/// while one is pending denies `root_initialization_pending`.
+pub async fn run_authorized_toolhost_set_root(
+    record: &ClientRecord,
+    cmd: &Command,
+    root_state: &Arc<tokio::sync::Mutex<crate::toolhost::root_confirm::ToolRootState>>,
+    root_confirmation: &dyn crate::toolhost::root_confirm::RootConfirmation,
+    home_dir: Option<std::path::PathBuf>,
+    now_ms: u64,
+    event_id: String,
+) -> FrameOutcome {
+    use crate::toolhost::root_confirm::ToolRootState;
+
+    // Outer scope gate (envelope permission). Without ToolWorkspaceGrant the
+    // owner is never prompted — the request is denied at the wire.
+    let authz = authorize(record, cmd, now_ms);
+    let audit = AuditEvent::from_authz(
+        event_id,
+        now_ms,
+        Some(record.client_id.clone()),
+        cmd,
+        &authz,
+    );
+    let response = match &authz {
+        AuthzDecision::Allow => match parse_set_root_payload(&cmd.payload) {
+            Ok(raw_path) => 'validate: {
+                // 1. Validate BEFORE prompting: canonicalize + blast-radius guard.
+                // Reject non-existent/non-dir/home/filesystem-root/shallow paths.
+                // The owner is NEVER prompted for an invalid/unsafe root.
+                let validated = std::path::Path::new(&raw_path)
+                    .canonicalize()
+                    .ok()
+                    .filter(|c| {
+                        crate::toolhost::root_confirm::is_safe_workspace_root(
+                            c,
+                            home_dir.as_deref(),
+                        )
+                    });
+                let Some(canon) = validated else {
+                    break 'validate Response::error(
+                        &cmd.request_id,
+                        "unsafe_root",
+                        "refused: path does not exist or is too broad (home/system root) to contain damage",
+                    );
+                };
+                // 2. Atomically check-and-set PendingRootConfirm.
+                let blocked = {
+                    let mut st = root_state.lock().await;
+                    if st.is_initialized() {
+                        Some("root_already_initialized")
+                    } else if st.is_pending() {
+                        Some("root_initialization_pending")
+                    } else {
+                        *st = ToolRootState::PendingRootConfirm;
+                        None
+                    }
+                };
+                if let Some(code) = blocked {
+                    Response::error(&cmd.request_id, code, "root lifecycle denied")
+                } else {
+                    // 3. The distinct root-approval round-trip.
+                    let req = crate::toolhost::root_confirm::build_root_confirm_request(
+                        &cmd.request_id,
+                        &canon.to_string_lossy(),
+                    );
+                    match root_confirmation.confirm_root(&req).await {
+                        crate::toolhost::root_confirm::RootConfirmReply::Approved => {
+                            let mut st = root_state.lock().await;
+                            *st = ToolRootState::ApprovedRoot {
+                                path: canon.to_string_lossy().into_owned(),
+                            };
+                            Response::ok(
+                                &cmd.request_id,
+                                serde_json::json!({"root": canon.to_string_lossy()}),
+                            )
+                        }
+                        crate::toolhost::root_confirm::RootConfirmReply::Denied(reason) => {
+                            let mut st = root_state.lock().await;
+                            *st = ToolRootState::Unset;
+                            Response::error(&cmd.request_id, "root_denied", &reason)
+                        }
+                    }
+                }
+            }
+            Err(msg) => Response::error(&cmd.request_id, "bad_request", &msg),
+        },
+        AuthzDecision::ConfirmRequired | AuthzDecision::Deny(_) => {
+            Response::error(&cmd.request_id, "forbidden", "authorization denied")
+        }
+    };
+    FrameOutcome {
+        response,
+        audit,
+        close: false,
+    }
+}
+
+/// Parse the `toolhost.set_root` payload `{path}` (reject unknown fields).
+fn parse_set_root_payload(payload: &serde_json::Value) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SetRootPayload {
+        path: String,
+    }
+    let parsed: SetRootPayload = serde_json::from_value(payload.clone())
+        .map_err(|e| format!("invalid toolhost.set_root payload: {e}"))?;
+    if parsed.path.trim().is_empty() {
+        return Err("path must not be empty".into());
+    }
+    Ok(parsed.path)
 }
 
 /// `agent.cancel` — interrupt the session's in-flight turn (`session/cancel`).
@@ -4233,5 +4356,209 @@ mod tests {
             .await
             .expect("task did not respond to cancel in time")
             .expect("join");
+    }
+
+    // -----------------------------------------------------------------------
+    // A3→B: toolhost.set_root (durable workspace root)
+    // -----------------------------------------------------------------------
+
+    fn set_root_cmd(path: &str) -> Command {
+        Command {
+            v: 2,
+            request_id: "sr1".into(),
+            command: "toolhost.set_root".into(),
+            payload: serde_json::json!({"path": path}),
+        }
+    }
+
+    fn root_state() -> Arc<tokio::sync::Mutex<crate::toolhost::root_confirm::ToolRootState>> {
+        Arc::new(tokio::sync::Mutex::new(
+            crate::toolhost::root_confirm::ToolRootState::Unset,
+        ))
+    }
+
+    #[tokio::test]
+    async fn set_root_without_workspace_grant_denies_without_prompting() {
+        // No ToolWorkspaceGrant ⇒ the outer authorize denies at the wire, before
+        // any path is parsed or the owner is prompted. (A FakeRootConfirmation
+        // that WOULD approve proves the gate runs before the confirm.)
+        let conf = crate::toolhost::root_confirm::FakeRootConfirmation::approve();
+        let record = tool_client(&[Scope::ToolExecuteSafe]); // no grant
+        let project = tempfile::tempdir().expect("project");
+        let outcome = run_authorized_toolhost_set_root(
+            &record,
+            &set_root_cmd(project.path().to_str().expect("path")),
+            &root_state(),
+            &conf,
+            None,
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(!outcome.response.ok, "must deny without the grant");
+        assert!(
+            !conf.was_called(),
+            "owner must never be prompted without ToolWorkspaceGrant"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_root_approved_stores_canonical_path() {
+        let conf = crate::toolhost::root_confirm::FakeRootConfirmation::approve();
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolWorkspaceGrant]);
+        let project = tempfile::tempdir().expect("project");
+        let canon = project
+            .path()
+            .canonicalize()
+            .expect("canon")
+            .to_string_lossy()
+            .into_owned();
+        let state = root_state();
+        let outcome = run_authorized_toolhost_set_root(
+            &record,
+            &set_root_cmd(project.path().to_str().expect("path")),
+            &state,
+            &conf,
+            None,
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(outcome.response.ok, "approved root should succeed");
+        assert!(conf.was_called(), "owner must be prompted");
+        let st = state.lock().await;
+        match &*st {
+            crate::toolhost::root_confirm::ToolRootState::ApprovedRoot { path } => {
+                assert_eq!(path, &canon, "stored path must be canonical");
+            }
+            other => panic!("expected ApprovedRoot, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_root_denied_does_not_store_path() {
+        let conf = crate::toolhost::root_confirm::FakeRootConfirmation::deny();
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolWorkspaceGrant]);
+        let project = tempfile::tempdir().expect("project");
+        let state = root_state();
+        let outcome = run_authorized_toolhost_set_root(
+            &record,
+            &set_root_cmd(project.path().to_str().expect("path")),
+            &state,
+            &conf,
+            None,
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(!outcome.response.ok, "denied root should fail");
+        let st = state.lock().await;
+        assert!(
+            matches!(&*st, crate::toolhost::root_confirm::ToolRootState::Unset),
+            "a denied root must revert to Unset (no stored path)"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_root_after_init_denies_root_already_initialized() {
+        // A late set_root (a ToolHost already exists) must deny — immutability.
+        let conf = crate::toolhost::root_confirm::FakeRootConfirmation::approve();
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolWorkspaceGrant]);
+        let project = tempfile::tempdir().expect("project");
+        let state = Arc::new(tokio::sync::Mutex::new(
+            crate::toolhost::root_confirm::ToolRootState::InitializedTemp,
+        ));
+        let outcome = run_authorized_toolhost_set_root(
+            &record,
+            &set_root_cmd(project.path().to_str().expect("path")),
+            &state,
+            &conf,
+            None,
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(!outcome.response.ok, "late set_root must deny");
+        assert!(
+            !conf.was_called(),
+            "must not prompt when already initialized"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_root_unsafe_home_dir_rejected_without_prompting() {
+        // The blast-radius guard: approving the HOME dir as a root is refused
+        // before the owner is ever prompted.
+        let conf = crate::toolhost::root_confirm::FakeRootConfirmation::approve();
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolWorkspaceGrant]);
+        let home = tempfile::tempdir().expect("home");
+        let outcome = run_authorized_toolhost_set_root(
+            &record,
+            &set_root_cmd(home.path().to_str().expect("path")),
+            &root_state(),
+            &conf,
+            Some(home.path().to_path_buf()), // pretend this tempdir IS home
+            0,
+            "ev".into(),
+        )
+        .await;
+        assert!(!outcome.response.ok, "home dir must be refused");
+        assert!(!conf.was_called(), "must not prompt for an unsafe root");
+    }
+
+    #[tokio::test]
+    async fn set_root_confirm_roundtrip_completes_no_deadlock() {
+        // BLOCKER-1 (set_root): the workspace.confirm_root round-trip must
+        // complete on a real ServerRequester without deadlocking — the client
+        // reads the server-request frame off the duplex and resolves it.
+        use tokio::io::{duplex, AsyncBufReadExt, BufReader};
+        let (_client, server) = duplex(8192);
+        let (sink, _writer) = crate::events::ConnSink::spawn(server);
+        let requester = ServerRequester::new(std::sync::Arc::clone(&sink));
+        let root_confirm = std::sync::Arc::new(
+            crate::toolhost::root_confirm::ServerRequestRootConfirmation::new(requester.clone()),
+        );
+        let project = tempfile::tempdir().expect("project");
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolWorkspaceGrant]);
+        let state = root_state();
+        let cmd = set_root_cmd(project.path().to_str().expect("path"));
+        // Spawn the handler exactly as transport.rs does.
+        let state_c = Arc::clone(&state);
+        let rc_c = std::sync::Arc::clone(&root_confirm);
+        let handle = tokio::spawn(async move {
+            run_authorized_toolhost_set_root(
+                &record,
+                &cmd,
+                &state_c,
+                rc_c.as_ref(),
+                None,
+                0,
+                "ev".into(),
+            )
+            .await
+        });
+        // Read the workspace.confirm_root frame + resolve it approved.
+        let mut reader = BufReader::new(_client);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.expect("read");
+        let obj: serde_json::Value = serde_json::from_str(line.trim()).expect("json");
+        let sr_id = obj["server_request_id"].as_str().expect("sr_id");
+        requester.resolve(
+            sr_id,
+            serde_json::json!({"approved": true, "call_id": "sr1"}),
+        );
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("handler did not complete (deadlock?)")
+            .expect("join");
+        assert!(
+            outcome.response.ok,
+            "approved root should succeed; got: {:?}",
+            outcome.response
+        );
+        assert!(matches!(
+            &*state.lock().await,
+            crate::toolhost::root_confirm::ToolRootState::ApprovedRoot { .. }
+        ));
     }
 }

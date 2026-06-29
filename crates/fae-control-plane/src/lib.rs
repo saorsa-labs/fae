@@ -186,6 +186,13 @@ pub enum Scope {
     ToolRead,
     ToolExecuteSafe,
     ToolExecuteDangerous,
+    /// (A3→B) Bind a durable owner-approved workspace directory as a session's
+    /// ToolHost root (replaces the ephemeral temp sandbox). Provisioned
+    /// default-OFF via `FAE_TOOLHOST_WORKSPACE_GRANT=1` at daemon startup —
+    /// never a client-supplied payload, never in `SwiftFrontend::default_scopes`.
+    /// The owner additionally approves the SPECIFIC path per session (the
+    /// `workspace.confirm_root` card); the scope is the envelope permission.
+    ToolWorkspaceGrant,
     AudioCapture,
     AudioPlayback,
     SchedulerRead,
@@ -214,6 +221,7 @@ impl Scope {
             Scope::ToolRead => "tool:read",
             Scope::ToolExecuteSafe => "tool:execute:safe",
             Scope::ToolExecuteDangerous => "tool:execute:dangerous",
+            Scope::ToolWorkspaceGrant => "tool:workspace:grant",
             Scope::AudioCapture => "audio:capture",
             Scope::AudioPlayback => "audio:playback",
             Scope::SchedulerRead => "scheduler:read",
@@ -238,6 +246,7 @@ impl Scope {
             "tool:read" => Scope::ToolRead,
             "tool:execute:safe" => Scope::ToolExecuteSafe,
             "tool:execute:dangerous" => Scope::ToolExecuteDangerous,
+            "tool:workspace:grant" => Scope::ToolWorkspaceGrant,
             "audio:capture" => Scope::AudioCapture,
             "audio:playback" => Scope::AudioPlayback,
             "scheduler:read" => Scope::SchedulerRead,
@@ -296,6 +305,11 @@ pub fn required_scopes(command: &str) -> Option<&'static [Scope]> {
         // tool.execute_dangerous per call. Two registration points (MAJOR-2):
         // this table runs before dispatch; the handler spawns in transport.rs.
         "toolhost.execute" => &[Scope::ToolExecuteSafe],
+        // ADR-013 Vision A (A3→B): bind an owner-approved durable workspace
+        // directory as the session's ToolHost root. Provisioned default-OFF
+        // (FAE_TOOLHOST_WORKSPACE_GRANT). The owner approves the SPECIFIC path
+        // via a distinct daemon-initiated `workspace.confirm_root` card.
+        "toolhost.set_root" => &[Scope::ToolWorkspaceGrant],
         "scheduler.list" => &[Scope::SchedulerRead],
         "scheduler.mutate" => &[Scope::SchedulerWrite],
         "agent.run" => &[Scope::AgentExecute],
@@ -1076,6 +1090,7 @@ mod tests {
             Scope::ToolRead,
             Scope::ToolExecuteSafe,
             Scope::ToolExecuteDangerous,
+            Scope::ToolWorkspaceGrant,
             Scope::AudioCapture,
             Scope::AudioPlayback,
             Scope::SchedulerRead,
@@ -1124,6 +1139,23 @@ mod tests {
         );
         // An unregistered command is denied UnknownCommand before dispatch.
         assert!(required_scopes("toolhost.unknown").is_none());
+    }
+
+    #[test]
+    fn toolhost_set_root_requires_workspace_grant() {
+        // A3→B: binding a durable workspace root requires the explicit
+        // ToolWorkspaceGrant scope (default-OFF; provisioned via
+        // FAE_TOOLHOST_WORKSPACE_GRANT at daemon startup). A SwiftFrontend client
+        // WITHOUT the grant cannot set_root — the outer gate denies before any
+        // path is even parsed or the owner is prompted.
+        assert_eq!(
+            required_scopes("toolhost.set_root"),
+            Some(&[Scope::ToolWorkspaceGrant][..])
+        );
+        // The scope is NEVER in the default set — it's an explicit opt-in.
+        assert!(!ClientClass::SwiftFrontend
+            .default_scopes()
+            .contains(&Scope::ToolWorkspaceGrant));
     }
 
     #[test]

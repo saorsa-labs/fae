@@ -17,7 +17,7 @@
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fae_audio::AudioManager;
 use fae_control_plane::{
-    generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, TicketStore,
+    generate_token, hash_token, ClientClass, ClientRecord, ClientRegistry, Scope, TicketStore,
     PROTOCOL_VERSION,
 };
 use fae_engine::{
@@ -133,13 +133,32 @@ async fn main() -> DaemonResult<()> {
     write_secret_file(&token_path, &token)?; // file fallback; CHUNK 2c: macOS Keychain
     println!("token   : {} (0600)", token_path.display());
 
+    // A3→B: the durable-workspace-root grant is an explicit owner opt-in,
+    // default OFF (scope §5 / advisor #3). When `FAE_TOOLHOST_WORKSPACE_GRANT=1`
+    // is set at daemon startup, the bootstrap SwiftFrontend client additionally
+    // holds `ToolWorkspaceGrant`, letting it call `toolhost.set_root` (which then
+    // requires a per-session owner approval of the SPECIFIC path via
+    // `workspace.confirm_root`). A client-supplied payload is NEVER authority.
+    let mut scopes: HashSet<_> = ClientClass::SwiftFrontend
+        .default_scopes()
+        .into_iter()
+        .collect();
+    let workspace_grant = std::env::var("FAE_TOOLHOST_WORKSPACE_GRANT")
+        .ok()
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false);
+    if workspace_grant {
+        scopes.insert(Scope::ToolWorkspaceGrant);
+        println!(
+            "workspace: durable-root grant ENABLED (FAE_TOOLHOST_WORKSPACE_GRANT). \
+             toolhost.set_root is callable; each root still requires per-session owner approval."
+        );
+    }
+
     let client = ClientRecord {
         client_id: fae_control_plane::BOOTSTRAP_CLIENT_ID.to_owned(),
         class: ClientClass::SwiftFrontend,
-        scopes: ClientClass::SwiftFrontend
-            .default_scopes()
-            .into_iter()
-            .collect(),
+        scopes,
         issued_at_ms: now,
         expires_at_ms: now.saturating_add(THIRTY_DAYS_MS),
         revoked_at_ms: None,

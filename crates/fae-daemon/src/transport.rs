@@ -155,6 +155,19 @@ async fn handle_connection(
     let mut tool_root: Option<tempfile::TempDir> = None;
     let mut toolhost: Option<Arc<ToolHost>> = None;
 
+    // A3→B: the per-session durable-root lifecycle (advisor #3 state machine). Set
+    // by `toolhost.set_root` (owner-approved), consumed by the lazy ToolHost init
+    // (layer 2 binds the durable root). `tokio::sync::Mutex` — never held across
+    // a long await (only the brief state transition). `home_dir` bounds the
+    // blast-radius guard (reject approving the home dir as a root).
+    let root_state = Arc::new(tokio::sync::Mutex::new(
+        crate::toolhost::root_confirm::ToolRootState::Unset,
+    ));
+    let root_confirm = Arc::new(
+        crate::toolhost::root_confirm::ServerRequestRootConfirmation::new(requester.clone()),
+    );
+    let home_dir = dirs::home_dir();
+
     let result: std::io::Result<()> = async {
         loop {
             line.clear();
@@ -232,6 +245,46 @@ async fn handle_connection(
                         });
                         continue;
                     }
+                    // A3→B: `toolhost.set_root` — bind an owner-approved durable
+                    // workspace root. SPAWNED like `toolhost.execute` (BLOCKER-1:
+                    // the `workspace.confirm_root` round-trip must not block the
+                    // read loop). The handler validates the path + runs the
+                    // distinct root-approval card + stores `ApprovedRoot`.
+                    if cmd.command == "toolhost.set_root" {
+                        let record = record.clone();
+                        let root_state = Arc::clone(&root_state);
+                        let root_confirm = Arc::clone(&root_confirm);
+                        let home_dir = home_dir.clone();
+                        let audit_path_t = audit_path.to_path_buf();
+                        let sink_t = Arc::clone(&sink);
+                        tool_tasks.spawn(async move {
+                            let outcome = crate::session::run_authorized_toolhost_set_root(
+                                &record,
+                                &cmd,
+                                &root_state,
+                                root_confirm.as_ref(),
+                                home_dir,
+                                now,
+                                event_id,
+                            )
+                            .await;
+                            if append_audit_jsonl(&audit_path_t, &outcome.audit).is_err() {
+                                let response = Response::error(
+                                    &outcome.response.request_id,
+                                    "audit_error",
+                                    "audit write failed",
+                                );
+                                if let Ok(line) = response_line(&response) {
+                                    sink_t.send_line(line);
+                                }
+                                return;
+                            }
+                            if let Ok(line) = response_line(&outcome.response) {
+                                sink_t.send_line(line);
+                            }
+                        });
+                        continue;
+                    }
                     // A3: `toolhost.execute` — spawned like `agent.prompt` (BLOCKER-1) so the
                     // `tool.confirm` round-trip doesn't block the read loop.
                     // Tracked in `tool_tasks` (not fire-and-forget) so close can
@@ -240,6 +293,28 @@ async fn handle_connection(
                     // `Authenticated(record)` arm), so lazy creation is post-auth
                     // by construction (oracle MAJOR-2).
                     if cmd.command == "toolhost.execute" {
+                        // A3→B: if a `toolhost.set_root` confirm is in flight,
+                        // deny execute — the root is mid-transition and racing a
+                        // tool against it could bind the wrong root. Fail-closed.
+                        let root_pending = root_state.lock().await.is_pending();
+                        if root_pending {
+                            let audit = crate::session::manual_audit(
+                                event_id,
+                                now,
+                                Some(record.client_id.clone()),
+                                "toolhost.execute",
+                                fae_control_plane::AuditDecision::Error,
+                                "root_initialization_pending",
+                            );
+                            let _ = append_audit_jsonl(audit_path, &audit);
+                            let response = Response::error(
+                                &cmd.request_id,
+                                "root_initialization_pending",
+                                "a workspace root confirm is in flight",
+                            );
+                            sink.send_line(response_line(&response)?);
+                            continue;
+                        }
                         // Lazy-init the per-session sandbox on first use.
                         if toolhost.is_none() {
                             match tempfile::tempdir() {
@@ -396,6 +471,7 @@ async fn handle_connection(
     // drops (temp dirs leak). Tasks already drained above dropped their clones.
     drop(toolhost);
     drop(confirm);
+    drop(root_confirm);
     drop(requester);
     // Now the only remaining sink ref is `sink` itself.
     drop(sink);

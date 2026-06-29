@@ -43,6 +43,7 @@ pub mod confirm;
 pub mod damage;
 pub mod egress;
 pub mod policy;
+pub mod root_confirm;
 
 /// A request to execute one tool call under governance.
 #[derive(Debug, Clone)]
