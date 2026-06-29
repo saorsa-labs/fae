@@ -114,11 +114,12 @@ actor DaemonToolHostSession {
         try await setRoot(path: path, handler: serverRequestHandler)
     }
 
-    /// Handler-injectable `setRoot`. `ensureDefaultRooted` passes a
+    /// Handler-injectable `setRoot` (private — an internal helper for
+    /// `ensureDefaultRooted`; the public API stays `setRoot(path:)`). Passes a
     /// `defaultAwareHandler`-wrapped handler so the Fae-owned default root is
     /// auto-approved (no card) while every other confirm surfaces the real card.
     @discardableResult
-    func setRoot(path: String, handler: @escaping DaemonServerRequestHandler) async throws -> [String: Any] {
+    private func setRoot(path: String, handler: @escaping DaemonServerRequestHandler) async throws -> [String: Any] {
         let conn = try await ensureConnected()
         let requestID = nextRequestID()
         let frame = try DaemonWire.encodeFrame(
@@ -132,13 +133,18 @@ actor DaemonToolHostSession {
                 await handler(method, params)
             })
         let validated = try DaemonAgentClient.validate(raw)
+        let result = (validated["result"] as? [String: Any]) ?? [:]
         // B-Rust returns ok=true with {root} on approval; a denial comes back as
-        // ok=false (root_denied / unsafe_root / root_already_initialized). Only
-        // bind the approved root path on a genuine approval.
-        if (validated["ok"] as? Bool) == true {
-            approvedRootPath = URL(fileURLWithPath: path)
+        // ok=false (root_denied / unsafe_root / root_already_initialized). Bind
+        // ONLY the DAEMON-RETURNED canonical root — not the requested path — so
+        // a raw/symlink drift can't make the session believe a different root
+        // (advisor #2). If ok=true arrives without a root string, stay unrooted.
+        if (validated["ok"] as? Bool) == true,
+           let rootStr = result["root"] as? String, !rootStr.isEmpty
+        {
+            approvedRootPath = URL(fileURLWithPath: rootStr)
         }
-        return (validated["result"] as? [String: Any]) ?? [:]
+        return result
     }
 
     /// Execute a portable tool on the durable-rooted ToolHost. REQUIRES a root

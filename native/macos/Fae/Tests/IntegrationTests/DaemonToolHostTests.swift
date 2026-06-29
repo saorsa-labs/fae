@@ -661,6 +661,130 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertTrue(hasRoot)
     }
 
+    /// A malformed confirm (missing/blank call_id or path) is NOT auto-approved —
+    /// the Layer 1 fail-closed invariant is preserved even on the default root
+    /// path (advisor #1).
+    func testAutoApproveRejectsMalformedConfirm() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: tmp.appendingPathComponent(FaeWorkspace.markerName))
+
+        actor Seen { var hits = 0; func bump() { hits += 1 } }
+        let seen = Seen()
+        let real: DaemonServerRequestHandler = { _, _ in
+            await seen.bump()
+            return ["approved": false, "call_id": "x"]
+        }
+        let wrapped = defaultAwareHandler(real, defaultPath: tmp, isMarkerPresent: { true })
+
+        // Missing call_id → real handler (not auto-approved).
+        _ = await wrapped("workspace.confirm_root", ["path": tmp.path])
+        // Blank call_id → real handler.
+        _ = await wrapped("workspace.confirm_root", ["call_id": "", "path": tmp.path])
+        // Missing path → real handler.
+        _ = await wrapped("workspace.confirm_root", ["call_id": "c"])
+        // Blank path → real handler.
+        _ = await wrapped("workspace.confirm_root", ["call_id": "c", "path": ""])
+
+        let hits = await seen.hits
+        XCTAssertEqual(hits, 4, "every malformed confirm must hit the real handler")
+    }
+
+    /// A pre-existing dir WITHOUT a marker surfaces the REAL card (not
+    /// auto-approved), and on approval the marker is written (sticky). Drives a
+    /// fake peer through the full ensureDefaultRooted flow (advisor #4).
+    func testPreExistingWithoutMarkerSurfacesCardThenSticky() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // User-made dir with precious files, no marker.
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("precious".utf8).write(to: tmp.appendingPathComponent("mine.txt"))
+        let provider = TempWorkspace(workspaceRoot: tmp)
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        // The real handler IS invoked (card surfaced) and approves.
+        actor Seen { var cardSurfaced = false; func mark() { cardSurfaced = true } }
+        let seen = Seen()
+        let session = DaemonToolHostSession(serverRequestHandler: { method, params in
+            await seen.mark()
+            let callID = (params["call_id"] as? String) ?? ""
+            return ["approved": true, "call_id": callID]
+        })
+        defer { Task { await session.close() } }
+
+        let rooted = Task { try await session.ensureDefaultRooted(provider: provider) }
+        let client = try peer.accept()
+        try driveAuth(client)
+        _ = try await recvWithTimeout(client)  // set_root frame
+        // Daemon sends confirm; the REAL handler answers (no auto-approve: no marker).
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        _ = try await recvWithTimeout(client)  // strict reply from the real handler
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+        let root = try await withTimeout(rooted)
+        XCTAssertEqual(root.path, tmp.path)
+        let cardSurfaced = await seen.cardSurfaced
+        XCTAssertTrue(cardSurfaced, "pre-existing-no-marker must surface the real card")
+        XCTAssertTrue(FaeWorkspace.markerPresent(at: tmp), "marker written after approval (sticky)")
+    }
+
+    /// A daemon denial (ok=false / unsafe_root) propagates as a throw and leaves
+    /// the session unrooted — the Swift-side stand-in for the symlinked-default /
+    /// server-guard rejection (the actual guard is Rust-tested; advisor #5).
+    func testDaemonRootDenialPropagatesAndStaysUnrooted() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: tmp.appendingPathComponent(FaeWorkspace.markerName))
+        let provider = TempWorkspace(workspaceRoot: tmp)
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(serverRequestHandler: { _, params in
+            let callID = (params["call_id"] as? String) ?? ""
+            return ["approved": true, "call_id": callID]
+        })
+        defer { Task { await session.close() } }
+
+        let rooted = Task { try await session.ensureDefaultRooted(provider: provider) }
+        let client = try peer.accept()
+        try driveAuth(client)
+        _ = try await recvWithTimeout(client)  // set_root frame
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        _ = try await recvWithTimeout(client)  // auto-approved reply
+        // Daemon DENIES the root (unsafe_root / root_denied).
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":false,"error":"unsafe_root"}
+        """)
+
+        do {
+            _ = try await withTimeout(rooted)
+            XCTFail("ensureDefaultRooted must throw on a daemon denial")
+        } catch {
+            // expected — the daemon rejected the root.
+        }
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "a denied root must leave the session unrooted")
+        let rootPath = await session.rootPath()
+        XCTAssertNil(rootPath, "rootPath must be nil after a denial")
+    }
+
     // MARK: helpers
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {
