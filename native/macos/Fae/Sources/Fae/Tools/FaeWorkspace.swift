@@ -119,16 +119,14 @@ func defaultAwareHandler(
         guard method == "workspace.confirm_root" else {
             return await real(method, params)
         }
-        // Layer 1 fail-closed invariant: a missing/blank (incl. WHITESPACE-ONLY)
-        // `call_id` or `path` must NOT be auto-approved. Trim both; require
-        // non-blank. Delegate to the real handler otherwise (which also denies on
-        // a malformed confirm) — preserving the invariant rather than bypassing
-        // it (advisor #1).
-        let callID = (params["call_id"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let confirmPath = (params["path"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !callID.isEmpty, !confirmPath.isEmpty else {
+        // Layer 1 fail-closed invariant: a missing/blank, PADDED, or non-absolute
+        // `path` and any missing/blank/padded `call_id` must NOT be auto-approved.
+        // Require raw == trimmed + non-empty (call_id) and clean-absolute (path);
+        // else delegate to the real handler (which also denies on a malformed
+        // confirm) — preserving the invariant rather than bypassing it (advisor #1).
+        guard let callID = params["call_id"] as? String, isCleanNonBlank(callID),
+              let confirmPath = params["path"] as? String, isCleanAbsolutePath(confirmPath)
+        else {
             return await real(method, params)
         }
         let confirmCanon = canonical(URL(fileURLWithPath: confirmPath))
@@ -144,4 +142,19 @@ func defaultAwareHandler(
 /// default is compared fairly (the daemon's server guard is the real defense).
 private func canonical(_ url: URL) -> URL {
     url.standardizedFileURL.resolvingSymlinksInPath()
+}
+
+/// True iff `s` is non-blank with NO leading/trailing whitespace (raw == trimmed).
+/// Rejects padding anomalies the daemon should never emit (defense-in-depth on
+/// the Layer 1 fail-closed invariant — "  th-1  " is not a valid call_id).
+func isCleanNonBlank(_ s: String) -> Bool {
+    let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty && s == trimmed
+}
+
+/// True iff `s` is a clean (non-blank, no padding) ABSOLUTE path. A relative root
+/// is ambiguous (binds to the daemon's cwd); the daemon's server guard also
+/// requires absolute.
+func isCleanAbsolutePath(_ s: String) -> Bool {
+    isCleanNonBlank(s) && s.hasPrefix("/")
 }

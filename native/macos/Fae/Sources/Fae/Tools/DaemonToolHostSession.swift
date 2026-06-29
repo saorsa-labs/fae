@@ -136,11 +136,12 @@ actor DaemonToolHostSession {
         let result = (validated["result"] as? [String: Any]) ?? [:]
         // B-Rust returns ok=true with {root} on approval; a denial comes back as
         // ok=false (root_denied / unsafe_root / root_already_initialized). Bind
-        // ONLY the DAEMON-RETURNED canonical root — not the requested path — so
-        // a raw/symlink drift can't make the session believe a different root
-        // (advisor #2). If ok=true arrives without a root string, stay unrooted.
+        // ONLY a clean, absolute, daemon-RETURNED root — not the requested path —
+        // so raw/symlink drift, whitespace, or a relative root can't make the
+        // session believe a different root (advisor #2). Whitespace-only or
+        // relative roots leave approvedRootPath nil → ensureDefaultRooted throws.
         if (validated["ok"] as? Bool) == true,
-           let rootStr = result["root"] as? String, !rootStr.isEmpty
+           let rootStr = result["root"] as? String, isCleanAbsolutePath(rootStr)
         {
             approvedRootPath = URL(fileURLWithPath: rootStr)
         }

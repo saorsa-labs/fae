@@ -898,6 +898,77 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertEqual(stored?.path, daemonRoot, "must store the daemon-returned root")
     }
 
+    /// Padded-but-non-empty call_id/path and relative paths must NOT auto-approve —
+    /// the raw==trimmed + absolute checks (advisor review #3, finding 1).
+    func testAutoApproveRejectsPaddedAndRelativeConfirm() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: tmp.appendingPathComponent(FaeWorkspace.markerName))
+
+        actor Seen { var hits = 0; func bump() { hits += 1 } }
+        let seen = Seen()
+        let real: DaemonServerRequestHandler = { _, _ in
+            await seen.bump()
+            return ["approved": false, "call_id": "x"]
+        }
+        let wrapped = defaultAwareHandler(real, defaultPath: tmp, isMarkerPresent: { true })
+        // Padded call_id (" th-1 ") → real handler.
+        _ = await wrapped("workspace.confirm_root", ["call_id": " th-1 ", "path": tmp.path])
+        // Padded path (" <tmp> ") → real handler.
+        _ = await wrapped("workspace.confirm_root", ["call_id": "c", "path": " \(tmp.path) "])
+        // Relative path → real handler (not absolute).
+        _ = await wrapped("workspace.confirm_root", ["call_id": "c", "path": "relative/ws"])
+        let hits = await seen.hits
+        XCTAssertEqual(hits, 3, "padded/relative confirm must hit the real handler")
+    }
+
+    /// ok=true with a whitespace-only or RELATIVE root is NOT bound — the clean-
+    /// absolute-path check rejects it, so ensureDefaultRooted throws and the
+    /// session stays unrooted (advisor review #3, finding 2).
+    func testOkTrueWithWhitespaceOrRelativeRootStaysUnrooted() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: tmp.appendingPathComponent(FaeWorkspace.markerName))
+
+        for badRoot in ["   ", "relative/ws"] {
+            let provider = TempWorkspace(workspaceRoot: tmp)
+            let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+            defer {
+                Task { await clearDaemonEndpoints() }
+                try? FileManager.default.removeItem(atPath: tokenPath)
+            }
+            let session = DaemonToolHostSession(serverRequestHandler: { _, params in
+                let callID = (params["call_id"] as? String) ?? ""
+                return ["approved": true, "call_id": callID]
+            })
+            defer { Task { await session.close() } }
+
+            let rooted = Task { try await session.ensureDefaultRooted(provider: provider) }
+            let client = try peer.accept()
+            try driveAuth(client)
+            _ = try await recvWithTimeout(client)
+            try client.send("""
+            {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+            """)
+            _ = try await recvWithTimeout(client)
+            try client.send("""
+            {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(badRoot)"}}
+            """)
+            do {
+                _ = try await withTimeout(rooted)
+                XCTFail("ensureDefaultRooted must throw for bad root: \(badRoot)")
+            } catch {
+                // expected — invalid root not bound.
+            }
+            let hasRoot = await session.hasRoot()
+            XCTAssertFalse(hasRoot, "bad root '\(badRoot)' must leave the session unrooted")
+        }
+    }
+
     // MARK: helpers
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {
