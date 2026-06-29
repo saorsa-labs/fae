@@ -241,20 +241,24 @@ enum DaemonAgentClient {
         let risk = (params["risk_class"] as? String) ?? "dangerous"
         let message = toolConfirmMessage(
             tool: tool, risk: risk, detail: params["detail"])
-        // Test seam: `ToolConfirmDecisionOverride` (nil in production) lets unit
-        // tests fix the card's decision without a UI. Production leaves it nil
-        // and shows the real governance card via `requestApproval`.
-        let approved: Bool
-        if let override = await ToolConfirmDecisionOverride.shared.get() {
-            approved = override
-        } else {
-            approved = await requestApproval(
-                title: "Fae wants to run a tool",
-                message: message)
-        }
-        // Strict two-field reply — matches the daemon's deny_unknown_fields
-        // parser. An extra key here would flip approval into a malformed-deny.
-        return ["approved": approved, "call_id": callID]
+        // Production: the real governance card. There is NO test override here —
+        // the strict reply shape + the fail-closed logic are unit-tested via the
+        // pure `toolConfirmReply` builder below (oracle MAJOR-1: a global mutable
+        // auto-approval actor was a structural bypass footgun; removed).
+        let approved = await requestApproval(
+            title: "Fae wants to run a tool",
+            message: message)
+        return toolConfirmReply(callID: callID, approved: approved)
+    }
+
+    /// Build the STRICT two-field `tool.confirm` reply `{approved, call_id}`.
+    /// Pure (no card, no global state) — this is what unit tests assert the
+    /// shape against, so the test seam is a pure function, not a mutable actor
+    /// that could bypass the UI in production (oracle MAJOR-1). Matches the
+    // daemon's `deny_unknown_fields` parser exactly — any extra field flips
+    // approval into a malformed-deny.
+    static func toolConfirmReply(callID: String, approved: Bool) -> [String: Any] {
+        ["approved": approved, "call_id": callID]
     }
 
     /// Compose a REDACTED confirmation message from the bounded `ConfirmRequest`.
@@ -473,17 +477,4 @@ enum DaemonAgentClient {
         let raw = try await connection.roundTrip(frame: authFrame, expectRequestID: "a0")
         _ = try DaemonWire.unwrapResponse(raw)
     }
-}
-
-/// Test-only decision override for the `tool.confirm` governance card (A3-Swift).
-/// `handleToolConfirm` consults this before showing the real card; production
-/// leaves it `nil` (the real `requestApproval` card is shown). Unit tests set it
-/// so the handler is deterministic without a UI. It is a no-op in production.
-actor ToolConfirmDecisionOverride {
-    static let shared = ToolConfirmDecisionOverride()
-    private var decision: Bool?
-
-    func set(_ approved: Bool) { decision = approved }
-    func get() -> Bool? { decision }
-    func clear() { decision = nil }
 }

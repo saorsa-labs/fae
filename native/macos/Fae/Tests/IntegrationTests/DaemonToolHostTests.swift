@@ -180,35 +180,44 @@ final class DaemonToolHostTests: XCTestCase {
     /// The plain `call()` helper must REFUSE `toolhost.execute` — that path uses
     /// the plain round-trip which would drop the confirm (BLOCKER-1). This is a
     /// structural guard against a future caller misrouting the command.
+    /// (oracle MINOR-1: assert the SPECIFIC error, not any error — a moved/
+    /// removed guard must flip this from agentFailed to daemonUnavailable, and
+    /// the test must catch that drift.)
     func testPlainCallRefusesToolhostExecute() async {
         do {
-            // The guard fires before any daemon connection is needed.
             _ = try await DaemonAgentClient.call(command: "toolhost.execute", payload: [:])
             XCTFail("call() must refuse toolhost.execute")
+        } catch DaemonAgentClientError.agentFailed(let message) {
+            // The BLOCKER-1 guard's message — NOT a generic daemonUnavailable.
+            XCTAssertTrue(
+                message.contains("server-request-aware"),
+                "expected the BLOCKER-1 guard message, got: \(message)")
         } catch {
-            // Expected: the BLOCKER-1 guard throws.
+            XCTFail("expected agentFailed (the BLOCKER-1 guard), got \(error)")
         }
     }
 
     // MARK: tool.confirm handler — strict reply shape + redaction
 
-    func testToolConfirmReplyShape() async throws {
-        // Approved: exactly {approved, call_id}, bound to the request.
-        await ToolConfirmDecisionOverride.shared.set(true)
-        let params: [String: Any] = [
-            "tool": "write", "call_id": "c1", "risk_class": "Write",
-            "reason": "dangerous_tool_requires_confirmation",
-            "detail": ["WriteEdit": ["path": "o.txt", "new_bytes": 5, "old_exists": false] as [String: Any]],
-        ]
-        let reply = await DaemonAgentClient.handleToolConfirm(params: params)
+    func testToolConfirmReplyShape() {
+        // (oracle MAJOR-1: tested via the PURE `toolConfirmReply` builder — no
+        // global override, no UI. The strict two-field shape is what the daemon's
+        // deny_unknown_fields parser expects; approved + call_id, nothing else.)
+        let reply = DaemonAgentClient.toolConfirmReply(callID: "c1", approved: true)
         XCTAssertEqual(reply["approved"] as? Bool, true)
         XCTAssertEqual(reply["call_id"] as? String, "c1")
-        XCTAssertEqual(reply.count, 2, "reply must be the strict two-field shape")
+        XCTAssertEqual(reply.count, 2, "reply must be exactly {approved, call_id}")
+
+        let denied = DaemonAgentClient.toolConfirmReply(callID: "c2", approved: false)
+        XCTAssertEqual(denied["approved"] as? Bool, false)
+        XCTAssertEqual(denied["call_id"] as? String, "c2")
+        XCTAssertEqual(denied.count, 2)
     }
 
     func testToolConfirmDeniesOnMissingCallID() async {
-        // No call_id ⇒ cannot bind the reply ⇒ deny (fail-closed), never prompt.
-        await ToolConfirmDecisionOverride.shared.set(true)
+        // No call_id ⇒ the guard early-returns {approved:false} BEFORE any card
+        // is shown (requestApproval is never reached), so this is safe to call
+        // without any override. Fail-closed: never prompt without a bound reply.
         let reply = await DaemonAgentClient.handleToolConfirm(
             params: ["tool": "write", "risk_class": "Write"])
         XCTAssertEqual(reply["approved"] as? Bool, false)
@@ -235,12 +244,6 @@ final class DaemonToolHostTests: XCTestCase {
     }
 
     // MARK: helpers
-
-    override func tearDown() async throws {
-        // Clear the test seam so it never leaks between tests / into other suites.
-        await ToolConfirmDecisionOverride.shared.clear()
-        try await super.tearDown()
-    }
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {
         let t = Task<String?, Error> { try client.recv() }

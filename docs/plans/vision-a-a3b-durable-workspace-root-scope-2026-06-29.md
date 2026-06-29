@@ -1,9 +1,17 @@
 # ADR-013 Vision A — Slice A3→B: owner-approved durable workspace root
 
-> **Status:** SCOPE rev 0 — **direction chosen by owner (2026-06-29: Option B)**.
-> This relaxes A3 §5's "never cwd/home/project as the root" under explicit
-> owner governance. Drafted for advisor/oracle review BEFORE implementation —
-> it changes a security invariant, so the model must be signed off first.
+> **Status:** SCOPE rev 1 — **direction chosen by owner (2026-06-29: Option B)**,
+> advisor-reviewed (2026-06-29, 7 corrections folded in). This relaxes A3 §5's
+> "never cwd/home/project as the root" under explicit owner governance. It
+> changes a security invariant, so the model must be signed off before B-Rust.
+>
+> **Rev 1 folds the advisor pass:** no-root ⇒ NO daemon routing (not a tempdir
+> fallback); root grant and `ToolExecuteDangerous` stay DECOUPLED (safe tools
+> route first, dangerous waits for explicit provisioning); `ToolWorkspaceGrant`
+> provisioning made real (server-side, not a Swift-local flag); `toolhost.
+> set_root` is BLOCKER-1 load-bearing; root is immutable once set; damage
+> control gets an explicit `TempSandbox` vs `DurableWorkspace` mode;
+> containment claims softened to the cooperative-owner threat model.
 >
 > **Parent:** `vision-a-a3-protocol-surface-scope-2026-06-29.md` (§11 — the
 > mechanism landed inert; routing was blocked pending this decision).
@@ -86,16 +94,34 @@ malicious local adversary (Fae runs as the owner).
   durable root at all (NOT in `SwiftFrontend::default_scopes` — explicit opt-in,
   like `ToolExecuteDangerous`).
 - A new wire command `toolhost.set_root {path}`:
-  - Requires `ToolWorkspaceGrant`.
+  - **Provisioning (advisor #3):** `ToolWorkspaceGrant` is NOT in
+    `SwiftFrontend::default_scopes`. It must be obtainable through REAL
+    server-side provisioning — a new bootstrap-token-stamped scope (the same
+    hash-verified per-connection handshake `session.authenticate` uses), NOT a
+    Swift-local flag. A Swift-local approval is not authority. (Provisioning
+    surface: `session.authenticate` gains an opt-in `workspace_grant` capability
+    bound to the bootstrap token; the server records it on `ClientRecord`.)
+  - **BLOCKER-1 (advisor #4 — load-bearing):** root approval is a daemon-
+    initiated `ServerRequester` round-trip (the daemon surfaces the root-
+    approval card, the owner replies). Therefore `toolhost.set_root` MUST be
+    SPAWNED like `toolhost.execute` (never awaited inline in the read loop), and
+    the Swift caller MUST use the server-request-aware `roundTrip`. Same
+    deadlock class as BLOCKER-1; regression-test-required.
   - Triggers a **distinct root-approval card** (not the inline `tool.confirm`):
-    shows the absolute directory path + a blast-radius note. Server-side, the
-    path is canonicalized + verified to exist + be a directory.
-  - On approval, the session's ToolHost root is set to that path (replacing the
-    temp sandbox) for the **remainder of the session**. Immutable once set
-    (avoids mid-session root-swapping races; a new session picks a new root).
-- Without an approved root: the ToolHost stays temp-sandboxed (file tools operate
-  there) OR file tools are unavailable (OPEN-Q1 — lean: temp-sandbox default
-  preserves the A3 inert-safe behavior).
+    shows the canonicalized absolute directory path + a blast-radius note. The
+    path is canonicalized + verified to exist + be a directory server-side.
+  - **Immutability (advisor #5):** on approval, the session's `ApprovedRoot` is
+    stored in connection/session state and the ToolHost is created bound to it.
+    A late `set_root` (after the ToolHost exists or tasks are in flight) is
+    denied with `root_already_initialized`. A new session picks a new root.
+- **No-root behavior (advisor #1 — RESOLVED, no longer OPEN):** without an
+  approved durable root, **owner-facing file tools do NOT route to the daemon.**
+  They either preserve the existing Swift-local behavior (today's path) or the
+  daemon denies with `workspace_root_required`. Critically, they do NOT silently
+  fall back to the temp sandbox — routing file tools to an empty tempdir is the
+  exact failure mode that blocked routing in the first place (reads/writes hit
+  nothing real). The temp sandbox is reserved for the daemon-resident agent loop
+  (Vision B) and for callers that explicitly opt into it.
 
 **Why distinct from `tool.confirm`:** `tool.confirm` is per-call, inline, and
 the owner approves a *tool invocation*. Root approval is per-session, deliberate,
@@ -104,44 +130,66 @@ implicitly grant a durable workspace — exactly the "one distracted tap" failur
 the threat model forbids.
 
 **Lifecycle:** the root is set at session setup (after auth, before the first
-`toolhost.execute` that needs the real project). This avoids recreating the
-ToolHost mid-session. The ToolHost is created lazily on first
-`toolhost.execute` (already the case post-A3 oracle fix); the root is resolved
-then (approved durable root if granted, else temp sandbox).
+`toolhost.execute` that needs the real project). The ToolHost is created lazily
+on first `toolhost.execute`; the root is resolved then (the approved
+`ApprovedRoot` if set, else `workspace_root_required` for routed file tools).
 
-### Q7b (dangerous opt-in) interaction — OPEN-Q2
-Dangerous execution still requires `ToolExecuteDangerous`. Two models:
-- **(a) Coupled:** granting the workspace root also grants `ToolExecuteDangerous`
-  for the session (the owner opted into the workspace; each dangerous tool is
-  still per-call confirmed). Simpler UX.
-- **(b) Separate:** root grant and dangerous opt-in are independent grants.
-  Tighter least-privilege.
+### Root grant vs dangerous scope — DECOUPLED (advisor #2 — RESOLVED, no longer OPEN)
 
-**Lean (a)** for the minimal slice (one deliberate approval unlocks the
-workspace; per-tool confirms remain). Flag for owner.
+Root grant answers "WHERE" (the workspace dir); `ToolExecuteDangerous` answers
+"MAY this client write/shell". These are independent axes. Keeping them
+**decoupled** (not coupled as rev 0 leaned) means:
+- **Safe tools** (`read`/`glob`/`grep`) route to the daemon with JUST an approved
+  root (no dangerous scope needed — they're read-only + path-contained).
+- **Dangerous tools** (`write`/`edit`/`bash`) additionally require explicit
+  server-side `ToolExecuteDangerous` provisioning (Q7b, a separate grant) AND
+  the per-tool confirm. Without `ToolExecuteDangerous`, they deny at the inner
+  `authorize("tool.execute_dangerous")` gate (proven `ec15a4bd`).
+
+This lets minimal routing land with safe tools first — the useful, low-blast-
+radius case (read/search a project) — and gates dangerous execution behind its
+own deliberate provisioning. Tighter least-privilege than rev 0's coupled lean.
 
 ## 6. Blast-radius-aware damage control (the must-change)
 
 The current `is_catastrophic_command` denylist catches device/system commands
 (`rm -rf /`, `mkfs`, `dd of=/dev/...`). Under a durable root it must ALSO catch
-**workspace-destroying** commands, and deny them **before** the confirm (§6.2):
+**workspace-destroying** commands, and deny them **before** the confirm (§6.2).
+This requires an explicit **mode** in `FaeToolPolicy` (advisor #6):
+`TempSandbox` (current behavior — a recursive delete of the temp root is fine)
+vs `DurableWorkspace` (a recursive delete of the real project is catastrophic).
+The denylist is mode-aware; the catastrophic patterns apply only in
+`DurableWorkspace` mode.
 
-- `rm -rf .` / `rm -rf ./` / `rm -rf <root-basename>` — recursive delete of the
-  workspace.
-- `git clean -fdx` / `git reset --hard` (destroys uncommitted work) — **OPEN-Q3**:
-  deny, or high-bar confirm? Lean deny-before-confirm for `-fdx`/`--hard`
-  (irreversible), same blast class as `rm -rf .`.
-- `find . -delete` — recursive delete.
-- Overwrite of a workspace-critical file (Makefile/Cargo.toml/package.json) —
+Durable-mode catastrophic patterns (deny WITHOUT prompting, §6.2):
+- `rm -rf .` / `rm -rf ./` / `rm -rf *` — recursive delete of the workspace.
+- `rm -rf <root-basename>` — deleting the workspace by name (root-aware).
+- `find . -delete` / `find <root> -delete` — recursive delete.
+- `git clean -fdx` / `git reset --hard` (destroys uncommitted work) —
+  **OPEN-Q3**: deny-before-confirm (lean; irreversible, same blast class as
+  `rm -rf .`) vs high-bar confirm. Lean deny.
+- Overwrite of a workspace-critical file (Cargo.toml/Makefile/package.json) —
   **OPEN-Q4**: hard to classify cheaply; lean: rely on the per-tool confirm's
-  `old_exists` + `new_bytes` to surface it, NOT a deny (too many false positives).
+  `old_exists` + `new_bytes` to surface it, NOT a deny (too many false
+  positives). The confirm shows the real path so the owner sees the target.
 
-This list must be **root-aware**: the same `rm -rf ./subdir` is fine (a clean
-subdir) but `rm -rf .` is catastrophic. The denylist compares against the root.
-Mutation-guarded tests for each.
+This list must be **root-aware**: `rm -rf ./subdir` is fine (a clean subdir) but
+`rm -rf .` is catastrophic. The mode+root are threaded into the denylist check.
+Mutation-guarded tests for EACH pattern (`rm -rf .`, `rm -rf ./`, `rm -rf *`,
+`find . -delete`, `git clean -fdx`, `git reset --hard`) — flipping the pattern
+must flip the verdict (mutation discipline).
 
 **Crucially:** the §6.2 ordering means these deny **without prompting** — a
 social-engineered "approve" can never authorize a workspace wipe.
+
+**Honesty (advisor #6):** this is a substring/regex denylist — it is NOT a
+complete shell-safety guarantee. A determined obfuscation (`rm -rf ${PWD}` or a
+script that deletes the root) can bypass it. The defense is layered:
+containment (paths stay under the root) + the denylist (catches the obvious
+wipes) + the per-tool confirm (the owner sees the command preview for EVERY
+bash call). The denylist raises the bar; it does not make `bash` safe. That is
+acceptable under the cooperative-owner threat model (Fae runs as the owner;
+the risk is accidental/over-broad damage, not a malicious local adversary).
 
 ## 7. Routing (deliverable #4 — Swift side)
 
