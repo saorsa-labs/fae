@@ -34,9 +34,10 @@ actor DaemonToolHostSession {
     /// (endpoints change), the session resets and re-binds on the next call.
     private var boundEndpoints: (socketPath: String, tokenPath: String)?
     private var authenticated = false
-    /// `true` once `setRoot` succeeded on this connection. A fresh connection
-    /// (after reset/reconnect) loses the root and must re-`setRoot`.
-    private var rootSet = false
+    /// The owner-approved durable root bound to THIS connection (advisor #2: store
+    /// the PATH, not just a bool — routing confines tool args to it). `nil` until
+    /// `setRoot`/`ensureDefaultRooted` succeeds; reset on reconnect.
+    private var approvedRootPath: URL?
     private var requestCounter = 0
     /// The server-request handler (workspace.confirm_root during setRoot,
     /// tool.confirm during a dangerous execute). Injectable for tests.
@@ -94,7 +95,7 @@ actor DaemonToolHostSession {
         connection = nil
         boundEndpoints = nil
         authenticated = false
-        rootSet = false
+        approvedRootPath = nil
     }
 
     // MARK: - Public API
@@ -105,8 +106,19 @@ actor DaemonToolHostSession {
     /// On owner denial, the root is NOT set and `execute` will fail-closed.
     ///
     /// - Returns: the daemon's `result` object (e.g. `{"root": "<canonical>"}`).
+    /// Bind an owner-approved durable workspace root (B-Rust `toolhost.set_root`)
+    /// using the session's default server-request handler. See `setRoot(_:handler:)`
+    /// for the handler-injectable form used by `ensureDefaultRooted`.
     @discardableResult
     func setRoot(path: String) async throws -> [String: Any] {
+        try await setRoot(path: path, handler: serverRequestHandler)
+    }
+
+    /// Handler-injectable `setRoot`. `ensureDefaultRooted` passes a
+    /// `defaultAwareHandler`-wrapped handler so the Fae-owned default root is
+    /// auto-approved (no card) while every other confirm surfaces the real card.
+    @discardableResult
+    func setRoot(path: String, handler: @escaping DaemonServerRequestHandler) async throws -> [String: Any] {
         let conn = try await ensureConnected()
         let requestID = nextRequestID()
         let frame = try DaemonWire.encodeFrame(
@@ -117,14 +129,14 @@ actor DaemonToolHostSession {
             frame: frame,
             expectRequestID: requestID,
             onServerRequest: { _, method, params in
-                await self.serverRequestHandler(method, params)
+                await handler(method, params)
             })
         let validated = try DaemonAgentClient.validate(raw)
         // B-Rust returns ok=true with {root} on approval; a denial comes back as
         // ok=false (root_denied / unsafe_root / root_already_initialized). Only
-        // flip rootSet on a genuine approval.
+        // bind the approved root path on a genuine approval.
         if (validated["ok"] as? Bool) == true {
-            rootSet = true
+            approvedRootPath = URL(fileURLWithPath: path)
         }
         return (validated["result"] as? [String: Any]) ?? [:]
     }
@@ -143,7 +155,7 @@ actor DaemonToolHostSession {
     @discardableResult
     func execute(tool: String, input: [String: Any]) async throws -> [String: Any] {
         let conn = try await ensureConnected()
-        guard rootSet else {
+        guard approvedRootPath != nil else {
             // No approved root → do NOT silently run against the temp sandbox.
             // Layer 3 routing must not reach here without a root.
             throw DaemonAgentClientError.agentFailed(
@@ -164,9 +176,75 @@ actor DaemonToolHostSession {
         return (validated["result"] as? [String: Any]) ?? [:]
     }
 
-    /// Whether `setRoot` has succeeded on the current connection (a durable root
-    /// is bound). Layer 3 routing consults this before routing a file tool.
-    func hasRoot() -> Bool { rootSet }
+    /// The approved workspace root bound to this connection, if any. Layer 3
+    /// routing confines tool args to this path (advisor #2).
+    func rootPath() -> URL? { approvedRootPath }
+
+    /// Whether an approved root is bound. Layer 3 routing consults this before
+    /// routing a file tool.
+    func hasRoot() -> Bool { approvedRootPath != nil }
+
+    // MARK: - Default workspace (Layer 3a, C′ root-source)
+
+    /// Idempotently bind Fae's default workspace as the session root. Provisions
+    /// the dir if absent, then `setRoot`s it. The `workspace.confirm_root` card
+    /// is AUTO-APPROVED when Fae owns the dir (marker present); a pre-existing
+    /// dir without a marker surfaces the REAL card once, and on approval the
+    /// marker is written (sticky thereafter).
+    ///
+    /// Because B-Rust root is immutable per connection, this is called at most
+    /// once per session; subsequent calls return the already-approved path.
+    /// - Returns: the approved workspace root.
+    @discardableResult
+    func ensureDefaultRooted(
+        provider: FaeWorkspaceProvider = DefaultDocumentsWorkspace()
+    ) async throws -> URL {
+        if let existing = approvedRootPath { return existing }
+        let outcome = try FaeWorkspace.provision(provider)
+        let url: URL
+        let handler: DaemonServerRequestHandler
+        var writeMarkerAfterApproval = false
+        switch outcome {
+        case .provisioned(let u), .alreadyOwned(let u):
+            // Fae owns it → auto-approve the root confirm (no card).
+            url = u
+            handler = defaultAwareHandler(
+                serverRequestHandler,
+                defaultPath: u,
+                isMarkerPresent: { FaeWorkspace.markerPresent(at: u) })
+        case .preExistingWithoutMarker(let u):
+            // A user-made dir → surface the real card; mark sticky on approval.
+            url = u
+            handler = serverRequestHandler
+            writeMarkerAfterApproval = true
+        }
+        // The daemon is authoritative: an unsafe root (e.g. a symlink that
+        // canonicalizes to home) is rejected server-side regardless of approval.
+        let result = try await setRoot(path: url.path, handler: handler)
+        guard result["root"] != nil else {
+            // ok=false denial (root_denied / unsafe_root / root_already_initialized).
+            throw DaemonAgentClientError.agentFailed("workspace root not approved by daemon")
+        }
+        if writeMarkerAfterApproval {
+            try? FaeWorkspace.writeMarker(at: url)
+        }
+        return url
+    }
+
+    /// Execute a portable tool confined to the default workspace. Ensures the
+    /// root is bound first (idempotent), then delegates to `execute`.
+    ///
+    /// Path normalization (rejecting absolute/escaping paths, relativizing to the
+    /// root) lands in Layer 3b routing; this seam exists so 3b has a single
+    /// call site. Fails closed without a root.
+    @discardableResult
+    func executeInDefaultWorkspace(
+        tool: String,
+        input: [String: Any]
+    ) async throws -> [String: Any] {
+        _ = try await ensureDefaultRooted()
+        return try await execute(tool: tool, input: input)
+    }
 
     /// Tear down the session (daemon shutdown, root denial, app session close).
     /// Resets connection + root state; the next call reconnects + re-roots.

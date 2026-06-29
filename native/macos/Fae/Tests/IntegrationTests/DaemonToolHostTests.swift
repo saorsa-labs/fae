@@ -493,6 +493,174 @@ final class DaemonToolHostTests: XCTestCase {
         _ = client  // keep the client alive for the duration of the test
     }
 
+    // MARK: - B-Swift Layer 3a: default workspace + auto-root (C′ root-source)
+
+    /// Temp-dir workspace provider for tests — NEVER touches real ~/Documents
+    /// (avoids macOS TCC prompts in CI; advisor #4).
+    private struct TempWorkspace: FaeWorkspaceProvider {
+        let workspaceRoot: URL
+    }
+
+    /// Provisioning a fresh temp dir creates the dir + the ownership marker.
+    func testProvisionCreatesDirAndMarker() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let provider = TempWorkspace(workspaceRoot: tmp)
+        let outcome = try FaeWorkspace.provision(provider)
+        XCTAssertEqual(outcome, .provisioned(tmp))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.path), "dir created")
+        XCTAssertTrue(FaeWorkspace.markerPresent(at: tmp), "marker written")
+    }
+
+    /// A dir Fae already owns (marker present) is reported sticky — no re-card.
+    func testAlreadyOwnedIsSticky() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let provider = TempWorkspace(workspaceRoot: tmp)
+        _ = try FaeWorkspace.provision(provider)   // first provision
+        let again = try FaeWorkspace.provision(provider)  // second
+        XCTAssertEqual(again, .alreadyOwned(tmp))
+    }
+
+    /// A pre-existing dir WITHOUT a marker is NOT taken over — provisioning
+    /// reports preExistingWithoutMarker so the caller surfaces the real card
+    /// (advisor #3: marker = ownership/collision guard, not security).
+    func testPreExistingWithoutMarkerIsReported() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // User-made dir with precious files, no marker.
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("precious".utf8).write(to: tmp.appendingPathComponent("mine.txt"))
+        let provider = TempWorkspace(workspaceRoot: tmp)
+        let outcome = try FaeWorkspace.provision(provider)
+        XCTAssertEqual(outcome, .preExistingWithoutMarker(tmp))
+    }
+
+    /// The auto-approve wrapper auto-approves workspace.confirm_root ONLY for the
+    /// canonical-exact default path with a marker — never for a sibling path
+    /// (a prefix collision like `Fae-evil` must hit the real handler).
+    func testAutoApproveCanonicalExactOnly() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: tmp.appendingPathComponent(FaeWorkspace.markerName))
+
+        actor Seen { var calls = [String](); func record(_ m: String) { calls.append(m) } }
+        let seen = Seen()
+        // The "real" handler records what it gets (would surface the card).
+        let real: DaemonServerRequestHandler = { method, _ in
+            await seen.record(method)
+            return ["approved": false, "call_id": "x"]
+        }
+        let wrapped = defaultAwareHandler(real, defaultPath: tmp, isMarkerPresent: { true })
+
+        // Exact default path → auto-approved (real handler NOT called).
+        let auto = await wrapped("workspace.confirm_root",
+                                 ["call_id": "c1", "path": tmp.path])
+        XCTAssertEqual(auto["approved"] as? Bool, true)
+        XCTAssertEqual(auto["call_id"] as? String, "c1")
+
+        // Sibling path (prefix collision attempt) → real handler (NOT auto-approved).
+        let sibling = tmp.deletingLastPathComponent().appendingPathComponent("Fae-evil")
+        _ = await wrapped("workspace.confirm_root",
+                          ["call_id": "c2", "path": sibling.path])
+        let calls = await seen.calls
+        XCTAssertEqual(calls, ["workspace.confirm_root"], "sibling must hit real handler, not auto-approve")
+    }
+
+    /// tool.confirm is NEVER auto-approved, even for the default path — only the
+    /// root grant (workspace.confirm_root) may be auto-approved (advisor #3).
+    func testToolConfirmNeverAutoApproved() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: tmp.appendingPathComponent(FaeWorkspace.markerName))
+
+        actor Seen { var hit = false; func mark() { hit = true } }
+        let seen = Seen()
+        let real: DaemonServerRequestHandler = { _, _ in
+            await seen.mark()
+            return ["approved": false, "call_id": "x"]
+        }
+        let wrapped = defaultAwareHandler(real, defaultPath: tmp, isMarkerPresent: { true })
+        // tool.confirm must ALWAYS go to real, even though the path is the default.
+        _ = await wrapped("tool.confirm",
+                          ["call_id": "tc1", "path": tmp.path])
+        let hit = await seen.hit
+        XCTAssertTrue(hit, "tool.confirm must always surface the real card")
+    }
+
+    /// ensureDefaultRooted provisions + auto-approves the default root WITHOUT
+    /// surfacing the real card, and a following execute reuses the SAME
+    /// connection (Layer 2's persistence invariant, extended to C′ default-root).
+    func testEnsureDefaultRootedAutoApprovesAndReusesSession() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let provider = TempWorkspace(workspaceRoot: tmp)
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        // The session's REAL handler records whether a card was surfaced. The
+        // auto-approve wrapper must suppress it for the default root.
+        actor Seen { var cardSurfaced = false; func mark() { cardSurfaced = true } }
+        let seen = Seen()
+        let session = DaemonToolHostSession(serverRequestHandler: { method, params in
+            await seen.mark()  // the real card would surface here
+            let callID = (params["call_id"] as? String) ?? ""
+            return ["approved": false, "call_id": callID]
+        })
+        defer { Task { await session.close() } }
+
+        // 1. ensureDefaultRooted → provisions tmp, auto-approves (no card), setRoot.
+        let rooted = Task { try await session.ensureDefaultRooted(provider: provider) }
+        let client = try peer.accept()
+        try driveAuth(client)
+        let setRootReq = try await recvWithTimeout(client)
+        XCTAssertTrue(setRootReq.contains("\"command\":\"toolhost.set_root\""))
+        XCTAssertTrue(FaeWorkspace.markerPresent(at: tmp), "provision wrote the marker")
+        // The daemon sends workspace.confirm_root; the wrapper AUTO-APPROVES it
+        // (marker present) WITHOUT surfacing the real card.
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"workspace grant"}}
+        """)
+        // ... and the session sends the strict {approved, call_id} reply back.
+        let rootReply = try await recvWithTimeout(client)
+        XCTAssertTrue(rootReply.contains("\"approved\":true"), "wrapper auto-approved the default root")
+        // Daemon returns the approved root.
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+        let root = try await withTimeout(rooted)
+        XCTAssertEqual(root.path, tmp.path)
+        // CRITICAL: the real handler was NOT invoked (auto-approve suppressed it).
+        let cardSurfaced = await seen.cardSurfaced
+        XCTAssertFalse(cardSurfaced, "default root must be auto-approved, not card-surfaced")
+
+        // 2. execute reuses the SAME connection (execute frame on the same client).
+        let execute = Task { try await session.executeInDefaultWorkspace(
+            tool: "read", input: ["path": "a.txt"]) }
+        let executeReq = try await recvWithTimeout(client)
+        XCTAssertTrue(executeReq.contains("\"command\":\"toolhost.execute\""),
+                      "execute must reuse the setRoot connection")
+        try client.send("""
+        {"v":2,"request_id":"th-2","ok":true,"result":{"content":["hi"]}}
+        """)
+        let execResult = try await withTimeout(execute)
+        let content = (execResult["content"] as? [String]) ?? []
+        XCTAssertEqual(content.first, "hi")
+        let hasRoot = await session.hasRoot()
+        XCTAssertTrue(hasRoot)
+    }
+
     // MARK: helpers
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {
