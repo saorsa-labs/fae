@@ -194,19 +194,26 @@ the risk is accidental/over-broad damage, not a malicious local adversary).
 ## 7. Routing (deliverable #4 — Swift side)
 
 Once a durable root is approved, Swift routes portable file tools to
-`toolhostExecute`:
+`toolhostExecute`. Routing respects the decoupling (§5): safe tools route with
+just the root; dangerous tools additionally require `ToolExecuteDangerous` (and
+the per-tool confirm):
 
-| Tool class | Routes to | Status |
+| Tool class | Routes to | Requires |
 |---|---|---|
-| Portable (`read`/`write`/`edit`/`bash`/`glob`/`grep`) | daemon `toolhost.execute` (server-request-aware) | **NEW in B** |
-| macOS-native (EventKit/camera/computer-use) | Swift, in-process | unchanged |
-| Networked (`web_search`/`fetch_url`) | denied (`DisabledGate`) | unchanged |
+| Safe portable (`read`/`glob`/`grep`) | daemon `toolhost.execute` (server-request-aware) | approved root only |
+| Dangerous portable (`write`/`edit`/`bash`) | daemon `toolhost.execute` | approved root **+** `ToolExecuteDangerous` **+** per-tool confirm |
+| macOS-native (EventKit/camera/computer-use) | Swift, in-process | unchanged (privileged OS APIs) |
+| Networked (`web_search`/`fetch_url`) | denied (`DisabledGate`) | egress adapter is A2.5/P7 |
 
-Routing helper: a small pure classifier `portableDaemon | localSwift |
-deniedNetworked` at the `PipelineCoordinator.executeTool` convergence point,
-explicitly allowlisting daemon-routed tool names (matching the Swift registry
-names to daemon tool names). Unknown/plugin/macOS-native tools stay local unless
-deliberately classified. (Networked explicitly denied — no silent egress.)
+No approved root ⇒ owner-facing file tools do NOT route to the daemon (advisor
+#1): they preserve existing Swift-local behavior or the daemon denies with
+`workspace_root_required`. They never silently fall back to the temp sandbox.
+
+Routing helper: a small pure classifier `portableDaemonSafe | portableDaemonDangerous | localSwift | deniedNetworked` at the
+`PipelineCoordinator.executeTool` convergence point, explicitly allowlisting
+daemon-routed tool names (matching the Swift registry names to daemon tool
+names). Unknown/plugin/macOS-native tools stay local unless deliberately
+classified. (Networked explicitly denied — no silent egress.)
 
 ## 8. Split (mirror A3-Rust / A3-Swift)
 
@@ -219,35 +226,46 @@ deliberately classified. (Networked explicitly denied — no silent egress.)
   scope provisioning + human-in-the-loop confirm testing. **After B-Rust green.**
 
 ## 9. Test plan (highlights — each mutation-guarded)
-- Root-not-approved → file tools operate in temp sandbox (or deny per OPEN-Q1).
-- Root approved → file tools read/write the real project dir; escapes still deny.
-- `rm -rf .` under a durable root → denied WITHOUT prompt (blast-radius).
+- Root-not-approved → owner-facing file tools do NOT route to the daemon (Swift-local or `workspace_root_required`); they never hit the temp sandbox silently.
+- Root approved, safe-only client → `read`/`glob`/`grep` run on the real project; `write`/`edit`/`bash` deny on `missing_scope` WITHOUT prompting (proven `ec15a4bd`).
+- Root approved + `ToolExecuteDangerous` → dangerous tools reach the confirm; approve runs, deny doesn't.
+- `rm -rf .` / `rm -rf ./` / `rm -rf *` / `find . -delete` / `git clean -fdx` / `git reset --hard` under a durable root → denied WITHOUT prompt (blast-radius; mutation-tested — flipping the pattern flips the verdict).
 - `rm -rf ./subdir` → proceeds to confirm (not a workspace wipe).
 - Symlink-outside under the root → denied (containment).
-- Per-tool confirm shows the real path + old_exists + new_bytes (redacted).
-- Routing: portable→daemon, native→local, networked→denied.
-- BLOCKER-1 still holds for `toolhost.set_root` (server-request-aware if it can
-  trigger a confirm).
+- Per-tool confirm shows the real path + old_exists + new_bytes (redacted, never contents).
+- Late `toolhost.set_root` (after init) → `root_already_initialized`.
+- Routing: safe-portable→daemon, dangerous-portable→daemon+scope, native→local, networked→denied.
+- BLOCKER-1 holds for `toolhost.set_root` (spawned + server-request-aware).
 
 ## 10. Open questions
-- **OPEN-Q1:** no-root-approved behavior — temp-sandbox default (lean) vs file-
-  tools-unavailable?
-- **OPEN-Q2:** Q7b coupling — root grant implies `ToolExecuteDangerous` (lean)
-  vs separate grants?
+- **OPEN-Q1 (RESOLVED, advisor #1):** no-root behavior = NO daemon routing for
+  owner-facing file tools (Swift-local or `workspace_root_required`), never a
+  temp-sandbox fallback.
+- **OPEN-Q2 (RESOLVED, advisor #2):** root grant and `ToolExecuteDangerous` are
+  DECOUPLED. Safe tools route with just a root; dangerous waits for explicit
+  provisioning.
 - **OPEN-Q3:** `git clean -fdx` / `git reset --hard` — deny-before-confirm (lean)
   vs high-bar confirm?
 - **OPEN-Q4:** critical-file overwrite (Cargo.toml etc.) — rely on confirm's
   `old_exists` (lean) vs a deny?
 - **OPEN-Q5:** persistent per-project root grant (survives sessions) — follow-on
   to the per-session minimal slice?
+- **OPEN-Q6 (advisor #3):** the exact `ToolWorkspaceGrant` provisioning surface —
+  lean is a `session.authenticate` capability bound to the bootstrap token; the
+  concrete handshake needs fleshing in B-Rust.
 
 ## 11. Acceptance (B done when)
-1. An owner can approve a durable workspace root via a distinct card; the root
-   is canonicalized, verified, and stored per-session.
-2. File tools operate on the real project under that root; path escapes (incl.
-   symlinks) still deny (two layers).
-3. Workspace-wipe commands (`rm -rf .`, etc.) deny WITHOUT prompting, regardless
-   of the confirm.
-4. macOS-native tools still run locally; networked tools still deny.
-5. Dangerous execution still requires `ToolExecuteDangerous` + per-tool confirm.
-6. Gates green; boundary guards intact; no `fae.db` writes; BLOCKER-1 holds.
+1. An owner can approve a durable workspace root via a DISTINCT card (not the
+   inline `tool.confirm`); the root is canonicalized, verified, stored per-session
+   in `ApprovedRoot`, and immutable once set (`root_already_initialized`).
+2. No approved root ⇒ owner-facing file tools do NOT route to the daemon (Swift-
+   local or `workspace_root_required`); they never silently hit the temp sandbox.
+3. Safe portable tools (`read`/`glob`/`grep`) run on the real project under the
+   approved root with just the root grant; path escapes (incl. symlinks) deny.
+4. Dangerous portable tools (`write`/`edit`/`bash`) additionally require
+   `ToolExecuteDangerous` (decoupled from the root grant) + the per-tool confirm.
+5. Workspace-wipe commands (`rm -rf .`, `git clean -fdx`, etc.) deny WITHOUT
+   prompting, regardless of the confirm (mode-aware damage control).
+6. macOS-native tools still run locally; networked tools still deny.
+7. `toolhost.set_root` is spawned + server-request-aware (BLOCKER-1).
+8. Gates green; boundary guards intact; no `fae.db` writes.
