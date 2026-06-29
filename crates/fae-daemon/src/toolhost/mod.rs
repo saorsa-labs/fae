@@ -31,14 +31,15 @@ use fluers_runtime::{Limits, LocalSessionEnv, SessionEnv};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::conductor::ConductorStore;
+use crate::toolhost::audit::{AuditDecision, ConductorStoreAudit, ToolHostAudit};
+use crate::toolhost::confirm::{build_detail, ConfirmReply, ConfirmRequest, ToolConfirmation};
+use crate::toolhost::egress::{DisabledGate, ToolEgressGate};
+use crate::toolhost::policy::{EvalDecision, FaeToolPolicy, ToolHostGovernance};
 use fae_control_plane::ClientRecord;
 
-use crate::conductor::ConductorStore;
-use crate::toolhost::audit::{ConductorStoreAudit, ToolHostAudit};
-use crate::toolhost::egress::{DisabledGate, ToolEgressGate};
-use crate::toolhost::policy::{FaeToolPolicy, ToolHostGovernance};
-
 pub mod audit;
+pub mod confirm;
 pub mod damage;
 pub mod egress;
 pub mod policy;
@@ -183,7 +184,7 @@ impl ToolHost {
     /// tool; [`ToolHostError::Tool`] for an execution failure.
     pub async fn execute(&self, req: ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
         let gov = Arc::new(ToolHostGovernance {
-            client: req.client,
+            client: req.client.clone(),
             audit: Arc::clone(&self.audit),
             egress: Arc::clone(&self.egress),
             now_ms: self.clock.now_ms(),
@@ -218,14 +219,124 @@ impl ToolHost {
                 return Err(ToolHostError::Denied(reason));
             }
         }
+        self.run_tool(&req).await
+    }
+
+    /// Governed execute WITH owner confirmation (A3 — the production path for
+    /// `toolhost.execute`). Runs [`FaeToolPolicy::evaluate`]; on
+    /// `NeedsConfirmation` performs the `tool.confirm` round-trip via
+    /// `confirmation`. On approval the tool runs; any deny / timeout /
+    /// disconnect / malformed reply fails closed.
+    ///
+    /// Distinct from [`execute`](Self::execute) (the fluers-loop path, which
+    /// denies on `NeedsConfirmation`): this is the path that actually lets a
+    /// dangerous tool proceed, behind the confirmation channel.
+    pub async fn execute_governed(
+        &self,
+        req: ToolHostRequest,
+        confirmation: &dyn ToolConfirmation,
+    ) -> Result<ToolHostResult, ToolHostError> {
+        let gov = Arc::new(ToolHostGovernance {
+            client: req.client.clone(),
+            audit: Arc::clone(&self.audit),
+            egress: Arc::clone(&self.egress),
+            now_ms: self.clock.now_ms(),
+            call_id: req.call_id.clone(),
+        });
+        let policy = FaeToolPolicy::new(Arc::clone(&gov));
+        let ev = policy.evaluate(&req.tool, &req.input).await;
+        match ev.decision {
+            EvalDecision::Allow => {
+                if !policy.record_audit(&req.tool, ev.risk_label, AuditDecision::Allowed, "allowed")
+                {
+                    return Err(ToolHostError::Denied("audit_write_failed".into()));
+                }
+                self.run_tool(&req).await
+            }
+            EvalDecision::Deny(reason) => {
+                let _ =
+                    policy.record_audit(&req.tool, ev.risk_label, AuditDecision::Denied, &reason);
+                Err(ToolHostError::Denied(reason))
+            }
+            EvalDecision::NeedsConfirmation(reason) => {
+                // Build the bounded, redacted payload (scope §6.3).
+                let old_exists = self.probe_old_exists(&req.tool, &req.input).await;
+                let detail = match build_detail(&req.tool, &req.input, old_exists) {
+                    Some(d) => d,
+                    None => {
+                        // A dangerous tool we can't summarize: deny rather than
+                        // send a useless/ambiguous prompt.
+                        let r = "confirm_detail_unbuildable";
+                        let _ =
+                            policy.record_audit(&req.tool, ev.risk_label, AuditDecision::Denied, r);
+                        return Err(ToolHostError::Denied(r.into()));
+                    }
+                };
+                let creq = ConfirmRequest {
+                    tool: req.tool.clone(),
+                    call_id: req.call_id.clone(),
+                    risk_class: ev.risk_label.to_string(),
+                    reason,
+                    detail,
+                };
+                match confirmation.confirm(&creq).await {
+                    ConfirmReply::Approved => {
+                        if !policy.record_audit(
+                            &req.tool,
+                            ev.risk_label,
+                            AuditDecision::Allowed,
+                            "confirmed_by_owner",
+                        ) {
+                            return Err(ToolHostError::Denied("audit_write_failed".into()));
+                        }
+                        self.run_tool(&req).await
+                    }
+                    ConfirmReply::Denied(r) => {
+                        let _ = policy.record_audit(
+                            &req.tool,
+                            ev.risk_label,
+                            AuditDecision::Denied,
+                            &r,
+                        );
+                        Err(ToolHostError::Denied(r))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Dispatch an already-policy-checked tool call (the shared tail of
+    /// [`execute`](Self::execute) and [`execute_governed`](Self::execute_governed)).
+    async fn run_tool(&self, req: &ToolHostRequest) -> Result<ToolHostResult, ToolHostError> {
+        let ctx = InvokeContext {
+            tool_call_id: req.call_id.clone(),
+            cancel: req.cancel.clone(),
+        };
         let Some(tool) = self.registry.get(&req.tool) else {
             return Err(ToolHostError::UnknownTool(req.tool.clone()));
         };
         let output = tool
-            .execute(ctx, req.input)
+            .execute(ctx, req.input.clone())
             .await
             .map_err(|e| ToolHostError::Tool(e.to_string()))?;
         Ok(ToolHostResult { output })
+    }
+
+    /// Cheap existence probe for the file a write/edit targets (feeds the
+    /// confirm payload's `old_exists` flag). Errors (path escape, IO, absent) ⇒
+    /// `false` — this is informational, not a gate (path/damage already ran in
+    /// `evaluate`).
+    async fn probe_old_exists(&self, tool: &str, input: &Value) -> bool {
+        if !matches!(tool, "write" | "edit") {
+            return false;
+        }
+        let Some(path) = input.get("path").and_then(Value::as_str) else {
+            return false;
+        };
+        self.env
+            .read_file_full(std::path::Path::new(path), 1)
+            .await
+            .is_ok()
     }
 }
 
@@ -233,6 +344,7 @@ impl ToolHost {
 mod tests {
     use super::*;
     use crate::toolhost::audit::CapturingAudit;
+    use crate::toolhost::confirm::FakeConfirmation;
     use crate::toolhost::egress::{EgressDenyReason, FakeEgressGate};
     use fae_control_plane::{ClientClass, Scope};
     use fluers_core::ToolPolicy;
@@ -374,7 +486,7 @@ mod tests {
         assert!(!matches!(v, fluers_core::PolicyVerdict::Confirm(_)));
         assert_eq!(
             audit.snapshot()[0].reason,
-            "confirm_required_mapped_to_deny"
+            "confirm_required_via_loop_bypass"
         );
     }
 
@@ -620,5 +732,191 @@ mod tests {
         // A deny audit row was written.
         assert_eq!(audit.snapshot().len(), 1);
         assert_eq!(audit.snapshot()[0].reason, "missing_scope");
+    }
+
+    // -----------------------------------------------------------------------
+    // A3 execute_governed: the confirmation channel (scope §6)
+    // -----------------------------------------------------------------------
+
+    fn dangerous_client() -> ClientRecord {
+        client(&[Scope::ToolExecuteSafe, Scope::ToolExecuteDangerous])
+    }
+
+    fn req(client: ClientRecord, tool: &str, input: Value) -> ToolHostRequest {
+        ToolHostRequest {
+            client,
+            tool: tool.into(),
+            input,
+            call_id: "call-1".into(),
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_safe_read_runs_without_confirm() {
+        // A safe tool (read) takes the Allow path — no confirmation asked.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        host.env
+            .write_file(std::path::Path::new("a.txt"), "hi")
+            .await
+            .expect("write");
+        let conf = FakeConfirmation::approve();
+        let r = host
+            .execute_governed(
+                req(
+                    client(&[Scope::ToolExecuteSafe]),
+                    "read",
+                    json!({"path":"a.txt"}),
+                ),
+                &conf,
+            )
+            .await
+            .expect("allowed + ran");
+        assert!(!r.output.content.is_empty());
+        assert!(!conf.was_called(), "safe read must not prompt");
+        assert_eq!(audit.snapshot()[0].reason, "allowed");
+    }
+
+    #[tokio::test]
+    async fn governed_write_approved_executes_and_audits() {
+        // A dangerous write: confirm→approve→runs; audit reason is the confirmed marker.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        host.execute_governed(
+            req(
+                dangerous_client(),
+                "write",
+                json!({"path":"out.txt","content":"hello"}),
+            ),
+            &conf,
+        )
+        .await
+        .expect("approved + ran");
+        assert!(conf.was_called(), "dangerous write must prompt");
+        // The file was actually written to the sandbox root.
+        let written = host
+            .env
+            .read_file_full(std::path::Path::new("out.txt"), 1024)
+            .await
+            .expect("file exists");
+        assert_eq!(written, "hello");
+        // The audit row records the owner's confirmation, not a bare allow.
+        assert_eq!(audit.snapshot()[0].decision, AuditDecision::Allowed);
+        assert_eq!(audit.snapshot()[0].reason, "confirmed_by_owner");
+    }
+
+    #[tokio::test]
+    async fn governed_write_denied_does_not_execute() {
+        // confirm→deny: the tool must NOT run.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::deny();
+        let err = host
+            .execute_governed(
+                req(
+                    dangerous_client(),
+                    "write",
+                    json!({"path":"out.txt","content":"x"}),
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)), "{err:?}");
+        // The file was NOT written.
+        assert!(
+            host.env
+                .read_file_full(std::path::Path::new("out.txt"), 1)
+                .await
+                .is_err(),
+            "denied write must not create the file"
+        );
+        assert_eq!(audit.snapshot()[0].decision, AuditDecision::Denied);
+    }
+
+    #[tokio::test]
+    async fn governed_write_path_escape_denies_without_prompting() {
+        // §6.2: a path-escaping write denies BEFORE the owner is prompted.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve(); // would approve if asked — it must NOT be asked
+        let err = host
+            .execute_governed(
+                req(
+                    dangerous_client(),
+                    "write",
+                    json!({"path":"../escape.txt","content":"x"}),
+                ),
+                &conf,
+            )
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)));
+        assert!(
+            !conf.was_called(),
+            "path-escape write must deny WITHOUT prompting"
+        );
+        assert_eq!(audit.snapshot()[0].reason, "path_escape");
+    }
+
+    #[tokio::test]
+    async fn governed_bash_catastrophic_denies_without_prompting() {
+        // §6.2: a catastrophic bash denies BEFORE the owner is prompted.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(
+                req(dangerous_client(), "bash", json!({"command":"rm -rf /"})),
+                &conf,
+            )
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)));
+        assert!(
+            !conf.was_called(),
+            "catastrophic bash must deny WITHOUT prompting"
+        );
+        assert_eq!(audit.snapshot()[0].reason, "damage_control");
+    }
+
+    #[tokio::test]
+    async fn governed_confirm_payload_carries_no_file_content() {
+        // §6.3 / owner Q3: the confirm payload is bounded + redacted — the file
+        // CONTENT must never reach the confirmation channel.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(audit, Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::deny(); // deny so nothing runs; we only inspect the request
+        let _ = host
+            .execute_governed(
+                req(
+                    dangerous_client(),
+                    "write",
+                    json!({"path":"out.txt","content":"SECRET-SENTINEL-DO-NOT-ECHO"}),
+                ),
+                &conf,
+            )
+            .await;
+        let creq = conf.last_request().expect("confirm was called");
+        let serialized = serde_json::to_string(&creq).expect("serialize");
+        assert!(
+            !serialized.contains("SECRET-SENTINEL-DO-NOT-ECHO"),
+            "file content leaked into confirm payload: {serialized}"
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_unknown_tool_denies_without_prompting() {
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(audit, Arc::new(FakeEgressGate::allow())).await;
+        let conf = FakeConfirmation::approve();
+        let err = host
+            .execute_governed(req(dangerous_client(), "nope", json!({})), &conf)
+            .await
+            .expect_err("must deny");
+        assert!(matches!(err, ToolHostError::Denied(_)));
+        assert!(!conf.was_called());
     }
 }

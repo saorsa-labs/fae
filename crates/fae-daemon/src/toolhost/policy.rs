@@ -208,6 +208,35 @@ pub struct ToolHostGovernance {
     pub(crate) call_id: String,
 }
 
+/// The internal (non-fluers) evaluation outcome — richer than
+/// [`PolicyVerdict`], which cannot carry "needs confirmation" safely (fluers'
+/// loop treats `Confirm` as allow-with-log, the §4.1 trap). The governed
+/// ToolHost path consumes this; the fluers-loop [`check`](FaeToolPolicy::check)
+/// maps `NeedsConfirmation` → `Deny`.
+pub(crate) enum EvalDecision {
+    Allow,
+    Deny(String),
+    /// A dangerous tool that passed path/damage/egress and now needs the
+    /// owner's confirmation (via `tool.confirm`) before it may execute.
+    NeedsConfirmation(String),
+}
+
+/// A pure pipeline decision (no audit). `risk_label` is the [`RiskClass`] label
+/// for the audit row the caller records.
+pub(crate) struct Evaluated {
+    pub(crate) risk_label: &'static str,
+    pub(crate) decision: EvalDecision,
+}
+
+impl Evaluated {
+    fn deny(risk_label: &'static str, reason: &str) -> Self {
+        Self {
+            risk_label,
+            decision: EvalDecision::Deny(reason.into()),
+        }
+    }
+}
+
 /// The Fae tool policy: composes control-plane scope + path/damage/egress gates
 /// into one `check` that never emits `Confirm`.
 pub struct FaeToolPolicy {
@@ -220,70 +249,35 @@ impl FaeToolPolicy {
         Self { gov }
     }
 
-    /// Record an allow decision; fail-closed (an audit write failure denies).
-    fn decide_allowed(&self, tool: &str, risk_label: &'static str) -> PolicyVerdict {
-        let rec = ToolHostAuditRecord {
-            event_type: "tool_policy",
-            ts_ms: self.gov.now_ms,
-            tool: tool.to_string(),
-            call_id: self.gov.call_id.clone(),
-            decision: AuditDecision::Allowed,
-            reason: "allowed".into(),
-            risk_class: risk_label,
-        };
-        match self.gov.audit.record(rec) {
-            Ok(()) => PolicyVerdict::Allow,
-            Err(e) => PolicyVerdict::Deny(format!("audit_write_failed: {e}")),
-        }
-    }
-
-    /// Record a deny decision (best-effort audit: the decision is already Deny).
-    fn decide_denied(&self, tool: &str, risk_label: &'static str, reason: &str) -> PolicyVerdict {
-        let rec = ToolHostAuditRecord {
-            event_type: "tool_policy",
-            ts_ms: self.gov.now_ms,
-            tool: tool.to_string(),
-            call_id: self.gov.call_id.clone(),
-            decision: AuditDecision::Denied,
-            reason: reason.into(),
-            risk_class: risk_label,
-        };
-        if let Err(e) = self.gov.audit.record(rec) {
-            tracing::warn!(
-                tool = %tool,
-                call_id = %self.gov.call_id,
-                error = %e,
-                "toolhost deny-path audit write failed"
-            );
-        }
-        PolicyVerdict::Deny(reason.into())
-    }
-}
-
-#[async_trait]
-impl ToolPolicy for FaeToolPolicy {
-    async fn check(&self, tool: &str, input: &Value, _ctx: &InvokeContext) -> PolicyVerdict {
+    /// The real pipeline (steps 1–5), returning a pure decision WITHOUT
+    /// auditing. Two callers: [`check`](FaeToolPolicy::check) (the fluers-loop
+    /// path — denies on `NeedsConfirmation`) and the governed ToolHost path
+    /// (`execute_governed`, which performs the `tool.confirm` round-trip).
+    ///
+    /// Ordering (scope §6.2): `ConfirmRequired` from authorize is **deferred**
+    /// — path/damage/egress run first, so a path-escaping or catastrophic
+    /// dangerous call denies before ever prompting the owner.
+    pub(crate) async fn evaluate(&self, tool: &str, input: &Value) -> Evaluated {
         // 1. Classify (deny-until-classified).
         let Some(rc) = classify(tool) else {
-            return self.decide_denied(tool, "Unknown", "unknown_tool");
+            return Evaluated::deny("Unknown", "unknown_tool");
         };
         let risk_label = rc.label();
 
-        // 2. Control-plane authorize.
+        // 2. Control-plane authorize. ConfirmRequired is DEFERRED (not returned
+        //    yet) so steps 3–5 run first (scope §6.2).
         let cmd = Command {
             v: PROTOCOL_VERSION,
             request_id: self.gov.call_id.clone(),
             command: rc.scope_command().into(),
             payload: Value::Null,
         };
+        let mut needs_confirm = false;
         match authorize(&self.gov.client, &cmd, self.gov.now_ms) {
             AuthzDecision::Allow => {}
-            AuthzDecision::ConfirmRequired => {
-                // §4.1 trap: no confirmation channel until A3.
-                return self.decide_denied(tool, risk_label, "confirm_required_mapped_to_deny");
-            }
+            AuthzDecision::ConfirmRequired => needs_confirm = true,
             AuthzDecision::Deny(reason) => {
-                return self.decide_denied(tool, risk_label, deny_reason_label(reason));
+                return Evaluated::deny(risk_label, deny_reason_label(reason));
             }
         }
 
@@ -291,7 +285,7 @@ impl ToolPolicy for FaeToolPolicy {
         if let PathProbe::Paths(paths) = path_probe(rc, input) {
             for p in &paths {
                 if path_is_escape(p) {
-                    return self.decide_denied(tool, risk_label, "path_escape");
+                    return Evaluated::deny(risk_label, "path_escape");
                 }
             }
         }
@@ -300,7 +294,7 @@ impl ToolPolicy for FaeToolPolicy {
         if matches!(rc, RiskClass::Shell) {
             if let Some(cmd_str) = input.get("command").and_then(Value::as_str) {
                 if is_catastrophic_command(cmd_str) {
-                    return self.decide_denied(tool, risk_label, "damage_control");
+                    return Evaluated::deny(risk_label, "damage_control");
                 }
             }
         }
@@ -310,13 +304,96 @@ impl ToolPolicy for FaeToolPolicy {
             match self.gov.egress.check_network_tool(tool, input).await {
                 EgressDecision::Allow => {}
                 EgressDecision::Deny(reason) => {
-                    return self.decide_denied(tool, risk_label, reason.as_label());
+                    return Evaluated::deny(risk_label, reason.as_label());
                 }
             }
         }
 
-        // 6. Allow + audit (fail-closed).
-        self.decide_allowed(tool, risk_label)
+        // 6. Resolve: the deferred confirmation surfaces here (path/damage/
+        //    egress all passed), or allow.
+        if needs_confirm {
+            Evaluated {
+                risk_label,
+                decision: EvalDecision::NeedsConfirmation(
+                    "dangerous_tool_requires_confirmation".into(),
+                ),
+            }
+        } else {
+            Evaluated {
+                risk_label,
+                decision: EvalDecision::Allow,
+            }
+        }
+    }
+
+    /// Record the final decision to the audit log. Returns `false` on write
+    /// failure so the governed-execute caller can fail-closed (deny). The
+    /// fluers-loop path embeds this in `decide_allowed`/`decide_denied`.
+    pub(crate) fn record_audit(
+        &self,
+        tool: &str,
+        risk_label: &'static str,
+        decision: AuditDecision,
+        reason: &str,
+    ) -> bool {
+        let rec = ToolHostAuditRecord {
+            event_type: "tool_policy",
+            ts_ms: self.gov.now_ms,
+            tool: tool.to_string(),
+            call_id: self.gov.call_id.clone(),
+            decision,
+            reason: reason.into(),
+            risk_class: risk_label,
+        };
+        match self.gov.audit.record(rec) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    tool = %tool,
+                    call_id = %self.gov.call_id,
+                    error = %e,
+                    "toolhost audit write failed"
+                );
+                false
+            }
+        }
+    }
+
+    /// Record an allow decision; fail-closed (an audit write failure denies).
+    fn decide_allowed(&self, tool: &str, risk_label: &'static str, reason: &str) -> PolicyVerdict {
+        if self.record_audit(tool, risk_label, AuditDecision::Allowed, reason) {
+            PolicyVerdict::Allow
+        } else {
+            PolicyVerdict::Deny("audit_write_failed".into())
+        }
+    }
+
+    /// Record a deny decision (best-effort audit: the decision is already Deny).
+    fn decide_denied(&self, tool: &str, risk_label: &'static str, reason: &str) -> PolicyVerdict {
+        // Best-effort: the decision is already Deny; an audit failure is logged
+        // inside record_audit but does not change the outcome.
+        let _ = self.record_audit(tool, risk_label, AuditDecision::Denied, reason);
+        PolicyVerdict::Deny(reason.into())
+    }
+}
+
+#[async_trait]
+impl ToolPolicy for FaeToolPolicy {
+    async fn check(&self, tool: &str, input: &Value, _ctx: &InvokeContext) -> PolicyVerdict {
+        // The fluers-loop path: run the full pipeline, but a NeedsConfirmation
+        // outcome (dangerous tool) is DENIED here — the §4.1 trap. The governed
+        // ToolHost path (execute_governed) calls evaluate() directly and
+        // performs the tool.confirm round-trip instead. This keeps FaeToolPolicy
+        // safe to wire into fluers' run_agent: it never emits Confirm, so it can
+        // never become a silent-allow.
+        let ev = self.evaluate(tool, input).await;
+        match ev.decision {
+            EvalDecision::Allow => self.decide_allowed(tool, ev.risk_label, "allowed"),
+            EvalDecision::Deny(reason) => self.decide_denied(tool, ev.risk_label, &reason),
+            EvalDecision::NeedsConfirmation(_) => {
+                self.decide_denied(tool, ev.risk_label, "confirm_required_via_loop_bypass")
+            }
+        }
     }
 }
 
