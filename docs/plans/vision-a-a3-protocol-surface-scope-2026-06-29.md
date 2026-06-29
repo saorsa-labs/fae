@@ -443,3 +443,49 @@ already has a generic approval card that fits, reuse `permission.request`
 8. The test plan (§7) passes, incl. no-prompt-on-escape, fail-closed-disconnect,
    bounded-payload, root-outlives-task, and the client-side-aware-roundtrip tests.
 9. Gates green; boundary guards intact; no `fae.db` writes.
+
+## 11. A3-Swift status — mechanism landed; live-loop routing DEFERRED
+
+**A3-Rust** (merged `8ed142d5`) + **A3-Swift Layer 1** (`0266d93b`) + the
+**dangerous-scope proof** (`ec15a4bd`) together deliver the safe, fully-tested
+*mechanism*: the `toolhost.execute` wire command, the per-session ephemeral root,
+the `tool.confirm` round-trip, the Swift governed client (`DaemonAgentClient.
+toolhostExecute`, server-request-aware only), the `tool.confirm` card handler
+(strict `{approved, call_id}` reply, redacted message), and the BLOCKER-1 client
+regression. Q7a provisions `ToolExecuteSafe` on `SwiftFrontend` by default.
+
+**Verified (not a gap):** dangerous execution requires BOTH `ToolExecuteDangerous`
+(server-side, via the inner `authorize("tool.execute_dangerous")` against the
+authenticated `ClientRecord.scopes` — proven at `execute_governed` level in
+`ec15a4bd`) AND an owner confirm. A client-side toggle is not the boundary; Q7b
+must grant the SCOPE through the control-plane.
+
+**Routing into the live Swift loop is DEFERRED — an architecture decision, not
+an implementation gap.** The session-root (§5) is a **per-connection ephemeral
+TEMP SANDBOX** (created post-auth, wiped on close); §5 explicitly rejects the
+user's cwd/home/project as the root, and `FaeToolPolicy` rejects absolute paths
+and `..`. So routing Fae's owner-facing pipeline file tools (`read`/`write`/`edit`
+of the user's *real* files) to the daemon would read/write an empty tempdir — it
+would break them or violate §5. The mechanism is therefore **callable but
+uncalled** from the live Swift loop today: `toolhostExecute` exists, `ToolExecuteSafe`
+is provisioned, but no caller in `PipelineCoordinator` invokes it yet.
+
+Consequence for the §2.1 routing table: it remains the *intended* dispatch, but
+its live activation needs an owner-approved workspace/root model first. Options
+for that follow-up decision:
+- **(A) Sandboxed workspace** — materialize/copy project into the temp root; the
+  model works on the contained copy (contained blast radius).
+- **(B) Owner-approved durable workspace root** — a new root model with its own
+  policy/confirmation semantics (relaxes §5's "never cwd" under explicit owner
+  governance).
+- **(C) Daemon-resident agent loop only** — `toolhost.execute` serves a daemon-
+  resident fluers loop (Vision B), not Swift owner-facing tools; Swift routing is
+  not the activation path.
+
+Until that decision: networked tools remain denied (`DisabledGate`);
+macOS-native tools remain local; the Swift pipeline is unchanged. This is a
+safe, inert stopping point — the mechanism is wired, tested, and provisioned,
+with zero live exposure and no file-tool breakage.
+
+**Oracle review reserved for the A3-Swift Layer 1 code** (the confirmation
+channel + governed client are security-sensitive), per the standing discipline.
