@@ -293,43 +293,30 @@ async fn handle_connection(
                     // `Authenticated(record)` arm), so lazy creation is post-auth
                     // by construction (oracle MAJOR-2).
                     if cmd.command == "toolhost.execute" {
-                        // A3→B: if a `toolhost.set_root` confirm is in flight,
-                        // deny execute — the root is mid-transition and racing a
-                        // tool against it could bind the wrong root. Fail-closed.
-                        let root_pending = root_state.lock().await.is_pending();
-                        if root_pending {
-                            let audit = crate::session::manual_audit(
-                                event_id,
-                                now,
-                                Some(record.client_id.clone()),
-                                "toolhost.execute",
-                                fae_control_plane::AuditDecision::Error,
-                                "root_initialization_pending",
-                            );
-                            let _ = append_audit_jsonl(audit_path, &audit);
-                            let response = Response::error(
-                                &cmd.request_id,
-                                "root_initialization_pending",
-                                "a workspace root confirm is in flight",
-                            );
-                            sink.send_line(response_line(&response)?);
-                            continue;
-                        }
-                        // A3→B: lazy-init the ToolHost, binding the APPROVED durable
-                        // root if one was set (else the ephemeral temp sandbox).
-                        // The root_state transition is atomic under its lock; the
-                        // async ToolHost::new runs AFTER the lock drops. root_state
-                        // is Pending-only-denied above (we're past that check).
+                        // A3→B: ONE atomic lock acquisition decides pending-deny
+                        // vs the durable/temp init plan. There is NO window for a
+                        // concurrent `set_root` to interleave between the
+                        // pending-check and the plan (oracle BLOCKER-1: a
+                        // separate check-then-plan race could clobber
+                        // PendingRootConfirm → InitializedTemp, then a later
+                        // approval would shadow a temp host with ApprovedRoot).
                         if toolhost.is_none() {
-                            // Decide the root + mode + temp guard from root_state.
                             enum Plan {
-                                Temp,
+                                Deny,
                                 Durable(std::path::PathBuf),
+                                Temp,
+                                Inconsistent,
                             }
                             let plan = {
                                 use crate::toolhost::root_confirm::ToolRootState;
                                 let mut st = root_state.lock().await;
                                 match &*st {
+                                    // A root confirm is in flight: the root is
+                                    // mid-transition. Racing a tool against it
+                                    // could bind the wrong root. Fail-closed.
+                                    ToolRootState::PendingRootConfirm => Plan::Deny,
+                                    // Owner approved a durable root but the host
+                                    // isn't created yet. Bind it now.
                                     ToolRootState::ApprovedRoot { path } => {
                                         let p = std::path::PathBuf::from(path);
                                         *st = ToolRootState::InitializedDurable {
@@ -337,14 +324,61 @@ async fn handle_connection(
                                         };
                                         Plan::Durable(p)
                                     }
-                                    // Unset (or any non-pending non-approved) → temp sandbox.
-                                    _ => {
+                                    // No root: ephemeral temp sandbox (A3 default).
+                                    ToolRootState::Unset => {
                                         *st = ToolRootState::InitializedTemp;
                                         Plan::Temp
+                                    }
+                                    // Initialized* should have a host bound; if
+                                    // toolhost is None here, state is inconsistent
+                                    // (e.g. a failed durable init that didn't
+                                    // revert). Fail-closed rather than guess a root.
+                                    ToolRootState::InitializedTemp
+                                    | ToolRootState::InitializedDurable { .. } => {
+                                        Plan::Inconsistent
                                     }
                                 }
                             };
                             match plan {
+                                Plan::Deny => {
+                                    let audit = crate::session::manual_audit(
+                                        event_id,
+                                        now,
+                                        Some(record.client_id.clone()),
+                                        "toolhost.execute",
+                                        fae_control_plane::AuditDecision::Error,
+                                        "root_initialization_pending",
+                                    );
+                                    let _ = append_audit_jsonl(audit_path, &audit);
+                                    let response = Response::error(
+                                        &cmd.request_id,
+                                        "root_initialization_pending",
+                                        "a workspace root confirm is in flight",
+                                    );
+                                    sink.send_line(response_line(&response)?);
+                                    continue;
+                                }
+                                Plan::Inconsistent => {
+                                    eprintln!(
+                                        "fae-daemon: toolhost missing despite Initialized root"
+                                    );
+                                    let audit = crate::session::manual_audit(
+                                        event_id,
+                                        now,
+                                        Some(record.client_id.clone()),
+                                        "toolhost.execute",
+                                        fae_control_plane::AuditDecision::Error,
+                                        "toolhost_inconsistent_state",
+                                    );
+                                    let _ = append_audit_jsonl(audit_path, &audit);
+                                    let response = Response::error(
+                                        &cmd.request_id,
+                                        "internal_error",
+                                        "toolhost state is inconsistent",
+                                    );
+                                    sink.send_line(response_line(&response)?);
+                                    continue;
+                                }
                                 Plan::Durable(path) => {
                                     match ToolHost::new_durable(
                                         path,

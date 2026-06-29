@@ -56,8 +56,11 @@ pub enum RootConfirmReply {
 }
 
 /// Parse the client's `workspace.confirm_root` reply (scope §6.4 parity).
-/// Strict: the ONLY accepted shape is `{approved: bool, call_id?: str}` — any
-/// other field fails to deserialize → deny (fail-closed).
+/// Strict: the ONLY accepted shape is `{approved: bool, call_id: str}` — the
+/// call id is REQUIRED and must match (oracle MINOR-2: the durable-root
+/// approval is higher-stakes than the per-tool confirm, so a missing/blank
+/// call_id denies rather than defaulting to approve). Any unknown field also
+/// fails to deserialize → deny (fail-closed).
 fn parse_root_confirm_reply(
     result: &serde_json::Value,
     expected_call_id: &str,
@@ -66,8 +69,7 @@ fn parse_root_confirm_reply(
     #[serde(deny_unknown_fields)]
     struct WireReply {
         approved: bool,
-        #[serde(default)]
-        call_id: Option<String>,
+        call_id: String,
     }
     let Ok(parsed) = serde_json::from_value::<WireReply>(result.clone()) else {
         return RootConfirmReply::Denied("root_confirm_reply_malformed".into());
@@ -75,10 +77,8 @@ fn parse_root_confirm_reply(
     if !parsed.approved {
         return RootConfirmReply::Denied("owner_denied".into());
     }
-    if let Some(echoed) = parsed.call_id {
-        if echoed != expected_call_id {
-            return RootConfirmReply::Denied("root_confirm_call_id_mismatch".into());
-        }
+    if parsed.call_id != expected_call_id {
+        return RootConfirmReply::Denied("root_confirm_call_id_mismatch".into());
     }
     RootConfirmReply::Approved
 }
@@ -130,10 +130,14 @@ impl ServerRequestRootConfirmation {
             }
             *guard = true;
         }
-        // Run the round-trip, then ALWAYS release the slot (approve/deny/timeout/
-        // disconnect) so a settled confirm can't block a later one.
+        // Run the round-trip, then GUARANTEED-release the slot (approve/deny/
+        // timeout/disconnect) so a settled confirm can't block a later one.
+        // `lock().await` (not try_lock) — the only contention is a second caller's
+        // fast-path check-then-return-Denied, which releases in nanoseconds, so
+        // this can't deadlock and always runs the clear (oracle MINOR-1).
         let outcome = self.confirm_round_trip(req).await;
-        if let Ok(mut guard) = self.in_flight.try_lock() {
+        {
+            let mut guard = self.in_flight.lock().await;
             *guard = false;
         }
         outcome
@@ -212,9 +216,31 @@ impl ToolRootState {
 ///
 /// `home_dir` is the canonicalized home (passed in so this is pure + testable
 /// without env reads). `path` is the RAW requested path (canonicalized inside).
+///
+/// (oracle BLOCKER-2) BOTH the raw and canonical paths are checked:
+/// - Raw depth catches symlinked system dirs BEFORE resolution (`/etc` raw has
+///   1 Normal component → rejected; it used to canonicalize to `/private/etc`
+///   depth 2 and slip through).
+/// - A system-dir prefix denylist on the CANONICAL path is the real defense
+///   against arbitrary symlinks (`/Users/me/evil` → `/private/etc` still caught).
 #[must_use]
 pub fn is_safe_workspace_root(path: &std::path::Path, home_dir: Option<&std::path::Path>) -> bool {
-    // Must exist + be a directory (no creating roots; no approving a file/ghost).
+    // --- Raw path checks (survive symlink resolution) ---
+    // Must be absolute (a relative root binds to the daemon's cwd — ambiguous).
+    if !path.is_absolute() {
+        return false;
+    }
+    // Reject single-component roots directly under `/` (e.g. `/etc`, `/var`,
+    // `/Users`, `/tmp`) evaluated on the RAW path BEFORE symlink resolution.
+    // `/etc` raw = RootDir + Normal("etc") = 1 component → rejected here.
+    let raw_depth = path
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .count();
+    if raw_depth < 2 {
+        return false;
+    }
+    // --- Canonical checks (resolve symlinks, verify on-disk reality) ---
     let canon = match path.canonicalize() {
         Ok(c) => c,
         Err(_) => return false,
@@ -234,17 +260,65 @@ pub fn is_safe_workspace_root(path: &std::path::Path, home_dir: Option<&std::pat
             }
         }
     }
-    // Reject single-component roots directly under `/` (e.g. `/Users`, `/etc`,
-    // `/var`) — system directories, not projects. Require ≥2 Normal components
-    // (e.g. `/Users/alice/projects/foo` is fine; `/Users` is not).
-    let depth = canon
+    // Reject known system directories + their symlink targets. This is the
+    // real defense: a symlink in the user's tree pointing at `/private/etc`
+    // is caught here even though its raw depth is ≥2. On macOS `/etc`, `/var`,
+    // `/tmp` all resolve UNDER `/private`, so the `/private` entry catches them.
+    if is_under_system_dir(&canon) {
+        return false;
+    }
+    // Reject shallow canonical roots (`/Users`, `/private/etc` has depth 2 but
+    // is already caught above; this is a backstop for any other depth-1/2 dir).
+    let canon_depth = canon
         .components()
         .filter(|c| matches!(c, std::path::Component::Normal(_)))
         .count();
-    if depth < 2 {
+    if canon_depth < 2 {
         return false;
     }
     true
+}
+
+/// Canonical-path check against known system roots. A project root must NOT
+/// be or live under a system directory. Two tiers (oracle BLOCKER-2):
+/// - PREFIX dirs (`/etc`, `/usr`, ...): every subdir is system -> reject
+///   subtree.
+/// - EXACT dirs (`/var`, `/tmp`, `/private`, `/private/var`, `/private/tmp`):
+///   a SUBDIR may be legitimate user temp (macOS tempdirs live under
+///   `/private/var/folders/...`), so only the root itself is rejected.
+///
+/// On macOS `/etc`/`/var`/`/tmp` resolve under `/private`, so the
+/// `/private/etc` (prefix) + `/private/var`/`/private/tmp` (exact) entries
+/// catch every symlinked form. Defense-in-depth with the raw-depth check.
+#[must_use]
+fn is_under_system_dir(canon: &std::path::Path) -> bool {
+    /// Every subdir is system config/binaries — reject the whole subtree.
+    const PREFIX_DIRS: &[&str] = &[
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/opt",
+        "/System",
+        "/Library",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/net",
+        "/Applications",
+        "/private/etc",
+    ];
+    /// Only the exact root is rejected — a subdir may be legitimate user temp
+    /// (e.g. macOS `/private/var/folders/...` per-user temp).
+    const EXACT_DIRS: &[&str] = &["/var", "/tmp", "/private", "/private/var", "/private/tmp"];
+    let canon_str = match canon.to_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    PREFIX_DIRS
+        .iter()
+        .any(|d| canon_str == *d || canon_str.starts_with(&format!("{}/", d)))
+        || EXACT_DIRS.contains(&canon_str)
 }
 
 /// Test-only root confirmation that returns a fixed reply without a wire.
@@ -289,19 +363,28 @@ mod tests {
 
     #[test]
     fn parse_root_reply_approved() {
-        let r = parse_root_confirm_reply(&serde_json::json!({"approved": true}), "c1");
+        let r = parse_root_confirm_reply(
+            &serde_json::json!({"approved": true, "call_id": "c1"}),
+            "c1",
+        );
         assert_eq!(r, RootConfirmReply::Approved);
     }
 
     #[test]
     fn parse_root_reply_denied() {
-        let r = parse_root_confirm_reply(&serde_json::json!({"approved": false}), "c1");
+        let r = parse_root_confirm_reply(
+            &serde_json::json!({"approved": false, "call_id": "c1"}),
+            "c1",
+        );
         assert_eq!(r, RootConfirmReply::Denied("owner_denied".into()));
     }
 
     #[test]
     fn parse_root_reply_stray_field_denies() {
-        let r = parse_root_confirm_reply(&serde_json::json!({"approved": true, "extra": 1}), "c1");
+        let r = parse_root_confirm_reply(
+            &serde_json::json!({"approved": true, "call_id": "c1", "extra": 1}),
+            "c1",
+        );
         assert_eq!(
             r,
             RootConfirmReply::Denied("root_confirm_reply_malformed".into())
@@ -310,7 +393,18 @@ mod tests {
 
     #[test]
     fn parse_root_reply_missing_approved_denies() {
-        let r = parse_root_confirm_reply(&serde_json::json!({}), "c1");
+        let r = parse_root_confirm_reply(&serde_json::json!({"call_id": "c1"}), "c1");
+        assert_eq!(
+            r,
+            RootConfirmReply::Denied("root_confirm_reply_malformed".into())
+        );
+    }
+
+    #[test]
+    fn parse_root_reply_missing_call_id_denies() {
+        // oracle MINOR-2: a durable-root approval without an echoed call_id
+        // must DENY (higher-stakes than the per-tool confirm; default-deny).
+        let r = parse_root_confirm_reply(&serde_json::json!({"approved": true}), "c1");
         assert_eq!(
             r,
             RootConfirmReply::Denied("root_confirm_reply_malformed".into())
@@ -346,6 +440,88 @@ mod tests {
     fn safe_root_rejects_home_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(!is_safe_workspace_root(tmp.path(), Some(tmp.path())));
+    }
+
+    // --- oracle BLOCKER-2: symlinked/shallow system dirs must be rejected ---
+
+    #[test]
+    fn safe_root_rejects_single_component_system_dirs() {
+        // Raw-depth check catches these BEFORE canonicalization — `/etc` raw has
+        // 1 Normal component. On macOS `/etc` → `/private/etc` (depth 2) which
+        // the old code accepted.
+        for p in ["/etc", "/var", "/tmp", "/usr", "/bin", "/Users", "/System"] {
+            assert!(
+                !is_safe_workspace_root(std::path::Path::new(p), None),
+                "should reject system dir {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_root_rejects_resolved_private_system_dirs() {
+        // Typed directly (depth 2 raw) — the canonical denylist catches them.
+        // `/private/etc`, `/private/var`, `/private/tmp` are exact-rejected.
+        for p in ["/private", "/private/etc", "/private/var", "/private/tmp"] {
+            // These may not exist on Linux CI — guard: a non-existent path is
+            // already rejected, but if it exists it must STILL be rejected.
+            if std::path::Path::new(p).exists() {
+                assert!(
+                    !is_safe_workspace_root(std::path::Path::new(p), None),
+                    "should reject resolved system dir {p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn safe_root_rejects_relative_path() {
+        // A relative root binds to the daemon's cwd — ambiguous + dangerous.
+        assert!(!is_safe_workspace_root(std::path::Path::new("."), None));
+        assert!(!is_safe_workspace_root(
+            std::path::Path::new("some/sub/dir"),
+            None
+        ));
+    }
+
+    #[test]
+    fn safe_root_accepts_real_project_subdir() {
+        // A real nested dir under a tempdir is a valid project root.
+        let base = tempfile::tempdir().expect("tempdir");
+        let proj = base.path().join("my").join("project");
+        std::fs::create_dir_all(&proj).expect("mkdir");
+        assert!(is_safe_workspace_root(&proj, None));
+    }
+
+    #[test]
+    fn safe_root_rejects_non_dir_file() {
+        // A file (not a directory) is not a valid workspace root.
+        let base = tempfile::tempdir().expect("tempdir");
+        let file = base.path().join("a").join("b").join("file.txt");
+        std::fs::create_dir_all(file.parent().unwrap()).expect("mkdir");
+        std::fs::write(&file, "x").expect("write");
+        assert!(!is_safe_workspace_root(&file, None));
+    }
+
+    #[test]
+    fn under_system_dir_classification() {
+        use std::path::Path;
+        // Prefix dirs: the root + every subdir is system.
+        assert!(is_under_system_dir(Path::new("/etc")));
+        assert!(is_under_system_dir(Path::new("/etc/nginx")));
+        assert!(is_under_system_dir(Path::new("/usr/local/bin")));
+        assert!(is_under_system_dir(Path::new("/private/etc/ssh")));
+        assert!(is_under_system_dir(Path::new("/System/Library")));
+        // Exact dirs: the root is rejected, but a subdir (user temp) is NOT.
+        assert!(is_under_system_dir(Path::new("/var")));
+        assert!(is_under_system_dir(Path::new("/private/var")));
+        assert!(is_under_system_dir(Path::new("/private")));
+        assert!(!is_under_system_dir(Path::new(
+            "/private/var/folders/xx/T/tmp.abc"
+        )));
+        assert!(!is_under_system_dir(Path::new("/tmp/myproject")));
+        // Legit project roots.
+        assert!(!is_under_system_dir(Path::new("/Users/alice/projects/foo")));
+        assert!(!is_under_system_dir(Path::new("/home/alice/proj")));
     }
 
     #[test]

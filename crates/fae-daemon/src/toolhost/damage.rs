@@ -70,52 +70,114 @@ pub fn is_catastrophic_command(command: &str) -> bool {
 #[must_use]
 pub fn is_workspace_wipe(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
-    // git nukes + find-based recursive delete — substring match is safe here
-    // (`find ./sub -delete` / `git clean -fdx ./tmp` are rare scoped forms; an
-    // over-block denies safely, the owner re-runs without the destructive flag).
-    if lower.contains("git reset --hard")
-        || lower.contains("git clean -fdx")
-        || lower.contains("find . -delete")
-    {
+    // `git reset --hard` is always a workspace wipe (destroys uncommitted work).
+    if lower.contains("git reset --hard") {
         return true;
     }
-    // `rm` with recursive+force flags whose TARGET is the workspace itself
-    // (`.`, `./`, `*`, `./*`) — not a subdir like `./target/debug`.
-    rm_targets_workspace(&lower)
-}
-
-/// Token-scan for an `rm` invocation with recursive+force flags whose first
-/// positional target is the workspace root itself (`.`, `./`, `*`, `./*`).
-/// Handles `sudo rm`, combined flags (`-rf`/`-fr`), and separate `-r`/`-f`.
-fn rm_targets_workspace(lower: &str) -> bool {
-    // Split on shell separators so `echo x; rm -rf .` is caught in the second
-    // chunk. (Naive — not a real shell parser; high-signal only.)
+    // Per-command token scan (oracle MAJOR-1: substring matching missed
+    // reordered flags, `--`, and quoted targets). Split on shell separators so
+    // `echo x; rm -rf .` is caught in the second chunk.
     for chunk in lower.split([';', '|', '&', '\n']) {
         let toks: Vec<&str> = chunk.split_whitespace().collect();
-        // Find `rm`, skipping a leading `sudo`.
-        let rm_idx = toks.iter().position(|t| *t == "rm");
-        let Some(mut k) = rm_idx else { continue };
-        k += 1;
-        let mut has_r = false;
-        let mut has_f = false;
-        while k < toks.len() {
-            let t = toks[k];
-            if let Some(flags) = t
-                .strip_prefix('-')
-                .filter(|s| !s.is_empty() && !s.starts_with('-'))
-            {
-                if flags.contains('r') {
-                    has_r = true;
-                }
-                if flags.contains('f') {
-                    has_f = true;
-                }
-                k += 1;
-                continue;
-            }
-            // First positional argument = the target.
-            return has_r && has_f && matches!(t, "." | "./" | "*" | "./*");
+        if rm_wipes_root(&toks) || git_clean_wipes(&toks) || find_wipes_root(&toks) {
+            return true;
         }
+    }
+    false
+}
+
+/// Strip surrounding single/double quotes from a token (`"."` → `.`, `'./'` → `./`).
+fn unquote(t: &str) -> &str {
+    t.trim_matches(|c| c == '"' || c == '\'')
+}
+
+/// `rm` with recursive+force flags whose TARGET is the workspace itself
+/// (`.`, `./`, `*`, `./*`). Handles `sudo rm`, combined (`-rf`/`-fr`) and
+/// separate (`-r`/`-f`) flags, the `--` end-of-options marker, and quoted
+/// targets (`rm -rf "."`).
+fn rm_wipes_root(toks: &[&str]) -> bool {
+    let rm_idx = toks.iter().position(|t| *t == "rm");
+    let Some(mut k) = rm_idx else { return false };
+    k += 1;
+    let mut has_r = false;
+    let mut has_f = false;
+    while k < toks.len() {
+        let t = toks[k];
+        if t == "--" {
+            // end-of-options marker — skip it; the NEXT token is the first target.
+            k += 1;
+            continue;
+        }
+        if let Some(flags) = t
+            .strip_prefix('-')
+            .filter(|s| !s.is_empty() && !s.starts_with('-'))
+        {
+            if flags.contains('r') {
+                has_r = true;
+            }
+            if flags.contains('f') {
+                has_f = true;
+            }
+            k += 1;
+            continue;
+        }
+        // First positional argument = the target (quote-stripped).
+        return has_r && has_f && matches!(unquote(t), "." | "./" | "*" | "./*");
+    }
+    false
+}
+
+/// `git clean` with force + ignored/dirs AND NO path target — i.e. it wipes
+/// the whole workspace (untracked files + dirs + ignored). `git clean -fdx
+/// ./subdir` is scoped (only cleans `./subdir`) and is NOT a workspace wipe —
+/// it proceeds to the per-call confirm. Reordered/combined flags are caught by
+/// scanning every flag token; a positional path arg means it's scoped.
+fn git_clean_wipes(toks: &[&str]) -> bool {
+    let mut i = 0;
+    while i + 1 < toks.len() {
+        if toks[i] == "git" && toks[i + 1] == "clean" {
+            let mut has_f = false;
+            let mut has_broad = false;
+            let mut has_path_target = false;
+            for &t in &toks[i + 2..] {
+                if let Some(flags) = t
+                    .strip_prefix('-')
+                    .filter(|s| !s.is_empty() && !s.starts_with('-'))
+                {
+                    if flags.contains('f') {
+                        has_f = true;
+                    }
+                    if flags.contains('d') || flags.contains('x') {
+                        has_broad = true;
+                    }
+                } else if t == "--" {
+                    // end-of-options; what follows is a path target.
+                } else if !t.starts_with('-') {
+                    // A positional path argument → scoped, not a workspace wipe.
+                    has_path_target = true;
+                }
+            }
+            // Wipe ONLY if force + broad AND no path target (defaults to `.`).
+            return has_f && has_broad && !has_path_target;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `find . -delete` and `find . -type f -delete` (recursive delete whose root
+/// is the workspace). Scoped forms (`find ./subdir -delete`) are NOT caught —
+/// their root token isn't `.`/`./`/`*`.
+fn find_wipes_root(toks: &[&str]) -> bool {
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i] == "find" && i + 1 < toks.len() {
+            let root = unquote(toks[i + 1]);
+            if matches!(root, "." | "./" | "*") && toks[i + 2..].contains(&"-delete") {
+                return true;
+            }
+        }
+        i += 1;
     }
     false
 }
@@ -154,18 +216,29 @@ mod tests {
 
     #[test]
     fn workspace_wipe_flags_each_pattern() {
+        // rm at workspace root.
         assert!(is_workspace_wipe("rm -rf ."));
         assert!(is_workspace_wipe("rm -rf ./"));
         assert!(is_workspace_wipe("rm -fr ."));
         assert!(is_workspace_wipe("rm -rf *"));
         assert!(is_workspace_wipe("rm -rf ./*"));
-        assert!(is_workspace_wipe("find . -delete"));
-        assert!(is_workspace_wipe("git clean -fdx"));
-        assert!(is_workspace_wipe("git reset --hard"));
         // Obfuscation that the token scan still catches.
         assert!(is_workspace_wipe("sudo rm -rf ."));
         assert!(is_workspace_wipe("rm -r -f .")); // separate flags
         assert!(is_workspace_wipe("echo hi; rm -rf .")); // chained
+                                                         // oracle MAJOR-1 gaps now closed.
+        assert!(is_workspace_wipe("rm -rf -- .")); // end-of-options marker
+        assert!(is_workspace_wipe("rm -rf \".\"")); // quoted target
+        assert!(is_workspace_wipe("rm -rf '*'")); // quoted glob
+                                                  // find recursive delete.
+        assert!(is_workspace_wipe("find . -delete"));
+        assert!(is_workspace_wipe("find . -type f -delete"));
+        assert!(is_workspace_wipe("find . -type d -delete"));
+        // git nukes — reordered/combined flags.
+        assert!(is_workspace_wipe("git clean -fdx"));
+        assert!(is_workspace_wipe("git clean -xfd")); // reordered
+        assert!(is_workspace_wipe("git clean -fd -x")); // split
+        assert!(is_workspace_wipe("git reset --hard"));
     }
 
     #[test]
@@ -175,7 +248,10 @@ mod tests {
         assert!(!is_workspace_wipe("rm -rf ./target/debug"));
         assert!(!is_workspace_wipe("rm -rf build/"));
         assert!(!is_workspace_wipe("rm -rf *.txt")); // glob with suffix, not bare `*`
-                                                     // Benign commands.
+                                                     // Scoped find/git clean.
+        assert!(!is_workspace_wipe("find ./subdir -delete"));
+        assert!(!is_workspace_wipe("git clean -fd ./tmp"));
+        // Benign commands.
         assert!(!is_workspace_wipe("cargo build"));
         assert!(!is_workspace_wipe("ls -la"));
         assert!(!is_workspace_wipe("rm file.txt")); // not recursive

@@ -1192,24 +1192,31 @@ pub async fn run_authorized_toolhost_set_root(
     let response = match &authz {
         AuthzDecision::Allow => match parse_set_root_payload(&cmd.payload) {
             Ok(raw_path) => 'validate: {
-                // 1. Validate BEFORE prompting: canonicalize + blast-radius guard.
-                // Reject non-existent/non-dir/home/filesystem-root/shallow paths.
-                // The owner is NEVER prompted for an invalid/unsafe root.
-                let validated = std::path::Path::new(&raw_path)
-                    .canonicalize()
-                    .ok()
-                    .filter(|c| {
-                        crate::toolhost::root_confirm::is_safe_workspace_root(
-                            c,
-                            home_dir.as_deref(),
-                        )
-                    });
-                let Some(canon) = validated else {
+                // 1. Validate BEFORE prompting: blast-radius guard on the RAW
+                //    path. The guard canonicalizes internally + checks BOTH the
+                //    raw and canonical forms (oracle BLOCKER-2: canonicalizing
+                //    here defeated the depth check — `/etc` → `/private/etc`
+                //    has depth 2 and would pass). The owner is NEVER prompted
+                //    for an invalid/unsafe root.
+                let raw = std::path::Path::new(&raw_path);
+                if !crate::toolhost::root_confirm::is_safe_workspace_root(raw, home_dir.as_deref())
+                {
                     break 'validate Response::error(
                         &cmd.request_id,
                         "unsafe_root",
                         "refused: path does not exist or is too broad (home/system root) to contain damage",
                     );
+                };
+                // Safe to canonicalize now for the confirm payload.
+                let canon = match raw.canonicalize() {
+                    Ok(c) => c,
+                    Err(_) => {
+                        break 'validate Response::error(
+                            &cmd.request_id,
+                            "unsafe_root",
+                            "refused: path does not exist",
+                        )
+                    }
                 };
                 // 2. Atomically check-and-set PendingRootConfirm. set_root is only
                 //    valid from `Unset` — an already-approved or initialized
@@ -1235,14 +1242,33 @@ pub async fn run_authorized_toolhost_set_root(
                     );
                     match root_confirmation.confirm_root(&req).await {
                         crate::toolhost::root_confirm::RootConfirmReply::Approved => {
+                            // CAS (oracle BLOCKER-1): only transition
+                            // PendingRootConfirm → ApprovedRoot. If a racing
+                            // `toolhost.execute` clobbered the state in the
+                            // meantime (it shouldn't now — execute denies while
+                            // Pending — but fail closed regardless), do NOT
+                            // shadow an already-initialized host with ApprovedRoot.
                             let mut st = root_state.lock().await;
-                            *st = ToolRootState::ApprovedRoot {
-                                path: canon.to_string_lossy().into_owned(),
-                            };
-                            Response::ok(
-                                &cmd.request_id,
-                                serde_json::json!({"root": canon.to_string_lossy()}),
-                            )
+                            if matches!(*st, ToolRootState::PendingRootConfirm) {
+                                *st = ToolRootState::ApprovedRoot {
+                                    path: canon.to_string_lossy().into_owned(),
+                                };
+                                Response::ok(
+                                    &cmd.request_id,
+                                    serde_json::json!({"root": canon.to_string_lossy()}),
+                                )
+                            } else {
+                                eprintln!(
+                                    "fae-daemon: root state changed during confirm: {:?}",
+                                    *st
+                                );
+                                *st = ToolRootState::Unset;
+                                Response::error(
+                                    &cmd.request_id,
+                                    "root_state_changed",
+                                    "root state changed during confirmation",
+                                )
+                            }
                         }
                         crate::toolhost::root_confirm::RootConfirmReply::Denied(reason) => {
                             let mut st = root_state.lock().await;
