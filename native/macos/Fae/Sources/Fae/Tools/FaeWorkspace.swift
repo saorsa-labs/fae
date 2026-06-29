@@ -119,13 +119,16 @@ func defaultAwareHandler(
         guard method == "workspace.confirm_root" else {
             return await real(method, params)
         }
-        // Layer 1 fail-closed invariant: a missing/blank `call_id` or `path` must
-        // NOT be auto-approved. Delegate to the real handler, which also denies
-        // on a malformed confirm — preserving the invariant rather than bypassing
+        // Layer 1 fail-closed invariant: a missing/blank (incl. WHITESPACE-ONLY)
+        // `call_id` or `path` must NOT be auto-approved. Trim both; require
+        // non-blank. Delegate to the real handler otherwise (which also denies on
+        // a malformed confirm) — preserving the invariant rather than bypassing
         // it (advisor #1).
-        guard let callID = params["call_id"] as? String, !callID.isEmpty,
-              let confirmPath = params["path"] as? String, !confirmPath.isEmpty
-        else {
+        let callID = (params["call_id"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let confirmPath = (params["path"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !callID.isEmpty, !confirmPath.isEmpty else {
             return await real(method, params)
         }
         let confirmCanon = canonical(URL(fileURLWithPath: confirmPath))

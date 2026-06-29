@@ -226,15 +226,18 @@ actor DaemonToolHostSession {
         }
         // The daemon is authoritative: an unsafe root (e.g. a symlink that
         // canonicalizes to home) is rejected server-side regardless of approval.
-        let result = try await setRoot(path: url.path, handler: handler)
-        guard result["root"] != nil else {
-            // ok=false denial (root_denied / unsafe_root / root_already_initialized).
+        // setRoot binds approvedRootPath only on ok==true with a non-empty
+        // daemon-RETURNED root. Require it and return THAT, not the requested
+        // provider URL — avoids raw/symlink drift (advisor #2). Also handles
+        // ok:true arriving with a missing/blank root.
+        _ = try await setRoot(path: url.path, handler: handler)
+        guard let approved = approvedRootPath else {
             throw DaemonAgentClientError.agentFailed("workspace root not approved by daemon")
         }
         if writeMarkerAfterApproval {
-            try? FaeWorkspace.writeMarker(at: url)
+            try? FaeWorkspace.writeMarker(at: approved)
         }
-        return url
+        return approved
     }
 
     /// Execute a portable tool confined to the default workspace. Ensures the
