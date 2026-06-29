@@ -819,6 +819,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn governed_dangerous_tool_without_scope_denies_without_prompting() {
+        // Server-side dangerous-scope gate (A3-Swift advisor focus + reviewer
+        // focus): a client holding ONLY ToolExecuteSafe must NOT be able to run
+        // write/edit/bash — even with a confirmation channel that would approve.
+        // The gate is enforced inside evaluate() via the inner
+        // authorize("tool.execute_dangerous") call against the SERVER's
+        // ClientRecord.scopes (not a client claim); client-side opt-in is NOT
+        // the security boundary. This proves dangerous execution requires BOTH
+        // the ToolExecuteDangerous scope AND an owner confirm.
+        let audit = Arc::new(CapturingAudit::new());
+        let (host, _dir) = fresh_host(Arc::clone(&audit), Arc::new(FakeEgressGate::allow())).await;
+        // A FakeConfirmation that WOULD approve if asked — to prove the gate
+        // denies BEFORE the confirm round-trip is ever initiated.
+        let conf = FakeConfirmation::approve();
+        for (tool, input) in [
+            ("write", json!({"path":"out.txt","content":"x"})),
+            ("edit", json!({"path":"a.txt","old_text":"a","new_text":"b"})),
+            ("bash", json!({"command":"echo hi"})),
+        ] {
+            let r = host
+                .execute_governed(req(client(&[Scope::ToolExecuteSafe]), tool, input), &conf)
+                .await;
+            match r {
+                Err(ToolHostError::Denied(reason)) => {
+                    assert!(
+                        reason.contains("scope"),
+                        "{tool} should deny on missing dangerous scope, got: {reason}"
+                    );
+                }
+                other => panic!("{tool} with safe-only client must deny, got {other:?}"),
+            }
+        }
+        // Crucially: the owner was NEVER prompted (the gate ran before confirm).
+        assert!(
+            !conf.was_called(),
+            "a safe-only client must never be prompted for a dangerous tool"
+        );
+        // And no file was written to the sandbox.
+        let wrote = host
+            .env
+            .read_file_full(std::path::Path::new("out.txt"), 1)
+            .await
+            .is_ok();
+        assert!(!wrote, "write must not have executed without the dangerous scope");
+    }
+
+    #[tokio::test]
     async fn governed_write_denied_does_not_execute() {
         // confirm→deny: the tool must NOT run.
         let audit = Arc::new(CapturingAudit::new());
