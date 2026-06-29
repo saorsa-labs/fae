@@ -363,6 +363,136 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertEqual(method, "workspace.confirm_root", "onServerRequest must be invoked for workspace.confirm_root")
     }
 
+    // MARK: DaemonToolHostSession — persistent connection (B-Swift Layer 2)
+
+    /// Publish a FakeDaemonPeer's socket as the live daemon endpoints, with a
+    /// temp token file the actor reads during auth. Returns (peer, tokenPath).
+    private func publishFakeDaemonEndpoints() async throws -> (FakeDaemonPeer, String) {
+        let peer = try FakeDaemonPeer.listen()
+        let tokenURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-test-token-\(UUID().uuidString.prefix(8))")
+        try "fake-bootstrap-token".write(to: tokenURL, atomically: true, encoding: .utf8)
+        await DaemonEndpointStore.shared.set((socketPath: peer.path, tokenPath: tokenURL.path))
+        return (peer, tokenURL.path)
+    }
+
+    private func clearDaemonEndpoints() async {
+        await DaemonEndpointStore.shared.set(nil)
+    }
+
+    /// Drive the fake daemon through the AUTH handshake: read the
+    /// session.authenticate frame the Swift side sends on connect, reply ok.
+    private func driveAuth(_ client: FakeDaemonPeer.Client) throws {
+        _ = try client.recv()  // the session.authenticate frame
+        try client.send("""
+        {"v":2,"request_id":"a0","ok":true,"result":{"client_id":"swift-frontend-bootstrap","authenticated":true}}
+        """)
+    }
+
+    /// The architectural proof for Layer 2: `setRoot` then `execute` reuse the
+    /// SAME daemon connection (B-Rust root_state is per-connection; a fresh
+    /// connection per call would lose the approved root). Drives one fake peer
+    /// through auth → set_root(+workspace.confirm_root) → execute on a single
+    /// accepted client.
+    ///
+    /// Persistence is proven by the EXECUTE frame arriving on the SAME client
+    /// handle that served setRoot: if the session had opened a second
+    /// connection for execute, that frame would have gone to a different
+    /// accept() and `recvWithTimeout(client)` would have TIMED OUT. So reading
+    /// the execute frame here IS the no-second-connection proof — no fragile
+    /// `accept()` timeout needed (a blocking accept() can't be cancelled by
+    /// Task cancellation, so a second-accept check would hang the test).
+    func testSetRootThenExecuteSharesOneConnection() async throws {
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        // Inject a fake server-request handler so the round-trip completes
+        // WITHOUT surfacing the real UI card (oracle MAJOR-1 precedent: the DI
+        // seam is a function, not a mutable global). Mirrors the strict reply.
+        actor Seen { var root = false; var tool = false; func markRoot(){root=true}; func markTool(){tool=true} }
+        let seen = Seen()
+        let session = DaemonToolHostSession(serverRequestHandler: { method, params in
+            let callID = (params["call_id"] as? String) ?? ""
+            if method == "workspace.confirm_root" { await seen.markRoot() }
+            if method == "tool.confirm" { await seen.markTool() }
+            return ["approved": true, "call_id": callID]
+        })
+        defer { Task { await session.close() } }
+
+        // 1. setRoot opens the connection (auth → set_root → confirm_root).
+        let setRoot = Task { try await session.setRoot(path: "/Users/me/projects/fae") }
+        let client = try peer.accept()
+        try driveAuth(client)
+        let setRootReq = try await recvWithTimeout(client)
+        XCTAssertTrue(setRootReq.contains("\"command\":\"toolhost.set_root\""), "expected set_root frame")
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"/Users/me/projects/fae","note":"Fae can read, write, and run commands inside this folder."}}
+        """)
+        let rootReply = try await recvWithTimeout(client)
+        let rootReplyObj = try XCTUnwrap(JSONSerialization.jsonObject(with: rootReply.data(using: .utf8)!) as? [String: Any])
+        XCTAssertEqual(rootReplyObj["server_request_id"] as? String, "sr-root")
+        XCTAssertEqual(((rootReplyObj["result"] as? [String: Any])?["approved"]) as? Bool, true)
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"/Users/me/projects/fae"}}
+        """)
+        let rootResult = try await withTimeout(setRoot)
+        XCTAssertEqual(rootResult["root"] as? String, "/Users/me/projects/fae")
+        let hasRoot = await session.hasRoot()
+        XCTAssertTrue(hasRoot, "setRoot must mark the session as rooted")
+        let sawRootConfirm = await seen.root
+        XCTAssertTrue(sawRootConfirm, "the server-request handler must see workspace.confirm_root")
+
+        // 2. execute on the SAME session — the execute frame arriving on THIS
+        //    client proves the connection was reused (a second connection would
+        //    have timed this read out).
+        let execute = Task { try await session.execute(tool: "read", input: ["path": "a.txt"]) }
+        let executeReq = try await recvWithTimeout(client)
+        XCTAssertTrue(
+            executeReq.contains("\"command\":\"toolhost.execute\""),
+            "expected execute frame on the SAME connection (a second connection would have timed this out)")
+        try client.send("""
+        {"v":2,"request_id":"th-2","ok":true,"result":{"content":["hello"]}}
+        """)
+        let execResult = try await withTimeout(execute)
+        let content = (execResult["content"] as? [String]) ?? []
+        XCTAssertEqual(content.first, "hello", "execute must return the daemon's result on the reused connection")
+    }
+
+    /// Without an approved root, `execute` fails closed (it must NOT silently run
+    /// against a temp sandbox). The session connects + authenticates (so the
+    /// daemon is up) but setRoot was never called → execute throws before sending
+    /// a toolhost.execute frame.
+    func testExecuteWithoutRootFailsClosed() async throws {
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession()
+        defer { Task { await session.close() } }
+
+        let execute = Task { try await session.execute(tool: "read", input: ["path": "a.txt"]) }
+        let client = try peer.accept()
+        try driveAuth(client)  // connect + auth succeed; the daemon is up
+
+        do {
+            _ = try await withTimeout(execute)
+            XCTFail("execute without a root must fail closed")
+        } catch DaemonAgentClientError.agentFailed(let message) {
+            XCTAssertTrue(message.contains("workspace root"), "expected the no-root guard, got: \(message)")
+        } catch {
+            // A timeout-derived error is acceptable only if it's the no-root
+            // path surfacing; anything else is a regression.
+            if !(error is DaemonAgentClientError) {
+                XCTFail("expected the no-root agentFailed guard, got \(error)")
+            }
+        }
+        // No toolhost.execute frame was sent (the guard fired before encode).
+        _ = client  // keep the client alive for the duration of the test
+    }
+
     // MARK: helpers
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {

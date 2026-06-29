@@ -130,7 +130,7 @@ enum DaemonAgentClient {
 
     /// Answer a daemon server-request: `permission.request` (gap A3a, approval
     /// card) and `fs.read` / `fs.write` (gap A3b, mediated by PathPolicy).
-    private static func handleServerRequest(
+    static func handleServerRequest(
         method: String, params: [String: Any]
     ) async -> [String: Any] {
         switch method {
@@ -393,7 +393,7 @@ enum DaemonAgentClient {
 
     /// Validate a daemon response, mapping a failure's classified `error.code`
     /// (gap A4) to a user-facing message. `ok` responses pass through.
-    private static func validate(_ raw: [String: Any]) throws -> [String: Any] {
+    static func validate(_ raw: [String: Any]) throws -> [String: Any] {
         if (raw["ok"] as? Bool) == true { return raw }
         let code = ((raw["error"] as? [String: Any])?["code"] as? String) ?? "agent_error"
         throw DaemonAgentClientError.agentFailed(friendlyAgentError(code))
@@ -520,7 +520,7 @@ enum DaemonAgentClient {
     /// connection, protocol v2) — the same handshake `DaemonLLMEngine` and
     /// `DaemonTTSEngine` use. The token is hash-verified per connection, so a
     /// third authenticated session alongside the LLM + TTS connections is fine.
-    private static func authenticate(
+    static func authenticate(
         connection: DaemonSocketConnection, tokenPath: String
     ) async throws {
         let token = try String(contentsOfFile: tokenPath, encoding: .utf8)
