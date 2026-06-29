@@ -79,25 +79,35 @@ pub enum ConfirmReply {
 }
 
 /// Parse the client's `tool.confirm` reply (`result` payload) fail-closed
-/// (scope §6.4 / oracle MAJOR-4). **Only** `{"approved": true}` (with an echoed
-/// `call_id` that matches, if present) proceeds. Everything else denies.
+/// (scope §6.4 / oracle MAJOR-3). The ONLY accepted shape is
+/// `{"approved": bool, "call_id"?: str}` — any other field (incl. `error`,
+/// `cancelled`, or a stray key) is a malformed/contradictory reply and DENIES.
+/// `approved: true` (with matching/absent `call_id`) is the sole path to
+/// [`ConfirmReply::Approved`]; everything else denies.
 fn parse_confirm_reply(result: &serde_json::Value, expected_call_id: &str) -> ConfirmReply {
-    let approved = result.get("approved").and_then(serde_json::Value::as_bool);
-    match approved {
-        Some(true) => {
-            // Defensive: if the client echoed `call_id` and it mismatches the
-            // request, deny (guards against reply mis-routing).
-            if let Some(echoed) = result.get("call_id").and_then(serde_json::Value::as_str) {
-                if echoed != expected_call_id {
-                    return ConfirmReply::Denied("confirm_call_id_mismatch".into());
-                }
-            }
-            ConfirmReply::Approved
-        }
-        Some(false) => ConfirmReply::Denied("owner_denied".into()),
-        // Missing or wrong-typed `approved` field ⇒ deny.
-        None => ConfirmReply::Denied("confirm_reply_missing_approved".into()),
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct WireReply {
+        approved: bool,
+        #[serde(default)]
+        call_id: Option<String>,
     }
+    // deny_unknown_fields: a reply carrying `error`, `cancelled`, or any stray
+    // key fails to deserialize → deny. This closes the {approved:true, error:x}
+    // contradiction the strict contract forbids.
+    let Ok(parsed) = serde_json::from_value::<WireReply>(result.clone()) else {
+        return ConfirmReply::Denied("confirm_reply_malformed".into());
+    };
+    if !parsed.approved {
+        return ConfirmReply::Denied("owner_denied".into());
+    }
+    // Defensive: if the client echoed `call_id` and it mismatches, deny.
+    if let Some(echoed) = parsed.call_id {
+        if echoed != expected_call_id {
+            return ConfirmReply::Denied("confirm_call_id_mismatch".into());
+        }
+    }
+    ConfirmReply::Approved
 }
 
 /// The confirmation channel seam. Production = [`ServerRequestConfirmation`];
@@ -201,13 +211,30 @@ pub(crate) fn build_detail(
     old_exists: bool,
 ) -> Option<ConfirmDetail> {
     match tool {
-        "write" | "edit" => {
+        // `write` takes `content`; `edit` takes `old_text`+`new_text`. Both
+        // surface as a WriteEdit summary: path + the incoming byte count +
+        // whether an existing file is overwritten. The CONTENT is never echoed
+        // (owner Q3 — redacted). (oracle MAJOR-4: edit was reading `content`,
+        // which doesn't exist on the edit input → new_bytes=0.)
+        "write" => {
             let path = input.get("path").and_then(serde_json::Value::as_str)?;
             let new_bytes = input
                 .get("content")
-                .and_then(|c| c.as_str())
-                .map(|s| s.len() as u64)
-                .unwrap_or(0);
+                .and_then(serde_json::Value::as_str)
+                .map_or(0, |s| s.len() as u64);
+            Some(ConfirmDetail::WriteEdit {
+                path: truncate(path, 1024),
+                new_bytes,
+                old_exists,
+            })
+        }
+        "edit" => {
+            let path = input.get("path").and_then(serde_json::Value::as_str)?;
+            // edit replaces old_text→new_text; report the new snippet's size.
+            let new_bytes = input
+                .get("new_text")
+                .and_then(serde_json::Value::as_str)
+                .map_or(0, |s| s.len() as u64);
             Some(ConfirmDetail::WriteEdit {
                 path: truncate(path, 1024),
                 new_bytes,
@@ -336,7 +363,7 @@ mod tests {
     fn reply_missing_approved_denies() {
         assert_eq!(
             parse_confirm_reply(&json!({"call_id": "c1"}), "c1"),
-            ConfirmReply::Denied("confirm_reply_missing_approved".into())
+            ConfirmReply::Denied("confirm_reply_malformed".into())
         );
     }
 
@@ -344,7 +371,7 @@ mod tests {
     fn reply_wrong_type_approved_denies() {
         assert_eq!(
             parse_confirm_reply(&json!({"approved": "yes"}), "c1"),
-            ConfirmReply::Denied("confirm_reply_missing_approved".into())
+            ConfirmReply::Denied("confirm_reply_malformed".into())
         );
     }
 
@@ -352,8 +379,63 @@ mod tests {
     fn reply_empty_object_denies() {
         assert_eq!(
             parse_confirm_reply(&json!({}), "c1"),
-            ConfirmReply::Denied("confirm_reply_missing_approved".into())
+            ConfirmReply::Denied("confirm_reply_malformed".into())
         );
+    }
+
+    #[test]
+    fn reply_approved_with_stray_error_field_denies() {
+        // oracle MAJOR-3: {approved:true, error:x} is contradictory → deny.
+        assert_eq!(
+            parse_confirm_reply(&json!({"approved": true, "error": "oops"}), "c1"),
+            ConfirmReply::Denied("confirm_reply_malformed".into())
+        );
+    }
+
+    #[test]
+    fn reply_approved_with_cancelled_field_denies() {
+        // A cancelled reply that also claims approved is contradictory → deny.
+        assert_eq!(
+            parse_confirm_reply(&json!({"approved": true, "cancelled": true}), "c1"),
+            ConfirmReply::Denied("confirm_reply_malformed".into())
+        );
+    }
+
+    #[test]
+    fn reply_with_unknown_field_denies() {
+        // Any field beyond approved/call_id → malformed → deny.
+        assert_eq!(
+            parse_confirm_reply(&json!({"approved": true, "extra": 1}), "c1"),
+            ConfirmReply::Denied("confirm_reply_malformed".into())
+        );
+    }
+
+    #[test]
+    fn detail_edit_uses_new_text_not_content() {
+        // oracle MAJOR-4: edit input carries old_text/new_text, NOT content.
+        // The detail must report new_text's size (was 0 when reading `content`).
+        let d = build_detail(
+            "edit",
+            &json!({"path": "f.txt", "old_text": "old", "new_text": "replacement"}),
+            true,
+        )
+        .expect("edit detail");
+        match d {
+            ConfirmDetail::WriteEdit { new_bytes, .. } => {
+                assert_eq!(new_bytes, 11, "new_bytes = len(new_text)");
+            }
+            _ => panic!("expected WriteEdit"),
+        }
+    }
+
+    #[test]
+    fn detail_edit_missing_new_text_reports_zero() {
+        let d = build_detail("edit", &json!({"path": "f.txt", "old_text": "x"}), false)
+            .expect("edit detail");
+        match d {
+            ConfirmDetail::WriteEdit { new_bytes, .. } => assert_eq!(new_bytes, 0),
+            _ => panic!("expected WriteEdit"),
+        }
     }
 
     // --- detail builder (bounded + redacted) ---

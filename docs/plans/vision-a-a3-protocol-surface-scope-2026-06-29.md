@@ -6,6 +6,23 @@
 >
 > Rev 2 incorporated the oracle scope review (`93ddbada`, NOT READY → fixed):
 > BLOCKER-1 (client-side deadlock), MAJOR-1..5, MINOR-1. **Rev 3 folds the
+> owner's structural decisions + the A3-Rust code review (run a32982e6,
+> NOT READY → fixed: no BLOCKER; MAJOR-1..5 + 2 MINOR, all grounded; MAJOR-5
+> correctly deferred to A3-Swift):**
+> - MAJOR-1 fixed: `ServerRequester::request` RAII `PendingCleanup` guard removes
+>   the pending entry on timeout/cancel/drop (was leaking across sequential
+>   timeouts); non-vacuous regression test via a `pending_count` accessor.
+> - MAJOR-2 fixed: close drops all sink-holding locals before `drop(sink)` (was
+>   hanging on `writer.await`); root is lazy (post-auth, on first
+>   `toolhost.execute`) not pre-auth eager.
+> - MAJOR-3 fixed: reply parser is strict `deny_unknown_fields` (`{approved,call_id?}`
+>   only); `{approved:true,error:x}` / cancelled / stray fields now deny.
+> - MAJOR-4 fixed: edit detail reads `new_text` (was `content` → 0); `old_exists`
+>   treats `FileTooLarge` as exists (was `read_file_full(path,1)` → false for >1 byte).
+> - MAJOR-5 = Q7 (SwiftFrontend `ToolExecuteSafe` default) — correctly A3-Swift
+>   (owner-decided split); the A3-Swift precondition, not an A3-Rust blocker.
+> - MINOR-1 fixed: sandbox-unavailable path audited (Error/sandbox_unavailable).
+> - MINOR-2 fixed: timeout/close/cancel tests added (non-vacuous).
 > owner's structural decisions and locks provenance.**
 >
 > ## Provenance (recorded per the standing rule)

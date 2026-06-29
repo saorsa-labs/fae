@@ -142,39 +142,18 @@ async fn handle_connection(
     let mut state = SessionState::Unauthenticated;
     let mut line = String::new();
 
-    // A3: per-session ephemeral tool sandbox (owner Q2 — eager at session start,
-    // torn down on close). The root is a `tempfile::TempDir` guard held HERE so
-    // it is deleted on close, AFTER in-flight tool tasks are cancelled (scope
-    // §5.1 / oracle MAJOR-2). Networked tools still deny (DisabledGate; the
-    // real 3-gate egress adapter is A2.5/P7).
+    // A3: per-session ephemeral tool sandbox (owner Q2 — created post-auth on
+    // the first `toolhost.execute`, torn down on close). `tool_root` is the
+    // `tempfile::TempDir` guard held HERE so it is deleted on close, AFTER
+    // in-flight tool tasks are cancelled (scope §5.1 / oracle MAJOR-2). Lazily
+    // created so an unauthenticated connection (or one that never uses tools)
+    // allocates nothing. Networked tools still deny (DisabledGate; the real
+    // 3-gate egress adapter is A2.5/P7).
     let session_cancel = CancellationToken::new();
     let mut tool_tasks: JoinSet<()> = JoinSet::new();
     let confirm = Arc::new(ServerRequestConfirmation::new(requester.clone()));
-    let tool_root = match tempfile::tempdir() {
-        Ok(d) => Some(d),
-        Err(e) => {
-            eprintln!("fae-daemon: toolhost sandbox init failed: {e}");
-            None
-        }
-    };
-    let toolhost: Option<Arc<ToolHost>> = match &tool_root {
-        Some(dir) => {
-            match ToolHost::new(
-                dir.path().to_path_buf(),
-                Limits::default(),
-                Arc::clone(&conductor_store),
-            )
-            .await
-            {
-                Ok(h) => Some(Arc::new(h)),
-                Err(e) => {
-                    eprintln!("fae-daemon: toolhost init failed: {e}");
-                    None
-                }
-            }
-        }
-        None => None,
-    };
+    let mut tool_root: Option<tempfile::TempDir> = None;
+    let mut toolhost: Option<Arc<ToolHost>> = None;
 
     let result: std::io::Result<()> = async {
         loop {
@@ -257,7 +236,35 @@ async fn handle_connection(
                     // `tool.confirm` round-trip doesn't block the read loop.
                     // Tracked in `tool_tasks` (not fire-and-forget) so close can
                     // cancel + await before the sandbox root drops (scope §5.1).
+                    // The client is authenticated here (we're inside the
+                    // `Authenticated(record)` arm), so lazy creation is post-auth
+                    // by construction (oracle MAJOR-2).
                     if cmd.command == "toolhost.execute" {
+                        // Lazy-init the per-session sandbox on first use.
+                        if toolhost.is_none() {
+                            match tempfile::tempdir() {
+                                Ok(dir) => {
+                                    match ToolHost::new(
+                                        dir.path().to_path_buf(),
+                                        Limits::default(),
+                                        Arc::clone(&conductor_store),
+                                    )
+                                    .await
+                                    {
+                                        Ok(h) => {
+                                            toolhost = Some(Arc::new(h));
+                                            tool_root = Some(dir);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("fae-daemon: toolhost init failed: {e}");
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("fae-daemon: toolhost sandbox init failed: {e}");
+                                }
+                            }
+                        }
                         if let Some(host) = toolhost.as_ref() {
                             let record = record.clone();
                             let host = Arc::clone(host);
@@ -292,7 +299,18 @@ async fn handle_connection(
                                 }
                             });
                         } else {
-                            // Sandbox init failed at session start — deny fail-closed.
+                            // Sandbox init failed — deny fail-closed AND audit it
+                            // (oracle MINOR-1: this path previously bypassed the
+                            // audit row). Synthesize an audited error response.
+                            let audit = crate::session::manual_audit(
+                                event_id,
+                                now,
+                                Some(record.client_id.clone()),
+                                "toolhost.execute",
+                                fae_control_plane::AuditDecision::Error,
+                                "sandbox_unavailable",
+                            );
+                            let _ = append_audit_jsonl(audit_path, &audit);
                             let response = Response::error(
                                 &cmd.request_id,
                                 "sandbox_error",
@@ -370,10 +388,20 @@ async fn handle_connection(
     .await;
     tool_tasks.shutdown().await;
 
-    // Dropping every strong ref to the sink closes the writer channel; the task
-    // flushes any queued frames (including a final error response) and exits.
+    // Drop every local that holds a strong `Arc<ConnSink>` reference BEFORE
+    // `drop(sink)`, so the writer's `rx` actually closes and `writer.await`
+    // returns (oracle MAJOR-2). `confirm` holds the requester → the sink;
+    // `requester` holds the sink directly. If these outlive `drop(sink)`, the
+    // writer channel never closes, `writer.await` hangs, and `tool_root` never
+    // drops (temp dirs leak). Tasks already drained above dropped their clones.
+    drop(toolhost);
+    drop(confirm);
+    drop(requester);
+    // Now the only remaining sink ref is `sink` itself.
     drop(sink);
     let _ = writer.await;
+    // `tool_root` drops here (implicit, end of scope) — AFTER the tasks drained
+    // and the toolhost dropped, so no read/write-after-delete race.
     result
 }
 

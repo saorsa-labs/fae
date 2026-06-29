@@ -323,9 +323,11 @@ impl ToolHost {
     }
 
     /// Cheap existence probe for the file a write/edit targets (feeds the
-    /// confirm payload's `old_exists` flag). Errors (path escape, IO, absent) ⇒
-    /// `false` — this is informational, not a gate (path/damage already ran in
-    /// `evaluate`).
+    /// confirm payload's `old_exists` flag). Uses `read_file_full` with the edit
+    /// byte cap: Ok ⇒ exists; `FileTooLarge` ⇒ exists (big); any other error ⇒
+    /// absent. This is informational, not a gate (path/damage already ran in
+    /// `evaluate`). (oracle MAJOR-4: was `read_file_full(path, 1)`, which
+    /// reported false for any existing file > 1 byte.)
     async fn probe_old_exists(&self, tool: &str, input: &Value) -> bool {
         if !matches!(tool, "write" | "edit") {
             return false;
@@ -333,10 +335,19 @@ impl ToolHost {
         let Some(path) = input.get("path").and_then(Value::as_str) else {
             return false;
         };
-        self.env
-            .read_file_full(std::path::Path::new(path), 1)
+        use fluers_runtime::RuntimeError;
+        match self
+            .env
+            .read_file_full(std::path::Path::new(path), Limits::default().max_edit_bytes)
             .await
-            .is_ok()
+        {
+            // File read fully ⇒ exists.
+            Ok(_) => true,
+            // File exists but exceeds the cap ⇒ exists (just large).
+            Err(RuntimeError::FileTooLarge { .. }) => true,
+            // Not found / unreadable / path issue ⇒ treat as absent.
+            Err(_) => false,
+        }
     }
 }
 

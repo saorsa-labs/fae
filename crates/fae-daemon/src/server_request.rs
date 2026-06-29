@@ -64,26 +64,33 @@ impl ServerRequester {
         if let Ok(mut pending) = self.pending.lock() {
             pending.insert(id.clone(), tx);
         }
+        // RAII guard: remove the pending entry on ANY exit — completion,
+        // disconnect, serialization failure, timeout, or future drop. Without
+        // this, a request whose future is dropped (e.g. a `tool.confirm` that
+        // times out) leaks its entry forever — `resolve` is the only other
+        // remover, and a client that never replies never triggers it. A
+        // long-lived client could then accumulate orphaned oneshots (oracle
+        // MAJOR-1). On `resolve()`, the entry is already removed (no-op).
+        let cleanup = PendingCleanup {
+            pending: Arc::clone(&self.pending),
+            id: id.clone(),
+        };
         let frame = serde_json::json!({
             "v": 2,
             "server_request_id": id,
             "method": method,
             "params": params,
         });
-        match serde_json::to_vec(&frame) {
-            Ok(mut bytes) => {
-                bytes.push(b'\n');
-                self.sink.send_line(Arc::new(bytes));
-            }
-            Err(_) => {
-                // Drop the parked oneshot; serialization can't recover.
-                if let Ok(mut pending) = self.pending.lock() {
-                    pending.remove(&id);
-                }
-                return Err(ServerRequestError::Disconnected);
-            }
+        if let Ok(mut bytes) = serde_json::to_vec(&frame) {
+            bytes.push(b'\n');
+            self.sink.send_line(Arc::new(bytes));
+            let result = rx.await.map_err(|_| ServerRequestError::Disconnected);
+            drop(cleanup); // explicit (also dropped on any early return / cancel)
+            result
+        } else {
+            // Serialization can't recover; the guard removes the entry on drop.
+            Err(ServerRequestError::Disconnected)
         }
-        rx.await.map_err(|_| ServerRequestError::Disconnected)
     }
 
     /// Resolve a pending request with the client's reply (called by the read
@@ -93,6 +100,31 @@ impl ServerRequester {
             if let Some(tx) = pending.remove(server_request_id) {
                 let _ = tx.send(result);
             }
+        }
+    }
+
+    /// The number of parked (unresolved) requests. Test-only — used by the
+    /// oracle-MAJOR-1 leak regression to prove a dropped (timed-out) request
+    /// future cleans up its pending entry rather than orphaning it.
+    #[cfg(test)]
+    pub fn pending_count(&self) -> usize {
+        self.pending.lock().map_or(0, |p| p.len())
+    }
+}
+
+/// RAII guard that removes a pending request entry when dropped. Ensures a
+/// request whose future is dropped (timeout, cancel, disconnect) does not leak
+/// its entry in the pending map (oracle MAJOR-1). On the happy path `resolve`
+/// already removed the entry, so this is a no-op.
+struct PendingCleanup {
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>>,
+    id: String,
+}
+
+impl Drop for PendingCleanup {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(&self.id);
         }
     }
 }

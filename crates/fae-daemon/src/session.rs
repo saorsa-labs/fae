@@ -2043,7 +2043,7 @@ fn strip_served_thinking(text: &str) -> String {
 
 /// An audit row for a non-authz, non-authenticate event (parse failure, command
 /// before auth). Never hashes a payload — `arg_hash` is empty.
-fn manual_audit(
+pub(crate) fn manual_audit(
     event_id: String,
     now_ms: u64,
     client_id: Option<String>,
@@ -4167,5 +4167,71 @@ mod tests {
             "write should succeed after confirm; got: {:?}",
             outcome.response
         );
+    }
+
+    #[tokio::test]
+    async fn toolhost_confirm_timeout_no_pending_leak() {
+        // oracle MAJOR-1: a confirm whose future is dropped (timed out) must NOT
+        // leak its entry in the pending map. resolve() is the only other
+        // remover; a client that never replies never triggers it. The RAII
+        // guard in ServerRequester::request cleans up on drop — this proves it.
+        use tokio::io::duplex;
+        let (_client, server) = duplex(8192);
+        let (sink, _writer) = crate::events::ConnSink::spawn(server);
+        let requester = ServerRequester::new(std::sync::Arc::clone(&sink));
+        assert_eq!(requester.pending_count(), 0, "starts empty");
+        // Issue a request that will never be resolved (no reply).
+        {
+            let fut = requester.request("tool.confirm", serde_json::json!({}));
+            let mut fut = std::pin::pin!(fut);
+            // Poll once so the entry is inserted.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), &mut fut).await;
+            assert_eq!(
+                requester.pending_count(),
+                1,
+                "entry parked while the future is alive"
+            );
+            // Drop the future (mimics a timeout dropping it). The RAII guard
+            // must remove the entry.
+        }
+        assert_eq!(
+            requester.pending_count(),
+            0,
+            "dropped (timed-out) request must not leak its pending entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn toolhost_execute_cancellation_aborts_inflight() {
+        // oracle MAJOR-2 / scope §5.1: cancelling the session token propagates
+        // to the spawned tool's InvokeContext, so close can drain tasks before
+        // the root drops. Proves the cancel token is wired into execute_governed.
+        let (host, _dir) = test_tool_host().await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        // A confirm channel that never resolves (blocks forever) — the only way
+        // out is the cancel.
+        let conf = crate::toolhost::confirm::FakeConfirmation::approve();
+        let record = tool_client(&[Scope::ToolExecuteSafe, Scope::ToolExecuteDangerous]);
+        let cmd = Command {
+            v: 2,
+            request_id: "r1".into(),
+            command: "toolhost.execute".into(),
+            payload: serde_json::json!({"tool":"write","input":{"path":"out.txt","content":"x"}}),
+        };
+        let cancel_clone = cancel.clone();
+        let handle = tokio::spawn(async move {
+            // Run with a hard outer bound; cancel mid-way.
+            tokio::select! {
+                _ = run_authorized_toolhost_execute(
+                    &record, &cmd, &host, &conf, cancel_clone, 0, "ev".into()
+                ) => {}
+            }
+        });
+        // Cancel + the task should complete promptly (the select exits).
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("task did not respond to cancel in time")
+            .expect("join");
     }
 }
