@@ -1625,6 +1625,111 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertEqual(outB.result.output, "BBB", "read b.txt must get its own response (no stealing)")
     }
 
+    /// Cancel-aware operation lock: a routed read cancelled WHILE PARKED on the
+    /// lock returns `.cancelled`, runs no zombie daemon work, and does NOT
+    /// retain/starve the lock — a later read acquires and succeeds on the same
+    /// connection. (The original `withCheckedContinuation` lock never resumed on
+    /// cancellation → zombie daemon round-trip + lock starvation.)
+    ///
+    /// Proven on the real `executeSerializedRoutedRead` path: read A holds the
+    /// lock (its execute frame is read but not responded to); read B parks and
+    /// is cancelled → `.cancelled`; read C then acquires after A releases and
+    /// succeeds. Cancellation-safe: read C actually completes (no blocking-accept
+    /// timeout used to assert "no frame").
+    func testCancelledReadWaiterDoesNotRunZombieWorkOrStarveLock() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("AAA".utf8).write(to: tmp.appendingPathComponent("a.txt"))
+        try Data("BBB".utf8).write(to: tmp.appendingPathComponent("b.txt"))
+        try Data("CCC".utf8).write(to: tmp.appendingPathComponent("c.txt"))
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp)
+        )
+        defer { Task { await session.close() } }
+
+        // Root the session up front so the handshake isn't part of the
+        // lock-holding dance.
+        let rootTask = Task { try await session.ensureDefaultRooted() }
+        let client = try peer.accept()
+        try driveAuth(client)
+        _ = try await recvWithTimeout(client)  // set_root
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        _ = try await recvWithTimeout(client)  // auto-approved reply
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+        _ = try await withTimeout(rootTask)
+
+        // Read A: acquires the lock + sends its execute frame. DO NOT respond →
+        // A stays parked inside `execute` holding the operation lock.
+        let readA = Task<DaemonToolRouting.ReadExecutionOutcome, Never> {
+            await session.executeSerializedRoutedRead(validatedPath: "a.txt")
+        }
+        let frameA = try await recvWithTimeout(client)
+        XCTAssertTrue(frameA.contains("\"tool\":\"read\""), "read A sent its execute frame")
+        XCTAssertTrue(frameA.contains("\"path\":\"a.txt\""))
+
+        // Read B: parks on the operation lock (A holds it). Cancel it while parked.
+        let readB = Task<DaemonToolRouting.ReadExecutionOutcome, Never> {
+            await session.executeSerializedRoutedRead(validatedPath: "b.txt")
+        }
+        // Yield a few times so B reliably reaches the parked continuation before cancel.
+        for _ in 0..<20 { await Task.yield() }
+        readB.cancel()
+
+        // B must resolve to `.cancelled` promptly (cancel handler resumes it).
+        let outcomeB = try await withTimeoutAsNever(readB)
+        if case .cancelled = outcomeB {
+            // expected
+        } else {
+            XCTFail("cancelled parked read must return .cancelled, got \(outcomeB)")
+        }
+
+        // Now release A: respond to its execute frame → A completes + releases
+        // the lock. A cancelled-B waiter (if it had left the lock in a bad state)
+        // would surface here.
+        try client.send("""
+        {"v":2,"request_id":"\(Self.extractField(frameA, field: "request_id") ?? "th-2")","ok":true,"result":{"content":["AAA"]}}
+        """)
+        let outcomeA = try await withTimeoutAsNever(readA)
+        if case .routed(let result) = outcomeA {
+            XCTAssertEqual((result["content"] as? [String])?.first, "AAA")
+        } else {
+            XCTFail("read A should succeed, got \(outcomeA)")
+        }
+
+        // Read C: must acquire the lock the cancelled waiter did NOT retain and
+        // succeed on the SAME connection. This is the no-starvation proof.
+        let readC = Task<DaemonToolRouting.ReadExecutionOutcome, Never> {
+            await session.executeSerializedRoutedRead(validatedPath: "c.txt")
+        }
+        let frameC = try await recvWithTimeout(client)
+        XCTAssertTrue(frameC.contains("\"path\":\"c.txt\""),
+                      "read C acquired the lock (cancellation did not starve it)")
+        try client.send("""
+        {"v":2,"request_id":"\(Self.extractField(frameC, field: "request_id") ?? "th-3")","ok":true,"result":{"content":["CCC"]}}
+        """)
+        let outcomeC = try await withTimeoutAsNever(readC)
+        if case .routed(let result) = outcomeC {
+            XCTAssertEqual((result["content"] as? [String])?.first, "CCC")
+        } else {
+            XCTFail("read C should succeed, got \(outcomeC)")
+        }
+    }
+
     // MARK: helpers
 
     /// Extract a `"field":"value"` string from a single-line JSON frame (test

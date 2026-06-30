@@ -74,23 +74,21 @@ Owner: david@saorsalabs.com · Scope owner decision required for each.
   added to those methods, either route it through the lock or make
   `DaemonSocketConnection`'s server-request-aware `roundTrip` atomic.
 
-## 8. Operation-lock cancelled-waiter (MEDIUM — reviewer, post-merge review)
+## 8. Operation-lock cancelled-waiter (MEDIUM — ✅ RESOLVED 2026-06-30)
 
-- `acquireToolHostOperationLock()` parks a waiter in
-  `withCheckedContinuation`, which does NOT resume on cooperative cancellation.
-  If a routed-read Task is cancelled while parked (pipeline barge-in, a
-  cancelled parent TaskGroup, a higher-level turn cancellation), the waiter
-  stays parked. When the holder releases, it resumes the **cancelled** waiter,
-  which then runs the full root+confine+execute daemon round-trip — zombie work
-  the caller already abandoned — AND holds the lock during it, starving other
-  readers. The waiter slot also leaks if never resumed.
-- **Fix shape:** a cancel-aware acquire (`withTaskCancellationHandler` + a
-  per-waiter id so the sync `onCancel` can remove the parked continuation from
-  the actor array, then throw `CancellationError`). Notably trickier than a
-  naïve ~10-liner because the cancel handler is sync and the waiter array is
-  actor-isolated — needs a small id/registry. Worth doing while the concurrency
-  code is fresh, but deferred to avoid a safety-critical-concurrency change +
-  full re-gate during the merge.
+**Fixed** in `01ab6b9a` → follow-up commit. `acquireToolHostOperationLock()` is
+now cancellation-aware: it parks via `withTaskCancellationHandler` over a
+one-shot `ToolHostOperationWaiter` (lock-guarded `arm`/`cancel`/`resumeLock`),
+re-checks `Task.isCancelled` after acquiring (closes the release-wins-over-
+cancel race), and returns a `.cancelled` outcome so the caller runs no zombie
+daemon work and retains no lock. Regression test:
+`testCancelledReadWaiterDoesNotRunZombieWorkOrStarveLock` (a parked read
+returns `.cancelled`; a later read acquires on the same connection).
+
+Original hazard (for the record): the prior `withCheckedContinuation` lock never
+resumed on cooperative cancellation → a cancelled waiter stayed parked until the
+holder released it, then ran the full root+confine+execute daemon round-trip
+(zombie work the caller abandoned) and starved the lock.
 
 ## 9. Routed-read error copy is technical / not user-facing (LOW — reviewer)
 
@@ -100,3 +98,20 @@ Owner: david@saorsalabs.com · Scope owner decision required for each.
   was approved…"`). Fine for the dev surface; not the friendly copy Fae's voice
   normally uses. Decide on a UX pass that maps routed-read outcomes to
   user-facing narration once the daemon read path is the default.
+
+## 10. Root-prompt before not-found (LOW — reviewer, post-merge review)
+
+- Root-binding-order is load-bearing for safety (confinement MUST use the
+  daemon-returned root, never a locally-computed one — see #8's fix context),
+  but its ordering has a UX cost: a `read` of a **non-existent** file still
+  drives the `ensureDefaultRooted()` handshake (provision + the
+  `workspace.confirm_root` round-trip) BEFORE confinement discovers the file
+  doesn't exist and returns not-found. So a typo'd path can surface the
+  root-approval card (or, on the default Fae-owned root, do the provisioning
+  side effect) only to then say "file not found."
+- **Not a safety issue** (the not-found result is still correct, and the root is
+  the Fae-owned default), just friction. A preflight existence hint could short-
+  circuit, but any such check MUST run AFTER the daemon root is bound (a local
+  existence probe against a locally-computed root would re-open the
+  root-inference footgun) — so it can't actually skip the handshake on the first
+  cold read. Realistic mitigation is UX/copy, not a safety change.

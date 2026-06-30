@@ -222,31 +222,55 @@ actor DaemonToolHostSession {
     /// shared socket and steal each other's responses (lost/mismatched
     /// `request_id`). One operation at a time, FIFO.
     private var toolHostOperationLocked = false
-    private var toolHostOperationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var toolHostOperationWaiters: [ToolHostOperationWaiter] = []
 
     /// Acquire the operation lock. The first caller proceeds immediately; later
     /// callers suspend (in FIFO order) until `releaseToolHostOperationLock()`.
-    private func acquireToolHostOperationLock() async {
+    ///
+    /// Cancellation-aware: if the calling Task is cancelled while parked (or
+    /// before it acquires), the waiter is resumed with `CancellationError` and
+    /// the lock is NOT taken — the cancelled caller runs no zombie daemon work
+    /// and holds no lock. `withCheckedContinuation` alone can't do this (it never
+    /// resumes on cancellation); the per-waiter `ToolHostOperationWaiter` makes
+    /// the cancel path win exclusively against the release path (one-shot).
+    private func acquireToolHostOperationLock() async throws {
+        // Fast cooperative-cancellation check up front.
+        try Task.checkCancellation()
         if !toolHostOperationLocked {
             toolHostOperationLocked = true
             return
         }
-        await withCheckedContinuation { continuation in
-            toolHostOperationWaiters.append(continuation)
-        }
+        let waiter = ToolHostOperationWaiter()
+        try await withTaskCancellationHandler(
+            operation: {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    // Runs synchronously on this actor; arm then enqueue.
+                    waiter.arm(continuation)
+                    self.toolHostOperationWaiters.append(waiter)
+                }
+            },
+            onCancel: {
+                // SYNC — must not touch actor-isolated state. Only the Sendable
+                // waiter. If release already resumed it, this is a no-op.
+                waiter.cancel()
+            }
+        )
     }
 
-    /// Release the operation lock, handing it to the next waiter (if any) or
+    /// Release the operation lock, handing it to the next LIVE waiter (if any) or
     /// marking it free. Sync (non-async) so it is safe to call from `defer`.
+    /// Cancelled waiters return `false` from `resumeLock()` and are skipped;
+    /// they never held the lock, so skipping is correct and cleans them up.
     private func releaseToolHostOperationLock() {
-        if let next = toolHostOperationWaiters.first {
+        while let next = toolHostOperationWaiters.first {
             toolHostOperationWaiters.removeFirst()
-            next.resume()
-            // `toolHostOperationLocked` stays true — the lock is transferred to
-            // the resumed waiter; it will release when it finishes.
-        } else {
-            toolHostOperationLocked = false
+            if next.resumeLock() {
+                // Handed the lock to this live waiter; stay locked.
+                return
+            }
+            // Cancelled — drop and try the next.
         }
+        toolHostOperationLocked = false
     }
 
     /// The serialized daemon-interacting core of a routed `read` (B-Swift 3b).
@@ -266,8 +290,22 @@ actor DaemonToolHostSession {
     func executeSerializedRoutedRead(
         validatedPath: String
     ) async -> DaemonToolRouting.ReadExecutionOutcome {
-        await acquireToolHostOperationLock()
+        // Acquire (parks if contended; throws CancellationError if the caller's
+        // Task is cancelled while parked). The deferred release is registered
+        // ONLY after a successful acquire so a cancelled-acquire never releases a
+        // lock it never took.
+        do {
+            try await acquireToolHostOperationLock()
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Could not acquire the read lock: \(error.localizedDescription)")
+        }
         defer { releaseToolHostOperationLock() }
+        // Re-check after acquire: if the holder released and resumed us a hair
+        // before cancellation fired, we hold the lock but our Task is cancelled.
+        // Bail (the defer releases) instead of running zombie daemon work.
+        if Task.isCancelled { return .cancelled }
 
         do {
             // Root FIRST. Returns the daemon-approved (daemon-RETURNED) root and
@@ -383,5 +421,62 @@ actor DaemonToolHostSession {
     private func nextRequestID() -> String {
         requestCounter += 1
         return "th-\(requestCounter)"
+    }
+}
+
+// MARK: - Operation-lock waiter (cancellation-aware one-shot)
+
+/// A parked `acquireToolHostOperationLock()` caller, made cancellation-aware.
+///
+/// `withCheckedContinuation` alone never resumes on cooperative cancellation, so
+/// a cancelled waiter would stay parked until the holder released it — then run
+/// the full daemon round-trip (zombie work) and starve the lock. This class is a
+/// **one-shot** continuation holder: whichever of {release, cancel} fires first
+/// wins exclusively and takes the continuation; the other no-ops. The `cancelled`
+/// flag closes the ordering hazard where `cancel()` runs before `arm(_:)`.
+///
+/// All access is `NSLock`-guarded so the sync `onCancel` handler can safely touch
+/// it without actor isolation (it must not reach actor state).
+private final class ToolHostOperationWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var cancelled = false
+
+    /// Bind the continuation. If `cancel()` already fired, resume it immediately
+    /// with `CancellationError` (closes the cancel-before-arm race).
+    func arm(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    /// Cancel handler: mark cancelled and, if armed, resume with
+    /// `CancellationError`. Idempotent and safe against a concurrent `resumeLock`.
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume(throwing: CancellationError())
+    }
+
+    /// Release path: resume the waiter successfully (hand it the lock). Returns
+    /// `true` if THIS call resumed (the waiter was live and armed), `false` if it
+    /// was already cancelled/resumed. Exactly-once.
+    @discardableResult
+    func resumeLock() -> Bool {
+        lock.lock()
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        guard let cont else { return false }
+        cont.resume()
+        return true
     }
 }

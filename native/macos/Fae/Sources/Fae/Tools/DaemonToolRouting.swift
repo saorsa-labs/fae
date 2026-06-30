@@ -181,6 +181,11 @@ enum DaemonToolRouting {
         /// Daemon dropped/errored BEFORE the root was approved, or the daemon
         /// execute itself errored. Fail closed — surface an error, no local read.
         case failClosed(String)
+        /// The caller's Task was cancelled (e.g. while parked on the operation
+        /// lock). No daemon round-trip ran; surface a clean cancelled result. The
+        /// cancellation must NOT fall through to a local `ReadTool` (that would
+        /// be extra work the caller already abandoned).
+        case cancelled
     }
 
     // MARK: - Route a read through the daemon session
@@ -235,6 +240,8 @@ enum DaemonToolRouting {
             return .error(reason)
         case .fallbackLocally(let canonical):
             return await readLocally(path: canonical.path)
+        case .cancelled:
+            return .error("Read was cancelled.")
         }
     }
 
