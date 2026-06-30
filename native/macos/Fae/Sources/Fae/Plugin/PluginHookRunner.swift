@@ -7,7 +7,17 @@ import Foundation
 ///
 /// Hook scripts receive `HookInput` as JSON on stdin and write `HookResponse`
 /// as JSON to stdout. Non-zero exit or timeout → passthrough (fail-open).
-actor PluginHookRunner {
+/// B-Swift Phase C/#5: protocol seam for testability (spy injection). The
+/// concrete `PluginHookRunner` actor conforms; `ToolExecutor` stores
+/// `(any PluginHookRunning)?` so tests can inject a spy with canned pre/post hook
+/// responses without the subprocess-backed actor. Production call sites
+/// (`PluginHookRunner`) are unchanged.
+protocol PluginHookRunning: Actor {
+    func hasHooks(for event: HookEvent) -> Bool
+    func runHooks(event: HookEvent, input: HookInput) async -> HookResponse
+}
+
+actor PluginHookRunner: PluginHookRunning {
 
     /// All registered hooks across all enabled plugins, grouped by event.
     private var hooks: [HookEvent: [RegisteredHook]] = [:]

@@ -191,6 +191,52 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertEqual(confirmMethod, "tool.confirm", "onServerRequest must be invoked for tool.confirm")
     }
 
+    /// B-Swift Phase C/#5 (F2): a `roundTrip` whose peer accepts but never
+    /// replies must observe task cancellation and unblock within ~1 `recv()`
+    /// poll (~1s), NOT the 600s overall deadline. Pre-fix, the in-flight
+    /// `recv()` ignored cooperative cancellation and held the operation lock
+    /// (and the socket queue) for the full 600s — a wedged-daemon DoS on routed
+    /// reads. Both `roundTrip` forms share `readLineAsync`, so this covers the
+    /// cancellation seam for the routed-read path too.
+    func testRoundTripCancellationUnblocksPromptlyFromSilentPeer() async throws {
+        let peer = try FakeDaemonPeer.listen()
+        let connection = DaemonSocketConnection(queueLabel: "fae.test.f2-cancel")
+        try connection.connect(to: peer.path)
+        defer { connection.close() }
+
+        let frame = try DaemonWire.encodeFrame(
+            requestID: "x", command: "toolhost.execute", payload: [:])
+
+        // Accept the Swift side's connection, then stay SILENT (never reply) so
+        // the roundTrip blocks in recv().
+        let client = try peer.accept()
+        defer { client.close() }
+
+        // Drive the round-trip on a child task so we can cancel it.
+        let roundTrip = Task { () -> [String: Any] in
+            try await connection.roundTrip(frame: frame, expectRequestID: "x")
+        }
+
+        // Let it reach the blocked recv() (write + first recv poll need time).
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let cancelStart = Date()
+        roundTrip.cancel()
+
+        do {
+            _ = try await roundTrip.value
+            XCTFail("roundTrip on a silent peer should not succeed after cancel")
+        } catch is CancellationError {
+            // Expected: cancellation observed within ~1 recv poll.
+        } catch {
+            // Other prompt errors are acceptable too — the point is NO 600s hang.
+        }
+        let elapsed = Date().timeIntervalSince(cancelStart)
+        XCTAssertLessThan(
+            elapsed, 3.0,
+            "cancel must unblock roundTrip within ~1s (recv poll), not 600s; took \(elapsed)s")
+    }
+
     /// The plain `call()` helper must REFUSE `toolhost.execute` — that path uses
     /// the plain round-trip which would drop the confirm (BLOCKER-1). This is a
     /// structural guard against a future caller misrouting the command.
@@ -1643,6 +1689,309 @@ final class DaemonToolHostTests: XCTestCase {
         case .route:
             XCTFail("hardlinked secret must be denied (st_nlink > 1 early-reject)")
         }
+    }
+
+    // MARK: - B-Swift Phase C / follow-up #5 — routed-read pipeline (hooks/audit/timeout)
+
+    /// #4: a routed read that stalls past the executor timeout returns a timeout
+    /// error. Pre-Phase-C the routed read short-circuited BEFORE step 12 (no
+    /// timeout). Phase C/#5 wraps the routed path in the executor timeout. Uses
+    /// the test-seam closure (no real daemon) + a 0.4s timeout override so the
+    /// test runs in <1s, not 30s. `Task.sleep` is cancellation-aware ⇒ the
+    /// stalling task exits promptly when the timeout cancels it.
+    func testRoutedReadTimeoutReturnsTimeoutError() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // Intended-but-down (no daemon published) ⇒ plan = .confinedLocalFallback
+        // ⇒ executeRoutedRead runs. The injected closure stalls 5s; the 0.4s
+        // timeout must fire first.
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedReadTimeoutForTesting(0.4)
+        await executor.setRoutedReadExecutorForTesting { _, _, _ in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            return .success("should-not-reach")
+        }
+
+        let start = Date()
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertTrue(outcome.result.isError, "stalling routed read must time out")
+        XCTAssertTrue(outcome.result.output.contains("timed out"),
+                      "error must be the timeout message: \(outcome.result.output)")
+        XCTAssertLessThan(elapsed, 2.0, "the 0.4s timeout must fire, not the 5s stall")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "timeout path must record latencyMs (Phase C/#5, code-review M1)")
+    }
+
+    /// #5: an opted-out runtime (useDaemonEngine=false) with no daemon falls
+    /// through to the FULL local pipeline — the legacy `ReadTool` reads an
+    /// ABSOLUTE path (which routing would deny), and the routed executor is
+    /// NEVER called (its error return IS the sentinel: if it were called, the
+    /// read would fail instead of returning the file content).
+    func testRoutedReadOptedOutFallsThroughToLegacyLocal() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let absPath = tmp.appendingPathComponent("outside.txt")
+        try Data("legacy-local-read".utf8).write(to: absPath)
+
+        // Opted-out ⇒ plan = .legacyLocal ⇒ fall through; the sentinel closure
+        // returns an error if ever called.
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedReadExecutorForTesting { _, _, _ in
+            .error("routed executor must not be called for legacy fall-through")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": absPath.path]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "legacy local read of an absolute path must succeed: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("legacy-local-read"),
+                      "the legacy local ReadTool must have read the file: \(outcome.result.output)")
+    }
+
+    /// #6: an intended-but-down runtime (the default-bundled failure mode) runs
+    /// the confined-fallback read THROUGH the routed pipeline (PreToolUse hooks +
+    /// timeout + PostToolUse hooks + audit), not the old raw early-return. The
+    /// sentinel closure stands in for the confined read; `latencyMs != nil`
+    /// proves the wrapped pipeline ran (the pre-Phase-C early-return carried
+    /// `latencyMs: nil`).
+    func testRoutedReadConfinedFallbackGoesThroughPipeline() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedReadExecutorForTesting { _, _, _ in
+            .success("canned-confined-read")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "routed read via the seam must succeed: \(outcome.result.output)")
+        XCTAssertEqual(outcome.result.output, "canned-confined-read",
+                       "the sentinel routed executor's result must surface")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "latencyMs must be set — proves the routed pipeline (not the raw early-return) ran (Phase C/#5)")
+    }
+
+    // Spy actors + entry records for the hook/audit observability tests below.
+    private struct SpyLogEntry: Sendable {
+        let event: String; let toolName: String; let success: Bool?; let error: String?
+    }
+    private struct SpyAnalyticsRecord: Sendable {
+        let toolName: String; let success: Bool; let error: String?
+    }
+    private actor SpyHookRunner: PluginHookRunning {
+        private(set) var preToolNames: [String] = []
+        private(set) var postToolNames: [String] = []
+        private(set) var postOutputs: [String] = []
+        let preResponse: HookResponse
+        let postResponse: HookResponse
+        let hasPre: Bool
+        let hasPost: Bool
+        init(preResponse: HookResponse = .passthrough, postResponse: HookResponse = .passthrough,
+             hasPre: Bool = true, hasPost: Bool = true) {
+            self.preResponse = preResponse; self.postResponse = postResponse
+            self.hasPre = hasPre; self.hasPost = hasPost
+        }
+        func hasHooks(for event: HookEvent) -> Bool {
+            switch event { case .preToolUse: return hasPre; case .postToolUse: return hasPost; default: return false }
+        }
+        func runHooks(event: HookEvent, input: HookInput) async -> HookResponse {
+            switch event {
+            case .preToolUse:
+                preToolNames.append(input.toolName ?? "?"); return preResponse
+            case .postToolUse:
+                postToolNames.append(input.toolName ?? "?"); postOutputs.append(input.toolOutput ?? ""); return postResponse
+            default: return .passthrough
+            }
+        }
+    }
+    private actor SpySecurityLogger: SecurityEventLogging {
+        private(set) var entries: [SpyLogEntry] = []
+        func log(event: String, toolName: String, decision: String?, reasonCode: String?,
+                 approved: Bool?, success: Bool?, error: String?, arguments: [String: Any]?) {
+            entries.append(SpyLogEntry(event: event, toolName: toolName, success: success, error: error))
+        }
+    }
+    private actor SpyToolAnalytics: ToolAnalyticsRecording {
+        private(set) var records: [SpyAnalyticsRecord] = []
+        func record(toolName: String, success: Bool, latencyMs: Int?, approved: Bool?, error: String?) {
+            records.append(SpyAnalyticsRecord(toolName: toolName, success: success, error: error))
+        }
+    }
+
+    /// Helper: a ToolExecutor wired with the spy logger/analytics + a routed-read
+    /// seam closure, on the confined-fallback plan (intended-but-down).
+    private func makeSpiedRoutedExecutor(
+        tmp: URL, hookRunner: SpyHookRunner?, logger: SpySecurityLogger,
+        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.ReadRoutePlan) async -> ToolResult
+    ) async -> ToolExecutor {
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: logger,
+            toolAnalytics: analytics,
+            daemonToolHostSession: session)
+        if let hookRunner { await executor.setPluginHookRunner(hookRunner) }
+        await executor.setRoutedReadExecutorForTesting(routed)
+        return executor
+    }
+
+    /// #1: a PreToolUse hook BLOCKS the routed read BEFORE the routed executor
+    /// closure runs (the closure's `.success("closure-ran")` must never surface —
+    /// the block message does). Closes the policy bypass: a user-configured read
+    /// hook now applies to routed reads too (Phase C/#5).
+    func testRoutedReadPreToolUseHookBlocksBeforeClosure() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let hooks = SpyHookRunner(preResponse:
+            HookResponse(systemMessage: "blocked-by-test", block: true, metadata: nil))
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedExecutor(
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+                .success("closure-ran")
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(), callbacks: .noop)
+
+        let preNames = await hooks.preToolNames
+        XCTAssertEqual(preNames, ["read"], "PreToolUse must fire for the routed read")
+        XCTAssertTrue(outcome.result.isError, "a blocking PreToolUse hook must surface an error")
+        XCTAssertEqual(outcome.result.output, "blocked-by-test",
+                       "the hook's block message must surface: \(outcome.result.output)")
+        let posts = await hooks.postToolNames
+        XCTAssertEqual(posts, [], "PostToolUse must NOT fire when PreToolUse blocks")
+    }
+
+    /// #2: PostToolUse fires WITH the routed output (the hook observes what the
+    /// routed read returned).
+    func testRoutedReadFiresPostToolUseWithOutput() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let hooks = SpyHookRunner()  // passthrough pre + post
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedExecutor(
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+                .success("canned-routed-output")
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError)
+
+        let postNames = await hooks.postToolNames, postOutputs = await hooks.postOutputs
+        XCTAssertEqual(postNames, ["read"], "PostToolUse must fire for the routed read")
+        XCTAssertEqual(postOutputs, ["canned-routed-output"],
+                       "PostToolUse must observe the routed read's output")
+    }
+
+    /// #3: a successful routed read records a Swift SecurityEventLogger row +
+    /// ToolAnalytics event (the daemon's audit.jsonl is a complement, not a
+    /// substitute — Phase C/#5).
+    func testRoutedReadRecordsAuditAndAnalyticsOnSuccess() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedExecutor(
+            tmp: tmp, hookRunner: nil, logger: logger, analytics: analytics) { _, _, _ in
+                .success("ok")
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError)
+
+        let entries = await logger.entries, records = await analytics.records
+        let resultEntries = entries.filter { $0.event == "tool_result" }
+        XCTAssertEqual(resultEntries.count, 1, "one tool_result audit row for the routed read")
+        XCTAssertEqual(resultEntries.first?.toolName, "read")
+        XCTAssertEqual(resultEntries.first?.success, true)
+        XCTAssertEqual(records.count, 1, "one ToolAnalytics record")
+        XCTAssertEqual(records.first?.toolName, "read")
+        XCTAssertEqual(records.first?.success, true)
+        XCTAssertNil(records.first?.error)
+    }
+
+    /// #4: a routed `.error(...)` read records the failure to SecurityEventLogger
+    /// + ToolAnalytics (success=false, error carried).
+    func testRoutedReadRecordsAuditAndAnalyticsOnError() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedExecutor(
+            tmp: tmp, hookRunner: nil, logger: logger, analytics: analytics) { _, _, _ in
+                .error("routed-failure")
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertTrue(outcome.result.isError)
+
+        let entries = await logger.entries, records = await analytics.records
+        let resultEntries = entries.filter { $0.event == "tool_result" }
+        XCTAssertEqual(resultEntries.count, 1)
+        XCTAssertEqual(resultEntries.first?.success, false)
+        XCTAssertEqual(resultEntries.first?.error, "routed-failure")
+        XCTAssertEqual(records.first?.success, false)
+        XCTAssertEqual(records.first?.error, "routed-failure")
     }
 
     /// A valid UTF-8 file truncated by the byte cap MID-MULTIBYTE-CHARACTER is

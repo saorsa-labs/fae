@@ -473,14 +473,35 @@ private final class DaemonOutputAccumulator: @unchecked Sendable {
 /// Shared by `DaemonLLMEngine` and `DaemonTTSEngine` — each opens its OWN
 /// connection (LLM turns serialize for minutes; TTS must not queue behind
 /// them), distinguished by `queueLabel`.
+/// NSLock-guarded cancellation flag for a single `readLineAsync` call (B-Swift
+/// Phase C/#5, F2). Set by the task's `onCancel` handler (runs OFF the socket
+/// queue); polled by `readLineLocked` (ON the queue) after each `recv()` poll.
+///
+/// Design note: `onCancel` only sets the flag — it never resumes the
+/// continuation. The continuation is resumed exactly once by the queue block
+/// (readLineLocked either returns a line or throws `CancellationError`), so
+/// there is no double-resume hazard.
+fileprivate final class SocketReadCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+}
+
 final class DaemonSocketConnection: @unchecked Sendable {
     private let queue: DispatchQueue
     private var fd: Int32 = -1
     private var buffer = Data()
 
-    /// Receive timeout per recv() call. Generous: a full local turn on a large
-    /// model can take minutes.
+    /// Overall read deadline (B-Swift Phase C/#5, F2): a single `readLineLocked`
+    /// call gives up after this many seconds of no progress. A full local turn on
+    /// a large model can take minutes, so this stays generous.
     private static let receiveTimeoutSeconds: Int = 600
+    /// Per-`recv()` poll interval (B-Swift Phase C/#5, F2). Short so a blocked
+    /// read returns often enough to observe task cancellation — a cancelled
+    /// routed read unblocks within ~1 poll instead of wedging the operation lock
+    /// for `receiveTimeoutSeconds`. The overall cap above is enforced separately.
+    private static let recvPollSeconds: Int = 1
 
     init(queueLabel: String = "fae.daemon-llm.socket") {
         self.queue = DispatchQueue(label: queueLabel)
@@ -491,21 +512,19 @@ final class DaemonSocketConnection: @unchecked Sendable {
     }
 
     /// Send one frame and read response lines until the object whose
-    /// `request_id` matches arrives. Unrelated lines (events, stale frames)
-    /// are skipped, bounded by `maxSkippedLines`.
+    /// `request_id` matches arrives. Unrelated lines (events, stale frames) are
+    /// skipped, bounded by `maxSkippedLines`. Routes through `writeAsync` + the
+    /// cancellation-aware `readLineAsync` (B-Swift Phase C/#5, F2) so a cancelled
+    /// caller unblocks within ~1 `recv()` poll, not 600s.
     func roundTrip(frame: Data, expectRequestID: String) async throws -> [String: Any] {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                do {
-                    try self.writeLocked(frame)
-                    let response = try self.readMatchingResponseLocked(
-                        requestID: expectRequestID, maxSkippedLines: 200)
-                    continuation.resume(returning: response)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
+        try await writeAsync(frame)
+        for _ in 0...200 {
+            let line = try await readLineAsync()
+            guard let object = DaemonWire.parseObjectLine(line) else { continue }
+            guard (object["request_id"] as? String) == expectRequestID else { continue }
+            return object
         }
+        throw DaemonLLMEngineError.responseTimedOut(expectRequestID)
     }
 
     /// Send one frame, then read response lines until the matching `request_id`
@@ -540,14 +559,27 @@ final class DaemonSocketConnection: @unchecked Sendable {
         throw DaemonLLMEngineError.responseTimedOut(expectRequestID)
     }
 
-    /// Queue-confined async single-line read (used by the server-request loop).
+    /// Queue-confined async single-line read (used by both `roundTrip` forms).
+    /// Cancellation-aware (B-Swift Phase C/#5, F2): wraps the read in
+    /// `withTaskCancellationHandler`; on cancel, the flag is set and the
+    /// in-progress `readLineLocked` observes it within one `recv()` poll
+    /// (~`recvPollSeconds`) and throws `CancellationError` — so a cancelled
+    /// routed read unblocks promptly instead of holding the operation lock for
+    /// `receiveTimeoutSeconds`. Does NOT close/`queue.sync` the socket from
+    /// `onCancel` (that would deadlock behind the blocked `recv`).
     private func readLineAsync() async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                do { continuation.resume(returning: try self.readLineLocked()) }
-                catch { continuation.resume(throwing: error) }
-            }
-        }
+        let cancellation = SocketReadCancellation()
+        return try await withTaskCancellationHandler(
+            operation: {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                    self.queue.async {
+                        do { continuation.resume(returning: try self.readLineLocked(cancellation: cancellation)) }
+                        catch { continuation.resume(throwing: error) }
+                    }
+                }
+            },
+            onCancel: { cancellation.cancel() }
+        )
     }
 
     /// Queue-confined async frame write (used by the server-request loop).
@@ -617,7 +649,7 @@ final class DaemonSocketConnection: @unchecked Sendable {
             throw DaemonLLMEngineError.connectionFailed("connect(\(path)): \(detail)")
         }
 
-        var timeout = timeval(tv_sec: Self.receiveTimeoutSeconds, tv_usec: 0)
+        var timeout = timeval(tv_sec: Self.recvPollSeconds, tv_usec: 0)
         _ = setsockopt(
             sock, SOL_SOCKET, SO_RCVTIMEO, &timeout,
             socklen_t(MemoryLayout<timeval>.size))
@@ -646,22 +678,19 @@ final class DaemonSocketConnection: @unchecked Sendable {
         }
     }
 
-    private func readMatchingResponseLocked(
-        requestID: String,
-        maxSkippedLines: Int
-    ) throws -> [String: Any] {
-        for _ in 0...maxSkippedLines {
-            let line = try readLineLocked()
-            guard let object = DaemonWire.parseObjectLine(line) else { continue }
-            guard (object["request_id"] as? String) == requestID else { continue }
-            return object
-        }
-        throw DaemonLLMEngineError.responseTimedOut(requestID)
-    }
-
-    private func readLineLocked() throws -> String {
+    private func readLineLocked(cancellation: SocketReadCancellation? = nil) throws -> String {
         guard fd >= 0 else { throw DaemonLLMEngineError.notConnected }
+        // Monotonic deadline (B-Swift Phase C/#5, F2): `Date()` is wall-clock and
+        // jumps on NTP/manual/system-time changes — a backward jump could extend
+        // this 600s cap indefinitely. CLOCK_MONOTONIC is immune to those jumps,
+        // matching the kernel-managed monotonicity of the original SO_RCVTIMEO.
+        var startTS = timespec()
+        clock_gettime(CLOCK_MONOTONIC, &startTS)
+        let deadlineSeconds = TimeInterval(Self.receiveTimeoutSeconds)
         while true {
+            if let cancellation, cancellation.isCancelled {
+                throw CancellationError()
+            }
             if let newline = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<newline)
                 buffer.removeSubrange(buffer.startIndex...newline)
@@ -682,8 +711,21 @@ final class DaemonSocketConnection: @unchecked Sendable {
             if count < 0 {
                 if errno == EINTR { continue }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
-                    throw DaemonLLMEngineError.responseTimedOut(
-                        "recv timed out after \(Self.receiveTimeoutSeconds)s")
+                    // recv poll timed out (~recvPollSeconds). Re-check the
+                    // overall deadline + cooperative cancellation before
+                    // re-polling (B-Swift Phase C/#5, F2).
+                    var nowTS = timespec()
+                    clock_gettime(CLOCK_MONOTONIC, &nowTS)
+                    let elapsed = TimeInterval(nowTS.tv_sec - startTS.tv_sec)
+                        + TimeInterval(nowTS.tv_nsec - startTS.tv_nsec) / 1_000_000_000
+                    if elapsed >= deadlineSeconds {
+                        throw DaemonLLMEngineError.responseTimedOut(
+                            "recv timed out after \(Self.receiveTimeoutSeconds)s")
+                    }
+                    if let cancellation, cancellation.isCancelled {
+                        throw CancellationError()
+                    }
+                    continue
                 }
                 throw DaemonLLMEngineError.connectionFailed("recv(): \(Self.errnoString())")
             }

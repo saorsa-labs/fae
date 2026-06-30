@@ -5,7 +5,21 @@ import GRDB
 ///
 /// Records every tool invocation with timing, success/failure, and approval status.
 /// Stored in a dedicated SQLite database alongside the memory store.
-actor ToolAnalytics {
+/// B-Swift Phase C/#5: protocol seam for testability (spy injection). The
+/// concrete `ToolAnalytics` actor conforms; `ToolExecutor` stores
+/// `(any ToolAnalyticsRecording)?` so tests can inject a recording spy without a
+/// SQLite-backed actor. Production call sites (`ToolAnalytics`) are unchanged.
+protocol ToolAnalyticsRecording: Actor {
+    func record(
+        toolName: String,
+        success: Bool,
+        latencyMs: Int?,
+        approved: Bool?,
+        error: String?
+    )
+}
+
+actor ToolAnalytics: ToolAnalyticsRecording {
     private let dbQueue: DatabaseQueue
     /// Monotonic per-process counter so rapid records in the same second get
     /// distinct primary keys. The old `tool-<sec>-<rand>` id collided when two

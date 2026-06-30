@@ -103,6 +103,12 @@ let package = Package(
                 .copy("Resources/App/AppIconFace.jpg"),
                 .copy("Resources/Scripts"),
             ],
+            swiftSettings: [
+                // Test-only seams (routed-read executor/timeout overrides) compiled
+                // OUT of release builds so no production binary can override
+                // routed-read confinement/timeout (Phase C/#5, red-team F4).
+                .define("FAE_TEST_SEAMS", .when(configuration: .debug)),
+            ],
             linkerSettings: [
                 // System frameworks for native Swift pipeline.
                 .linkedFramework("Security"),

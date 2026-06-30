@@ -35,14 +35,14 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     let registry: ToolRegistry
     let damageControlPolicy: DamageControlPolicy
-    let securityLogger: SecurityEventLogger
+    let securityLogger: any SecurityEventLogging
     let workflowTraceStore: WorkflowTraceStore?
-    let toolAnalytics: ToolAnalytics?
+    let toolAnalytics: (any ToolAnalyticsRecording)?
     weak var delegate: (any ToolExecutorDelegate)?
     nonisolated(unsafe) var debugConsole: DebugConsoleController?
 
     /// Plugin hook runner for PreToolUse / PostToolUse hooks.
-    var pluginHookRunner: PluginHookRunner?
+    var pluginHookRunner: (any PluginHookRunning)?
 
     /// Action receipt store for undo/reversibility. Set after init by FaeCore.
     var receiptStore: ReceiptStore?
@@ -58,6 +58,23 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// `DaemonToolRouting`.
     let daemonToolHostSession: DaemonToolHostSession
 
+    /// B-Swift Phase C/#5 test seam: the routed-read executor. Defaults to the
+    /// real `DaemonToolRouting.routeRead(call:session:plan:)`. Tests inject a
+    /// canned or stalling closure to assert hooks/audit/timeout WITHOUT a real
+    /// daemon. Production is unchanged (the default delegates to the real
+    /// router). Set via `setRoutedReadExecutorForTesting`.
+    private var routedReadExecutor: @Sendable (
+        ToolCall, DaemonToolHostSession, DaemonToolRouting.ReadRoutePlan
+    ) async -> ToolResult = { call, session, plan in
+        await DaemonToolRouting.routeRead(call: call, session: session, plan: plan)
+    }
+
+    /// B-Swift Phase C/#5 test seam: override the routed-read timeout (seconds).
+    /// Nil → use `toolTimeoutSeconds(for:)` (production = 30s for `read`). Tests
+    /// set a short value so a stalling injected executor closure trips the
+    /// timeout without a 30s wait.
+    private var routedReadTimeoutOverride: TimeInterval?
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -71,9 +88,9 @@ actor ToolExecutor: ToolExecutorProtocol {
     init(
         registry: ToolRegistry,
         damageControlPolicy: DamageControlPolicy,
-        securityLogger: SecurityEventLogger,
+        securityLogger: any SecurityEventLogging,
         workflowTraceStore: WorkflowTraceStore? = nil,
-        toolAnalytics: ToolAnalytics? = nil,
+        toolAnalytics: (any ToolAnalyticsRecording)? = nil,
         delegate: (any ToolExecutorDelegate)? = nil,
         debugConsole: DebugConsoleController? = nil,
         daemonIntendedForToolhostRouting: Bool
@@ -103,9 +120,9 @@ actor ToolExecutor: ToolExecutorProtocol {
     init(
         registry: ToolRegistry,
         damageControlPolicy: DamageControlPolicy,
-        securityLogger: SecurityEventLogger,
+        securityLogger: any SecurityEventLogging,
         workflowTraceStore: WorkflowTraceStore? = nil,
-        toolAnalytics: ToolAnalytics? = nil,
+        toolAnalytics: (any ToolAnalyticsRecording)? = nil,
         delegate: (any ToolExecutorDelegate)? = nil,
         debugConsole: DebugConsoleController? = nil,
         daemonToolHostSession: DaemonToolHostSession
@@ -131,7 +148,7 @@ actor ToolExecutor: ToolExecutorProtocol {
     }
 
     /// Wire plugin hook runner for PreToolUse / PostToolUse hooks.
-    func setPluginHookRunner(_ runner: PluginHookRunner?) {
+    func setPluginHookRunner(_ runner: (any PluginHookRunning)?) {
         pluginHookRunner = runner
     }
 
@@ -275,34 +292,33 @@ actor ToolExecutor: ToolExecutorProtocol {
             )
         }
 
-        // ── 6b. Daemon routing (B-Swift Layer 3b) ──────────────────────
+        // ── 6b. Daemon routing (B-Swift Layer 3b + Phase C/#5) ──────────
         // Route safe portable tools (ONLY `read` in 3b) to the governed daemon
         // ToolHost, confined to the default workspace. This runs AFTER the
         // deterministic gates (1-5) and BEFORE DamageControl (7), so a
         // daemon-routed read is governed by the daemon (path/damage/egress + its
-        // own tool.confirm) and never double-approved in Swift. write/edit/bash
-        // stay local (Layer 4 provisions the dangerous scope; bash blast radius
-        // is too high for the substring denylist).
+        // own tool.confirm) and never double-approved in Swift.
         //
-        // No-daemon fallback (follow-up #2, gated on `daemonIntended` =
-        // `FaeConfig.llm.useDaemonEngine`): a reachable daemon routes as below;
-        // an unreachable daemon returns `nil` ONLY when opted out (legacy
-        // unconfined local read), and otherwise confines the read LOCALLY so the
-        // "reads are confined to ~/Documents/Fae" invariant survives outages.
-        // See `DaemonToolRouting.routeRead` for the branch logic.
+        // Phase C / follow-up #5 (LOCKED 2026-06-30): decide the route FIRST
+        // (`planReadRoute` — no side effect), then:
+        //  - `.legacyLocal` (opted-out + no daemon) → fall through to the FULL
+        //    local pipeline (DamageControl, hooks, audit, receipts) unchanged;
+        //  - `.daemonReachable` / `.confinedLocalFallback` → run the routed-read
+        //    branch (`executeRoutedRead`), which mirrors the local pipeline's
+        //    PreToolUse hooks + timeout + PostToolUse hooks + audit/analytics,
+        //    skipping ONLY DamageControl (the daemon governs) and receipts (no
+        //    mutation). This closes the policy bypass: a user-configured read
+        //    hook now applies to routed reads too, and the 30s executor timeout
+        //    + SecurityEventLogger/ToolAnalytics rows fire (the daemon's
+        //    `audit.jsonl` is a complement, not a substitute). `read` is the
+        //    precedent-setter — Layer 4 routes write/edit/bash through this seam.
         if DaemonToolRouting.routedTools.contains(call.name) {
-            if let routed = await DaemonToolRouting.routeRead(
-                call: call, session: daemonToolHostSession)
-            {
-                return ToolExecutorResult(
-                    result: routed,
-                    approvedByUser: nil,
-                    damageControlIntervened: false,
-                    latencyMs: nil
-                )
+            let plan = await DaemonToolRouting.planReadRoute(session: daemonToolHostSession)
+            if plan != .legacyLocal {
+                return await executeRoutedRead(call: call, plan: plan, context: context)
             }
-            // nil → opted-out + no daemon: fall through to the local pipeline
-            // (legacy pre-routing local read, unconfined).
+            // .legacyLocal → fall through to the local pipeline (legacy
+            // pre-routing local read via the full pipeline, unconfined).
         }
 
         // ── 7. DamageControlPolicy ──────────────────────────────────────
@@ -323,6 +339,9 @@ actor ToolExecutor: ToolExecutorProtocol {
                 toolName: call.name,
                 decision: "deny",
                 reasonCode: "damageControlBlock",
+                approved: nil,
+                success: nil,
+                error: nil,
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
@@ -340,6 +359,9 @@ actor ToolExecutor: ToolExecutorProtocol {
                 toolName: call.name,
                 decision: "confirm",
                 reasonCode: "damageControlDisaster",
+                approved: nil,
+                success: nil,
+                error: nil,
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC disaster: \(call.name) — \(reason)")
@@ -363,6 +385,9 @@ actor ToolExecutor: ToolExecutorProtocol {
                 toolName: call.name,
                 decision: "confirm",
                 reasonCode: "damageControlConfirmManual",
+                approved: nil,
+                success: nil,
+                error: nil,
                 arguments: call.arguments
             )
             debugLog(debugConsole, .approval, "DC confirm manual: \(call.name) — \(reason)")
@@ -380,32 +405,12 @@ actor ToolExecutor: ToolExecutorProtocol {
             }
         }
 
-        // ── 8. Argument augmentation ────────────────────────────────────
-        var executionArguments = call.arguments
-        if call.name == "voice_identity",
-           let action = executionArguments["action"] as? String,
-           action == "collect_sample"
-        {
-            executionArguments["enrollment_active"] = context.firstOwnerEnrollmentActive
-        }
+        // ── 8. Argument augmentation (shared helper) ────────────────────
+        let executionArguments = computeExecutionArguments(for: call, context: context)
 
-        // ── 9. Plugin PreToolUse hooks ──────────────────────────────────
-        if let hookRunner = pluginHookRunner, await hookRunner.hasHooks(for: .preToolUse) {
-            let hookInput = HookInput.preToolUse(
-                toolName: call.name,
-                toolInput: executionArguments
-            )
-            let hookResponse = await hookRunner.runHooks(event: .preToolUse, input: hookInput)
-            if hookResponse.shouldBlock {
-                let blockMsg = hookResponse.systemMessage ?? "Blocked by plugin hook"
-                debugLog(debugConsole, .toolResult, "Plugin hook blocked \(call.name): \(blockMsg)")
-                return ToolExecutorResult(
-                    result: .error(blockMsg),
-                    approvedByUser: nil,
-                    damageControlIntervened: false,
-                    latencyMs: nil
-                )
-            }
+        // ── 9. Plugin PreToolUse hooks (shared helper) ─────────────────
+        if let blocked = await runPreToolUseHooks(toolName: call.name, arguments: executionArguments) {
+            return blocked
         }
 
         // ── 10. Pre-state capture (BEFORE execution) ────────────────────
@@ -453,25 +458,12 @@ actor ToolExecutor: ToolExecutorProtocol {
         } catch {
             let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
             debugLog(debugConsole, .toolResult, "Tool threw error: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
-            if let analytics = toolAnalytics {
-                await analytics.record(
-                    toolName: call.name,
-                    success: false,
-                    latencyMs: latencyMs,
-                    approved: nil,
-                    error: error.localizedDescription
-                )
-            }
-            await securityLogger.log(
-                event: "tool_result",
+            await recordToolOutcome(
                 toolName: call.name,
-                decision: "allow",
-                reasonCode: nil,
-                approved: nil,
+                arguments: call.arguments,
                 success: false,
                 error: error.localizedDescription,
-                arguments: call.arguments
-            )
+                startTime: startTime)
             return ToolExecutorResult(
                 result: .error("Tool error: \(error.localizedDescription)"),
                 approvedByUser: nil,
@@ -480,41 +472,18 @@ actor ToolExecutor: ToolExecutorProtocol {
             )
         }
 
-        // ── 13. Plugin PostToolUse hooks ─────────────────────────────────
-        if let hookRunner = pluginHookRunner, await hookRunner.hasHooks(for: .postToolUse) {
-            let hookInput = HookInput.postToolUse(
-                toolName: call.name,
-                toolOutput: String(result.output.prefix(2000))
-            )
-            let hookResponse = await hookRunner.runHooks(event: .postToolUse, input: hookInput)
-            if let msg = hookResponse.systemMessage, !msg.isEmpty {
-                debugLog(debugConsole, .toolResult, "Plugin PostToolUse hook message for \(call.name): \(msg)")
-            }
-        }
+        // ── 13. Plugin PostToolUse hooks (shared helper) ────────────────
+        await runPostToolUseHooks(toolName: call.name, output: result.output)
 
-        // ── 14. Post-execution analytics + logging ──────────────────────
+        // ── 14. Post-execution analytics + logging (shared helper) ──────
         let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
         debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
-        if let analytics = toolAnalytics {
-            await analytics.record(
-                toolName: call.name,
-                success: !result.isError,
-                latencyMs: latencyMs,
-                approved: nil,
-                error: result.isError ? result.output : nil
-            )
-        }
-
-        await securityLogger.log(
-            event: "tool_result",
+        await recordToolOutcome(
             toolName: call.name,
-            decision: "allow",
-            reasonCode: nil,
-            approved: nil,
+            arguments: call.arguments,
             success: !result.isError,
             error: result.isError ? result.output : nil,
-            arguments: call.arguments
-        )
+            startTime: startTime)
 
         // ── 15. Action receipt ──────────────────────────────────────────
         var narrationReceiptId: String?
@@ -546,6 +515,203 @@ actor ToolExecutor: ToolExecutorProtocol {
             damageControlIntervened: workflowDamageControlIntervened,
             latencyMs: nil
         )
+    }
+
+    // MARK: - B-Swift Phase C / follow-up #5: routed-read executor branch
+
+    /// Execute a routed `read` (`.daemonReachable` or `.confinedLocalFallback`)
+    /// through the shared pipeline shape: PreToolUse hooks → timeout-wrapped
+    /// routed execute → PostToolUse hooks → audit/analytics. Skips ONLY
+    /// DamageControl (the daemon governs) and receipts (no mutation).
+    ///
+    /// Race rule (advisor C3): the `plan` was fixed BEFORE any side effect
+    /// (`planReadRoute`), so the route is deterministic — no fall-through to the
+    /// legacy `ReadTool` after DamageControl was skipped. The routed executor's
+    /// own fail-closed semantics apply (fail CLOSED before root approval;
+    /// confined local fallback only AFTER the daemon-approved root).
+    private func executeRoutedRead(
+        call: ToolCall,
+        plan: DaemonToolRouting.ReadRoutePlan,
+        context: ToolExecutorContext
+    ) async -> ToolExecutorResult {
+        // Augment args with execution-time context (mirrors local step 8) so
+        // PreToolUse hooks see the same input on both paths. For `read` this is
+        // currently a no-op; the seam exists for Layer 4 (write/edit/bash)
+        // precedent (Phase C/#5, code-review S1).
+        let executionArguments = computeExecutionArguments(for: call, context: context)
+
+        // ── PreToolUse hooks (BEFORE any daemon/root/provision side effect).
+        if let blocked = await runPreToolUseHooks(
+            toolName: call.name, arguments: executionArguments)
+        {
+            return blocked
+        }
+
+        // ── Timeout-wrapped routed execute (mirrors step 12).
+        let timeoutSeconds = routedReadTimeoutOverride ?? Self.toolTimeoutSeconds(for: call.name)
+        let startTime = Date()
+        let result: ToolResult
+        do {
+            // Capture the closure + session values before the task group so the
+            // child task crosses isolation with Sendable captures only.
+            let executor = routedReadExecutor
+            let session = daemonToolHostSession
+            result = try await withThrowingTaskGroup(of: ToolResult.self) { group in
+                group.addTask {
+                    await executor(call, session, plan)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    return .error("Tool timed out after \(Int(timeoutSeconds))s")
+                }
+                guard let r = try await group.next() else {
+                    group.cancelAll()
+                    return .error("Tool execution did not return a result")
+                }
+                group.cancelAll()
+                return r
+            }
+        } catch {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Routed read threw: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
+            await recordToolOutcome(
+                toolName: call.name,
+                arguments: call.arguments,
+                success: false,
+                error: error.localizedDescription,
+                startTime: startTime)
+            return ToolExecutorResult(
+                result: .error("Tool error: \(error.localizedDescription)"),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: latencyMs
+            )
+        }
+
+        // ── PostToolUse hooks.
+        await runPostToolUseHooks(toolName: call.name, output: result.output)
+
+        // ── Analytics + audit (mirrors step 14). Receipts SKIPPED (no mutation).
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
+        await recordToolOutcome(
+            toolName: call.name,
+            arguments: call.arguments,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            startTime: startTime)
+
+        return ToolExecutorResult(
+            result: result,
+            approvedByUser: nil,
+            damageControlIntervened: false,
+            latencyMs: latencyMs
+        )
+    }
+
+    #if FAE_TEST_SEAMS
+    /// Test seam setter (Phase C/#5): override the routed-read executor.
+    /// GUARDED: `FAE_TEST_SEAMS` is defined only in `.debug` (Package.swift
+    /// `swiftSettings` `.when(configuration: .debug)`), so these setters are
+    /// compiled OUT of release builds — no production binary can override
+    /// routed-read confinement/timeout (red-team F4).
+    func setRoutedReadExecutorForTesting(
+        _ fn: @Sendable @escaping (
+            ToolCall, DaemonToolHostSession, DaemonToolRouting.ReadRoutePlan
+        ) async -> ToolResult
+    ) {
+        routedReadExecutor = fn
+    }
+
+    /// Test seam setter (Phase C/#5): override the routed-read timeout.
+    func setRoutedReadTimeoutForTesting(_ seconds: TimeInterval?) {
+        routedReadTimeoutOverride = seconds
+    }
+    #endif
+
+    // MARK: - Shared tool-execution helpers (local + routed pipeline)
+
+    /// Augment tool arguments with execution-time context (e.g. voice-identity
+    /// enrollment). Shared by the local pipeline (step 8) and the routed-read
+    /// branch so PreToolUse hooks see identical input on both paths (Phase C/#5,
+    /// Layer 4 precedent — code-review S1).
+    private func computeExecutionArguments(
+        for call: ToolCall, context: ToolExecutorContext
+    ) -> [String: Any] {
+        var args = call.arguments
+        if call.name == "voice_identity",
+           let action = args["action"] as? String,
+           action == "collect_sample"
+        {
+            args["enrollment_active"] = context.firstOwnerEnrollmentActive
+        }
+        return args
+    }
+
+    /// Run PreToolUse plugin hooks. Returns a blocking `ToolExecutorResult` if a
+    /// hook blocks (the caller returns it immediately); nil to proceed. Shared
+    /// by the local pipeline (step 9) and the routed-read branch so BOTH honor
+    /// user-configured read hooks (Phase C/#5 — closes the routed-read bypass).
+    private func runPreToolUseHooks(
+        toolName: String, arguments: [String: Any]
+    ) async -> ToolExecutorResult? {
+        guard let hookRunner = pluginHookRunner,
+              await hookRunner.hasHooks(for: .preToolUse)
+        else { return nil }
+        let hookInput = HookInput.preToolUse(toolName: toolName, toolInput: arguments)
+        let hookResponse = await hookRunner.runHooks(event: .preToolUse, input: hookInput)
+        guard hookResponse.shouldBlock else { return nil }
+        let blockMsg = hookResponse.systemMessage ?? "Blocked by plugin hook"
+        debugLog(debugConsole, .toolResult, "Plugin hook blocked \(toolName): \(blockMsg)")
+        return ToolExecutorResult(
+            result: .error(blockMsg),
+            approvedByUser: nil,
+            damageControlIntervened: false,
+            latencyMs: nil
+        )
+    }
+
+    /// Run PostToolUse plugin hooks (informational; no return). Shared by the
+    /// local pipeline (step 13) and the routed-read branch.
+    private func runPostToolUseHooks(
+        toolName: String, output: String
+    ) async {
+        guard let hookRunner = pluginHookRunner,
+              await hookRunner.hasHooks(for: .postToolUse)
+        else { return }
+        let hookInput = HookInput.postToolUse(
+            toolName: toolName, toolOutput: String(output.prefix(2000)))
+        let hookResponse = await hookRunner.runHooks(event: .postToolUse, input: hookInput)
+        if let msg = hookResponse.systemMessage, !msg.isEmpty {
+            debugLog(debugConsole, .toolResult, "Plugin PostToolUse hook message for \(toolName): \(msg)")
+        }
+    }
+
+    /// Record a tool outcome to ToolAnalytics + SecurityEventLogger (mirrors step
+    /// 14). Shared by the local pipeline and the routed-read branch so BOTH emit
+    /// a Swift audit row + analytics event (Phase C/#5: daemon `audit.jsonl` is
+    /// a complement, not a substitute). Returns the measured latency in ms.
+    @discardableResult
+    private func recordToolOutcome(
+        toolName: String,
+        arguments: [String: Any],
+        success: Bool,
+        error: String?,
+        startTime: Date,
+        decision: String = "allow",
+        reasonCode: String? = nil
+    ) async -> Int {
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        if let analytics = toolAnalytics {
+            await analytics.record(
+                toolName: toolName, success: success, latencyMs: latencyMs,
+                approved: nil, error: error)
+        }
+        await securityLogger.log(
+            event: "tool_result", toolName: toolName, decision: decision,
+            reasonCode: reasonCode, approved: nil, success: success,
+            error: error, arguments: arguments)
+        return latencyMs
     }
 
     // MARK: - Workflow Trace Recording
