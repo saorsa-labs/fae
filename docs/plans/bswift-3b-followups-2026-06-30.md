@@ -8,15 +8,30 @@
 
 Owner: david@saorsalabs.com · Scope owner decision required for each.
 
-## 1. 3a symlinked-default-root auto-approve (HIGH — in 3a `FaeWorkspace`)
+## 1. 3a symlinked-default-root auto-approve (HIGH — ✅ RESOLVED 2026-06-30)
 
-- If `~/Documents/Fae` is itself a symlink to e.g. `~/.ssh`, the 3a
-  `defaultAwareHandler` auto-approve follows it (canonical-EXACT compares the
-  *resolved* path, so a symlinked default still matches itself — but the *dir*
-  Fae roots into is the symlink target).
-- 3b makes this reachable via a routed read. Needs verification + `lstat`-based
-  hardening in the 3a provisioning/auto-approve path (reject a default root
-  whose own path is a symlink, or surface the real card).
+**Fixed.** Verified against the real server guard (`crates/fae-daemon/src/
+toolhost/root_confirm.rs::is_safe_workspace_root`): it rejects the home dir
+itself but NOT home subdirs (it must allow `~/Documents/Fae`, also a home
+subdir). So a symlink `~/Documents/Fae → ~/.ssh` defeated the guard — the daemon
+rooted into `~/.ssh` and a routed `read id_rsa` would exfiltrate SSH keys.
+
+Swift-side hardening (load-bearing, not redundant): `FaeWorkspace.provision`
+and `writeMarker` now `requireNotSymlinkAtTip` (`lstat` `S_IFLNK`) before any
+marker/provisioning/`set_root`, throwing `FaeWorkspaceError.symlinkedWorkspaceRoot`;
+`defaultAwareHandler` adds the same check as defense-in-depth. Only the default
+root's TIP is checked (ancestor symlinks like macOS `/tmp → /private/tmp` are
+fine — the daemon canonicalizes and guards those). Tests:
+`testProvisionRejectsSymlinkedWorkspaceRoot`,
+`testAutoApproveRejectsSymlinkedDefaultRoot`,
+`testEnsureDefaultRootedRejectsSymlinkedDefaultBeforeDaemon`,
+`testRoutedReadRejectsSymlinkedDefaultRoot` (asserts the key material never
+leaks).
+
+Original hazard (for the record): if `~/Documents/Fae` was a symlink to
+`~/.ssh`, the 3a auto-approve followed it (canonical-EXACT compared the
+*resolved* path, so the symlinked default still matched itself), and Fae rooted
+into the symlink target (`~/.ssh`). 3b made this reachable via a routed read.
 - **Owner call:** hard-reject symlinked default, or allow-with-warning?
 
 ## 2. Legacy no-daemon fallback is unconfined (MED — deliberate, revisit when daemon is default-bundled)

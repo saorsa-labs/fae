@@ -31,6 +31,28 @@ struct DefaultDocumentsWorkspace: FaeWorkspaceProvider {
 
 // MARK: - Provisioning
 
+/// Errors from workspace provisioning/root checks.
+///
+/// `symlinkedWorkspaceRoot` is a **security fail-closed** (B-Swift 3a follow-up
+/// #1): the daemon's `is_safe_workspace_root` server guard rejects the home dir
+/// itself but NOT its subdirs (it must allow `~/Documents/Fae`, also a home
+/// subdir). So a symlink `~/Documents/Fae → ~/.ssh` defeats the guard — the
+/// daemon roots into `~/.ssh` and a routed `read id_rsa` exfiltrates SSH keys.
+/// Fae therefore refuses to use a default root that is itself a symbolic link.
+enum FaeWorkspaceError: Error, LocalizedError {
+    /// `provider.workspaceRoot` (at its tip path) is a symbolic link. Fae will
+    /// not root through it. The path is the requested default root.
+    case symlinkedWorkspaceRoot(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case .symlinkedWorkspaceRoot(let url):
+            return "Fae's default workspace (\(url.path)) is a symbolic link. "
+                + "Remove it so Fae can create a real workspace directory."
+        }
+    }
+}
+
 /// Pure workspace provisioning (no shared mutable state). Idempotent.
 enum FaeWorkspace {
 
@@ -59,6 +81,17 @@ enum FaeWorkspace {
     ///   exists without a marker (caller must NOT auto-approve).
     static func provision(_ provider: FaeWorkspaceProvider) throws -> ProvisionOutcome {
         let root = provider.workspaceRoot
+        // SECURITY (B-Swift 3a follow-up #1): refuse a default root that is itself
+        // a symbolic link. `fileExists`/`attributesOfItem` FOLLOW symlinks, so a
+        // `~/Documents/Fae → ~/.ssh` link would otherwise look like an ordinary
+        // dir and Fae would root into `~/.ssh` (the daemon's `is_safe_workspace_
+        // root` guard rejects the home dir but NOT home subdirs, so it accepts
+        // `~/.ssh` reached this way). `lstat` reports the link entry itself; a
+        // symlink at the tip is fail-closed here, before any marker/provisioning/
+        // set_root. Ancestors that are symlinks (e.g. macOS `/tmp → /private/tmp`)
+        // are fine — only the tip is checked.
+        try requireNotSymlinkAtTip(root)
+
         let marker = root.appendingPathComponent(markerName)
         let fm = FileManager.default
         let markerExists = fm.fileExists(atPath: marker.path)
@@ -82,11 +115,48 @@ enum FaeWorkspace {
     }
 
     /// Write the marker (after a one-time card approval of a pre-existing dir).
-    /// No-op if already present.
+    /// No-op if already present. SECURITY: never writes through a symlinked tip —
+    /// `requireNotSymlinkAtTip` guards against a swapped `~/Documents/Fae → …`
+    /// link making the marker sticky on an attacker-chosen target.
     static func writeMarker(at url: URL) throws {
+        try requireNotSymlinkAtTip(url)
         let marker = url.appendingPathComponent(markerName)
         guard !FileManager.default.fileExists(atPath: marker.path) else { return }
         try Data("fae workspace\n".utf8).write(to: marker)
+    }
+}
+
+// MARK: - Symlink-at-tip guard (B-Swift 3a follow-up #1)
+
+extension FaeWorkspace {
+
+    /// True iff `url`'s own path entry is a symbolic link (`lstat` `S_IFLNK`).
+    /// Only the TIP is checked — ancestor symlinks (`/tmp → /private/tmp`) are
+    /// fine; the daemon canonicalizes those and guards the canonical path. The
+    /// hazard is specifically the default root ITSELF being a link.
+    static func isSymlinkAtTip(_ url: URL) -> Bool {
+        var st = stat()
+        guard Darwin.lstat(url.path, &st) == 0 else { return false }
+        return (st.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    /// Fail-closed if `url` exists and its tip is a symlink; no-op if it does not
+    /// exist (provisioning may create it). Any other `lstat` error is treated as
+    /// unsafe (deny) rather than safe.
+    static func requireNotSymlinkAtTip(_ url: URL) throws {
+        var st = stat()
+        let rc = Darwin.lstat(url.path, &st)
+        if rc == 0 {
+            if (st.st_mode & S_IFMT) == S_IFLNK {
+                throw FaeWorkspaceError.symlinkedWorkspaceRoot(url)
+            }
+            return
+        }
+        // rc != 0: ENOENT (does not exist) is fine — provisioning will create it.
+        // Anything else (EACCES/EIO/…) → fail closed.
+        if errno != ENOENT {
+            throw FaeWorkspaceError.symlinkedWorkspaceRoot(url)
+        }
     }
 }
 
@@ -130,7 +200,11 @@ func defaultAwareHandler(
             return await real(method, params)
         }
         let confirmCanon = canonical(URL(fileURLWithPath: confirmPath))
-        if confirmCanon == defaultCanon && isMarkerPresent() {
+        // Defense-in-depth (B-Swift 3a follow-up #1): never auto-approve when the
+        // default root itself is a symlink. `ensureDefaultRooted` already
+        // hard-denies a symlinked default before `setRoot`, but this keeps the
+        // handler safe against future reuse and a swapped link racing the guard.
+        if confirmCanon == defaultCanon && isMarkerPresent() && !FaeWorkspace.isSymlinkAtTip(defaultPath) {
             return ["approved": true, "call_id": callID]
         }
         return await real(method, params)

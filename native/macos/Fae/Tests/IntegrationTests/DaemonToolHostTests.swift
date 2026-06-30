@@ -1730,6 +1730,155 @@ final class DaemonToolHostTests: XCTestCase {
         }
     }
 
+    // MARK: - B-Swift 3a follow-up #1: symlinked default workspace root
+
+    /// A default root that is itself a symlink is REJECTED at provisioning — the
+    /// marker is NOT written into the symlink target, and `provision` throws the
+    /// symlink error. (The daemon's `is_safe_workspace_root` guard rejects the
+    /// home dir but NOT home subdirs, so `~/Documents/Fae → ~/.ssh` would root
+    /// into `~/.ssh` and leak SSH keys via a routed `read id_rsa`.)
+    func testProvisionRejectsSymlinkedWorkspaceRoot() throws {
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-target-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: target) }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        // Plant a marker in the TARGET — proves the guard does not follow the link.
+        try Data("fae workspace\n".utf8).write(to: target.appendingPathComponent(FaeWorkspace.markerName))
+
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-root-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let provider = TempWorkspace(workspaceRoot: link)
+        XCTAssertThrowsError(try FaeWorkspace.provision(provider)) { error in
+            guard case FaeWorkspaceError.symlinkedWorkspaceRoot = error else {
+                XCTFail("expected symlinkedWorkspaceRoot, got \(error)")
+                return
+            }
+        }
+        // No NEW marker was written through the link (the target's planted one is
+        // untouched; the link itself has no marker entry).
+        XCTAssertTrue(FaeWorkspace.markerPresent(at: target),
+                      "provision must not mutate the symlink target")
+        XCTAssertTrue(FaeWorkspace.isSymlinkAtTip(link), "link is still a symlink")
+    }
+
+    /// The auto-approve wrapper does NOT auto-approve a symlinked default root,
+    /// even with canonical-exact match + marker present — defense-in-depth so a
+    /// swapped link can't race the provisioning guard.
+    func testAutoApproveRejectsSymlinkedDefaultRoot() async throws {
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-target-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: target) }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("fae workspace\n".utf8).write(to: target.appendingPathComponent(FaeWorkspace.markerName))
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-root-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        actor Seen { var hit = false; func mark() { hit = true } }
+        let seen = Seen()
+        let real: DaemonServerRequestHandler = { _, _ in
+            await seen.mark()
+            return ["approved": false, "call_id": "x"]
+        }
+        // marker IS present (in the target), canonical path matches — but the link
+        // tip is a symlink → must hit the real handler, NOT auto-approve.
+        let wrapped = defaultAwareHandler(real, defaultPath: link, isMarkerPresent: { true })
+        let reply = await wrapped("workspace.confirm_root",
+                                  ["call_id": "c1", "path": link.path])
+        XCTAssertEqual(reply["approved"] as? Bool, false, "symlinked default must NOT auto-approve")
+        let hit = await seen.hit
+        XCTAssertTrue(hit, "symlinked default confirm must surface the real handler")
+    }
+
+    /// `ensureDefaultRooted` rejects a symlinked default root BEFORE contacting
+    /// the daemon — even with endpoints published, no `set_root` frame is sent.
+    /// (Surfaces the symlink error, not `daemonUnavailable`.)
+    func testEnsureDefaultRootedRejectsSymlinkedDefaultBeforeDaemon() async throws {
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-target-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: target) }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-root-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: link))
+        defer { Task { await session.close() } }
+
+        let rooted = Task { try await session.ensureDefaultRooted() }
+        // Drive nothing past auth; expect the symlink throw without a set_root.
+        do {
+            _ = try await withTimeout(rooted)
+            XCTFail("ensureDefaultRooted must throw for a symlinked default root")
+        } catch FaeWorkspaceError.symlinkedWorkspaceRoot {
+            // expected — the symlink guard fired before setRoot.
+        } catch DaemonAgentClientError.daemonUnavailable {
+            XCTFail("symlink guard must fire before the daemon-unavailable path")
+        } catch {
+            XCTFail("expected symlinkedWorkspaceRoot, got \(error)")
+        }
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "a symlinked default must leave the session unrooted")
+        _ = peer  // daemon published but never sent a set_root
+    }
+
+    /// Executor-level proof: a routed `read` against a symlinked default root
+    /// returns an error (fail closed) WITHOUT rooting the session, even though a
+    /// daemon is published. (The SSH-key exfiltration vector — `read id_rsa` —
+    /// must be stopped at the Swift seam.)
+    func testRoutedReadRejectsSymlinkedDefaultRoot() async throws {
+        let target = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-ssh-standin-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: target) }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        // A "key" the model would love to read — planted in the symlink target.
+        try Data("PRIVATE KEY MATERIAL".utf8).write(to: target.appendingPathComponent("id_rsa"))
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-symlink-root-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: link))
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        let exec = Task<ToolExecutorResult, Never> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "id_rsa"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+        // Do NOT drive the daemon handshake; the symlink guard should fire first.
+        let outcome = try await withTimeoutAsNever(exec)
+        XCTAssertTrue(outcome.result.isError, "read of a symlinked-default-root file must be denied")
+        XCTAssertFalse(outcome.result.output.contains("PRIVATE KEY MATERIAL"),
+                      "the key material must NEVER be returned")
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "the session must not root through a symlinked default")
+        _ = peer
+    }
+
     // MARK: helpers
 
     /// Extract a `"field":"value"` string from a single-line JSON frame (test
