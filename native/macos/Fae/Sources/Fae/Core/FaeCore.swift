@@ -270,7 +270,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
                     // B-Swift Phase B: wire the supervisor callbacks. The engine
                     // owns process supervision; FaeCore owns the downstream
                     // effects of endpoint changes (DaemonEndpointStore + TTS
-                    // reconnection) and the loud MLX fallback on exhaustion.
+                    // reconnection) and surfaces Retry/Quit on exhaustion (there
+                    // is NO automatic post-startup MLX continuity — see
+                    // handleDaemonRestartExhausted).
                     // On endpoint loss/recovery the store is updated so the
                     // ToolHost routing + ACP lane follow the live daemon.
                     daemonEngine.onEndpointsChanged = { [weak self] endpoints in
@@ -756,20 +758,26 @@ final class FaeCore: ObservableObject, HostCommandSender {
     }
 
     /// Called by `DaemonLLMEngine` exactly once when bounded restarts are
-    /// exhausted. Surfaces a loud fallback: the daemon LLM lane is dead, so the
-    /// pipeline relies on the in-process MLX engine (the supervisor already
-    /// marked `loadState = .failed`). The app layer surfaces Retry/Quit. Never
-    /// silent — B-Swift Phase B keeps MLX as the loud last-resort.
+    /// exhausted. Surfaces a LOUD terminal failure: the daemon LLM lane is
+    /// dead and stays dead until the user retries.
+    ///
+    /// IMPORTANT (advisor-guided honesty, Fix #4): there is NO automatic
+    /// post-startup MLX continuity here — `PipelineCoordinator` holds an
+    /// immutable `llmEngine` (`private let`), so the lane cannot be hot-swapped
+    /// to MLX at runtime without a larger pipeline mutation (out of Phase B
+    /// scope). The INITIAL daemon-launch failure still falls back to MLX
+    /// correctly (FaeCore.start() catch leaves `llmEngine = MLXLLMEngine()`);
+    /// only POST-startup exhaustion is terminal. The Retry button re-launches
+    /// the daemon lane via `retryDaemonAfterExhausted`. Never silent.
     private func handleDaemonRestartExhausted() async {
         NSLog(
             "FaeCore: ⚠️ fae-daemon crashed and bounded restart is EXHAUSTED — "
-            + "staying on the loud in-process MLX fallback; surface Retry/Quit")
+            + "daemon LLM lane is terminal until Retry; surfacing Retry/Quit")
         // The daemon engine's loadState is `.failed`; the pipeline's llmEngine
-        // reference is stale-but-harmless (its turns will fail fast and route to
-        // MLX). Do NOT silently swap engines here — the app surfaces Retry/Quit,
-        // and `retryDaemonAfterExhausted` re-loads the daemon lane on user choice.
-        // Post a notification so the app layer (FaeApp) can present a Retry/Quit
-        // alert on the main thread, mirroring the orb-host exhaustion flow.
+        // reference is the (now-dead) DaemonLLMEngine — turns to it fail fast.
+        // Do NOT silently claim MLX continuity; surface Retry/Quit. Post a
+        // notification so the app layer (FaeApp) can present a Retry/Quit alert
+        // on the main thread, mirroring the orb-host exhaustion flow.
         await MainActor.run {
             NotificationCenter.default.post(
                 name: .faeDaemonRestartExhausted, object: nil)
@@ -778,8 +786,9 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
     /// Re-load the daemon LLM lane after exhaustion (Retry button). Clears the
     /// supervisor's crash counter, re-arms, and attempts a fresh `load`. On
-    /// failure the loud MLX fallback remains and the caller may re-surface the
-    /// alert. Public so the app layer can invoke it from a Retry button.
+    /// failure the lane stays terminal (there is no automatic post-startup MLX
+    /// continuity — see handleDaemonRestartExhausted) and the caller may
+    /// re-surface the alert. Public so the app layer can invoke it from Retry.
     func retryDaemonAfterExhausted() async {
         guard let engine = llmEngine as? DaemonLLMEngine else {
             NSLog("FaeCore: retryDaemonAfterExhausted — no daemon engine to retry")
@@ -791,7 +800,7 @@ final class FaeCore: ObservableObject, HostCommandSender {
             NSLog("FaeCore: daemon LLM lane restored via Retry after exhaustion")
         } catch {
             NSLog(
-                "FaeCore: ⚠️ daemon Retry after exhaustion FAILED — staying on MLX: %@",
+                "FaeCore: ⚠️ daemon Retry after exhaustion FAILED — lane stays terminal: %@",
                 error.localizedDescription)
         }
     }

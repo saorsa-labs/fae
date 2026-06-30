@@ -4,12 +4,14 @@ import Foundation
 //
 // Ports the `RustUiShellController` orb-shell supervisor pattern
 // (`terminationHandler` + bounded retries + exponential backoff +
-// `stableRunInterval` counter reset + exhaustion → loud fallback/Retry-Quit)
-// to the daemon LLM lane. Today `DaemonLLMEngine.launchAndConnect` launches
-// `fae-daemon` with NO `terminationHandler`, so a post-startup crash is never
-// revived — `FaeCore` stays on the loud MLX fallback permanently even if the
-// crash was transient. This makes the daemon lane self-healing, with the
-// exhaust path surfacing as a deliberate Retry/Quit (mirroring the orb shell).
+// `stableRunInterval` counter reset + exhaustion → Retry/Quit) to the daemon
+// LLM lane. Today `DaemonLLMEngine.launchAndConnect` launches `fae-daemon`
+// with NO `terminationHandler`, so a post-startup crash is never revived.
+// This makes the daemon lane self-healing, with the exhaust path surfacing as
+// a deliberate Retry/Quit (mirroring the orb shell). NOTE: there is NO
+// automatic post-startup MLX continuity on exhaustion — the initial launch
+// failure still falls back to MLX via `FaeCore.start()` catch, but a
+// post-startup crash storm leaves the lane terminal until Retry.
 //
 // The decision logic is a PURE, injectable state machine (`DaemonSupervisor`)
 // with NO `Process` dependency and NO real sleep — it takes a `Clock` and
@@ -189,6 +191,24 @@ final class DaemonSupervisor {
         isStoppingIntentionally = false
         didFireExhaustion = false
         lastLaunchDate = clock.now()
+    }
+
+    /// Decide what to do after a SUPERVISED RELAUNCH itself failed (the
+    // process wouldn't start or the socket never came up). Distinct from
+    // `decideOnUnexpectedExit`: a relaunch failure is NOT a new crash of an
+    // already-counted attempt — it IS the next launch attempt, so increment
+    // once here and decide. Without this split, a failed relaunch would be
+    // double-counted (the crash already incremented for this attempt).
+    func decideAfterFailedRelaunch() -> DaemonRestartDecision {
+        if isStoppingIntentionally { return .exhausted }
+        if didFireExhaustion { return .alreadyExhausted }
+        guard restartAttempts < policy.maxRestartAttempts else {
+            didFireExhaustion = true
+            return .exhausted
+        }
+        restartAttempts += 1
+        let delay = policy.backoffSeconds(forAttempt: restartAttempts)
+        return .restart(delaySeconds: delay, attempt: restartAttempts)
     }
 
     /// Decide what to do after an unexpected exit. Pure: returns a decision the

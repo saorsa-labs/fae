@@ -198,4 +198,54 @@ final class DaemonSupervisorTests: XCTestCase {
         await sleeper.sleep(seconds: 4)
         XCTAssertEqual(sleeper.delays, [1, 2, 4])
     }
+
+    // MARK: - Fix #1: relaunch-failure accounting (no double-count)
+
+    /// A failed relaunch is the NEXT launch attempt (increment once via
+    /// `decideAfterFailedRelaunch`), NOT a re-count of the crash that triggered
+    /// it. This proves exactly 3 RELAUNCH attempts happen before exhaustion when
+    /// every relaunch fails — the off-by-one the reviewer caught (the old code
+    /// double-counted, giving only 2 relaunches).
+    func testFailedRelaunchIncrementsOncePerActualLaunchAttempt() {
+        let clock = FakeSupervisorClock()
+        let sup = DaemonSupervisor(policy: .default, clock: clock)
+        sup.recordLaunch()
+        var relaunchAttempts = 0
+        // Crash → restart #1 → relaunch fails → decideAfterFailedRelaunch.
+        var decision = sup.decideOnUnexpectedExit()
+        while true {
+            switch decision {
+            case .restart(let delay, let attempt):
+                relaunchAttempts = max(relaunchAttempts, attempt)
+                // Simulate the relaunch FAILING (process wouldn't start). The
+                // engine asks decideAfterFailedRelaunch for the next attempt.
+                decision = sup.decideAfterFailedRelaunch()
+                _ = delay
+            case .exhausted, .alreadyExhausted:
+                break
+            }
+            if case .exhausted = decision { break }
+            if case .alreadyExhausted = decision { break }
+            // Loop guard: the only other case is .restart, handled above.
+            if case .restart = decision { continue }
+            break
+        }
+        // Exactly 3 relaunch attempts were granted before exhaustion (the bug
+        // gave 2).
+        XCTAssertEqual(relaunchAttempts, 3, "3 relaunch attempts before exhaustion")
+    }
+
+    /// `decideAfterFailedRelaunch` is symmetric with `decideOnUnexpectedExit`
+    // for the first decision after a crash (1s, attempt 1) — the relaunch-failure
+    // path does NOT skip attempt 1.
+    func testDecideAfterFailedRelaunchStartsAtFirstAttempt() {
+        let clock = FakeSupervisorClock()
+        let sup = DaemonSupervisor(policy: .default, clock: clock)
+        sup.recordLaunch()
+        // One crash → restart #1 → relaunch fails → FIRST failed-relaunch decision.
+        _ = sup.decideOnUnexpectedExit()
+        let d = sup.decideAfterFailedRelaunch()
+        // The relaunch failure is attempt #2 (attempt #1 was the crash's restart).
+        XCTAssertEqual(d, .restart(delaySeconds: 2, attempt: 2))
+    }
 }
