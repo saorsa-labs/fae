@@ -34,15 +34,52 @@ Original hazard (for the record): if `~/Documents/Fae` was a symlink to
 into the symlink target (`~/.ssh`). 3b made this reachable via a routed read.
 - **Owner call:** hard-reject symlinked default, or allow-with-warning?
 
-## 2. Legacy no-daemon fallback is unconfined (MED — deliberate, revisit when daemon is default-bundled)
+## 2. Legacy no-daemon fallback is unconfined (MED — ✅ DECISION MADE 2026-06-30, implementation tracked)
 
-- With no daemon published, a routed `read` falls through to the local
-  `ReadTool` with the ORIGINAL (unconfined) path. `read` is `.low` risk and was
-  always local — **not a regression** — but "advertised confinement + silent
-  unconfined fallback" is a trap once users expect confinement.
-- **Owner call:** once the daemon is bundled by default, either (a) confine the
-  local fallback to the workspace too, or (b) gate the legacy path behind a dev
-  flag. Until then, the behavior is documented in `DaemonToolRouting.routeRead`.
+**Decision (owner, 2026-06-30): the daemon IS default-bundled** (`llm.useDaemonEngine`
+defaults to `true`; `FaeConfig.LlmConfig` comment: “the bundled
+`Contents/MacOS/fae-daemon` makes this work out of the box”). So the no-daemon
+state is not a rare pre-bundling edge — it is a **live failure mode** (failed
+start, missing model, daemon crash → `FaeCore` clears endpoints → reads fall
+through). “Advertised confinement + silent unconfined escape” is therefore a
+real trap, not a theoretical one.
+
+**Chosen policy: gate the fallback on the daemon-intended flag.**
+- When the daemon is the intended runtime (`useDaemonEngine == true`) but is
+  momentarily unreachable ⇒ the routed `read` is **confined locally** to the
+  workspace (provision the default root locally — idempotent, #1-symlink-guarded
+  — confine the shape-validated path against it, read the canonical path via
+  `ReadTool`). Confinement becomes a **universal invariant** (“reads are
+  confined to `~/Documents/Fae`” holds whether or not the daemon is up), and the
+  `read` capability is preserved during daemon outages (no regression).
+- When the daemon is explicitly opted out (`useDaemonEngine == false`, e.g. CI /
+  pure-MLX mode) ⇒ keep the **legacy local unconfined** read (pre-3b behavior).
+  This branch is what avoids the provisioning side-effect leaking into
+  non-injecting test suites.
+- Never silent: the branch taken is logged (ties into #5 — the Swift audit gap).
+
+**Why not fail-closed:** `read` is `.low` risk and pre-dates routing; breaking
+all reads during a daemon glitch is a worse UX than a confined local read, and
+confinement already holds. **Why not unconditional confined-fallback:** it would
+provision `~/Documents/Fae` as a side-effect in test suites that don’t inject a
+temp provider — the gate avoids that.
+
+**Implementation (tracked, lands in a fresh session with an advisor scope
+review):**
+- Thread the daemon-intended flag onto the routing seam (read
+  `useDaemonEngine` via the session/config, or a new `toolhost.routeReads`).
+- In `DaemonToolRouting.routeRead`, replace the unconditional `nil`-return with:
+  intended-and-down → local confined read (reuse `confineValidatedReadPath`
+  against the provisioned provider root + `readLocally`); opted-out → `nil`
+  (legacy fallthrough).
+- Tests: intended-and-down confines (reads a workspace file locally, denies an
+  escape); opted-out stays legacy; provisioning side-effect only fires in the
+  intended branch.
+
+Original hazard (for the record): with no daemon published, a routed `read`
+fell through to the local `ReadTool` with the ORIGINAL (unconfined) path — not a
+regression (`read` was always local + `.low` risk), but a trap once confinement
+is advertised.
 
 ## 3. Hardlinks defeat path confinement (MED — inherent)
 

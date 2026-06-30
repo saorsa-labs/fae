@@ -198,8 +198,10 @@ enum DaemonToolRouting {
     ///   with the ORIGINAL arguments. This is **legacy pre-routing local read**
     ///   (`read` is `.low` risk and was always local) — it is NOT workspace-
     ///   confined, and it avoids provisioning `~/Documents/Fae` as a side effect
-    ///   when the daemon is absent (tests / CI / pre-bundling). Tracked follow-up:
-    ///   once the daemon is bundled by default, confine this fallback too.
+    ///   in non-injecting test suites. **DECISION (follow-up #2, 2026-06-30):**
+    ///   once a routing gate lands, this branch becomes mode-dependent —
+    ///   confined-local when the daemon is intended-but-down, legacy when opted
+    ///   out. Not yet implemented; see `docs/plans/bswift-3b-followups-2026-06-30.md`.
     /// - **Daemon involved but the root was never approved** (daemon dropped
     ///   during `ensureDefaultRooted`): fail CLOSED — `.failClosed`. Never read
     ///   locally on a locally-computed root that bypasses the server root guard.
