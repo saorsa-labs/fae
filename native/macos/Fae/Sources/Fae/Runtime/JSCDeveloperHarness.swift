@@ -75,7 +75,13 @@ struct JSCDeveloperHarness {
         let executor = ToolExecutor(
             registry: registry,
             damageControlPolicy: DamageControlPolicy(),
-            securityLogger: SecurityEventLogger.shared
+            securityLogger: SecurityEventLogger.shared,
+            // The developer harness does NOT launch or publish the daemon, and
+            // legitimately uses absolute paths (legacy tool semantics). Opt OUT
+            // of daemon-intended routing so reads keep the legacy unconfined
+            // local behavior (no shape rejection of absolute paths, no
+            // `~/Documents/Fae` provisioning side effect).
+            daemonIntendedForToolhostRouting: false
         )
 
         let runtime = JSCRuntime(

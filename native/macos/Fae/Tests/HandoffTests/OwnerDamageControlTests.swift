@@ -33,7 +33,8 @@ final class OwnerDamageControlTests: XCTestCase {
         ToolExecutor(
             registry: ToolRegistry(tools: [StubBash()]),
             damageControlPolicy: DamageControlPolicy(),
-            securityLogger: SecurityEventLogger.shared
+            securityLogger: SecurityEventLogger.shared,
+            daemonIntendedForToolhostRouting: false
         )
     }
 
@@ -214,7 +215,8 @@ final class OwnerDamageControlTests: XCTestCase {
         let executor = ToolExecutor(
             registry: ToolRegistry(tools: [StubCalendar()]),
             damageControlPolicy: DamageControlPolicy(),
-            securityLogger: SecurityEventLogger.shared
+            securityLogger: SecurityEventLogger.shared,
+            daemonIntendedForToolhostRouting: false
         )
         let call = ToolCall(name: "calendar", arguments: ["command": "rm -rf /"])
         let result = await executor.execute(call, context: ownerContext(), callbacks: noopCallbacks)

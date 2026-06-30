@@ -44,7 +44,8 @@ private func makeRuntime(
     let executor = ToolExecutor(
         registry: registry,
         damageControlPolicy: DamageControlPolicy(),
-        securityLogger: SecurityEventLogger.shared
+        securityLogger: SecurityEventLogger.shared,
+        daemonIntendedForToolhostRouting: false
     )
 
     return JSCRuntime(

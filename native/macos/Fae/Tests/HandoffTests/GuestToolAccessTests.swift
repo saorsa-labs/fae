@@ -29,7 +29,8 @@ final class GuestToolAccessTests: XCTestCase {
         return ToolExecutor(
             registry: ToolRegistry(tools: tools),
             damageControlPolicy: DamageControlPolicy(),
-            securityLogger: SecurityEventLogger.shared
+            securityLogger: SecurityEventLogger.shared,
+            daemonIntendedForToolhostRouting: false
         )
     }
 

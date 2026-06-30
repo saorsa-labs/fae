@@ -76,8 +76,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         toolAnalytics: ToolAnalytics? = nil,
         delegate: (any ToolExecutorDelegate)? = nil,
         debugConsole: DebugConsoleController? = nil,
-        daemonIntendedForToolhostRouting: Bool = true,
-        daemonToolHostSession: DaemonToolHostSession? = nil
+        daemonIntendedForToolhostRouting: Bool
     ) {
         self.registry = registry
         self.damageControlPolicy = damageControlPolicy
@@ -86,14 +85,39 @@ actor ToolExecutor: ToolExecutorProtocol {
         self.toolAnalytics = toolAnalytics
         self.delegate = delegate
         self.debugConsole = debugConsole
-        // If the caller injects a session (tests do, with a temp workspace
-        // provider + an explicit `daemonIntended`), use it as-is — its own
-        // `daemonIntended` governs the fallback branch. Otherwise build one
-        // from the config-derived flag (production: `runtimeConfig.llm.
-        // useDaemonEngine`). This keeps the intent explicit at every production
-        // construction site rather than relying on a silent default.
+        // Build a session from the EXPLICIT config-derived flag. There is NO
+        // silent default: `daemonIntendedForToolhostRouting` is unlabeled on
+        // purpose so every construction site must state its intent (production
+        // passes `runtimeConfig.llm.useDaemonEngine`; tests/harness pass `false`
+        // to preserve legacy local tool behavior). This prevents a harness from
+        // accidentally opting into the confined local fallback (which would
+        // reject absolute paths the harness legitimately uses).
+        self.daemonToolHostSession =
+            DaemonToolHostSession(daemonIntended: daemonIntendedForToolhostRouting)
+    }
+
+    /// Session-injecting initializer (tests). The injected session carries its
+    /// own `daemonIntended`, so the fallback branch is governed by the session,
+    /// not a separate flag here. Use this for routing tests that inject a temp
+    /// workspace provider + an explicit intent.
+    init(
+        registry: ToolRegistry,
+        damageControlPolicy: DamageControlPolicy,
+        securityLogger: SecurityEventLogger,
+        workflowTraceStore: WorkflowTraceStore? = nil,
+        toolAnalytics: ToolAnalytics? = nil,
+        delegate: (any ToolExecutorDelegate)? = nil,
+        debugConsole: DebugConsoleController? = nil,
+        daemonToolHostSession: DaemonToolHostSession
+    ) {
+        self.registry = registry
+        self.damageControlPolicy = damageControlPolicy
+        self.securityLogger = securityLogger
+        self.workflowTraceStore = workflowTraceStore
+        self.toolAnalytics = toolAnalytics
+        self.delegate = delegate
+        self.debugConsole = debugConsole
         self.daemonToolHostSession = daemonToolHostSession
-            ?? DaemonToolHostSession(daemonIntended: daemonIntendedForToolhostRouting)
     }
 
     /// Wire the delegate after init (since `self` is not available during actor init).

@@ -52,7 +52,8 @@ private func makeExecutor(
     return ToolExecutor(
         registry: registry,
         damageControlPolicy: DamageControlPolicy(),
-        securityLogger: SecurityEventLogger.shared
+        securityLogger: SecurityEventLogger.shared,
+        daemonIntendedForToolhostRouting: false
     )
 }
 
@@ -340,7 +341,8 @@ final class ToolExecutorTests: XCTestCase {
             registry: ToolRegistry(tools: [tool]),
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
-            workflowTraceStore: store
+            workflowTraceStore: store,
+            daemonIntendedForToolhostRouting: false
         )
         let context = ToolExecutorContext(
             toolMode: "full",
@@ -390,7 +392,8 @@ final class ToolExecutorTests: XCTestCase {
             registry: ToolRegistry(tools: [tool]),
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
-            workflowTraceStore: store
+            workflowTraceStore: store,
+            daemonIntendedForToolhostRouting: false
         )
         // workflowRunID is nil — trace should be skipped
         let context = makeContext()
