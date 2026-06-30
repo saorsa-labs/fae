@@ -115,8 +115,11 @@ def do_start(client: X0x, instance: str | None) -> dict:
     except OSError as e:
         raise X0xError(f"Could not launch x0x: {e}")
 
-    # The daemon writes api.port/api-token on startup; re-read by reconstructing the client.
-    deadline = time.monotonic() + 15.0
+    # The daemon writes api.port/api-token on startup; re-read by reconstructing
+    # the client. A COLD first start generates the ML-KEM identity and connects
+    # to bootstrap peers, which can take well over 15s — poll generously so we
+    # never report a false failure for a daemon that is simply still warming up.
+    deadline = time.monotonic() + 45.0
     while time.monotonic() < deadline:
         probe = X0x(instance)
         if probe.is_running():
@@ -132,7 +135,7 @@ def do_start(client: X0x, instance: str | None) -> dict:
         time.sleep(1.0)
 
     raise X0xError(
-        "I launched x0x but it didn't come up within 15 seconds. "
+        "I launched x0x but it didn't come up within 45 seconds. "
         "It may still be starting — try again in a moment."
     )
 

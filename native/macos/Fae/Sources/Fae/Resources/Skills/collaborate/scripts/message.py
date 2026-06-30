@@ -36,7 +36,7 @@ def do_send(client: X0x, params: dict) -> dict:
     if group_id and agent_id:
         raise X0xError("Send to a space OR a person, not both — give group_id or agent_id.")
     if group_id:
-        resp = client.post(f"/groups/{group_id}/send", {"body": text, "kind": "text"})
+        resp = client.post(f"/groups/{group_id}/send", {"body": text, "kind": "chat"})
         return {
             "ok": True,
             "message_id": resp.get("message_id"),
