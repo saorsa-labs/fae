@@ -38,27 +38,39 @@ into the symlink target (`~/.ssh`). 3b made this reachable via a routed read.
 
 **Implemented.** The fallback is now gated on the daemon-intended flag
 (`DaemonToolHostSession.daemonIntended`, threaded from
-`FaeConfig.llm.useDaemonEngine` at the `PipelineCoordinator` construction site
-via `ToolExecutor(daemonIntendedForToolhostRouting:)`):
+`FaeConfig.llm.useDaemonEngine` at the `PipelineCoordinator` construction site).
+`ToolExecutor` exposes two **explicit, unlabeled** initializers
+(`daemonIntendedForToolhostRouting: Bool` OR `daemonToolHostSession:
+DaemonToolHostSession`) so ambiguous constructions fail to compile — there is
+NO silent default, and no production call site can accidentally opt out.
 
 - **Daemon intended but unreachable** (`useDaemonEngine == true`, the
 canonical failure mode for a default-bundled daemon): `DaemonToolRouting.routeRead`
 confines the read **locally** — `DaemonToolHostSession.confinedLocalReadFallback`
-provisions the default workspace (idempotent, #1-symlink-guarded) and confines
-the shape-validated path against it via the SAME `confineValidatedReadPath`
-helper the daemon path uses, returning the canonical path for `ReadTool`. The
-universal "reads are confined to `~/Documents/Fae`" invariant therefore holds
-whether or not the daemon is up, and the `read` capability is preserved during
-outages (no regression). The provisioning side effect fires ONLY in this branch.
+provisions the default workspace (idempotent, #1-symlink-guarded), then performs
+an **fd-anchored** read via `DaemonToolRouting.readFdAnchored` (the open IS the
+atomic check-and-use): the root is opened with `O_NOFOLLOW`, the validated path
+is walked from that fd with `openat`+`O_NOFOLLOW`, each component is `fstat`-
+checked (S_IFDIR for intermediates, S_IFREG for the leaf), and the leaf is read
+from its open fd. **No path string is ever re-resolved**, so swapping the
+workspace dir for a symlink after provisioning cannot redirect the read (closes
+the root-symlink TOCTOU the red-team flagged on the earlier path-based confine).
+`O_NONBLOCK` on every open defeats an open-time DoS (a FIFO would otherwise
+block the open until a writer arrives). The universal "reads are confined to
+`~/Documents/Fae`" invariant therefore holds whether or not the daemon is up,
+and the `read` capability is preserved during outages (no regression). The
+provisioning side effect fires ONLY in this branch.
   - `approvedRootPath` is NOT mutated (the daemon root guard never ran — this is
 a local confinement against the provisioned default, not a daemon-approved root).
   - `.preExistingWithoutMarker` fails closed (no daemon card available to
 approve a user-made dir; no silent takeover / read).
-  - Symlinked default root is hard-denied inside `FaeWorkspace.provision`.
+  - Symlinked default root is hard-denied by the `O_NOFOLLOW` root open (and,
+defense-in-depth, inside `FaeWorkspace.provision`).
 - **Daemon explicitly opted out** (`useDaemonEngine == false`, e.g. CI /
-pure-MLX): `routeRead` returns `nil` BEFORE shape validation, so the caller
-falls through to the local `ReadTool` with the ORIGINAL args — the legacy
-UNCONFINED pre-routing read (absolute paths allowed). No provisioning side effect.
+pure-MLX, and the dev `JSCDeveloperHarness`): `routeRead` returns `nil` BEFORE
+shape validation, so the caller falls through to the local `ReadTool` with the
+ORIGINAL args — the legacy UNCONFINED pre-routing read (absolute paths allowed).
+No provisioning side effect.
 - **Never silent:** both branches `NSLog` which path was taken (ties into #5).
 
 The invariant that is unchanged: when the daemon is **involved** but drops
@@ -74,7 +86,14 @@ absolute + `..` denied),
 `testReadIntendedButDownProvisionsWorkspaceMarker` (intended provisions +
 marker; missing-file read still denied),
 `testReadIntendedButDownPreExistingWithoutMarkerFailsClosed` (user-made dir →
-error, no marker write, precious file untouched).
+error, no marker write, precious file untouched),
+`testReadIntendedButDownRejectsSymlinkedWorkspaceRoot` +
+`testReadFdAnchoredRejectsSymlinkedRootDirectly` (symlinked root → ELOOP,
+sensitive target never read),
+`testReadFdAnchoredRejectsLeafSymlinkEscape` /
+`testReadFdAnchoredRejectsIntermediateSymlinkEscape` (openat+O_NOFOLLOW),
+`testReadFdAnchoredRejectsFifo` (O_NONBLOCK + S_IFREG),
+`testReadFdAnchoredTruncatesMultibyteWithoutDenying` (byte-cap mid-multibyte).
 
 **Why not fail-closed:** `read` is `.low` risk and pre-dates routing; breaking
 all reads during a daemon glitch is a worse UX than a confined local read, and
@@ -100,6 +119,14 @@ temp provider — the gate avoids that.
 - **Fix location:** fluers runtime (`local_env.rs`: `O_NOFOLLOW` / `openat`
   under root) for the daemon path; `ReadTool` for the local path. **Out of scope
   for this Swift slice.**
+- **Phase A note (2026-06-30):** the **local fallback** path (follow-up #2,
+  daemon intended-but-down) is now **fd-anchored** (`DaemonToolRouting.
+  readFdAnchored` — `O_NOFOLLOW` root open + `openat` per component + direct fd
+  read), so it is NOT subject to this TOCTOU. This item remains OPEN for the
+  **daemon** read path (`confineValidatedReadPath` is still path-based, confined
+  against the daemon-RETURNED root) and the legacy **`ReadTool`**
+  (`String(contentsOfFile:)`); the daemon's own root canonicalization + the
+  pre-existing `is_safe_workspace_root` guard are the current defense there.
 
 ## 5. Routed reads skip Swift audit / plugin hooks / executor timeout (reviewer + codex)
 
