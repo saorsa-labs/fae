@@ -51,6 +51,11 @@ import Foundation
 /// aware `roundTrip` releases the connection's dispatch queue between reads).
 enum DaemonToolRouting {
 
+    /// `O_CLOEXEC` flag value, resolved once at load. Present on all supported
+    /// macOS SDKs; this indirection keeps the fd-anchored read portable and
+    /// avoids a bare magic number in the open flag sets.
+    private static let openCloexec: Int32 = Darwin.O_CLOEXEC
+
     /// The ONLY tools Layer 3b routes to the daemon. `write`/`edit` stay
     /// dangerous-classed and are NOT enabled until Layer 4 provisions the
     /// server-side `ToolExecuteDangerous` scope; `bash` stays local (highest
@@ -177,7 +182,211 @@ enum DaemonToolRouting {
         }
     }
 
-    // MARK: - Serialized daemon execution outcome
+    // MARK: - FD-anchored confined local read (red-team fix for follow-up #2)
+
+    /// Hard byte cap for an fd-anchored local read. Matches the order of the
+    /// daemon's 50 KiB truncation (parity tracked in follow-up #6; exact line /
+    /// char parity is settled there).
+    static let localReadByteCap = 50 * 1024
+
+    /// Open flags common to every fd-anchored open. `O_NOFOLLOW` rejects a
+    /// symlink leaf at the kernel level (ELOOP — no path re-resolution, the
+    /// TOCTOU fix). `O_CLOEXEC` avoids the fd leaking across an exec.
+    /// `O_NONBLOCK` is **mandatory** to defeat an open-time DoS: opening a FIFO
+    /// (or some character devices) for reading WITHOUT `O_NONBLOCK` **blocks
+    /// until a writer opens it** — a workspace FIFO would hang the read
+    /// indefinitely before the `fstat` regular-file check ever runs. With
+    /// `O_NONBLOCK` the open returns immediately and `fstat` then rejects the
+    /// non-regular entry. Harmless on regular files and directories.
+    private static let openFlags: Int32 =
+        Darwin.O_RDONLY | Darwin.O_NOFOLLOW | openCloexec | Darwin.O_NONBLOCK
+
+    /// The result of an fd-anchored confined local read.
+    enum FdAnchoredRead: Equatable {
+        /// The file was opened, confirmed regular, and read (truncated to
+        /// `localReadByteCap` bytes, decoded as UTF-8).
+        case text(String)
+        /// The path could not be opened / confirmed regular / decoded. The
+        /// reason is surfaced to the caller as a denial.
+        case deny(String)
+    }
+
+    /// FD-ANCHORED confined local read (closes the root-symlink TOCTOU the
+    /// red-team flagged on the path-based fallback).
+    ///
+    /// The open IS the atomic check-and-use: `root` is opened with `O_NOFOLLOW`,
+    /// so even if a symlink swap races `FaeWorkspace.provision`'s `lstat`, the
+    /// open fails with `ELOOP` (the leaf of `root.path` being a symlink is
+    /// rejected by the kernel). Once `rootFd` is obtained it anchors everything
+    /// that follows — the path on disk can be swapped freely; navigation uses
+    /// `openat(rootFd, ...)` from the stable descriptor. Each component is
+    /// likewise opened with `O_NOFOLLOW` + `fstat`, so an intermediate or leaf
+    /// symlink (a workspace file symlinked to `/etc/passwd`) is rejected at the
+    /// kernel level (no re-resolution of a path string → no TOCTOU).
+    ///
+    /// `validatedPath` MUST already be shape-validated (no leading `/`, no `..`,
+    /// no NUL, non-empty). `.` components are filtered defensively. The leaf is
+    /// `fstat`-required to be `S_IFREG` (rejects FIFOs/dirs/sockets/devices — a
+    /// FIFO would otherwise block). Does NOT use `ReadTool(path:)` (that would
+    /// re-resolve the path from cwd and re-open the TOCTOU window).
+    static func readFdAnchored(
+        validatedPath: String,
+        root: URL
+    ) -> FdAnchoredRead {
+        // Split into components; the shape validator already rejected `..`, so
+        // every component is a real name (filter `.` and empties defensively).
+        let rawParts = validatedPath.split(separator: "/", omittingEmptySubsequences: true)
+        let parts = rawParts.map(String.init).filter { $0 != "." && $0 != ".." }
+        guard !parts.isEmpty else {
+            return .deny("read path must name a file")
+        }
+
+        // Anchor: open the ROOT with O_NOFOLLOW. If `root.path`'s tip is (or has
+        // become) a symlink, the kernel returns ELOOP — this is the TOCTOU fix.
+        let rootFd = root.path.withCString { cstr -> Int32 in
+            Darwin.open(cstr, openFlags, 0)
+        }
+        guard rootFd >= 0 else {
+            return .deny("workspace root is not a readable directory")
+        }
+        defer { Darwin.close(rootFd) }
+
+        // Confirm the anchored root is a directory (fstat off the open fd, NOT a
+        // path — no re-resolution).
+        var rootSt = stat()
+        guard Darwin.fstat(rootFd, &rootSt) == 0 else {
+            return .deny("workspace root is not readable")
+        }
+        guard (rootSt.st_mode & S_IFMT) == S_IFDIR else {
+            return .deny("workspace root is not a directory")
+        }
+
+        // Walk every intermediate component as a directory (openat + O_NOFOLLOW
+        // + fstat). Hold each fd only long enough to descend; close on swap.
+        var parentFd = rootFd
+        // Keep the fds we open for intermediate dirs so we can close them all at
+        // the end (the root is closed by the outer `defer`).
+        var openedIntermediates: [Int32] = []
+        defer {
+            for fd in openedIntermediates where fd >= 0 { Darwin.close(fd) }
+        }
+        let lastIdx = parts.count - 1
+        for (idx, name) in parts.enumerated() {
+            let isLeaf = idx == lastIdx
+            let requireDir = !isLeaf
+            guard let opened = openComponent(
+                parent: parentFd, name: name, requireDir: requireDir)
+            else {
+                if isLeaf {
+                    return .deny("file not found or not a regular file: \(validatedPath)")
+                }
+                return .deny("read path component is not a directory: \(name)")
+            }
+            if isLeaf {
+                // Leaf: read from this open fd, then close it. Never re-resolve.
+                defer { Darwin.close(opened) }
+                return readLeaf(fd: opened, validatedPath: validatedPath)
+            }
+            // Intermediate dir: keep it open for the next iteration.
+            openedIntermediates.append(opened)
+            parentFd = opened
+        }
+        // Unreachable: parts is non-empty and the loop returns on the leaf.
+        return .deny("read path could not be resolved")
+    }
+
+    /// Open one component relative to `parent` with `O_RDONLY | O_NOFOLLOW`, then
+    /// `fstat` to confirm it is a directory (intermediate) or a regular file
+    /// (leaf). `O_NOFOLLOW` makes a symlink leaf fail with `ELOOP` at the kernel
+    /// level — no path re-resolution, no TOCTOU. Returns the fd or nil on any
+    /// failure (closes the fd before returning nil so it never leaks).
+    private static func openComponent(
+        parent: Int32, name: String, requireDir: Bool
+    ) -> Int32? {
+        name.withCString { cstr -> Int32? in
+            let fd = Darwin.openat(parent, cstr, openFlags, 0)
+            guard fd >= 0 else { return nil }
+            var st = stat()
+            guard Darwin.fstat(fd, &st) == 0 else {
+                Darwin.close(fd)
+                return nil
+            }
+            let kind = st.st_mode & S_IFMT
+            if requireDir {
+                guard kind == S_IFDIR else {
+                    Darwin.close(fd)
+                    return nil
+                }
+            } else {
+                guard kind == S_IFREG else {
+                    Darwin.close(fd)
+                    return nil
+                }
+            }
+            return fd
+        }
+    }
+
+    /// Read up to `localReadByteCap` bytes from an already-open regular-file fd,
+    /// decode as UTF-8, and return `.text`. A non-UTF-8 file is denied (the
+    /// workspace is a text surface; binary files are out of scope for the
+    /// fallback read). Never re-resolves a path.
+    ///
+    /// Two robustness details (red-team §4 + multibyte-UTF-8):
+    /// - `EINTR` on `read()` retries (bounded) instead of denying — a signal
+    ///   during the read must not turn into a spurious failure.
+    /// - The byte cap may split a multibyte UTF-8 sequence. Decode is attempted
+    ///   first; on failure, trim trailing incomplete-sequence bytes and retry,
+    ///   so a valid UTF-8 file truncated mid-character is returned (shorter)
+    ///   rather than denied as "not UTF-8". Only genuinely non-UTF-8 content is
+    ///   denied. (Truncation parity with the daemon is tracked in follow-up #6.)
+    private static func readLeaf(fd: Int32, validatedPath: String) -> FdAnchoredRead {
+        var collected = Data()
+        collected.reserveCapacity(Swift.min(localReadByteCap, 8192))
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        while collected.count < localReadByteCap {
+            let n = buffer.withUnsafeMutableBufferPointer { ptr -> ssize_t in
+                Darwin.read(fd, ptr.baseAddress, ptr.count)
+            }
+            if n < 0 {
+                // Retry on EINTR (a signal interrupted the syscall); any other
+                // errno is a real read failure → deny.
+                if errno == EINTR { continue }
+                return .deny("read failed: \(validatedPath)")
+            }
+            if n == 0 { break }
+            collected.append(contentsOf: buffer.prefix(Int(n)))
+        }
+        // Prefer a whole-buffer decode (fast path for files under the cap).
+        if let text = String(data: collected, encoding: .utf8) {
+            return .text(trimmedToByteCap(text))
+        }
+        // The cap may have split a multibyte sequence. Trim trailing bytes until
+        // the remainder decodes as UTF-8 (drop at most 3 continuation bytes), so
+        // a valid UTF-8 file truncated mid-character is returned, not denied.
+        var bytes = collected
+        for _ in 0..<3 where !bytes.isEmpty {
+            bytes.removeLast()
+            if let text = String(data: bytes, encoding: .utf8) {
+                return .text(trimmedToByteCap(text))
+            }
+        }
+        return .deny("file is not UTF-8 text: \(validatedPath)")
+    }
+
+    /// Cap a decoded `String` to `localReadByteCap` UTF-8 bytes without splitting
+    /// a multibyte character (`String.prefix(_:)` is Character-based, so it can
+    /// land mid-sequence in bytes). Iteratively drop trailing characters until
+    /// the UTF-8 byte length fits. No-op when already within the cap.
+    private static func trimmedToByteCap(_ text: String) -> String {
+        guard text.utf8.count > localReadByteCap else { return text }
+        var trimmed = text
+        while trimmed.utf8.count > localReadByteCap, !trimmed.isEmpty {
+            trimmed.removeLast()
+        }
+        return trimmed
+    }
+
 
     /// The outcome of the serialized daemon-interacting core of a routed read
     /// (produced by `DaemonToolHostSession.executeSerializedRoutedRead`).
@@ -197,6 +406,13 @@ enum DaemonToolRouting {
         /// cancellation must NOT fall through to a local `ReadTool` (that would
         /// be extra work the caller already abandoned).
         case cancelled
+        /// The confined LOCAL read already happened (fd-anchored, no daemon):
+        /// the workspace was provisioned, the validated path was walked from an
+        /// `O_NOFOLLOW`-opened root fd via `openat`, and the file was read from
+        /// an open leaf fd (truncated to `~50 KiB`). Carries the text directly so
+        /// the caller never re-resolves a path from cwd (closes the root-symlink
+        /// TOCTOU the red-team flagged on the path-based fallback).
+        case localText(String)
     }
 
     // MARK: - Route a read through the daemon session
@@ -293,6 +509,8 @@ enum DaemonToolRouting {
             return .error(reason)
         case .fallbackLocally(let canonical):
             return await readLocally(path: canonical.path)
+        case .localText(let text):
+            return .success(text)
         case .cancelled:
             return .error("Read was cancelled.")
         }

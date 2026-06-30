@@ -360,22 +360,24 @@ actor DaemonToolHostSession {
     /// (B-Swift follow-up #2: daemon intended but momentarily unreachable).
     ///
     /// Provisions the default workspace LOCALLY (idempotent,
-    /// #1-symlink-guarded via `FaeWorkspace.provision`), confines the already
-    /// shape-validated path against that LOCAL root, and returns the canonical
-    /// path for the caller to read via `ReadTool`. Does **NOT** mutate
-    /// `approvedRootPath` — the daemon root guard never ran, so this is a local
-    /// confinement against the provisioned default (the universal "reads are
-    /// confined to `~/Documents/Fae`" invariant), NOT a daemon-approved root.
+    /// #1-symlink-guarded via `FaeWorkspace.provision`), then performs an
+    /// **fd-anchored** confined read (`DaemonToolRouting.readFdAnchored`): the
+    /// root is opened with `O_NOFOLLOW` (the open IS the atomic check-and-use,
+    /// closing the root-symlink TOCTOU a path-based confine would re-open), the
+    /// validated path is walked from that fd with `openat`+`O_NOFOLLOW`, each
+    /// component is `fstat`-checked, and the leaf is read from its open fd. No
+    /// path string is ever re-resolved, so swapping the workspace dir for a
+    /// symlink after provisioning cannot redirect the read.
+    ///
+    /// Does **NOT** mutate `approvedRootPath` — the daemon root guard never
+    /// ran, so this is a local confinement against the provisioned default
+    /// (the universal "reads are confined to `~/Documents/Fae`" invariant), NOT
+    /// a daemon-approved root.
     ///
     /// `.preExistingWithoutMarker` fails closed: no daemon card is available to
     /// approve a user-made dir, so we never silently read through (or take over)
-    /// a dir Fae did not create. A symlinked default root is hard-denied inside
-    /// `FaeWorkspace.provision` before any confinement/read.
-    ///
-    /// This is the counterpart of `executeSerializedRoutedRead` for the
-    /// daemon-down case; it reuses the SAME confinement helper
-    /// (`DaemonToolRouting.confineValidatedReadPath`) so the confinement rules
-    /// are identical whether the daemon is up or down.
+    /// a dir Fae did not create. A symlinked default root is hard-denied by the
+    /// `O_NOFOLLOW` open (and, defense-in-depth, inside `FaeWorkspace.provision`).
     func confinedLocalReadFallback(
         validatedPath: String
     ) -> DaemonToolRouting.ReadExecutionOutcome {
@@ -391,15 +393,16 @@ actor DaemonToolHostSession {
         }
         switch provisioned {
         case .provisioned(let url), .alreadyOwned(let url):
-            // Fae owns the dir → confine the validated path against it. Same
-            // helper + rules as the daemon path (existence, regular-file,
-            // symlink-escape, `..`). The daemon root guard is absent here, so
-            // do NOT bind `approvedRootPath`; confinement alone is the guard.
-            switch DaemonToolRouting.confineValidatedReadPath(validatedPath, root: url) {
+            // Fae owns the dir → fd-anchored confined read. `O_NOFOLLOW` on the
+            // root open + per-component `openat` defeats both a root-symlink
+            // swap (TOCTOU) and intermediate/leaf symlink escapes, at the kernel
+            // level — no path re-resolution. The daemon root guard is absent
+            // here, so do NOT bind `approvedRootPath`; the fd anchor is the guard.
+            switch DaemonToolRouting.readFdAnchored(validatedPath: validatedPath, root: url) {
+            case .text(let text):
+                return .localText(text)
             case .deny(let reason):
                 return .denied(reason)
-            case .route(_, let canonical):
-                return .fallbackLocally(canonical)
             }
         case .preExistingWithoutMarker:
             // A user-made dir with no Fae marker, and the daemon (the only

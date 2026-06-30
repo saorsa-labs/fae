@@ -1418,6 +1418,189 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertTrue(esc.result.isError, "traversal path must be denied (confined)")
     }
 
+    // MARK: - FD-anchored local fallback (red-team fix: root-symlink TOCTOU)
+    //
+    // The intended-but-down fallback opens the root with O_NOFOLLOW and walks
+    // the path with openat+O_NOFOLLOW so a symlink swap (root-symlink TOCTOU) or
+    // an intermediate/leaf symlink escape is rejected at the KERNEL level.
+
+    /// INTENDED + no daemon + a SYMLINKED default root → DENIED. The root open
+    /// uses O_NOFOLLOW, so a symlink at the tip fails with ELOOP even if it
+    /// races `FaeWorkspace.provision`'s lstat. The sensitive target is never
+    /// read.
+    func testReadIntendedButDownRejectsSymlinkedWorkspaceRoot() async throws {
+        let secretDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-secret-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: secretDir) }
+        try FileManager.default.createDirectory(at: secretDir, withIntermediateDirectories: true)
+        try Data("ssh-private-key-material".utf8)
+            .write(to: secretDir.appendingPathComponent("id_rsa"))
+
+        // The default root is a SYMLINK to the secret dir. `FaeWorkspace.provision`
+        // lstat-rejects this (`symlinkedWorkspaceRoot`), so the fallback fails
+        // closed before any read. (This is the `provision` guard; the fd-anchored
+        // O_NOFOLLOW open is the deeper defense if provision's lstat is ever
+        // bypassed — proven by the direct helper test below.)
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-link-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(
+            atPath: link.path, withDestinationPath: secretDir.path)
+
+        await clearDaemonEndpoints()
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: link),
+            daemonIntended: true
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "id_rsa"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertTrue(outcome.result.isError, "symlinked root must be rejected")
+        XCTAssertFalse(
+            outcome.result.output.contains("ssh-private-key-material"),
+            "the sensitive target must never be read")
+    }
+
+    /// The fd-anchored helper DIRECTLY rejects a symlinked root, even when the
+    /// `provision`-level lstat guard is not in the call chain. Proves the
+    /// O_NOFOLLOW open is the real anchor (closes the TOCTOU the red-team
+    /// traced: swap the root for a symlink between provision's lstat and the
+    /// confine step).
+    func testReadFdAnchoredRejectsSymlinkedRootDirectly() throws {
+        let secretDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-direct-secret-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: secretDir) }
+        try FileManager.default.createDirectory(at: secretDir, withIntermediateDirectories: true)
+        try Data("topsecret".utf8).write(to: secretDir.appendingPathComponent("flag.txt"))
+
+        let link = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-direct-link-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(
+            atPath: link.path, withDestinationPath: secretDir.path)
+
+        let result = DaemonToolRouting.readFdAnchored(validatedPath: "flag.txt", root: link)
+        XCTAssertEqual(result, .deny("workspace root is not a readable directory"),
+                       "O_NOFOLLOW root open must reject a symlinked tip")
+    }
+
+    /// The fd-anchored helper rejects a LEAF symlink escape: a workspace file
+    /// symlinked to `/etc/passwd` is denied at the kernel level (openat +
+    /// O_NOFOLLOW → ELOOP), never followed. (Companion to the daemon path's
+    /// `confineValidatedReadPath` canonicalization, but anchored on the fd.)
+    func testReadFdAnchoredRejectsLeafSymlinkEscape() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-leaf-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+        // A regular file to prove the helper DOES read legit files.
+        try Data("ok".utf8).write(to: ws.appendingPathComponent("legit.txt"))
+        // A symlink → /etc/passwd (escape attempt).
+        try FileManager.default.createSymbolicLink(
+            atPath: ws.appendingPathComponent("evil").path,
+            withDestinationPath: "/etc/passwd")
+
+        let ok = DaemonToolRouting.readFdAnchored(validatedPath: "legit.txt", root: ws)
+        if case .text(let t) = ok { XCTAssertEqual(t, "ok") } else {
+            XCTFail("legit file should read via the fd anchor")
+        }
+        let evil = DaemonToolRouting.readFdAnchored(validatedPath: "evil", root: ws)
+        if case .deny = evil { /* expected */ } else {
+            XCTFail("leaf symlink escape must be denied (openat+O_NOFOLLOW)")
+        }
+    }
+
+    /// The fd-anchored helper rejects an INTERMEDIATE-component symlink escape:
+    // a dir component symlinked outside the workspace is denied (openat+
+    // O_NOFOLLOW on the intermediate → ELOOP / fstat-not-dir).
+    func testReadFdAnchoredRejectsIntermediateSymlinkEscape() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-inter-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-outside-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("exfil".utf8).write(to: outside.appendingPathComponent("secret.txt"))
+        // ws/sub → outside (intermediate symlink escape).
+        try FileManager.default.createSymbolicLink(
+            atPath: ws.appendingPathComponent("sub").path,
+            withDestinationPath: outside.path)
+
+        let result = DaemonToolRouting.readFdAnchored(
+            validatedPath: "sub/secret.txt", root: ws)
+        if case .deny = result { /* expected */ } else {
+            XCTFail("intermediate symlink escape must be denied")
+        }
+    }
+
+    /// The fd-anchored helper rejects a FIFO (non-regular file): a workspace
+    // FIFO would otherwise block the read up to its timeout (a routed DoS).
+    // `fstat` on the leaf requires S_IFREG.
+    func testReadFdAnchoredRejectsFifo() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-fifo-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+        let fifoPath = ws.appendingPathComponent("pipe").path
+        XCTAssertEqual(mkfifo(fifoPath, 0o600), 0, "mkfifo should succeed")
+
+        let result = DaemonToolRouting.readFdAnchored(validatedPath: "pipe", root: ws)
+        if case .deny = result { /* expected */ } else {
+            XCTFail("FIFO must be denied (regular-files-only)")
+        }
+    }
+
+    /// A valid UTF-8 file truncated by the byte cap MID-MULTIBYTE-CHARACTER is
+    /// returned (shorter) rather than denied as "not UTF-8". The cap is 50 KiB;
+    /// build a file whose boundary lands inside a multibyte sequence. The
+    /// fd-anchored helper trims the incomplete trailing sequence and decodes
+    /// the valid prefix. (Companion to follow-up #6 truncation parity.)
+    func testReadFdAnchoredTruncatesMultibyteWithoutDenying() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-mb-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+
+        // Build a file of 4-byte UTF-8 chars (U+1F600 = \u{F0 9F 98 80}). Fill
+        // past the cap so the boundary lands inside a char. cap / 4 = 12800
+        // chars exactly; append a few more to guarantee a mid-char split.
+        let cap = DaemonToolRouting.localReadByteCap
+        let char = "😀"  // 4 UTF-8 bytes
+        let charBytes = char.utf8.count
+        let charsToOverflow = (cap / charBytes) + 4
+        let big = String(repeating: char, count: charsToOverflow)
+        try Data(big.utf8).write(to: ws.appendingPathComponent("emoji.txt"))
+
+        let result = DaemonToolRouting.readFdAnchored(validatedPath: "emoji.txt", root: ws)
+        switch result {
+        case .text(let text):
+            XCTAssertLessThanOrEqual(
+                text.utf8.count, cap,
+                "returned text must respect the byte cap")
+            // Every returned code point is a complete char (no partial bytes).
+            XCTAssertEqual(text.unicodeScalars.last?.description, "😀",
+                           "no partial multibyte sequence at the boundary")
+        case .deny:
+            XCTFail("a valid UTF-8 file truncated mid-char must be returned, not denied")
+        }
+    }
+
+
+
     /// Provisioning side effect fires ONLY in the intended branch. INTENDED +
     /// no daemon + a missing workspace root provisions it (marker written) even
     /// when the read itself is denied (file not found). OPTED OUT leaves the
