@@ -24,6 +24,22 @@ trust David's human identity *and* his agent's `agent_id`, then add both to a sp
 - **Connect to a human** → import/trust their agent card (carries `user_id` + `agent_id`).
 - **Connect to their agents** → trust each agent's `agent_id`.
 
+### Exchanging identities out-of-band
+
+Connecting two people is a **two-way card swap, done out-of-band** (message, email,
+AirDrop — however they already talk):
+
+1. **Give yours** → `contacts mycard {display_name?}`. This shows the user's own
+   shareable `x0x://agent/…` card **on screen in the browser** (with a Copy button) and
+   tells you their `agent_id`. The user sends that link to the other person.
+2. **Get theirs** → when the other person sends their `x0x://agent/…` link, run
+   `contacts import {card, trust_level}`. That adds them (and their `user_id`) as a
+   trusted contact — confirm who you added by reading back the result.
+
+Both sides do both steps, and they're connected. You can then DM them, add them to a
+space, or send files. To **show the cards on screen**: `mycard` opens the user's card;
+`gui {tab:"contacts"}` opens the full contacts view; `contacts list` reads them aloud.
+
 ## How to use it
 
 Every action runs a script via `run_skill collaborate <script> { ...params }`.
@@ -33,7 +49,7 @@ Always run `ensure` first in a session if you are unsure the daemon is up.
 |--------|-----------|
 | `ensure` | Detect/start the x0xd daemon and read the user's identity (`agent_id`, `user_id`). Run this first. |
 | `gui` | Open the collaboration app in the user's browser (whole app, or a specific tab: `chat`, `groups`, `board`, `files`, `contacts`, `presence`). |
-| `contacts` | List contacts; import an agent card; add and trust a person or agent (`action`: `list`/`import`/`add`/`trust`). This is how you connect humans and their agents. |
+| `contacts` | Show the user's OWN shareable card on screen (`mycard`), import someone's card (`import`), list, or add/trust by agent_id (`action`: `mycard`/`list`/`import`/`add`/`trust`). This is how you connect humans and their agents — see the out-of-band swap above. |
 | `groups` | Create / list / join / invite-to / manage members of spaces (`action`: `create`/`list`/`get`/`members`/`add_member`/`invite`/`join`). |
 | `message` | Send and read messages — in a space (`group_id`) or direct to an agent (`agent_id`). Use `action`: `send`/`read`. Read returns recent messages for you to summarise by voice. |
 | `kanban` | Boards/cards via x0x task-lists (`action`: `list`/`create`/`tasks`/`add`/`update`). |
@@ -46,6 +62,7 @@ All scripts accept an optional `instance` param to target a named x0x identity
 
 ## Voice patterns
 
+- "Connect me with someone." / "Give me my x0x card to share." → `contacts mycard {display_name}` (shows it on screen to send out-of-band). When they send you their `x0x://agent/…` link → `contacts import {card, trust_level:"trusted"}`.
 - "Create a space called *Project Falcon* and invite David and his agent."
   → `groups create {name:"Project Falcon"}` → `groups invite {group_id}` (share the link with David), and `contacts add`/`trust` for David's agent so you can DM/add directly.
 - "Who's online?" / "Is David around?" → `presence online` / `presence find {agent_id}`.
