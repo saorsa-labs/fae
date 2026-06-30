@@ -267,6 +267,21 @@ final class FaeCore: ObservableObject, HostCommandSender {
                         modelID: daemonModelId,
                         eventBus: eventBus
                     )
+                    // B-Swift Phase B: wire the supervisor callbacks. The engine
+                    // owns process supervision; FaeCore owns the downstream
+                    // effects of endpoint changes (DaemonEndpointStore + TTS
+                    // reconnection) and the loud MLX fallback on exhaustion.
+                    // On endpoint loss/recovery the store is updated so the
+                    // ToolHost routing + ACP lane follow the live daemon.
+                    daemonEngine.onEndpointsChanged = { [weak self] endpoints in
+                        await DaemonEndpointStore.shared.set(endpoints)
+                        guard let self else { return }
+                        await self.handleDaemonEndpointsChanged(endpoints)
+                    }
+                    daemonEngine.onRestartExhausted = { [weak self] in
+                        guard let self else { return }
+                        await self.handleDaemonRestartExhausted()
+                    }
                     do {
                         try await daemonEngine.load(modelID: daemonModelId)
                         llmEngine = daemonEngine
@@ -699,6 +714,85 @@ final class FaeCore: ObservableObject, HostCommandSender {
                 pipelineState = .error
                 eventBus.send(.runtimeState(.error))
             }
+        }
+    }
+
+    // MARK: - B-Swift Phase B: daemon supervisor callbacks
+
+    /// Called by `DaemonLLMEngine` whenever the daemon endpoints change (initial
+    /// connect, supervised reconnect after a crash, or nil on loss/exhaustion).
+    /// The store is updated in the callback itself (so the ToolHost routing +
+    /// ACP lane follow the live daemon); this method handles the TTS-lane side —
+    /// reconnecting daemon TTS on recovery, or falling back to in-process Kokoro
+    /// on loss. `@Sendable` closure hops back into this actor.
+    private func handleDaemonEndpointsChanged(
+        _ endpoints: (socketPath: String, tokenPath: String)?
+    ) async {
+        guard config.llm.useDaemonEngine else { return }
+        if let endpoints {
+            NSLog(
+                "FaeCore: daemon endpoints (re)published — socket %@",
+                endpoints.socketPath)
+            // Reconnect daemon TTS if configured (it may have dropped with the
+            // daemon and needs a fresh socket to the revived process).
+            if config.tts.useDaemonEngine, ttsEngine == nil {
+                let daemonTTS = DaemonTTSEngine(
+                    socketPath: endpoints.socketPath,
+                    tokenPath: endpoints.tokenPath,
+                    configuredVoice: config.tts.voice)
+                do {
+                    try await daemonTTS.load(modelID: config.tts.modelId)
+                    ttsEngine = daemonTTS
+                    NSLog("FaeCore: daemon TTS lane reconnected after supervised restart")
+                } catch {
+                    NSLog(
+                        "FaeCore: ⚠️ daemon TTS reconnect FAILED after restart — in-process Kokoro remains: %@",
+                        error.localizedDescription)
+                }
+            }
+        } else {
+            NSLog("FaeCore: daemon endpoints LOST — ToolHost routing + ACP lane degrade")
+        }
+    }
+
+    /// Called by `DaemonLLMEngine` exactly once when bounded restarts are
+    /// exhausted. Surfaces a loud fallback: the daemon LLM lane is dead, so the
+    /// pipeline relies on the in-process MLX engine (the supervisor already
+    /// marked `loadState = .failed`). The app layer surfaces Retry/Quit. Never
+    /// silent — B-Swift Phase B keeps MLX as the loud last-resort.
+    private func handleDaemonRestartExhausted() async {
+        NSLog(
+            "FaeCore: ⚠️ fae-daemon crashed and bounded restart is EXHAUSTED — "
+            + "staying on the loud in-process MLX fallback; surface Retry/Quit")
+        // The daemon engine's loadState is `.failed`; the pipeline's llmEngine
+        // reference is stale-but-harmless (its turns will fail fast and route to
+        // MLX). Do NOT silently swap engines here — the app surfaces Retry/Quit,
+        // and `retryDaemonAfterExhausted` re-loads the daemon lane on user choice.
+        // Post a notification so the app layer (FaeApp) can present a Retry/Quit
+        // alert on the main thread, mirroring the orb-host exhaustion flow.
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .faeDaemonRestartExhausted, object: nil)
+        }
+    }
+
+    /// Re-load the daemon LLM lane after exhaustion (Retry button). Clears the
+    /// supervisor's crash counter, re-arms, and attempts a fresh `load`. On
+    /// failure the loud MLX fallback remains and the caller may re-surface the
+    /// alert. Public so the app layer can invoke it from a Retry button.
+    func retryDaemonAfterExhausted() async {
+        guard let engine = llmEngine as? DaemonLLMEngine else {
+            NSLog("FaeCore: retryDaemonAfterExhausted — no daemon engine to retry")
+            return
+        }
+        let modelId = engine.daemonModelID
+        do {
+            try await engine.retryAfterExhausted(modelID: modelId)
+            NSLog("FaeCore: daemon LLM lane restored via Retry after exhaustion")
+        } catch {
+            NSLog(
+                "FaeCore: ⚠️ daemon Retry after exhaustion FAILED — staying on MLX: %@",
+                error.localizedDescription)
         }
     }
 
@@ -3395,4 +3489,8 @@ final class FaeCore: ObservableObject, HostCommandSender {
 
 extension Notification.Name {
     static let faeSettingsChanged = Notification.Name("faeSettingsChanged")
+    /// B-Swift Phase B: fired (on the main actor) when the fae-daemon has
+    /// crashed and bounded automatic restarts are exhausted. The app layer
+    // observes this to present a Retry/Quit alert (loud fallback, never silent).
+    static let faeDaemonRestartExhausted = Notification.Name("faeDaemonRestartExhausted")
 }

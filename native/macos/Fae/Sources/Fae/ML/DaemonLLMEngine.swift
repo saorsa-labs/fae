@@ -738,6 +738,41 @@ actor DaemonLLMEngine: LLMEngine {
 
     var isLoaded: Bool { loadState.isLoaded }
 
+    // MARK: - B-Swift Phase B: crash-supervisor state
+    //
+    // The supervisor owns the bounded-restart POLICY (pure, injectable clock).
+    // The engine owns the real `terminationHandler` + sleeper around it. An
+    // unexpected exit hops back into this actor via `Task { await
+    // self.handleDaemonExit(status:) }`; the handler asks the supervisor what to
+    // do and either schedules a real backoff sleep + relaunch, or surfaces
+    // exhaustion. `internalShutdown()` disarms the supervisor so an intentional
+    // quit never schedules a zombie relaunch.
+    private var supervisor = DaemonSupervisor()
+    /// True while an intentional `shutdown()` is in flight — the termination
+    // handler treats it as a no-op restart trigger.
+    private var isStoppingIntentionally = false
+    /// The pending backoff+relaunch Task, cancelled on shutdown.
+    private var pendingRestartTask: Task<Void, Never>?
+    /// Optional clock/sleeper injection so the restart path is unit-testable
+    // without real sleeps. Production leaves them nil → wall clock + real sleep.
+    private let supervisorClock: DaemonSupervisorClock?
+    private let supervisorSleeper: DaemonSupervisorSleeper?
+
+    /// Published by the engine whenever the daemon endpoints change (initial
+    // connect, supervised restart reconnect, or nil on loss/exhaustion). FaeCore
+    // owns `DaemonEndpointStore.shared.set(...)` + TTS reconnection + the loud
+    // MLX fallback — the engine does NOT touch those globals directly.
+    //
+    // `nonisolated(unsafe)`: set ONCE at construction (before any daemon
+    // launch / terminationHandler fire) and read from within the actor. The
+    // closure is `@Sendable` so the detached `Task` that invokes it crosses
+    // isolation safely.
+    nonisolated(unsafe) var onEndpointsChanged: (@Sendable ((socketPath: String, tokenPath: String)?) async -> Void)?
+    /// Fired exactly once when bounded restarts are exhausted, so FaeCore/App
+    // can surface a Retry/Quit (loud fallback, never silent suppression). Same
+    // `nonisolated(unsafe)` set-once contract as `onEndpointsChanged`.
+    nonisolated(unsafe) var onRestartExhausted: (@Sendable () async -> Void)?
+
     /// Seconds to wait for the daemon socket. Model load can take minutes on
     /// first launch (weights download + load), so this is deliberately long.
     private static let socketWaitTimeoutSeconds: TimeInterval = 600
@@ -807,13 +842,22 @@ actor DaemonLLMEngine: LLMEngine {
         modelID: String,
         eventBus: FaeEventBus? = nil,
         audioFallbackTranscriber: AudioFallbackTranscribing? = nil,
-        audioFallbackMode: AudioFallbackMode = .fromEnvironment()
+        audioFallbackMode: AudioFallbackMode = .fromEnvironment(),
+        supervisorClock: DaemonSupervisorClock? = nil,
+        supervisorSleeper: DaemonSupervisorSleeper? = nil
     ) {
         self.configuredBinaryPath = binaryPath
         self.daemonModelID = modelID
         self.eventBus = eventBus
         self.audioFallbackTranscriber = audioFallbackTranscriber
         self.audioFallbackMode = audioFallbackMode
+        self.supervisorClock = supervisorClock
+        self.supervisorSleeper = supervisorSleeper
+        // If a test injects a clock, the supervisor uses it (so stable-run
+        // accounting is testable); otherwise it uses the wall clock.
+        if let clock = supervisorClock {
+            self.supervisor = DaemonSupervisor(clock: clock)
+        }
     }
 
     deinit {
@@ -1539,6 +1583,24 @@ actor DaemonLLMEngine: LLMEngine {
             "DaemonLLMEngine: launched fae-daemon pid %d (FAE_MODEL_ID=%@)",
             daemonProcess.processIdentifier, daemonModelID)
 
+        // B-Swift Phase B: arm the crash supervisor. The terminationHandler
+        // fires on ANY exit (crash, intentional `terminate()`, clean exit).
+        // It hops back into THIS actor so it never touches actor state off-actor;
+        // `handleDaemonExit` then asks the supervisor whether to relaunch (crash)
+        // or no-op (intentional stop). Set BEFORE the connect loop so a crash
+        // during socket-wait is still supervised.
+        daemonProcess.terminationHandler = { [weak self] terminated in
+            let status = terminated.terminationStatus
+            Task { [weak self] in
+                await self?.handleDaemonExit(status: status)
+            }
+        }
+        // Record the launch baseline for stable-run accounting. A run that
+        // stays alive ≥ `stableRunInterval` resets the crash counter.
+        supervisor.recordLaunch()
+        // Clear any prior intentional-stop disarm — a fresh launch re-arms.
+        isStoppingIntentionally = false
+
         // Resolve socket/token paths: parse the daemon's startup stdout, fall
         // back to the platform default run directory.
         let defaultRunDir = Self.defaultRunDirectory
@@ -1630,12 +1692,33 @@ actor DaemonLLMEngine: LLMEngine {
 
         connection = establishedConnection
         endpoints = (socketPath: socketPath, tokenPath: tokenPath)
+        // B-Swift Phase B: publish live endpoints to FaeCore (initial connect
+        // AND every supervised reconnect) so it updates DaemonEndpointStore +
+        // reconnects the TTS lane. A nil publish (loss/exhaustion) happens in
+        // `handleDaemonExit` / `internalShutdown`.
+        await onEndpointsChanged?(endpoints)
     }
 
     private func internalShutdown() {
+        // B-Swift Phase B: disarm the supervisor FIRST so the terminationHandler
+        // (fired by `process.terminate()` below) treats the exit as intentional
+        // and does NOT schedule a zombie relaunch. Cancel any pending backoff.
+        isStoppingIntentionally = true
+        supervisor.recordIntentionalStop()
+        pendingRestartTask?.cancel()
+        pendingRestartTask = nil
+
         connection?.close()
         connection = nil
+        // Publish endpoint loss so FaeCore clears DaemonEndpointStore + drops
+        // the TTS lane (no orphan connections to a dead daemon). Fire-and-await
+        // via a detached copy of the closure value so clearing `endpoints` below
+        // can't race the callback; the callback is FaeCore's own @Sendable.
+        let lostEndpoints = endpoints
         endpoints = nil
+        if let cb = onEndpointsChanged, lostEndpoints != nil {
+            Task { await cb(nil) }
+        }
         if let process {
             if process.isRunning {
                 process.terminate()
@@ -1643,5 +1726,154 @@ actor DaemonLLMEngine: LLMEngine {
             DaemonProcessRegistry.unregister(process.processIdentifier)
         }
         process = nil
+    }
+
+    // MARK: - B-Swift Phase B: supervised crash recovery
+
+    /// Called from the daemon process's `terminationHandler` (hopped back into
+    /// this actor). Decides whether the exit was intentional (no-op —
+    /// `internalShutdown` disarmed the supervisor) or a crash to be supervised
+    /// (bounded restart with backoff, or exhaustion → loud fallback). The
+    /// daemon's socket-wait loop in `launchAndConnect` is NOT re-entered here:
+    /// a supervised relaunch goes through `performSupervisedRestart`, which
+    /// re-runs the same launch+connect sequence and republishes endpoints.
+    ///
+    /// `load()` (the initial start) is unaffected — it throws on failure so
+    // `FaeCore` falls back to MLX; supervision only covers POST-startup exits.
+    private func handleDaemonExit(status: Int32) {
+        // Intentional stop (shutdown) — the supervisor is disarmed; do nothing.
+        // A clean exit (status 0) without an intentional stop is still treated
+        // as unexpected (the daemon should run for the app lifetime); supervising
+        // it is correct.
+        guard !isStoppingIntentionally else { return }
+
+        // Tear down the dead connection/process state, unregister the PID, and
+        // publish endpoint loss BEFORE deciding on a restart.
+        connection?.close()
+        connection = nil
+        if let process {
+            DaemonProcessRegistry.unregister(process.processIdentifier)
+        }
+        process = nil
+        let lostEndpoints = endpoints
+        endpoints = nil
+        if let cb = onEndpointsChanged, lostEndpoints != nil {
+            Task { await cb(nil) }
+        }
+
+        NSLog("DaemonLLMEngine: fae-daemon exited unexpectedly (status=%d)", status)
+
+        switch supervisor.decideOnUnexpectedExit() {
+        case .restart(let delay, let attempt):
+            NSLog(
+                "DaemonLLMEngine: scheduling supervised restart %d/%d in %.0fs",
+                attempt, DaemonRestartPolicy.default.maxRestartAttempts, delay)
+            scheduleRestart(delaySeconds: delay)
+        case .exhausted:
+            // Bounded restarts exhausted (the TRANSITION). Fail loud: mark the
+            // lane failed and fire the exhaustion callback ONCE so FaeCore/App
+            // surfaces Retry/Quit + the loud MLX fallback. Never silently
+            // suppress. (`.alreadyExhausted` returns below are a no-op — the
+            // callback already fired.)
+            loadState = .failed("fae-daemon crashed and bounded restart is exhausted")
+            NSLog(
+                "DaemonLLMEngine: supervised restart exhausted — surfacing Retry/Quit + loud MLX fallback")
+            if let cb = onRestartExhausted {
+                Task { await cb() }
+            }
+        case .alreadyExhausted:
+            // Post-exhaustion repeat exit — terminal no-op (callback already fired).
+            break
+        }
+    }
+
+    /// Schedule a supervised restart after `delaySeconds` of backoff. Cancels
+    /// any prior pending restart (only one in flight). Uses the injected sleeper
+    /// in tests, the real sleeper in production. The relaunch itself re-runs the
+    /// full launch+connect sequence (new PID, new socket, new auth) and
+    /// republishes endpoints on success.
+    private func scheduleRestart(delaySeconds: TimeInterval) {
+        pendingRestartTask?.cancel()
+        let sleeper = supervisorSleeper ?? RealDaemonSupervisorSleeper()
+        pendingRestartTask = Task { [weak self] in
+            await sleeper.sleep(seconds: delaySeconds)
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            await self.performSupervisedRestart()
+        }
+    }
+
+    /// Re-run the launch+connect sequence after a supervised restart decision.
+    /// On success: the process gets a fresh `terminationHandler` (in
+    /// `launchAndConnect`), endpoints are republished (via `onEndpointsChanged`
+    /// at the end of `launchAndConnect`), and the lane returns to `.loaded`.
+    /// On failure: decrement-and-retry by asking the supervisor again (a failed
+    /// relaunch counts as another crash); on exhaustion, fail loud.
+    private func performSupervisedRestart() {
+        guard !isStoppingIntentionally else { return }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            return
+        }
+        // Re-arm the intentional-stop clear + relaunch. `launchAndConnect`
+        // sets a fresh terminationHandler + records the launch.
+        let launchTask = Task { () -> Bool in
+            do {
+                try await self.launchAndConnect()
+                self.loadState = .loaded
+                NSLog("DaemonLLMEngine: supervised restart SUCCEEDED — daemon lane restored")
+                return true
+            } catch {
+                NSLog(
+                    "DaemonLLMEngine: supervised restart FAILED — %@",
+                    error.localizedDescription)
+                return false
+            }
+        }
+        // Drive the launch task and chain the exhaustion path if it fails. We
+        // can't `await` here (this method is non-async to keep the call site
+        // simple); spawn a driver Task that hops back into the actor.
+        Task { [weak self] in
+            let ok = await launchTask.value
+            guard let self else { return }
+            await self.handleRestartOutcome(success: ok)
+        }
+        pendingRestartTask = nil
+    }
+
+    /// Post-relaunch accounting: on success the lane is `.loaded` (set above);
+    // on failure, treat it as another unexpected exit so the bounded-restart
+    // policy continues toward exhaustion.
+    private func handleRestartOutcome(success: Bool) {
+        if success { return }
+        // The relaunch failed — recurse through the decision path. The
+        // supervisor already incremented `restartAttempts` for the attempt that
+        // just failed; deciding again either schedules the next retry or
+        // exhausts.
+        switch supervisor.decideOnUnexpectedExit() {
+        case .restart(let delay, _):
+            scheduleRestart(delaySeconds: delay)
+        case .exhausted:
+            loadState = .failed("fae-daemon crashed and bounded restart is exhausted")
+            NSLog(
+                "DaemonLLMEngine: supervised restart exhausted after failed relaunch — loud fallback")
+            if let cb = onRestartExhausted {
+                Task { await cb() }
+            }
+        case .alreadyExhausted:
+            break
+        }
+    }
+
+    /// Public reset for the Retry alert action after exhaustion: clears the
+    /// crash counter, re-arms supervision, and attempts a fresh load.
+    /// `FaeCore`/App calls this from the Retry button. Throws on failure (the
+    // caller may then keep the loud MLX fallback).
+    func retryAfterExhausted(modelID: String) async throws {
+        supervisor.retryAfterExhausted()
+        isStoppingIntentionally = false
+        loadState = .notStarted
+        try await load(modelID: modelID)
     }
 }

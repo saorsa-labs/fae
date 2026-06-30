@@ -359,6 +359,28 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// B-Swift Phase B: shown when fae-daemon has crashed repeatedly and
+    /// bounded automatic restarts are exhausted. The pipeline stays on the
+    /// loud in-process MLX fallback meanwhile. Offer Retry (re-launch the
+    /// daemon lane) or Quit (MLX keeps running either way, but Quit is offered
+    /// for parity with the orb-host flow). Never silent.
+    @MainActor
+    private func presentDaemonExhaustionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Fae's daemon stopped working"
+        alert.informativeText = "The local model daemon crashed repeatedly and could not be restarted automatically. Fae is running on the backup engine. You can try again, or quit Fae."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Retry")
+        alert.addButton(withTitle: "Quit Fae")
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            Task { await faeCore.retryDaemonAfterExhausted() }
+        } else {
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
     private func prefillFaePrompt(_ text: String) {
         // The legacy Swift composer is gone; route help prompts through the
         // same typed-input path used by the orb host's Messages composer.
@@ -546,6 +568,19 @@ class FaeAppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.faeCore.cancel()
+            }
+        }
+
+        // B-Swift Phase B: fae-daemon crash-restart exhaustion → Retry/Quit.
+        // The daemon LLM lane is dead; the pipeline stays on the loud in-process
+        // MLX fallback. Offer Retry (re-launch the daemon lane) or Quit.
+        NotificationCenter.default.addObserver(
+            forName: .faeDaemonRestartExhausted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.presentDaemonExhaustionAlert()
             }
         }
 
