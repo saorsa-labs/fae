@@ -48,6 +48,19 @@ actor DaemonToolHostSession {
     /// `~/Documents/Fae`; tests inject a temp-dir provider.
     private let workspaceProvider: FaeWorkspaceProvider
 
+    /// Whether the daemon is the intended runtime for this session
+    /// (`FaeConfig.llm.useDaemonEngine`). Gates the no-daemon fallback policy
+    /// (B-Swift follow-up #2): when the daemon is intended but momentarily
+    /// unreachable, routed `read`s confine LOCALLY to the workspace (the
+    /// "reads are confined to `~/Documents/Fae`" invariant holds whether or
+    /// not the daemon is up, and the `read` capability is preserved during
+    /// outages); when the daemon is explicitly opted out (`useDaemonEngine ==
+    /// false`, e.g. CI / pure-MLX), reads fall through to legacy UNCONFINED
+    /// local behavior (pre-3b), which avoids provisioning `~/Documents/Fae`
+    /// as a side effect in non-injecting test suites. `nonisolated` + Sendable
+    /// `Bool` ⇒ readable off-actor without `await`.
+    nonisolated let daemonIntended: Bool
+
     /// - Parameters:
     ///   - serverRequestHandler: defaults to the real governance handler
     ///     (`DaemonAgentClient.handleServerRequest`). Tests inject a fake that
@@ -56,13 +69,19 @@ actor DaemonToolHostSession {
     ///   - workspaceProvider: the default workspace to root against AND confine
     ///     routed-tool paths to. Defaults to `~/Documents/Fae`; tests inject a
     ///     temp-dir provider.
+    ///   - daemonIntended: mirrors `FaeConfig.llm.useDaemonEngine`. The
+    ///     production construction site (`PipelineCoordinator`) passes the
+    ///     config-derived value; tests pass `false` to exercise the opted-out
+    ///     legacy fallback. Defaults to `true` to match the config default.
     init(
         serverRequestHandler: @escaping DaemonServerRequestHandler =
             DaemonAgentClient.handleServerRequest,
-        workspaceProvider: FaeWorkspaceProvider = DefaultDocumentsWorkspace()
+        workspaceProvider: FaeWorkspaceProvider = DefaultDocumentsWorkspace(),
+        daemonIntended: Bool = true
     ) {
         self.serverRequestHandler = serverRequestHandler
         self.workspaceProvider = workspaceProvider
+        self.daemonIntended = daemonIntended
     }
 
     // MARK: - Lifecycle
@@ -334,6 +353,61 @@ actor DaemonToolHostSession {
             // Daemon up but errored (root denial, path escape caught
             // server-side, etc.) — do NOT fall back; surface the error.
             return .failClosed("Daemon read failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Confined LOCAL read fallback for the no-daemon-but-intended branch
+    /// (B-Swift follow-up #2: daemon intended but momentarily unreachable).
+    ///
+    /// Provisions the default workspace LOCALLY (idempotent,
+    /// #1-symlink-guarded via `FaeWorkspace.provision`), confines the already
+    /// shape-validated path against that LOCAL root, and returns the canonical
+    /// path for the caller to read via `ReadTool`. Does **NOT** mutate
+    /// `approvedRootPath` — the daemon root guard never ran, so this is a local
+    /// confinement against the provisioned default (the universal "reads are
+    /// confined to `~/Documents/Fae`" invariant), NOT a daemon-approved root.
+    ///
+    /// `.preExistingWithoutMarker` fails closed: no daemon card is available to
+    /// approve a user-made dir, so we never silently read through (or take over)
+    /// a dir Fae did not create. A symlinked default root is hard-denied inside
+    /// `FaeWorkspace.provision` before any confinement/read.
+    ///
+    /// This is the counterpart of `executeSerializedRoutedRead` for the
+    /// daemon-down case; it reuses the SAME confinement helper
+    /// (`DaemonToolRouting.confineValidatedReadPath`) so the confinement rules
+    /// are identical whether the daemon is up or down.
+    func confinedLocalReadFallback(
+        validatedPath: String
+    ) -> DaemonToolRouting.ReadExecutionOutcome {
+        let provisioned: FaeWorkspace.ProvisionOutcome
+        do {
+            provisioned = try FaeWorkspace.provision(workspaceProvider)
+        } catch {
+            // Includes `symlinkedWorkspaceRoot` (fail-closed) + any lstat/IO
+            // error during provisioning.
+            return .failClosed(
+                "Could not provision the local workspace for a confined read: "
+                + "\(error.localizedDescription)")
+        }
+        switch provisioned {
+        case .provisioned(let url), .alreadyOwned(let url):
+            // Fae owns the dir → confine the validated path against it. Same
+            // helper + rules as the daemon path (existence, regular-file,
+            // symlink-escape, `..`). The daemon root guard is absent here, so
+            // do NOT bind `approvedRootPath`; confinement alone is the guard.
+            switch DaemonToolRouting.confineValidatedReadPath(validatedPath, root: url) {
+            case .deny(let reason):
+                return .denied(reason)
+            case .route(_, let canonical):
+                return .fallbackLocally(canonical)
+            }
+        case .preExistingWithoutMarker:
+            // A user-made dir with no Fae marker, and the daemon (the only
+            // authority that can surface the confirm card) is down. Fail closed
+            // rather than silently reading through or taking it over.
+            return .failClosed(
+                "Fae's default workspace exists but was not created by Fae, and "
+                + "the daemon is unavailable to approve it; refusing to read locally.")
         }
     }
 

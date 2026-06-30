@@ -49,8 +49,13 @@ actor ToolExecutor: ToolExecutorProtocol {
 
     /// The long-lived daemon ToolHost session (B-Swift Layer 2). Layer 3b routes
     /// `read` through it, confined to the default workspace. Non-optional: one
-    /// instance per executor/pipeline, defaulting to a real-handler session. An
-    /// absent daemon degrades to pre-3b local reads inside `DaemonToolRouting`.
+    /// instance per executor/pipeline. When the production caller
+    /// (`PipelineCoordinator`) does not inject one, it is built from
+    /// `daemonIntendedForToolhostRouting` (which mirrors
+    /// `FaeConfig.llm.useDaemonEngine`) so the no-daemon fallback policy is
+    /// config-driven, not a silent default. An absent daemon then degrades to
+    /// a CONFINED local read (intended) or legacy local read (opted out) inside
+    /// `DaemonToolRouting`.
     let daemonToolHostSession: DaemonToolHostSession
 
     // MARK: - Constants
@@ -71,7 +76,8 @@ actor ToolExecutor: ToolExecutorProtocol {
         toolAnalytics: ToolAnalytics? = nil,
         delegate: (any ToolExecutorDelegate)? = nil,
         debugConsole: DebugConsoleController? = nil,
-        daemonToolHostSession: DaemonToolHostSession = DaemonToolHostSession()
+        daemonIntendedForToolhostRouting: Bool = true,
+        daemonToolHostSession: DaemonToolHostSession? = nil
     ) {
         self.registry = registry
         self.damageControlPolicy = damageControlPolicy
@@ -80,7 +86,14 @@ actor ToolExecutor: ToolExecutorProtocol {
         self.toolAnalytics = toolAnalytics
         self.delegate = delegate
         self.debugConsole = debugConsole
+        // If the caller injects a session (tests do, with a temp workspace
+        // provider + an explicit `daemonIntended`), use it as-is — its own
+        // `daemonIntended` governs the fallback branch. Otherwise build one
+        // from the config-derived flag (production: `runtimeConfig.llm.
+        // useDaemonEngine`). This keeps the intent explicit at every production
+        // construction site rather than relying on a silent default.
         self.daemonToolHostSession = daemonToolHostSession
+            ?? DaemonToolHostSession(daemonIntended: daemonIntendedForToolhostRouting)
     }
 
     /// Wire the delegate after init (since `self` is not available during actor init).
@@ -245,8 +258,14 @@ actor ToolExecutor: ToolExecutorProtocol {
         // daemon-routed read is governed by the daemon (path/damage/egress + its
         // own tool.confirm) and never double-approved in Swift. write/edit/bash
         // stay local (Layer 4 provisions the dangerous scope; bash blast radius
-        // is too high for the substring denylist). Returns nil when no daemon is
-        // reachable → fall through to the local pipeline (pre-3b behavior).
+        // is too high for the substring denylist).
+        //
+        // No-daemon fallback (follow-up #2, gated on `daemonIntended` =
+        // `FaeConfig.llm.useDaemonEngine`): a reachable daemon routes as below;
+        // an unreachable daemon returns `nil` ONLY when opted out (legacy
+        // unconfined local read), and otherwise confines the read LOCALLY so the
+        // "reads are confined to ~/Documents/Fae" invariant survives outages.
+        // See `DaemonToolRouting.routeRead` for the branch logic.
         if DaemonToolRouting.routedTools.contains(call.name) {
             if let routed = await DaemonToolRouting.routeRead(
                 call: call, session: daemonToolHostSession)
@@ -258,7 +277,8 @@ actor ToolExecutor: ToolExecutorProtocol {
                     latencyMs: nil
                 )
             }
-            // nil → no daemon reachable: fall through to the local pipeline.
+            // nil → opted-out + no daemon: fall through to the local pipeline
+            // (legacy pre-routing local read, unconfined).
         }
 
         // ── 7. DamageControlPolicy ──────────────────────────────────────

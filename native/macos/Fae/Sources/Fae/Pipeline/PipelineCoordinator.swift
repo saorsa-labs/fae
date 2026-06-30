@@ -723,7 +723,8 @@ actor PipelineCoordinator {
             damageControlPolicy: damageControlPolicy,
             securityLogger: securityLogger,
             workflowTraceStore: workflowTraceStore,
-            toolAnalytics: toolAnalytics
+            toolAnalytics: toolAnalytics,
+            daemonIntendedForToolhostRouting: config.llm.useDaemonEngine
         )
 
         // Build keyword spotter config from existing sleep phrases + interrupt triggers.

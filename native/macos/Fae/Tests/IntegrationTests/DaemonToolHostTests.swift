@@ -1316,30 +1316,180 @@ final class DaemonToolHostTests: XCTestCase {
         _ = peer  // daemon published but never contacted by the write
     }
 
-    /// No daemon reachable ⇒ `read` falls back to the LOCAL ReadTool (legacy
-    /// pre-routing behavior). `read` is `.low` risk and was always local. This
-    /// uses the ORIGINAL path (not workspace-confined) — distinct from the
-    /// daemon-involved fail-closed path in `testReadFailsClosedWhenDaemon…`.
-    func testReadFallsBackToLocalWhenDaemonDown() async throws {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        try Data("local content".utf8).write(to: tmp.appendingPathComponent("fallback.txt"))
+    // MARK: - B-Swift follow-up #2: no-daemon fallback is intent-gated
+    //
+    // `read` with no daemon reachable branches on `session.daemonIntended`
+    // (mirrors `FaeConfig.llm.useDaemonEngine`):
+    //   - OPTED OUT (false, CI / pure-MLX): legacy UNCONFINED local read with
+    //     the original args (absolute paths allowed; no provisioning).
+    //   - INTENDED (true, default-bundled runtime): CONFINED local read against
+    //     the provisioned default workspace (universal invariant preserved,
+    //     capability preserved, provisioning fires only here).
+    //   - pre-existing-without-marker + intended + no daemon → fail closed.
+
+    /// OPTED OUT + no daemon ⇒ legacy UNCONFINED local read. An ABSOLUTE path
+    /// outside the workspace succeeds (the routing seam returns `nil` BEFORE
+    /// shape validation, so the local `ReadTool` reads the original args), and
+    /// the workspace root is NOT provisioned (no side effect). Distinct from the
+    /// intended-but-down confined path below.
+    func testReadOptedOutFallsBackToLegacyLocalWhenDaemonDown() async throws {
+        // A file OUTSIDE the (never-created) workspace root.
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-outside-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("local content".utf8).write(to: outside.appendingPathComponent("fallback.txt"))
+
+        // A workspace root that does NOT exist — proves no provisioning fires.
+        let wsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: wsRoot) }
 
         // No daemon published.
         await clearDaemonEndpoints()
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: wsRoot),
+            daemonIntended: false
+        )
+        defer { Task { await session.close() } }
         let executor = ToolExecutor(
             registry: ToolRegistry(tools: [ReadTool()]),
             damageControlPolicy: DamageControlPolicy(),
-            securityLogger: SecurityEventLogger.shared
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+        // Absolute path outside the workspace — legitimate in legacy mode.
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": outside.appendingPathComponent("fallback.txt").path]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError, "opted-out local read should succeed (legacy unconfined)")
+        XCTAssertEqual(outcome.result.output, "local content")
+        // No provisioning side effect: the workspace root was never created.
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: wsRoot.path),
+            "opted-out read must not provision the workspace root")
+    }
+
+    /// INTENDED + no daemon ⇒ CONFINED local read. A relative path inside the
+    /// provisioned workspace succeeds; an ABSOLUTE path and a `..` escape are
+    /// DENIED at the routing seam (the universal invariant holds even with the
+    // daemon down). The provisioning side effect fires (workspace + marker).
+    func testReadIntendedButDownConfinesLocally() async throws {
+        let wsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-ws-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: wsRoot) }
+        try FileManager.default.createDirectory(at: wsRoot, withIntermediateDirectories: true)
+        try Data("confined content".utf8).write(to: wsRoot.appendingPathComponent("notes.txt"))
+        // Mark it Fae-owned so provisioning is a no-op (alreadyOwned) and the
+        // test exercises the confine+read path, not the provisioning path
+        // (that is covered separately below).
+        try FaeWorkspace.writeMarker(at: wsRoot)
+
+        await clearDaemonEndpoints()
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: wsRoot),
+            daemonIntended: true
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        // Relative path inside the workspace → confined local read succeeds.
+        let ok = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertFalse(ok.result.isError, "intended-but-down confined read should succeed")
+        XCTAssertEqual(ok.result.output, "confined content")
+
+        // Absolute path → DENIED at the shape gate (confinement holds).
+        let abs = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "/etc/passwd"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertTrue(abs.result.isError, "absolute path must be denied (confined)")
+
+        // `..` escape → DENIED at the shape gate.
+        let esc = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "../../../etc/passwd"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertTrue(esc.result.isError, "traversal path must be denied (confined)")
+    }
+
+    /// Provisioning side effect fires ONLY in the intended branch. INTENDED +
+    /// no daemon + a missing workspace root provisions it (marker written) even
+    /// when the read itself is denied (file not found). OPTED OUT leaves the
+    /// root absent.
+    func testReadIntendedButDownProvisionsWorkspaceMarker() async throws {
+        // --- intended branch: provisioning fires ---
+        let wsIntended = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-int-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: wsIntended) }
+        // wsIntended does NOT exist yet.
+        await clearDaemonEndpoints()
+        let sessionIntended = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: wsIntended),
+            daemonIntended: true
+        )
+        defer { Task { await sessionIntended.close() } }
+        let executorIntended = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: sessionIntended
+        )
+        // Read a file that does not exist → the read is denied (file not found),
+        // but provisioning MUST have created the workspace + marker first.
+        let denied = await executorIntended.execute(
+            ToolCall(name: "read", arguments: ["path": "missing.txt"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertTrue(denied.result.isError, "missing file must be denied")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: wsIntended.path),
+            "intended branch must provision the workspace root")
+        XCTAssertTrue(
+            FaeWorkspace.markerPresent(at: wsIntended),
+            "intended branch must write the ownership marker")
+    }
+
+    /// INTENDED + no daemon + a pre-existing workspace WITHOUT the Fae marker ⇒
+    /// fail CLOSED. No daemon card is available to approve a user-made dir, so
+    /// the confined fallback refuses (no silent takeover, no read). The marker
+    /// is NOT written and the precious file is NOT exfiltrated.
+    func testReadIntendedButDownPreExistingWithoutMarkerFailsClosed() async throws {
+        let wsRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-pre-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: wsRoot) }
+        // A user-made dir (NO marker) with a precious file.
+        try FileManager.default.createDirectory(at: wsRoot, withIntermediateDirectories: true)
+        try Data("precious".utf8).write(to: wsRoot.appendingPathComponent("mine.txt"))
+
+        await clearDaemonEndpoints()
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: wsRoot),
+            daemonIntended: true
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
         )
         let outcome = await executor.execute(
-            ToolCall(name: "read", arguments: ["path": tmp.appendingPathComponent("fallback.txt").path]),
+            ToolCall(name: "read", arguments: ["path": "mine.txt"]),
             context: makeFullContext(), callbacks: .noop)
-        XCTAssertFalse(outcome.result.isError, "local fallback read should succeed")
-        XCTAssertEqual(outcome.result.output, "local content")
+        XCTAssertTrue(outcome.result.isError, "pre-existing-without-marker must fail closed when daemon is down")
+        XCTAssertFalse(
+            FaeWorkspace.markerPresent(at: wsRoot),
+            "must NOT write the marker on a user-made dir without approval")
+        // The precious file is untouched (no exfiltration).
+        let stillThere = try String(contentsOfFile: wsRoot.appendingPathComponent("mine.txt").path, encoding: .utf8)
+        XCTAssertEqual(stillThere, "precious")
     }
+
 
     /// A `read` with an escaping path (absolute / `..`) is DENIED at the Swift
     /// seam via the REAL `ToolExecutor.execute` path: no `set_root`, no

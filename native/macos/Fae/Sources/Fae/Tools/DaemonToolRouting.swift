@@ -24,9 +24,20 @@ import Foundation
 //      daemon approved).
 //   3. `tool.confirm` is never auto-approved by routing (routing does not touch
 //      approval at all for `read`; `read` is safe-scope and needs no confirm).
-//   4. No daemon reachable ⇒ the read is NOT routed. It falls through to the
-//      existing local `ReadTool` (`read` is `.low` risk and was always local) —
-//      the legacy, UNCONFINED pre-routing path (deliberate; see follow-ups).
+//   4. No daemon reachable ⇒ mode-dependent (B-Swift follow-up #2, gated on
+//      `session.daemonIntended` = `FaeConfig.llm.useDaemonEngine`):
+//        - INTENDED-but-down (default-bundled runtime): the read is CONFINED
+//          LOCALLY to the provisioned default workspace (`read` capability is
+//          preserved, the universal "reads are confined to ~/Documents/Fae"
+//          invariant holds during outages). Provisioning fires only here.
+//        - OPTED OUT (`useDaemonEngine == false`, CI / pure-MLX): the read
+//          falls through to the existing local `ReadTool` with the ORIGINAL
+//          args — the legacy, UNCONFINED pre-routing path (no provisioning
+//          side effect in non-injecting test suites).
+//      Either branch is logged (never silent). The invariant that NEVER
+//      changes: when the daemon is involved but drops before root approval,
+//      the read FAILS CLOSED — it never reads locally on a locally-computed
+//      root that bypasses the server root guard.
 
 /// The Layer 3b routing classifier + `read`-path confinement helper.
 ///
@@ -192,16 +203,22 @@ enum DaemonToolRouting {
 
     /// Route a `read` tool call to the daemon, confined to the default workspace.
     ///
-    /// Two distinct no-daemon policies (do not conflate them):
-    /// - **No daemon published** (`isDaemonReachable() == false`): returns `nil`
+    /// Three distinct no-daemon / daemon-loss policies (do not conflate them):
+    /// - **No daemon published + opted OUT** (`isDaemonReachable() == false` AND
+    ///   `session.daemonIntended == false`, e.g. CI / pure-MLX): returns `nil`
     ///   so the caller falls through to the existing local `ReadTool` pipeline
     ///   with the ORIGINAL arguments. This is **legacy pre-routing local read**
     ///   (`read` is `.low` risk and was always local) — it is NOT workspace-
     ///   confined, and it avoids provisioning `~/Documents/Fae` as a side effect
-    ///   in non-injecting test suites. **DECISION (follow-up #2, 2026-06-30):**
-    ///   once a routing gate lands, this branch becomes mode-dependent —
-    ///   confined-local when the daemon is intended-but-down, legacy when opted
-    ///   out. Not yet implemented; see `docs/plans/bswift-3b-followups-2026-06-30.md`.
+    ///   in non-injecting test suites. Logged (never silent).
+    /// - **No daemon published + INTENDED** (`isDaemonReachable() == false` AND
+    ///   `session.daemonIntended == true`, the default-bundled runtime): the
+    ///   read is **confined LOCALLY** to the workspace via
+    ///   `confinedLocalReadFallback`. The universal "reads are confined to
+    ///   `~/Documents/Fae`" invariant holds whether or not the daemon is up, and
+    ///   the `read` capability is preserved during daemon outages (no
+    ///   regression). The provisioning side effect fires ONLY in this branch.
+    ///   Logged (never silent). (B-Swift follow-up #2, 2026-06-30.)
     /// - **Daemon involved but the root was never approved** (daemon dropped
     ///   during `ensureDefaultRooted`): fail CLOSED — `.failClosed`. Never read
     ///   locally on a locally-computed root that bypasses the server root guard.
@@ -212,27 +229,61 @@ enum DaemonToolRouting {
         call: ToolCall,
         session: DaemonToolHostSession
     ) async -> ToolResult? {
-        // No daemon published ⇒ NOT routed. Return nil so the caller falls through
-        // to the local pipeline (legacy pre-routing local read — see above).
-        guard await session.isDaemonReachable() else { return nil }
+        let reachable = await session.isDaemonReachable()
 
+        // Opted-out + no daemon (useDaemonEngine == false, e.g. CI / pure-MLX):
+        // preserve the legacy UNCONFINED local read. Return nil BEFORE shape
+        // validation so a legacy absolute path (legitimate when the daemon is
+        // not the runtime and there is no workspace root) is not rejected at
+        // the routing seam — the local `ReadTool` reads the original args as-is.
+        // No provisioning side effect. Logged (never silent).
+        if !reachable, !session.daemonIntended {
+            NSLog(
+                "DaemonToolRouting: daemon unreachable and useDaemonEngine=false "
+                + "(opted out) → legacy local read (unconfined, pre-routing behavior)")
+            return nil
+        }
+
+        // Either the daemon is reachable, or it is intended-but-down (confined
+        // local fallback). Both paths CONFINEMENT, so require + shape-validate
+        // the path now. Shape validation needs no daemon contact: absolute / `..`
+        // / NUL / empty are denied without rooting the session or sending a frame.
         guard let requested = call.arguments["path"] as? String else {
             return .error("Missing required parameter: path")
         }
-
-        // Shape validation FIRST — no daemon contact. Absolute / `..` / NUL /
-        // empty are denied without rooting the session or sending any frame.
         let validated: String
         switch validateReadPathShape(requested) {
         case .deny(let reason): return .error(reason)
         case .ok(let trimmed): validated = trimmed
         }
 
-        // Serialized daemon interaction: root FIRST (binds the daemon-approved
-        // root), then confine against THAT root (root-binding-order), then
-        // execute. One operation lock prevents concurrent routed reads from
-        // interleaving frames on the shared connection.
-        let outcome = await session.executeSerializedRoutedRead(validatedPath: validated)
+        if reachable {
+            // Serialized daemon interaction: root FIRST (binds the daemon-
+            // approved root), then confine against THAT root (root-binding-
+            // order), then execute. One operation lock prevents concurrent
+            // routed reads from interleaving frames on the shared connection.
+            let outcome = await session.executeSerializedRoutedRead(validatedPath: validated)
+            return await mapReadOutcome(outcome)
+        }
+
+        // Intended-but-down (the default-bundled runtime's live failure mode).
+        // Confine LOCALLY so the "reads are confined to ~/Documents/Fae"
+        // invariant survives the outage and the `read` capability is preserved.
+        // Provisioning fires only here. `daemonIntended` is a `nonisolated let
+        // Bool` ⇒ readable off-actor without `await`.
+        NSLog(
+            "DaemonToolRouting: daemon unreachable and useDaemonEngine=true "
+            + "(intended) → confined local read (universal invariant preserved)")
+        let fallback = await session.confinedLocalReadFallback(validatedPath: validated)
+        return await mapReadOutcome(fallback)
+    }
+
+    /// Map a `ReadExecutionOutcome` (from either the serialized daemon path or
+    /// the confined-local fallback) to a Swift `ToolResult`. Shared so the two
+    /// paths surface identical result shapes.
+    private static func mapReadOutcome(
+        _ outcome: ReadExecutionOutcome
+    ) async -> ToolResult {
         switch outcome {
         case .routed(let result):
             return buildReadResult(from: result)
