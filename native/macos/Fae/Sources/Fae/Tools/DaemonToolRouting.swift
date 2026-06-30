@@ -163,6 +163,14 @@ enum DaemonToolRouting {
         guard (st.st_mode & S_IFMT) == S_IFREG else {
             return .deny("read supports regular files only (non-regular entry: \(validated))")
         }
+        // B-Swift Phase C / follow-up #3 (LOCKED 2026-06-30): reject multiple
+        // hard links as defense-in-depth early-reject (a hardlinked secret under
+        // the workspace would exfiltrate). Path-based here (lstat); the
+        // authoritative check is the fluers daemon read's post-open fstat (C1a),
+        // with `readFdAnchored`'s fd-anchored fstat the stronger Swift check.
+        guard st.st_nlink <= 1 else {
+            return .deny("multiple hard links — can't safely confine: \(validated)")
+        }
 
         let relative: String
         if targetCanon == rootCanon {
@@ -283,6 +291,21 @@ enum DaemonToolRouting {
                 return .deny("read path component is not a directory: \(name)")
             }
             if isLeaf {
+                // B-Swift Phase C / follow-up #3 (LOCKED 2026-06-30): reject multiple
+                // hard links — a hardlinked secret under the workspace (`ln
+                // ~/.ssh/id_rsa ~/Documents/Fae/key`) is a regular file that passes
+                // confinement and would exfiltrate the target. `fstat` off the
+                // OPENED leaf fd (no path re-resolution). This is the Swift
+                // authoritative check for the fd-anchored path; the fluers daemon
+                // read's post-open fstat (C1a) is the server-side authority, and
+                // `confineValidatedReadPath`'s lstat-site check is path-based
+                // early-reject defense-in-depth.
+                var leafSt = stat()
+                if Darwin.fstat(opened, &leafSt) == 0, leafSt.st_nlink > 1 {
+                    Darwin.close(opened)
+                    return .deny(
+                        "multiple hard links — can't safely confine: \(validatedPath)")
+                }
                 // Leaf: read from this open fd, then close it. Never re-resolve.
                 defer { Darwin.close(opened) }
                 return readLeaf(fd: opened, validatedPath: validatedPath)

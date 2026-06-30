@@ -1564,6 +1564,87 @@ final class DaemonToolHostTests: XCTestCase {
         }
     }
 
+    /// B-Swift Phase C / follow-up #3 (LOCKED 2026-06-30): a HARDLINK planted
+    /// inside the workspace (`ln ~/.ssh/id_rsa ~/Documents/Fae/key`) is a regular
+    /// file under the workspace, so it passes confinement and would exfiltrate
+    /// the sensitive target. The fd-anchored read must reject `st_nlink > 1` on
+    /// the leaf (defense-in-depth early-reject; the authoritative check is the
+    /// fluers daemon read's post-open fstat — see C1a). Authoritative Swift
+    /// check is the fstat off the opened leaf fd in `readFdAnchored`.
+    func testReadFdAnchoredRejectsHardlinkedSecret() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-hardlink-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+
+        // A legit single-link workspace file still reads (false-positive guard).
+        try Data("ok".utf8).write(to: ws.appendingPathComponent("legit.txt"))
+
+        // A sensitive file OUTSIDE the workspace, hardlinked IN: st_nlink == 2.
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-hardlink-secret-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let secretPath = outside.appendingPathComponent("id_rsa")
+        try Data("TOPSECRET-ssh-key-material".utf8).write(to: secretPath)
+        // Create a hardlink inside the workspace (nlink becomes 2).
+        try FileManager.default.linkItem(at: secretPath, to: ws.appendingPathComponent("key"))
+
+        // Legit read still works.
+        let ok = DaemonToolRouting.readFdAnchored(validatedPath: "legit.txt", root: ws)
+        if case .text(let t) = ok { XCTAssertEqual(t, "ok") } else {
+            XCTFail("legit single-link file should read via the fd anchor")
+        }
+
+        // Hardlinked secret must be DENIED, and its content never returned.
+        let exfil = DaemonToolRouting.readFdAnchored(validatedPath: "key", root: ws)
+        switch exfil {
+        case .text(let t):
+            XCTFail("hardlinked secret must be denied, but read returned: \(t)")
+        case .deny:
+            break  // expected — multiple hard links can't be safely confined
+        }
+    }
+
+    /// Companion to `testReadFdAnchoredRejectsHardlinkedSecret` for the daemon-UP
+    /// routed path: `confineValidatedReadPath` (path-based, used by
+    /// `executeSerializedRoutedRead`) early-rejects `st_nlink > 1` as
+    /// defense-in-depth (authoritative check is the fluers daemon read's
+    /// post-open fstat — C1a).
+    func testConfineRejectsHardlinkedSecret() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-confine-hardlink-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // A legit single-link file still routes (false-positive guard).
+        try Data("ok".utf8).write(to: tmp.appendingPathComponent("legit.txt"))
+        if case .deny = DaemonToolRouting.confineReadPath("legit.txt", root: tmp) {
+            XCTFail("legit single-link file should route")
+        }
+
+        // Sensitive file outside the workspace, hardlinked IN (nlink == 2).
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-confine-hardlink-secret-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let secretPath = outside.appendingPathComponent("id_rsa")
+        try Data("TOPSECRET".utf8).write(to: secretPath)
+        try FileManager.default.linkItem(at: secretPath, to: tmp.appendingPathComponent("key"))
+
+        switch DaemonToolRouting.confineReadPath("key", root: tmp) {
+        case .deny(let reason):
+            XCTAssertTrue(reason.contains("hard link"),
+                          "hardlinked secret must be denied as multiple hard links: \(reason)")
+        case .route:
+            XCTFail("hardlinked secret must be denied (st_nlink > 1 early-reject)")
+        }
+    }
+
     /// A valid UTF-8 file truncated by the byte cap MID-MULTIBYTE-CHARACTER is
     /// returned (shorter) rather than denied as "not UTF-8". The cap is 50 KiB;
     /// build a file whose boundary lands inside a multibyte sequence. The
