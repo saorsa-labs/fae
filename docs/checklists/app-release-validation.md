@@ -27,6 +27,7 @@ Run this full contract when any of the following changes:
 - legacy dual-model or concierge compatibility changes
 - settings that affect loaded models, policy, or diagnostics
 - **learned-conductor surfaces: routing policy/recipes, reward aggregation, shadow routing, the content-aware task classifier, recipe mutation, or the fae-metaopt boundary**
+- **daemon ToolHost routing (B-Swift Layer 3): the `read`-to-daemon routing slice, workspace-root provisioning/auto-approve, path confinement, or the `DaemonToolHostSession` persistent-connection wiring**
 - any release candidate build
 
 ## Required environment
@@ -171,6 +172,24 @@ The Swift main window scenarios remain required while the live pipeline is still
 - [ ] macOS permission prompts are understandable and unblock the intended feature.
 - [ ] Tool access copy is trustworthy and not hallucinatory.
 - [ ] First-use vision turns (`screenshot`, `camera`, `read_screen`) can wait through capture and VLM load/inference without failing on an internal tool timeout.
+
+### Daemon ToolHost routing (B-Swift Layer 3)
+
+Layer 3 makes the governed daemon ToolHost **reachable** on the live app for the
+first time. 3a provisions Fae's default workspace (`~/Documents/Fae`) and
+auto-roots it on a persistent session; 3b routes `read` to the daemon, confined
+to that workspace. `write`/`edit`/`bash` stay local until Layer 4 provisions the
+server-side dangerous scope. Validate the live boundary:
+
+- [ ] A `read` of a file **inside** `~/Documents/Fae` executes in the daemon (governed/audited), and its content returns to the conversation.
+- [ ] A `read` of an **absolute** path, a `..` traversal, or a symlink that escapes the workspace is **denied** with a clear error and never reaches the daemon.
+- [ ] `write`/`edit`/`bash` and Apple/scheduler tools **stay local** — no `toolhost.execute` frame for them.
+- [ ] One persistent daemon session/connection is **reused** across multiple reads (no reconnect per call).
+- [ ] With the daemon **absent** (unbundled / not running), `read` falls back to the existing local behavior (low-risk; was always local).
+- [ ] If the daemon drops **before** the workspace root is approved, the read **fails closed** — never reads locally on an un-approved root that bypasses the server root guard.
+- [ ] The workspace root is the Fae-owned default (`~/Documents/Fae`) — **never inferred from a requested file path** (a `read /etc/passwd` must not become "approve /etc as root").
+- [ ] Routing never auto-approves `tool.confirm` (only the default `workspace.confirm_root` is auto-approved, marker-gated — 3a's job).
+- [ ] No-double-approval: a daemon-routed `read` does not also surface the Swift DamageControl card.
 
 ### Memory, scheduler, and skills
 

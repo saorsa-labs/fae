@@ -47,6 +47,12 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Action receipt store for undo/reversibility. Set after init by FaeCore.
     var receiptStore: ReceiptStore?
 
+    /// The long-lived daemon ToolHost session (B-Swift Layer 2). Layer 3b routes
+    /// `read` through it, confined to the default workspace. Non-optional: one
+    /// instance per executor/pipeline, defaulting to a real-handler session. An
+    /// absent daemon degrades to pre-3b local reads inside `DaemonToolRouting`.
+    let daemonToolHostSession: DaemonToolHostSession
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -64,7 +70,8 @@ actor ToolExecutor: ToolExecutorProtocol {
         workflowTraceStore: WorkflowTraceStore? = nil,
         toolAnalytics: ToolAnalytics? = nil,
         delegate: (any ToolExecutorDelegate)? = nil,
-        debugConsole: DebugConsoleController? = nil
+        debugConsole: DebugConsoleController? = nil,
+        daemonToolHostSession: DaemonToolHostSession = DaemonToolHostSession()
     ) {
         self.registry = registry
         self.damageControlPolicy = damageControlPolicy
@@ -73,6 +80,7 @@ actor ToolExecutor: ToolExecutorProtocol {
         self.toolAnalytics = toolAnalytics
         self.delegate = delegate
         self.debugConsole = debugConsole
+        self.daemonToolHostSession = daemonToolHostSession
     }
 
     /// Wire the delegate after init (since `self` is not available during actor init).
@@ -228,6 +236,29 @@ actor ToolExecutor: ToolExecutorProtocol {
                 damageControlIntervened: false,
                 latencyMs: nil
             )
+        }
+
+        // ── 6b. Daemon routing (B-Swift Layer 3b) ──────────────────────
+        // Route safe portable tools (ONLY `read` in 3b) to the governed daemon
+        // ToolHost, confined to the default workspace. This runs AFTER the
+        // deterministic gates (1-5) and BEFORE DamageControl (7), so a
+        // daemon-routed read is governed by the daemon (path/damage/egress + its
+        // own tool.confirm) and never double-approved in Swift. write/edit/bash
+        // stay local (Layer 4 provisions the dangerous scope; bash blast radius
+        // is too high for the substring denylist). Returns nil when no daemon is
+        // reachable → fall through to the local pipeline (pre-3b behavior).
+        if DaemonToolRouting.routedTools.contains(call.name) {
+            if let routed = await DaemonToolRouting.routeRead(
+                call: call, session: daemonToolHostSession)
+            {
+                return ToolExecutorResult(
+                    result: routed,
+                    approvedByUser: nil,
+                    damageControlIntervened: false,
+                    latencyMs: nil
+                )
+            }
+            // nil → no daemon reachable: fall through to the local pipeline.
         }
 
         // ── 7. DamageControlPolicy ──────────────────────────────────────

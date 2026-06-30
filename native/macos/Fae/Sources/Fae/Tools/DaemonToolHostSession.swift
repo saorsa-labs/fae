@@ -42,15 +42,27 @@ actor DaemonToolHostSession {
     /// The server-request handler (workspace.confirm_root during setRoot,
     /// tool.confirm during a dangerous execute). Injectable for tests.
     private let serverRequestHandler: DaemonServerRequestHandler
+    /// The default workspace provider this session roots against. Layer 3b
+    /// routing uses the SAME provider for path confinement (so the confinement
+    /// root == the daemon-approved root). Defaults to the real
+    /// `~/Documents/Fae`; tests inject a temp-dir provider.
+    private let workspaceProvider: FaeWorkspaceProvider
 
-    /// - Parameter serverRequestHandler: defaults to the real governance handler
-    ///   (`DaemonAgentClient.handleServerRequest`). Tests inject a fake that
-    ///   returns the strict reply without the UI card (so the round-trip
-    ///   completes without a human responder).
-    init(serverRequestHandler: @escaping DaemonServerRequestHandler =
-        DaemonAgentClient.handleServerRequest)
-    {
+    /// - Parameters:
+    ///   - serverRequestHandler: defaults to the real governance handler
+    ///     (`DaemonAgentClient.handleServerRequest`). Tests inject a fake that
+    ///     returns the strict reply without the UI card (so the round-trip
+    ///     completes without a human responder).
+    ///   - workspaceProvider: the default workspace to root against AND confine
+    ///     routed-tool paths to. Defaults to `~/Documents/Fae`; tests inject a
+    ///     temp-dir provider.
+    init(
+        serverRequestHandler: @escaping DaemonServerRequestHandler =
+            DaemonAgentClient.handleServerRequest,
+        workspaceProvider: FaeWorkspaceProvider = DefaultDocumentsWorkspace()
+    ) {
         self.serverRequestHandler = serverRequestHandler
+        self.workspaceProvider = workspaceProvider
     }
 
     // MARK: - Lifecycle
@@ -191,6 +203,102 @@ actor DaemonToolHostSession {
     /// routing a file tool.
     func hasRoot() -> Bool { approvedRootPath != nil }
 
+    /// Whether a daemon is currently published and thus routing is possible.
+    /// Layer 3b consults this BEFORE any confinement/provisioning so an absent
+    /// daemon (tests / CI / before bundling) yields pre-3b local behavior with
+    /// no `~/Documents/Fae` side effect.
+    func isDaemonReachable() async -> Bool {
+        await DaemonEndpointStore.shared.current() != nil
+    }
+
+    // MARK: - Serialized routed execution (B-Swift Layer 3b)
+
+    /// Mutual-exclusion state for daemon-interacting routed operations. Actor
+    /// isolation alone does NOT serialize across `await`s (reentrancy), and the
+    /// server-request-aware `DaemonSocketConnection.roundTrip(... onServerRequest:)`
+    /// issues its write + reads as SEPARATE dispatch-queue hops — so the
+    /// connection's serial queue does not make two concurrent routed reads safe.
+    /// Without this lock, concurrent reads would interleave frames on the one
+    /// shared socket and steal each other's responses (lost/mismatched
+    /// `request_id`). One operation at a time, FIFO.
+    private var toolHostOperationLocked = false
+    private var toolHostOperationWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Acquire the operation lock. The first caller proceeds immediately; later
+    /// callers suspend (in FIFO order) until `releaseToolHostOperationLock()`.
+    private func acquireToolHostOperationLock() async {
+        if !toolHostOperationLocked {
+            toolHostOperationLocked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            toolHostOperationWaiters.append(continuation)
+        }
+    }
+
+    /// Release the operation lock, handing it to the next waiter (if any) or
+    /// marking it free. Sync (non-async) so it is safe to call from `defer`.
+    private func releaseToolHostOperationLock() {
+        if let next = toolHostOperationWaiters.first {
+            toolHostOperationWaiters.removeFirst()
+            next.resume()
+            // `toolHostOperationLocked` stays true — the lock is transferred to
+            // the resumed waiter; it will release when it finishes.
+        } else {
+            toolHostOperationLocked = false
+        }
+    }
+
+    /// The serialized daemon-interacting core of a routed `read` (B-Swift 3b).
+    ///
+    /// Under the operation lock (one routed op at a time):
+    ///   1. `ensureDefaultRooted()` — bind the daemon-approved root FIRST;
+    ///   2. confine the already-shape-validated path against the daemon-RETURNED
+    ///      root (root-binding-order — never a locally-computed root), rejecting
+    ///      non-existent / non-regular / escaping targets;
+    ///   3. `execute` the read on the persistent connection.
+    ///
+    /// Daemon-loss semantics:
+    /// - lost BEFORE root approval ⇒ `.failClosed` (never read locally on an
+    ///   un-approved root that bypasses the server root guard);
+    /// - lost AFTER root approval, at `execute` ⇒ `.fallbackLocally(canonical)`
+    ///   (the path was already confined; read it locally, never cwd).
+    func executeSerializedRoutedRead(
+        validatedPath: String
+    ) async -> DaemonToolRouting.ReadExecutionOutcome {
+        await acquireToolHostOperationLock()
+        defer { releaseToolHostOperationLock() }
+
+        do {
+            // Root FIRST. Returns the daemon-approved (daemon-RETURNED) root and
+            // binds `approvedRootPath`. Uses the session's stored provider.
+            let daemonRoot = try await ensureDefaultRooted()
+            switch DaemonToolRouting.confineValidatedReadPath(validatedPath, root: daemonRoot) {
+            case .deny(let reason):
+                return .denied(reason)
+            case .route(let relative, let canonical):
+                do {
+                    let result = try await execute(tool: "read", input: ["path": relative])
+                    return .routed(result)
+                } catch DaemonAgentClientError.daemonUnavailable {
+                    // Root was approved (we are past ensureDefaultRooted); the
+                    // daemon dropped at execute. Fall back to a local read of the
+                    // already-confined canonical path (never cwd).
+                    return .fallbackLocally(canonical)
+                }
+            }
+        } catch DaemonAgentClientError.daemonUnavailable {
+            // Daemon dropped before/during root approval. Fail closed.
+            return .failClosed(
+                "Daemon unavailable before the workspace root was approved; " +
+                "refusing to read locally without a daemon-approved root.")
+        } catch {
+            // Daemon up but errored (root denial, path escape caught
+            // server-side, etc.) — do NOT fall back; surface the error.
+            return .failClosed("Daemon read failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Default workspace (Layer 3a, C′ root-source)
 
     /// Idempotently bind Fae's default workspace as the session root. Provisions
@@ -204,8 +312,12 @@ actor DaemonToolHostSession {
     /// - Returns: the approved workspace root.
     @discardableResult
     func ensureDefaultRooted(
-        provider: FaeWorkspaceProvider = DefaultDocumentsWorkspace()
+        provider override: FaeWorkspaceProvider? = nil
     ) async throws -> URL {
+        // Use the explicit override when given (existing tests pass a temp-dir
+        // provider per-call); otherwise the session's stored provider — the SAME
+        // provider Layer 3b confinement uses — so routing + rooting agree.
+        let provider = override ?? workspaceProvider
         if let existing = approvedRootPath { return existing }
         let outcome = try FaeWorkspace.provision(provider)
         let url: URL
@@ -244,9 +356,13 @@ actor DaemonToolHostSession {
     /// Execute a portable tool confined to the default workspace. Ensures the
     /// root is bound first (idempotent), then delegates to `execute`.
     ///
-    /// Path normalization (rejecting absolute/escaping paths, relativizing to the
-    /// root) lands in Layer 3b routing; this seam exists so 3b has a single
-    /// call site. Fails closed without a root.
+    /// NOTE: this is NOT the 3b live-routing call site. Production `read` routing
+    /// goes through `executeSerializedRoutedRead`, which serializes root + confine
+    /// + execute under one operation lock (this method, like `execute`, runs the
+    /// server-request-aware roundTrip that is NOT safe under concurrent calls —
+    /// actor isolation does not serialize across awaits). `executeInDefaultWorkspace`
+    /// is retained for the 3a test surface and direct/sequential callers; do not
+    /// add concurrent live callers here. Fails closed without a root.
     @discardableResult
     func executeInDefaultWorkspace(
         tool: String,

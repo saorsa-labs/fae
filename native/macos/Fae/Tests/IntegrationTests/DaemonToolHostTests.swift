@@ -72,11 +72,14 @@ final class FakeDaemonPeer {
     }
 
     final class Client {
-        private let fd: Int32
+        private var fd: Int32
         fileprivate init(fd: Int32) { self.fd = fd }
 
         /// Write one newline-terminated NDJSON line.
         func send(_ line: String) throws {
+            guard fd >= 0 else {
+                throw NSError(domain: "FakeDaemonPeer", code: 6, userInfo: [NSLocalizedDescriptionKey: "send() on closed client"])
+            }
             var data = Array(line.utf8)
             data.append(0x0A)
             var sent = 0
@@ -93,6 +96,9 @@ final class FakeDaemonPeer {
 
         /// Read one newline-terminated line (blocking). Returns nil on EOF.
         func recv() throws -> String? {
+            guard fd >= 0 else {
+                throw NSError(domain: "FakeDaemonPeer", code: 7, userInfo: [NSLocalizedDescriptionKey: "recv() on closed client"])
+            }
             var buffer = [UInt8]()
             var oneByte: [UInt8] = [0]
             while true {
@@ -106,7 +112,15 @@ final class FakeDaemonPeer {
             }
         }
 
-        deinit { Darwin.close(fd) }
+        /// Close the client FD (simulate a daemon-side drop). Idempotent — safe
+        /// against the `deinit` close so a reused OS FD is never double-closed.
+        func close() {
+            guard fd >= 0 else { return }
+            Darwin.close(fd)
+            fd = -1
+        }
+
+        deinit { close() }
     }
 }
 
@@ -969,7 +983,674 @@ final class DaemonToolHostTests: XCTestCase {
         }
     }
 
+    // MARK: - B-Swift Layer 3b: read routing + path confinement
+
+    /// A full-access context so `read`/`write` clear the tool-mode gate (step 1).
+    private func makeFullContext() -> ToolExecutorContext {
+        ToolExecutorContext(
+            toolMode: "full",
+            privacyMode: "local_preferred",
+            modelLocality: .local,
+            explicitUserAuthorization: false,
+            isOwner: true,
+            livenessScore: nil,
+            speakerId: nil,
+            actionSource: .voice,
+            proactiveContext: nil,
+            visionEnabled: false,
+            firstOwnerEnrollmentActive: false,
+            workflowTurnID: nil,
+            traceToolCallID: nil,
+            workflowRunID: nil
+        )
+    }
+
+    /// `read` of an in-workspace file routes to the daemon: the fake peer
+    /// receives `toolhost.execute` with `{"tool":"read"}`, replies with content,
+    /// and the executor returns it. Exercises the REAL `ToolExecutor.execute`
+    /// routing path (advisor #8), not just a helper.
+    func testReadRoutesToDaemon() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("hello world".utf8).write(to: tmp.appendingPathComponent("notes.txt"))
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp)
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        let exec = Task<ToolExecutorResult, Error> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+                context: makeFullContext(),
+                callbacks: .noop)
+        }
+        let client = try peer.accept()
+        try driveAuth(client)
+
+        // set_root + auto-approved confirm_root handshake.
+        let setRootReq = try await recvWithTimeout(client)
+        XCTAssertTrue(setRootReq.contains("\"command\":\"toolhost.set_root\""))
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        let rootReply = try await recvWithTimeout(client)
+        XCTAssertTrue(rootReply.contains("\"approved\":true"), "default root auto-approved")
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+
+        // The daemon receives the routed `read`.
+        let executeReq = try await recvWithTimeout(client)
+        XCTAssertTrue(executeReq.contains("\"command\":\"toolhost.execute\""), "read routed to daemon")
+        XCTAssertTrue(executeReq.contains("\"tool\":\"read\""), "execute carries tool=read")
+        XCTAssertTrue(executeReq.contains("\"path\":\"notes.txt\""), "path is root-relative")
+        try client.send("""
+        {"v":2,"request_id":"th-2","ok":true,"result":{"content":["hello world"]}}
+        """)
+
+        let outcome = try await withTimeout(exec)
+        XCTAssertFalse(outcome.result.isError, "routed read should succeed")
+        XCTAssertEqual(outcome.result.output, "hello world")
+    }
+
+    /// Two reads reuse ONE connection: both `toolhost.execute` frames arrive on
+    /// the SAME accepted client (the second read re-roots with no `set_root`).
+    /// Reuse is proven by the second execute frame arriving on this client — a
+    /// second connection would have routed it to a different `accept()` and
+    /// timed this read out (cancellation-safe; no blocking-accept check).
+    func testSessionReusedAcrossReads() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("one".utf8).write(to: tmp.appendingPathComponent("a.txt"))
+        try Data("two".utf8).write(to: tmp.appendingPathComponent("b.txt"))
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp)
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        // Read 1 — full handshake.
+        let exec1 = Task<ToolExecutorResult, Error> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "a.txt"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+        let client = try peer.accept()
+        try driveAuth(client)
+        _ = try await recvWithTimeout(client)  // set_root
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        _ = try await recvWithTimeout(client)  // auto-approved reply
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+        let exec1Frame = try await recvWithTimeout(client)
+        XCTAssertTrue(exec1Frame.contains("\"tool\":\"read\""))
+        try client.send("""
+        {"v":2,"request_id":"th-2","ok":true,"result":{"content":["one"]}}
+        """)
+        let outcome1 = try await withTimeout(exec1)
+        XCTAssertEqual(outcome1.result.output, "one")
+
+        // Read 2 — NO re-root; the execute frame on the SAME client proves reuse.
+        let exec2 = Task<ToolExecutorResult, Error> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "b.txt"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+        let exec2Frame = try await recvWithTimeout(client)
+        XCTAssertTrue(
+            exec2Frame.contains("\"command\":\"toolhost.execute\""),
+            "second read reused the connection (a new connection would time out)")
+        // No second set_root frame — root is immutable per connection.
+        XCTAssertFalse(exec2Frame.contains("toolhost.set_root"))
+        try client.send("""
+        {"v":2,"request_id":"th-3","ok":true,"result":{"content":["two"]}}
+        """)
+        let outcome2 = try await withTimeout(exec2)
+        XCTAssertEqual(outcome2.result.output, "two")
+        let hasRoot = await session.hasRoot()
+        XCTAssertTrue(hasRoot)
+    }
+
+    /// An absolute path is DENIED at the Swift seam — no daemon frame. Layer 3b
+    /// routes only root-relative paths (absolute paths are denied even under the
+    /// workspace). Pure confinement — no daemon needed.
+    func testReadAbsolutePathDenied() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // Absolute path outside the workspace.
+        if case .route = DaemonToolRouting.confineReadPath("/etc/passwd", root: tmp) {
+            XCTFail("absolute outside-root path must be denied")
+        }
+        // Absolute path INSIDE the workspace is also denied (3b: root-relative only).
+        let insideAbs = tmp.appendingPathComponent("notes.txt").path
+        if case .route = DaemonToolRouting.confineReadPath(insideAbs, root: tmp) {
+            XCTFail("absolute under-root path must be denied (3b routes root-relative only)")
+        }
+
+        // Dot-only and trailing-slash are directory-ish shapes, denied as SHAPE
+        // (phase 1, no daemon contact) — not as non-regular after rooting.
+        for shapey in [".", "foo/"] {
+            switch DaemonToolRouting.confineReadPath(shapey, root: tmp) {
+            case .deny: break
+            case .route: XCTFail("directory-ish shape '\(shapey)' must be denied")
+            }
+        }
+        // And via the pure shape validator directly.
+        if case .ok = DaemonToolRouting.validateReadPathShape(".") { XCTFail("'.' must be shape-denied") }
+        if case .ok = DaemonToolRouting.validateReadPathShape("foo/") { XCTFail("trailing slash must be shape-denied") }
+    }
+
+    /// `..` traversal is DENIED — any `..` path component is rejected.
+    func testReadTraversalDenied() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        for escaping in ["../secret", "../../etc/passwd", "sub/../../etc/passwd"] {
+            if case .route = DaemonToolRouting.confineReadPath(escaping, root: tmp) {
+                XCTFail("traversal path '\(escaping)' must be denied")
+            }
+        }
+    }
+
+    /// A symlink inside the workspace that escapes it is DENIED — canonicalization
+    /// resolves it outside the root. (The daemon's server guard is a second layer;
+    /// this is the Swift seam.)
+    func testReadSymlinkEscapeDenied() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // An OUTSIDE REGULAR file + a workspace symlink to it. This is the case
+        // that verifies the canonicalization/containment intent: the target is a
+        // regular file (passes the regular-file check), so the ONLY thing that
+        // denies it is canonicalization revealing the escape. (Symlinking to a
+        // directory like /etc would be caught by the regular-file check first,
+        // weakening the test — it would pass even if canonicalization regressed.)
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-outside-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("secret".utf8).write(to: outside.appendingPathComponent("id_rsa"))
+        try FileManager.default.createSymbolicLink(
+            at: tmp.appendingPathComponent("evil"),
+            withDestinationURL: outside.appendingPathComponent("id_rsa"))
+        switch DaemonToolRouting.confineReadPath("evil", root: tmp) {
+        case .deny(let reason):
+            XCTAssertTrue(reason.contains("escape"),
+                          "outside-regular symlink must be denied as an escape: \(reason)")
+        case .route:
+            XCTFail("symlink to an outside regular file must be denied as an escape")
+        }
+
+        // A directory entry is denied as non-regular (catches /etc-style links).
+        try FileManager.default.createSymbolicLink(
+            at: tmp.appendingPathComponent("dirlink"),
+            withDestinationURL: URL(fileURLWithPath: "/etc"))
+        switch DaemonToolRouting.confineReadPath("dirlink", root: tmp) {
+        case .deny: break
+        case .route: XCTFail("directory entry must be denied as non-regular")
+        }
+
+        // A non-escaping symlink to a sibling INSIDE the workspace is allowed.
+        try Data("inner".utf8).write(to: tmp.appendingPathComponent("real.txt"))
+        try FileManager.default.createSymbolicLink(
+            at: tmp.appendingPathComponent("link"),
+            withDestinationURL: tmp.appendingPathComponent("real.txt"))
+        let confined = DaemonToolRouting.confineReadPath("link", root: tmp)
+        if case .route(let relative, _) = confined {
+            // The symlink canonicalizes to its in-workspace target, so the
+            // root-relative path sent to the daemon is the canonical target.
+            XCTAssertEqual(relative, "real.txt")
+        } else {
+            XCTFail("in-workspace symlink must be allowed")
+        }
+    }
+
+    /// A valid root-relative read of an existing in-workspace file is routed with
+    /// the correct root-relative path.
+    func testReadInWorkspaceRoutes() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tmp.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: tmp.appendingPathComponent("sub").appendingPathComponent("f.txt"))
+
+        let shallow = DaemonToolRouting.confineReadPath("notes.txt", root: tmp)
+        // notes.txt doesn't exist here → denied (existence required).
+        if case .route = shallow { XCTFail("non-existent file must be denied") }
+
+        try Data("x".utf8).write(to: tmp.appendingPathComponent("notes.txt"))
+        if case .route(let relative, _) = DaemonToolRouting.confineReadPath("notes.txt", root: tmp) {
+            XCTAssertEqual(relative, "notes.txt")
+        } else { XCTFail("existing in-workspace file must route") }
+
+        if case .route(let relative, _) = DaemonToolRouting.confineReadPath("sub/f.txt", root: tmp) {
+            XCTAssertEqual(relative, "sub/f.txt")
+        } else { XCTFail("nested in-workspace file must route") }
+    }
+
+    /// Non-routed tools stay local: `write`/`edit`/`bash` are NOT in the routed
+    /// set, and a real `write` (with a daemon published) executes locally and
+    /// never roots the session (proving it did not route).
+    func testNonRoutedToolsStayLocal() async throws {
+        // Classifier assertion: only `read` routes in 3b.
+        XCTAssertEqual(DaemonToolRouting.routedTools, ["read"])
+        for nonRouted in ["write", "edit", "bash", "calendar", "web_search", "self_config"] {
+            XCTAssertFalse(DaemonToolRouting.routedTools.contains(nonRouted),
+                           "\(nonRouted) must not route in 3b")
+        }
+
+        // Smoke: a `write` with a daemon published runs locally + never roots.
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let outFile = tmp.appendingPathComponent("out.txt")
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp))
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": outFile.path, "content": "hi"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError, "local write should succeed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outFile.path), "write ran locally")
+        // Routing never fired → the session was never rooted / never connected.
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "write must not root the daemon session")
+        _ = peer  // daemon published but never contacted by the write
+    }
+
+    /// No daemon reachable ⇒ `read` falls back to the LOCAL ReadTool (legacy
+    /// pre-routing behavior). `read` is `.low` risk and was always local. This
+    /// uses the ORIGINAL path (not workspace-confined) — distinct from the
+    /// daemon-involved fail-closed path in `testReadFailsClosedWhenDaemon…`.
+    func testReadFallsBackToLocalWhenDaemonDown() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("local content".utf8).write(to: tmp.appendingPathComponent("fallback.txt"))
+
+        // No daemon published.
+        await clearDaemonEndpoints()
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared
+        )
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": tmp.appendingPathComponent("fallback.txt").path]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError, "local fallback read should succeed")
+        XCTAssertEqual(outcome.result.output, "local content")
+    }
+
+    /// A `read` with an escaping path (absolute / `..`) is DENIED at the Swift
+    /// seam via the REAL `ToolExecutor.execute` path: no `set_root`, no
+    /// `toolhost.execute` frame. Proven by `session.hasRoot() == false` after
+    /// the call (a routed read would have rooted the session).
+    func testReadDeniedPathDoesNotContactDaemon() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp))
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        for escaping in ["/etc/passwd", "../../etc/passwd"] {
+            let outcome = await executor.execute(
+                ToolCall(name: "read", arguments: ["path": escaping]),
+                context: makeFullContext(), callbacks: .noop)
+            XCTAssertTrue(outcome.result.isError, "escaping path '\(escaping)' must be denied")
+        }
+        // No daemon contact: the session was never rooted.
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "a denied read must not root the daemon session")
+        _ = peer
+    }
+
+    /// Fail-closed: if the daemon is involved (published) but drops BEFORE the
+    /// workspace root is approved, the read returns an `.error` and never reads
+    /// locally on the un-approved (locally-computed) root. The server root guard
+    /// must run before any local read is trusted. (The exact error path —
+    /// `daemonUnavailable` vs a socket EOF/connection error — may differ; this
+    /// asserts the SAFETY property: daemon was involved, root not approved,
+    /// result is an error, no local read, `hasRoot == false`.)
+    func testReadFailsClosedWhenDaemonDropsBeforeRootApproval() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: tmp.appendingPathComponent("notes.txt"))
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp)
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        let exec = Task<ToolExecutorResult, Error> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+        let client = try peer.accept()
+        try driveAuth(client)
+        // The daemon received set_root but then DROPS before approving the root
+        // (no confirm_root, no set_root response). Simulate the drop by closing
+        // the connection + clearing endpoints.
+        _ = try await recvWithTimeout(client)  // set_root frame
+        client.close()                         // daemon-side drop
+
+        let outcome = try await withTimeout(exec)
+        XCTAssertTrue(outcome.result.isError, "read must fail closed when the daemon drops before root approval")
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "root must not be approved after a daemon drop")
+    }
+
+    /// A FIFO (or other non-regular entry) in the workspace is DENIED before any
+    /// daemon read — a workspace FIFO would otherwise block the daemon socket up
+    /// to its recv timeout (a routed DoS). Verified directly on the pure
+    /// confinement helper; the regular-file check is what catches it.
+    func testReadFifoAndNonRegularDenied() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // FIFO via mkfifo.
+        let fifoPath = tmp.appendingPathComponent("myfifo").path
+        XCTAssertEqual(Darwin.mkfifo(fifoPath, 0o644), 0, "mkfifo should succeed")
+        switch DaemonToolRouting.confineReadPath("myfifo", root: tmp) {
+        case .deny(let reason):
+            XCTAssertTrue(reason.contains("regular"), "FIFO must be denied as non-regular: \(reason)")
+        case .route:
+            XCTFail("a FIFO must not route (would block the daemon socket)")
+        }
+
+        // A sub-DIRECTORY is also denied as non-regular.
+        try FileManager.default.createDirectory(at: tmp.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        switch DaemonToolRouting.confineReadPath("sub", root: tmp) {
+        case .deny(let reason):
+            XCTAssertTrue(reason.contains("regular"), "directory must be denied as non-regular: \(reason)")
+        case .route:
+            XCTFail("a directory must not route")
+        }
+
+        // Control: a regular file IS routed.
+        try Data("x".utf8).write(to: tmp.appendingPathComponent("real.txt"))
+        if case .deny = DaemonToolRouting.confineReadPath("real.txt", root: tmp) {
+            XCTFail("a regular file must route")
+        }
+    }
+
+    /// Root-binding-order: confinement uses the DAEMON-RETURNED root, not the
+    /// provider root. Here the provider root (`tmp`) has NO `notes.txt`, but the
+    /// fake daemon's `set_root` response returns a DIFFERENT canonical root that
+    /// DOES contain `notes.txt`. The read routes+resolves ONLY because confinement
+    /// runs against the daemon-returned root (the 3a invariant: bind the daemon-
+    /// RETURNED root). If confinement used the provider root, `notes.txt` would be
+    /// “not found” and the read would error.
+    func testReadConfinesAgainstDaemonReturnedRoot() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // NOTE: deliberately NO notes.txt under tmp (the provider root).
+
+        // The daemon-returned root: a DIFFERENT dir that DOES contain notes.txt.
+        let daemonRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-daemon-root-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: daemonRoot) }
+        try FileManager.default.createDirectory(at: daemonRoot, withIntermediateDirectories: true)
+        try Data("from-daemon-root".utf8).write(to: daemonRoot.appendingPathComponent("notes.txt"))
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        // Provider root = tmp; the daemon will RETURN daemonRoot.
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp)
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        let exec = Task<ToolExecutorResult, Error> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "notes.txt"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+        let client = try peer.accept()
+        try driveAuth(client)
+        // set_root request carries the PROVIDER path (tmp); confirm auto-approved.
+        let setRootReq = try await recvWithTimeout(client)
+        XCTAssertTrue(setRootReq.contains("\"command\":\"toolhost.set_root\""))
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        _ = try await recvWithTimeout(client)  // auto-approved reply
+        // Daemon RETURNS daemonRoot (not tmp). The session binds daemonRoot.
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(daemonRoot.path)"}}
+        """)
+        // The routed execute reads notes.txt (found under daemonRoot, not tmp).
+        let executeReq = try await recvWithTimeout(client)
+        XCTAssertTrue(executeReq.contains("\"tool\":\"read\""))
+        try client.send("""
+        {"v":2,"request_id":"th-2","ok":true,"result":{"content":["from-daemon-root"]}}
+        """)
+
+        let outcome = try await withTimeout(exec)
+        XCTAssertFalse(outcome.result.isError, "read must resolve against the daemon-returned root")
+        XCTAssertEqual(outcome.result.output, "from-daemon-root")
+        // The session stored the DAEMON-returned root, not the provider root.
+        let stored = await session.rootPath()
+        XCTAssertEqual(stored?.path, daemonRoot.path)
+    }
+
+    /// Concurrent cold reads SERIALIZE: two reads issued concurrently through
+    /// the REAL `ToolExecutor.execute` path share ONE connection, ONE `set_root`,
+    /// and their execute frames arrive strictly sequentially on the same accepted
+    /// client. The operation lock makes this deterministic; without it, two
+    /// server-request-aware roundTrips would interleave frames and steal each
+    /// other's responses. (Cancellation-safe: proven by both reads succeeding on
+    /// the single client — no blocking-accept timeout used.)
+    func testConcurrentReadsSerializeOnOneConnection() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data("AAA".utf8).write(to: tmp.appendingPathComponent("a.txt"))
+        try Data("BBB".utf8).write(to: tmp.appendingPathComponent("b.txt"))
+
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer {
+            Task { await clearDaemonEndpoints() }
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+        let session = DaemonToolHostSession(
+            serverRequestHandler: { _, params in
+                ["approved": true, "call_id": (params["call_id"] as? String) ?? ""]
+            },
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp)
+        )
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [ReadTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session
+        )
+
+        // Two concurrent cold reads.
+        let readA = Task<ToolExecutorResult, Never> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "a.txt"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+        let readB = Task<ToolExecutorResult, Never> {
+            await executor.execute(
+                ToolCall(name: "read", arguments: ["path": "b.txt"]),
+                context: makeFullContext(), callbacks: .noop)
+        }
+
+        let client = try peer.accept()
+        try driveAuth(client)
+        // Exactly ONE set_root handshake (concurrent reads dedupe to a single
+        // root-establishment under the operation lock).
+        let setRootReq = try await recvWithTimeout(client)
+        XCTAssertTrue(setRootReq.contains("toolhost.set_root"))
+        try client.send("""
+        {"v":2,"server_request_id":"sr-root","method":"workspace.confirm_root","params":{"call_id":"th-1","path":"\(tmp.path)","note":"grant"}}
+        """)
+        _ = try await recvWithTimeout(client)  // auto-approved reply
+        try client.send("""
+        {"v":2,"request_id":"th-1","ok":true,"result":{"root":"\(tmp.path)"}}
+        """)
+
+        // Serve the two execute frames strictly sequentially on THIS client. The
+        // lock serializes them; each is matched by request_id. Order is
+        // non-deterministic but each read gets its own response regardless.
+        func serveExecute() async throws {
+            let frame = try await recvWithTimeout(client)
+            XCTAssertTrue(frame.contains("\"command\":\"toolhost.execute\""),
+                          "execute frame must arrive on the shared connection")
+            let requestID = Self.extractField(frame, field: "request_id") ?? ""
+            let path = Self.extractField(frame, field: "path") ?? ""
+            let content = path == "a.txt" ? "AAA" : "BBB"
+            try client.send("""
+            {"v":2,"request_id":"\(requestID)","ok":true,"result":{"content":["\(content)"]}}
+            """)
+        }
+        try await serveExecute()
+        try await serveExecute()
+
+        let outA = try await withTimeoutAsNever(readA)
+        let outB = try await withTimeoutAsNever(readB)
+        XCTAssertFalse(outA.result.isError)
+        XCTAssertFalse(outB.result.isError)
+        XCTAssertEqual(outA.result.output, "AAA", "read a.txt must get its own response (no stealing)")
+        XCTAssertEqual(outB.result.output, "BBB", "read b.txt must get its own response (no stealing)")
+    }
+
     // MARK: helpers
+
+    /// Extract a `"field":"value"` string from a single-line JSON frame (test
+    /// helper for matching routed execute frames without a full JSON parse).
+    private static func extractField(_ line: String, field: String) -> String? {
+        guard let range = line.range(of: "\"\(field)\":\"") else { return nil }
+        let rest = line[range.upperBound...]
+        if let endQuote = rest.firstIndex(of: "\"") {
+            return String(rest[..<endQuote])
+        }
+        return nil
+    }
+
+    /// `withTimeout` for a `Task<T, Never>` (the concurrent-read tasks never throw).
+    private func withTimeoutAsNever<T>(_ task: Task<T, Never>) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { await task.value }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                throw NSError(domain: "DaemonToolHostTests", code: 99, userInfo: [NSLocalizedDescriptionKey: "timed out"])
+            }
+            let first = try await group.next()!
+            group.cancelAll()
+            return first
+        }
+    }
 
     private func recvWithTimeout(_ client: FakeDaemonPeer.Client) async throws -> String {
         let t = Task<String?, Error> { try client.recv() }
