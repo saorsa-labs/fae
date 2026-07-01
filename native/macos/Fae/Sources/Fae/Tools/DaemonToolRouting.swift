@@ -196,6 +196,9 @@ enum DaemonToolRouting {
     /// daemon's 50 KiB truncation (parity tracked in follow-up #6; exact line /
     /// char parity is settled there).
     static let localReadByteCap = 50 * 1024
+    /// Line cap for local reads (B-Swift #6 parity with the fluers daemon's
+    /// `apply_read_limits`: 2000 lines OR 50 KiB, whichever binds first).
+    static let localReadLineCap = 2_000
 
     /// Open flags common to every fd-anchored open. `O_NOFOLLOW` rejects a
     /// symlink leaf at the kernel level (ELOOP — no path re-resolution, the
@@ -422,6 +425,14 @@ enum DaemonToolRouting {
     ///   rather than denied as "not UTF-8". Only genuinely non-UTF-8 content is
     ///   denied. (Truncation parity with the daemon is tracked in follow-up #6.)
     private static func readLeaf(fd: Int32, validatedPath: String) -> FdAnchoredRead {
+        // fstat the open fd to detect whether we will truncate by BYTES (the
+        // read loop stops at `localReadByteCap`). Using the fd (not a path)
+        // avoids re-resolution; st_size on the open leaf is authoritative for
+        // the byte-truncation marker (B-Swift #6 daemon-parity).
+        var leafSt = stat()
+        let byteTruncated = (Darwin.fstat(fd, &leafSt) == 0)
+            && UInt64(leafSt.st_size) > UInt64(localReadByteCap)
+
         var collected = Data()
         collected.reserveCapacity(Swift.min(localReadByteCap, 8192))
         var buffer = [UInt8](repeating: 0, count: 8192)
@@ -440,7 +451,8 @@ enum DaemonToolRouting {
         }
         // Prefer a whole-buffer decode (fast path for files under the cap).
         if let text = String(data: collected, encoding: .utf8) {
-            return .text(trimmedToByteCap(text))
+            return .text(applyPresentationLimits(
+                trimmedToByteCap(text), byteTruncated: byteTruncated))
         }
         // The cap may have split a multibyte sequence. Trim trailing bytes until
         // the remainder decodes as UTF-8 (drop at most 3 continuation bytes), so
@@ -449,7 +461,8 @@ enum DaemonToolRouting {
         for _ in 0..<3 where !bytes.isEmpty {
             bytes.removeLast()
             if let text = String(data: bytes, encoding: .utf8) {
-                return .text(trimmedToByteCap(text))
+                return .text(applyPresentationLimits(
+                    trimmedToByteCap(text), byteTruncated: byteTruncated))
             }
         }
         return .deny("file is not UTF-8 text: \(validatedPath)")
@@ -466,6 +479,73 @@ enum DaemonToolRouting {
             trimmed.removeLast()
         }
         return trimmed
+    }
+
+    /// Apply daemon-parity presentation limits to a byte-capped read (B-Swift
+    /// #6). Mirrors fluers `apply_read_limits` EXACTLY (same semantics so a
+    /// routed read and a local read surface the SAME truncation):
+    /// `split_inclusive('\n')` (each line keeps its trailing newline; a
+    /// trailing newline-less line is still one element), 0-indexed line counter,
+    /// `i >= max_lines` truncates (so exactly `max_lines` lines → NO marker,
+    /// `max_lines+1` → marker), and bytes-bind checked per-line.
+    ///
+    /// `byteTruncated` is decided by `fstat.st_size` (the source file is larger
+    /// than the byte cap). The line check runs first ("whichever binds first").
+    /// Swift's `String.enumeratedSubstrings` is awkward for `split_inclusive`;
+    /// we walk newline offsets manually to keep the trailing-newline semantics.
+    private static func applyPresentationLimits(
+        _ text: String, byteTruncated: Bool
+    ) -> String {
+        // Split keeping trailing newlines: "a\nb\n" → ["a\n", "b\n"],
+        // "a\nb" (no trailing nl) → ["a\n", "b"]. Matches Rust split_inclusive.
+        var lines: [String] = []
+        var start = text.startIndex
+        while start < text.endIndex {
+            if let nl = text[start...].firstIndex(of: "\n") {
+                let after = text.index(after: nl) // include the newline
+                lines.append(String(text[start..<after]))
+                start = after
+            } else {
+                lines.append(String(text[start..<text.endIndex]))
+                break
+            }
+        }
+        // Edge case: empty text → no lines (daemon: split_inclusive on "" → []).
+        if lines.isEmpty { return text }
+
+        var bytesLeft = localReadByteCap
+        var out = ""
+        for (i, line) in lines.enumerated() {
+            if i >= localReadLineCap {
+                out += "\n[... truncated at \(localReadLineCap) lines ...]"
+                return out
+            }
+            let lineBytes = line.utf8.count
+            if lineBytes > bytesLeft {
+                // Byte cap binds mid/after this line. Take whole bytes that fit
+                // on a UTF-8 boundary (don't split a multibyte char).
+                var taken = ""
+                var bytesUsed = 0
+                for ch in line {
+                    let chBytes = ch.utf8.count
+                    if bytesUsed + chBytes > bytesLeft { break }
+                    taken.append(ch)
+                    bytesUsed += chBytes
+                }
+                out += taken
+                out += "\n[... truncated at \(localReadByteCap) bytes ...]"
+                return out
+            }
+            out += line
+            bytesLeft -= lineBytes
+        }
+        // No truncation bound by lines or bytes within the (already byte-capped)
+        // window. But if the SOURCE file exceeded the byte cap, the read loop
+        // stopped early — surface the byte marker (fstat-detected, authoritative).
+        if byteTruncated {
+            return text + "\n[... truncated at \(localReadByteCap) bytes ...]"
+        }
+        return text
     }
 
 

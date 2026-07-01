@@ -2132,15 +2132,102 @@ final class DaemonToolHostTests: XCTestCase {
         let result = DaemonToolRouting.readFdAnchored(validatedPath: "emoji.txt", root: ws)
         switch result {
         case .text(let text):
+            // The byte marker is appended AFTER the capped content (B-Swift #6
+            // daemon parity), so the total may slightly exceed `cap`; the CONTENT
+            // must still respect the cap and end on a complete char. Strip a
+            // trailing daemon-style marker (if present) before the byte assertion.
+            let contentOnly = text.components(separatedBy: "\n[... truncated at").first ?? text
             XCTAssertLessThanOrEqual(
-                text.utf8.count, cap,
-                "returned text must respect the byte cap")
+                contentOnly.utf8.count, cap,
+                "returned content must respect the byte cap (marker excluded)")
             // Every returned code point is a complete char (no partial bytes).
-            XCTAssertEqual(text.unicodeScalars.last?.description, "😀",
+            XCTAssertEqual(contentOnly.unicodeScalars.last?.description, "😀",
                            "no partial multibyte sequence at the boundary")
         case .deny:
             XCTFail("a valid UTF-8 file truncated mid-char must be returned, not denied")
         }
+    }
+
+    // MARK: - B-Swift #6 — truncation parity with the fluers daemon
+
+    /// #6: a local read over 2000 lines truncates with the daemon-style LINE
+    /// marker (matches fluers `apply_read_limits`). Pre-#6 the local path had
+    /// no line cap and no marker; now routed/local surface the same truncation.
+    func testReadFdAnchoredTruncatesAtLineCapWithDaemonMarker() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-linecap-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+        // 2001 short lines — line cap binds (bytes are ~12k, well under 50KiB).
+        let big = (1...2001).map { "line\($0)" }.joined(separator: "\n")
+        try Data(big.utf8).write(to: ws.appendingPathComponent("many.txt"))
+
+        let result = DaemonToolRouting.readFdAnchored(validatedPath: "many.txt", root: ws)
+        if case .text(let text) = result {
+            XCTAssertTrue(text.contains("\n[... truncated at 2000 lines ...]"),
+                          "over-line-cap file must get the daemon-style line marker: last 60 chars=\(text.suffix(60))")
+            // Exactly 2000 content lines kept + the marker line.
+            XCTAssertEqual(text.split(separator: "\n").count, 2001,
+                          "keep 2000 lines + 1 marker line")
+        } else { XCTFail("expected .text; got \(result)") }
+    }
+
+    /// #6: a local read over 50 KiB truncates with the daemon-style BYTE marker.
+    func testReadFdAnchoredTruncatesAtByteCapWithDaemonMarker() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-bytecap-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+        // A single line > 50KiB — byte cap binds (1 line, no line-cap).
+        let big = String(repeating: "x", count: 60_000)
+        try Data(big.utf8).write(to: ws.appendingPathComponent("big.txt"))
+
+        let result = DaemonToolRouting.readFdAnchored(validatedPath: "big.txt", root: ws)
+        if case .text(let text) = result {
+            XCTAssertTrue(text.contains("\n[... truncated at 51200 bytes ...]"),
+                          "over-byte-cap file must get the daemon-style byte marker")
+        } else { XCTFail("expected .text; got \(result)") }
+    }
+
+    /// #6: a file at EXACTLY the line cap is NOT truncated (daemon semantics:
+    /// `i >= max_lines` is 0-indexed, so 2000 lines → no marker).
+    func testReadFdAnchoredAtExactLineCapIsNotTruncated() throws {
+        let ws = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-exact-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: ws) }
+        try FileManager.default.createDirectory(at: ws, withIntermediateDirectories: true)
+        let exact = (1...2000).map { "l\($0)" }.joined(separator: "\n")
+        try Data(exact.utf8).write(to: ws.appendingPathComponent("exact.txt"))
+
+        let result = DaemonToolRouting.readFdAnchored(validatedPath: "exact.txt", root: ws)
+        if case .text(let text) = result {
+            XCTAssertFalse(text.contains("truncated"),
+                           "exactly 2000 lines must NOT be truncated: \(text.suffix(40))")
+        } else { XCTFail("expected .text; got \(result)") }
+    }
+
+    /// #6: the legacy rootless `ReadTool` now emits the daemon-style markers too
+    /// (parity) — and the OLD bare `\n[truncated]` is gone. End-to-end proof.
+    func testReadToolEmitsDaemonStyleMarkerAndDropsLegacyBareMarker() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-readtool-marker-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let big = String(repeating: "x", count: 60_000)
+        try Data(big.utf8).write(to: tmp.appendingPathComponent("big.txt"))
+
+        let result = try await ReadTool().execute(input: [
+            "path": tmp.appendingPathComponent("big.txt").path,
+        ])
+        XCTAssertFalse(result.isError, "read should succeed")
+        XCTAssertTrue(result.output.contains("[... truncated at 51200 bytes ...]"),
+                      "ReadTool must emit the daemon-style byte marker: \(result.output.suffix(60))")
+        XCTAssertFalse(result.output.contains("\n[truncated]"),
+                       "legacy bare \"\n[truncated]\" marker must be gone (parity): \(result.output.suffix(40))")
     }
 
 

@@ -245,12 +245,34 @@ temp provider — the gate avoids that.
   since **landed and shipped**: fluers `0.3.1` (crates.io) fd-anchors the
   authoritative daemon read, and Fae consumes it via `=0.3.1` (see #4).
 
-## 6. Truncation parity (LOW)
+## 6. Truncation parity (LOW — ✅ RESOLVED 2026-07-01, daemon-semantics canonical)
 
-- Daemon `read` truncates at 2000 lines / 50 KiB; local `ReadTool` truncates at
-  50k chars. `offset`/`limit` aren't exposed by the Swift `read` tool, so no
-  arg-drop — but a routed read can return a different truncation than a local
-  one for the same large file. Add a parity test + decide the canonical limit.
+- **Canonical policy (LOCKED):** local Swift reads now mirror the fluers
+  daemon's `apply_read_limits` exactly — **2000 lines OR 50 KiB (51_200) bytes,
+  whichever binds first** — with the daemon-style markers
+  `\n[... truncated at 2000 lines ...]` / `\n[... truncated at 51200 bytes ...]`.
+  A routed read (daemon UP) already had this server-side; now the confined-local
+  fallback AND the legacy rootless `ReadTool` surface the SAME truncation for
+  the same large file. (The marker suffix may slightly exceed 50 KiB; the cap
+  applies to included file content, matching fluers.)
+- **Fix sites:**
+  - `DaemonToolRouting.readLeaf` — added `localReadLineCap = 2_000`; new
+    `applyPresentationLimits(_:byteTruncated:)` mirroring fluers
+    `apply_read_limits` (`split_inclusive('\n')` semantics, 0-indexed line
+    counter so exactly 2000 lines → NO marker, per-line byte check). `fstat`
+    on the open leaf fd decides `byteTruncated` (authoritative, no path
+    re-resolution).
+  - `ReadTool` (`BuiltinTools.swift`) — removed the legacy double-truncation
+    (`50_000` chars + bare `\n[truncated]`); now returns the fd-reader text
+    directly (which already carries the daemon-style marker).
+  - Routed-UP path (`buildReadResult`) — unchanged; trusts the daemon's
+    server-side `apply_read_limits` (no Swift re-limiting).
+- **Evidence:** 4 new tests (line-cap marker; byte-cap marker; exact-2000-lines
+  NOT truncated; `ReadTool` end-to-end emits daemon-style marker AND the old
+  bare `\n[truncated]` is gone) + updated `testReadFdAnchoredTruncates-
+  MultibyteWithoutDenying` (content-vs-marker byte assertion) + updated
+  `BuiltinToolsTests.testReadToolTruncation` (60_000-byte file → byte marker).
+  Full suite 3515/0 (5 pre-existing skips).
 
 ## 7. Concurrent-caller coverage for `executeInDefaultWorkspace` / `execute` (LOW)
 

@@ -28,10 +28,10 @@ struct ReadTool: Tool {
         // reject hardlinks; see `readRootlessFdAnchored`).
         switch DaemonToolRouting.readRootlessFdAnchored(absolutePath: expanded) {
         case .text(let content):
-            let truncated = content.count > 50_000
-                ? String(content.prefix(50_000)) + "\n[truncated]"
-                : content
-            return .success(truncated)
+            // Truncation/marker now applied inside the fd-anchored reader
+            // (B-Swift #6 daemon parity: 2000 lines / 50 KiB, daemon-style
+            // marker). No legacy double-truncation here.
+            return .success(content)
         case .deny(let reason):
             return .error(reason)
         }

@@ -53,12 +53,18 @@ final class BuiltinToolsTests: XCTestCase {
     }
 
     func testReadToolTruncation() async throws {
-        let largeContent = String(repeating: "x", count: 51_000)
+        // B-Swift #6: truncation now mirrors the fluers daemon (2000 lines OR
+        // 50 KiB bytes, daemon-style marker). 60_000 single-line bytes > 50 KiB
+        // (51_200) → byte marker. (The old test used 51_000 chars under the old
+        // 50_000-char cap; the new byte cap is 51_200, so a 60_000-byte file is
+        // needed to bind.)
+        let largeContent = String(repeating: "x", count: 60_000)
         let path = createTempFile(named: "large.txt", content: largeContent)
         let tool = ReadTool()
         let result = try await tool.execute(input: ["path": path])
         XCTAssertFalse(result.isError)
-        XCTAssertTrue(result.output.hasSuffix("[truncated]"))
+        XCTAssertTrue(result.output.contains("[... truncated at 51200 bytes ...]"),
+                      "over-byte-cap file must get the daemon-style byte marker")
     }
 
     // MARK: - WriteTool
