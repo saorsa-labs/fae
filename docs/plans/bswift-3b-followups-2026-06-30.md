@@ -149,6 +149,18 @@ temp provider — the gate avoids that.
     clippy::{panic,unwrap_used,expect_used}` rc=0; `clippy --workspace
     --all-targets` rc=0; `cargo check --workspace --all-targets` rc=0;
     `cargo test --workspace` green.
+  - **⚠️ Behavior change (deep-review note #1):** per-component `openat`+
+    `O_NOFOLLOW` rejects **any** symlinked path component, including a
+    *legitimate* symlinked subdirectory inside the workspace (e.g. a user's
+    `~/Documents/Fae/lib → /Users/me/code/lib`). This is a deliberate
+    security-correct trade-off: accepting an intermediate symlink reopens the
+    escape vector #4/#5 close (a symlinked component can point outside root).
+    The confined-local fallback (`readFdAnchored`) is the same. The **legacy
+    rootless `ReadTool`** (when `useDaemonEngine=false`) still follows
+    intermediate symlinks via `open(path, O_NOFOLLOW)` (leaf-only rejection) —
+    so the behavior differs by routing mode. Users who hit this should either
+    materialize the symlinked subdir or read via the legacy path; flagged here
+    so the surprise is documented, not discovered.
 - **Downstream — ✅ DONE (released fluers 0.3.1, 2026-07-01):** fluers was
   released to crates.io as `fluers-core`/`fluers-runtime` **0.3.1** (first
   crates.io release; the prior `v0.3.0` marker tag pointed at the pre-fix
