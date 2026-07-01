@@ -356,3 +356,40 @@ holder released it, then ran the full root+confine+execute daemon round-trip
   order is load-bearing (confinement MUST use the daemon-returned root).
 - **No new test** (the copy change is covered by #9's category test, which
   asserts `file not found: …` → `"couldn't find"`).
+
+---
+
+## Red-team + reviewer pass (2026-07-01, post-#1–#10)
+
+Independent `reviewer` + `red-team` sub-agents ran on the cumulative diff
+(`4a90523b..72e59eb3`). Reviewer: **SHIP** (zero MUST-FIX; verified no
+unwrap/expect/panic/force-try, no policy race, shared helpers verbatim across
+local + routed pipelines, cancellation sound). Red-team: **SHIP-WITH-FIXES** —
+1 HIGH + 4 MEDIUM. Findings + dispositions:
+
+- **HIGH — daemon-drop fallback bypassed hardlink rejection** → ✅ FIXED
+  (`72e59eb3`). `.fallbackLocally` now carries `(relative, root)`; `mapReadOutcome`
+  re-confines via the fd-anchored `readFdAnchored` (st_nlink check off the OPENED
+  leaf fd), unifying the two fallback paths' confinement strength. 2 tests.
+- **M2 — friendly-error unmapped fallback leaked verbatim** → ✅ FIXED. Generic
+  fallback copy; audit keeps raw.
+- **M3 — no daemon response size cap** → ✅ FIXED. `buildReadResult` caps at
+  200 KiB (4× the daemon's own cap) with a truncation marker. 1 test.
+- **M5 — cancellation surfaced a raw technical string** → ✅ FIXED. Dedicated
+  `catch is CancellationError` → `.cancelled` → friendly copy.
+- **M4 — workspace-root symlink guard misses APFS firmlinks** → 📌 OUT OF SCOPE.
+  Firmlinks are OS-created at boot from `/etc/firmlinks`; a non-root attacker
+  cannot create one. The workspace root (`~/Documents/Fae`) is user-owned; an
+  attacker who can replace it with a firmlink is already root (SIP compromised),
+  at which point all confinement is moot. The fd-anchored root open
+  (`O_NOFOLLOW`) + the daemon's `is_safe_workspace_root` remain the real guards.
+  Tracked as a residual, not fixed.
+
+All probes on the prompt-injectable `path` surface (absolute, `..`, symlink
+escape, root-symlink TOCTOU, leaf/intermediate symlink, hardlink on the
+primary/confined path, FIFO/non-regular, root inference, daemon-returned root
+binding, concurrent-read serialization, cancellation starvation, audit-trail
+preservation, `toolhost.execute`/`set_root` misrouting, `tool.confirm`/
+`workspace.confirm_root` extra-field bypass, auto-approve prefix collision)
+**failed** — defended, with file:line citations in the red-team report
+(`/tmp/fae-3b-final-review/red-team-report.md`).
