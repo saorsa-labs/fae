@@ -65,8 +65,8 @@ agent-client-protocol-tokio = "0.11"
 # governance hook (A0, proptest dev-only) + the generic `edit` tool and a
 # non-truncating `read_file_full` (A2-pre). Exact pin for supply-chain
 # determinism; bump deliberately.
-fluers-core = "=0.3.1"
-fluers-runtime = "=0.3.1"
+fluers-core = "=0.4.0"
+fluers-runtime = "=0.4.0"
 
 [profile.release]
 opt-level = 3
