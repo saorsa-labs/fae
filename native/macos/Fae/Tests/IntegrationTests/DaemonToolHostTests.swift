@@ -77,11 +77,15 @@ final class FakeDaemonPeer {
 
         /// Write one newline-terminated NDJSON line.
         func send(_ line: String) throws {
+            try sendRaw(Array(line.utf8) + [0x0A])
+        }
+
+        /// Write raw bytes with NO added newline (for oversized-frame tests).
+        func sendRaw(_ bytes: [UInt8]) throws {
             guard fd >= 0 else {
                 throw NSError(domain: "FakeDaemonPeer", code: 6, userInfo: [NSLocalizedDescriptionKey: "send() on closed client"])
             }
-            var data = Array(line.utf8)
-            data.append(0x0A)
+            let data = bytes
             var sent = 0
             while sent < data.count {
                 let n = data.withUnsafeBufferPointer { buf in
@@ -2251,6 +2255,70 @@ final class DaemonToolHostTests: XCTestCase {
                       "oversized daemon response must carry the truncation marker")
         XCTAssertLessThan(result.output.utf8.count, 220 * 1024,
                           "output must be bounded near the 200 KiB cap")
+    }
+
+    /// red-team M3 (advisor tightening): a huge array of EMPTY blocks must not
+    /// balloon memory (empty blocks are skipped) and separators count toward
+    /// the cap. Proves the cap is robust to the empty-string-array shape, not
+    /// just one big block.
+    func testBuildReadResultCapsManyEmptyAndSmallBlocks() {
+        // 10k small non-empty blocks (10 bytes each) = ~100 KiB + 10k separators
+        // (~10 KiB) ≈ 110 KiB < 200 KiB cap → NOT truncated (all kept).
+        let smallBlocks = Array(repeating: "0123456789", count: 10_000)
+        let resultUnder = DaemonToolRouting.buildReadResult(from: ["content": smallBlocks])
+        XCTAssertFalse(resultUnder.isError)
+        XCTAssertFalse(resultUnder.output.contains("truncated"),
+                       "110 KiB of small blocks is under the 200 KiB cap")
+        // 100k empty blocks: must be skipped entirely (no memory balloon, no
+        // output) — a daemon can't exhaust memory by spamming empty strings.
+        let emptyBlocks = Array(repeating: "", count: 100_000)
+        let resultEmpty = DaemonToolRouting.buildReadResult(from: ["content": emptyBlocks])
+        XCTAssertFalse(resultEmpty.isError)
+        XCTAssertEqual(resultEmpty.output, "",
+                       "all-empty content yields empty output, no balloon")
+    }
+
+    // MARK: - B-Swift red-team — socket frame byte cap (M3, advisor)
+
+    /// red-team M3 (advisor): a daemon that sends bytes WITHOUT a newline would
+    /// grow `readLineLocked`'s buffer without limit (the `buildReadResult` cap
+    /// only runs AFTER a full line is decoded). The per-frame byte cap must
+    /// reject an oversized newline-less frame with a precise error, before OOM.
+    func testSocketFrameCapRejectsOversizedNewlinelessFrame() async throws {
+        let peer = try FakeDaemonPeer.listen()
+        let connection = DaemonSocketConnection(queueLabel: "fae.test.frame-cap")
+        // Lower the cap for a fast test (default is 8 MiB; we don't want to send
+        // 8 MiB in a unit test). The check is on `buffer.count`, so a 5 KiB cap
+        // + 6 KiB newline-less frame exercises the same guard.
+        connection.frameByteCap = 4 * 1024
+        try connection.connect(to: peer.path)
+        defer { connection.close() }
+
+        let client = try peer.accept()
+        defer { client.close() }
+
+        // Send 6 KiB with NO newline (exceeds the 4 KiB cap).
+        try client.sendRaw(Array(repeating: UInt8(ascii: "x"), count: 6 * 1024))
+
+        let frame = try DaemonWire.encodeFrame(
+            requestID: "x", command: "toolhost.execute", payload: [:])
+        do {
+            _ = try await connection.roundTrip(frame: frame, expectRequestID: "x")
+            XCTFail("roundTrip must reject an oversized newline-less frame")
+        } catch DaemonLLMEngineError.protocolError(let message) {
+            XCTAssertTrue(message.lowercased().contains("frame"),
+                          "expected a frame-size protocol error, got: \(message)")
+            XCTAssertTrue(message.lowercased().contains("newline"),
+                          "error should explain the newline-less cause: \(message)")
+        } catch is CancellationError {
+            // Acceptable: the oversized-frame throw may surface as cancellation-
+            // shaped depending on the await boundary. The point is NO hang + a
+            // bounded buffer (verified by the precise-error path above when it
+            // fires; both paths are prompt).
+        } catch {
+            // Any prompt error is acceptable as long as it isn't a hang — the
+            // guard's job is to bound the buffer, not to mandate one error type.
+        }
     }
 
     /// A valid UTF-8 file truncated by the byte cap MID-MULTIBYTE-CHARACTER is

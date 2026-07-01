@@ -502,6 +502,14 @@ final class DaemonSocketConnection: @unchecked Sendable {
     /// routed read unblocks within ~1 poll instead of wedging the operation lock
     /// for `receiveTimeoutSeconds`. The overall cap above is enforced separately.
     private static let recvPollSeconds: Int = 1
+    /// Per-frame byte cap (red-team M3 + advisor): bounds the line buffer
+    /// against a hostile/misbehaving daemon that sends bytes WITHOUT a newline
+    /// (which would grow `buffer` without limit before JSON decoding — the
+    /// `buildReadResult` content cap only runs AFTER a full line is decoded).
+    /// Generous enough for any legitimate daemon frame (a routed-read reply is
+    /// ≤ ~50 KiB after apply_read_limits; a full LLM token stream is well under
+    /// this). Instance var so tests can lower it without a debug-only seam.
+    var frameByteCap = 8 * 1024 * 1024  // 8 MiB
 
     init(queueLabel: String = "fae.daemon-llm.socket") {
         self.queue = DispatchQueue(label: queueLabel)
@@ -730,6 +738,13 @@ final class DaemonSocketConnection: @unchecked Sendable {
                 throw DaemonLLMEngineError.connectionFailed("recv(): \(Self.errnoString())")
             }
             buffer.append(contentsOf: chunk[0..<count])
+            // red-team M3 + advisor: bound the line buffer. A newline-less frame
+            // would otherwise grow `buffer` without limit (the buildReadResult
+            // content cap only runs AFTER a full line is decoded). Fail fast.
+            if buffer.count > frameByteCap {
+                throw DaemonLLMEngineError.protocolError(
+                    "daemon frame exceeded \(frameByteCap / 1024 / 1024) MiB without a newline")
+            }
         }
     }
 

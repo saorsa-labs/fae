@@ -756,33 +756,32 @@ enum DaemonToolRouting {
         guard let content = result["content"] as? [Any] else {
             return .error("Daemon read returned no content")
         }
-        // Defense against a compromised/misbehaving daemon that sends an
-        // unbounded `content` array or a single enormous block (red-team M3).
-        // The daemon applies apply_read_limits (~50 KiB) itself, so a
-        // well-behaved reply is small; cap well above the legitimate max.
-        let responseByteHardCap = 4 * localReadByteCap  // 200 KiB
-        var accumulated = 0
+        // Defense against a compromised/misbehaving daemon (red-team M3 +
+        // advisor): cap total decoded bytes INCLUDING join separators, and skip
+        // empty/nil blocks so a daemon can't balloon memory with a huge array
+        // of empty strings. The daemon applies apply_read_limits (~50 KiB)
+        // itself, so a well-behaved reply is small; 200 KiB is well above the
+        // legitimate max.
+        let hardCap = 4 * localReadByteCap  // 200 KiB
         var blocks: [String] = []
+        var bytes = 0
         for block in content {
             let next: String?
             if let s = block as? String { next = s }
             else if let d = block as? [String: Any], let t = d["text"] as? String { next = t }
             else { next = nil }
-            guard let text = next else { continue }
-            accumulated += text.utf8.count
-            if accumulated > responseByteHardCap {
-                // Trim this block to the remaining budget and stop decoding
-                // further blocks (bounds peak memory against a hostile peer).
-                let prev = accumulated - text.utf8.count
-                let remaining = max(0, responseByteHardCap - prev)
+            guard let text = next, !text.isEmpty else { continue }
+            let sep = blocks.isEmpty ? 0 : 1  // "\n" between blocks, counted
+            if bytes + sep + text.utf8.count > hardCap {
+                let remaining = max(0, hardCap - bytes - sep)
                 if remaining > 0 {
-                    let trimmed = String(decoding: text.utf8.prefix(remaining), as: UTF8.self)
-                    if !trimmed.isEmpty { blocks.append(trimmed) }
+                    blocks.append(String(decoding: text.utf8.prefix(remaining), as: UTF8.self))
                 }
-                blocks.append("\n[... daemon response exceeded \(responseByteHardCap / 1024) KiB; truncated ...]")
-                break
+                blocks.append("\n[... daemon response exceeded \(hardCap / 1024) KiB; truncated ...]")
+                return .success(blocks.joined(separator: "\n"))
             }
             blocks.append(text)
+            bytes += sep + text.utf8.count
         }
         return .success(blocks.joined(separator: "\n"))
     }

@@ -373,8 +373,15 @@ local + routed pipelines, cancellation sound). Red-team: **SHIP-WITH-FIXES** —
   leaf fd), unifying the two fallback paths' confinement strength. 2 tests.
 - **M2 — friendly-error unmapped fallback leaked verbatim** → ✅ FIXED. Generic
   fallback copy; audit keeps raw.
-- **M3 — no daemon response size cap** → ✅ FIXED. `buildReadResult` caps at
-  200 KiB (4× the daemon's own cap) with a truncation marker. 1 test.
+- **M3 — no daemon response size cap** → ✅ FIXED (both layers). Two caps:
+  (1) `DaemonSocketConnection.frameByteCap` (8 MiB default) bounds the `readLineLocked`
+  line buffer — a newline-less frame is rejected with a precise `protocolError`
+  BEFORE JSON decoding runs (advisor: the buildReadResult cap alone was a
+  half-fix since the socket buffer grows first). (2) `buildReadResult` caps
+  decoded content at 200 KiB, counting join separators and skipping empty/nil
+  blocks (so a huge array of empty strings can't balloon memory). 3 tests
+  (oversized block, many-empty/small blocks, oversized newline-less socket
+  frame).
 - **M5 — cancellation surfaced a raw technical string** → ✅ FIXED. Dedicated
   `catch is CancellationError` → `.cancelled` → friendly copy.
 - **M4 — workspace-root symlink guard misses APFS firmlinks** → 📌 OUT OF SCOPE.
