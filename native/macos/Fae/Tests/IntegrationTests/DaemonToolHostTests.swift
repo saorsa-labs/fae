@@ -1326,19 +1326,23 @@ final class DaemonToolHostTests: XCTestCase {
     /// set, and a real `write` (with a daemon published) executes locally and
     /// never roots the session (proving it did not route).
     func testNonRoutedToolsStayLocal() async throws {
-        // Classifier assertion: only `read` routes in 3b.
-        XCTAssertEqual(DaemonToolRouting.routedTools, ["read"])
-        for nonRouted in ["write", "edit", "bash", "calendar", "web_search", "self_config"] {
+        // Classifier assertion: `read` + `write` route (3b read; F7a write).
+        // edit/bash/calendar/web_search/self_config stay local (F7b/F8 are future).
+        XCTAssertEqual(DaemonToolRouting.routedTools, ["read", "write"])
+        for nonRouted in ["edit", "bash", "calendar", "web_search", "self_config"] {
             XCTAssertFalse(DaemonToolRouting.routedTools.contains(nonRouted),
-                           "\(nonRouted) must not route in 3b")
+                           "\(nonRouted) must not route yet (F7b/F8 are future)")
         }
 
-        // Smoke: a `write` with a daemon published runs locally + never roots.
+        // Smoke: an `edit` (still non-routed) with a daemon published runs
+        // locally + never roots. (Pre-F7a this used `write`; F7a routed write,
+        // so the smoke now uses `edit` to keep proving the non-routed invariant.)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         let outFile = tmp.appendingPathComponent("out.txt")
+        try Data("hi".utf8).write(to: outFile)
 
         let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
         defer {
@@ -1349,21 +1353,22 @@ final class DaemonToolHostTests: XCTestCase {
             workspaceProvider: TempWorkspace(workspaceRoot: tmp))
         defer { Task { await session.close() } }
         let executor = ToolExecutor(
-            registry: ToolRegistry(tools: [WriteTool()]),
+            registry: ToolRegistry(tools: [EditTool()]),
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session
         )
 
         let outcome = await executor.execute(
-            ToolCall(name: "write", arguments: ["path": outFile.path, "content": "hi"]),
+            ToolCall(name: "edit", arguments: ["path": outFile.path, "old_string": "hi", "new_string": "hello"]),
             context: makeFullContext(), callbacks: .noop)
-        XCTAssertFalse(outcome.result.isError, "local write should succeed")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: outFile.path), "write ran locally")
+        XCTAssertFalse(outcome.result.isError, "local edit should succeed: \(outcome.result.output)")
+        let edited = (try? Data(contentsOf: outFile)).flatMap { String(data: $0, encoding: .utf8) }
+        XCTAssertEqual(edited, "hello", "edit ran locally and updated the file")
         // Routing never fired → the session was never rooted / never connected.
         let hasRoot = await session.hasRoot()
-        XCTAssertFalse(hasRoot, "write must not root the daemon session")
-        _ = peer  // daemon published but never contacted by the write
+        XCTAssertFalse(hasRoot, "non-routed edit must not root the daemon session")
+        _ = peer  // daemon published but never contacted by the edit
     }
 
     // MARK: - B-Swift follow-up #2: no-daemon fallback is intent-gated
@@ -3101,5 +3106,430 @@ final class DaemonToolHostTests: XCTestCase {
             group.cancelAll()
             return first
         }
+    }
+}
+
+// MARK: - B-Swift Phase F7a: routed write tests
+//
+// Mirror the routed-read test matrix with the KEY write difference: mutations
+// are irreversible, so an intended-but-down daemon FAILS CLOSED (no confined
+// local write fallback). The success path additionally exercises pre-state
+// capture + receipt creation + post-action narration (the mutation steps the
+// read branch skips). Each test uses the injected routed-write executor seam
+// (`setRoutedWriteExecutorForTesting`) so the timeout/hooks/receipt pipeline
+// runs without a live daemon.
+
+extension DaemonToolHostTests {
+
+    /// A routed write with a reachable (canned) daemon succeeds and records a
+    /// receipt (the mutation step the read branch skips).
+    func testRoutedWriteSucceedsAndRecordsReceipt() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        // Real ReceiptStore against a temp DB so the receipt row is actually
+        // written (proves the mutation receipt step ran).
+        let receiptDB = tmp.appendingPathComponent("receipts.db").path
+        let store = try ReceiptStore(path: receiptDB)
+        await executor.setReceiptStore(store)
+        await executor.setRoutedWriteExecutorForTesting { _, _, _ in
+            .routed(
+                result: ["content": [["type": "text", "text": "Wrote 5 bytes to `notes.txt`"]]],
+                preStateContent: nil,
+                absoluteTargetPath: nil)
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": "notes.txt", "content": "hello"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "routed write must succeed: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("Wrote 5 bytes"),
+                      "the daemon's write success content must surface (not a generic string): \(outcome.result.output)")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "the routed-write pipeline must record latencyMs")
+    }
+
+    /// F7a key invariant: an intended-but-down daemon FAILS CLOSED — no local
+    /// write, friendly error. Tested via the REAL `routeWrite` (not the executor
+    /// seam, which replaces routeWrite and would bypass the fail-closed branch).
+    /// The `.daemonUnavailableFailClosed` plan must return an error WITHOUT
+    /// contacting the daemon (no root bound).
+    func testRoutedWriteIntendedDownFailsClosedNoLocalFallback() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+
+        let outcome = await DaemonToolRouting.routeWrite(
+            call: ToolCall(name: "write", arguments: ["path": "notes.txt", "content": "hello"]),
+            session: session,
+            plan: .daemonUnavailableFailClosed)
+
+        guard case .failClosed = outcome else {
+            XCTFail("the fail-closed plan must return .failClosed (no local write fallback): \(outcome)")
+            return
+        }
+        let failClosedHasRoot = await session.hasRoot()
+        XCTAssertFalse(failClosedHasRoot,
+                       "fail-closed must not bind a daemon root (no daemon contact)")
+    }
+
+    /// An opted-out runtime (useDaemonEngine=false) with no daemon falls through
+    /// to the FULL local pipeline — the legacy path-based `WriteTool` writes an
+    /// ABSOLUTE path (which routing would deny), and the routed executor is
+    /// NEVER called.
+    func testRoutedWriteOptedOutFallsThroughToLegacyLocal() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let absPath = tmp.appendingPathComponent("outside.txt")
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedWriteExecutorForTesting { _, _, _ in
+            .failClosed("routed executor must not be called for legacy fall-through")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": absPath.path, "content": "legacy-local-write"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "legacy local write of an absolute path must succeed: \(outcome.result.output)")
+        let wrote = (try? Data(contentsOf: absPath)).map { String(data: $0, encoding: .utf8) } ?? nil
+        XCTAssertEqual(wrote, "legacy-local-write",
+                       "the legacy local WriteTool must have written the file")
+    }
+
+    /// A stalling routed write trips the timeout (the wrapped pipeline fires).
+    func testRoutedWriteTimeoutReturnsTimeoutError() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedWriteTimeoutForTesting(0.4)
+        await executor.setRoutedWriteExecutorForTesting { _, _, _ in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            return .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
+        }
+
+        let start = Date()
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": "notes.txt", "content": "hello"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertTrue(outcome.result.isError, "stalling routed write must time out")
+        XCTAssertTrue(outcome.result.output.contains("took too long"),
+                      "error must be the friendly timeout message: \(outcome.result.output)")
+        XCTAssertLessThan(elapsed, 2.0, "the 0.4s timeout must fire, not the 5s stall")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "timeout path must record latencyMs")
+    }
+
+    /// A blocking PreToolUse hook must block BEFORE the routed write runs (no
+    /// daemon side effect, no receipt). Mirrors the read hook test.
+    func testRoutedWritePreToolUseHookBlocksBeforeWrite() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let hooks = SpyHookRunner(preResponse:
+            HookResponse(systemMessage: "blocked-by-test", block: true, metadata: nil))
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedWriteExecutor(
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+                .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": "notes.txt", "content": "hello"]),
+            context: makeFullContext(), callbacks: .noop)
+
+        let preNames = await hooks.preToolNames
+        XCTAssertEqual(preNames, ["write"], "PreToolUse must fire for the routed write")
+        XCTAssertTrue(outcome.result.isError, "a blocking PreToolUse hook must surface an error")
+        XCTAssertEqual(outcome.result.output, "blocked-by-test",
+                       "the hook's block message must surface: \(outcome.result.output)")
+        let posts = await hooks.postToolNames
+        XCTAssertEqual(posts, [], "PostToolUse must NOT fire when PreToolUse blocks")
+    }
+
+    /// A routed write missing the `content` parameter is shape-denied before any
+    /// daemon contact. Tested via the REAL `routeWrite` (the executor seam would
+    /// bypass this guard, which lives inside routeWrite).
+    func testRoutedWriteMissingContentIsShapeDenied() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+
+        // Even with a reachable plan, missing content is rejected BEFORE the
+        // daemon is contacted (no root bound).
+        let outcome = await DaemonToolRouting.routeWrite(
+            call: ToolCall(name: "write", arguments: ["path": "notes.txt"]),  // no content
+            session: session,
+            plan: .daemonReachable)
+
+        guard case .denied(let reason) = outcome else {
+            XCTFail("missing content must be .denied: \(outcome)")
+            return
+        }
+        XCTAssertTrue(reason.contains("content"),
+                      "error must mention the missing content parameter: \(reason)")
+        let missingContentHasRoot = await session.hasRoot()
+        XCTAssertFalse(missingContentHasRoot,
+                       "must not contact the daemon when content is missing")
+    }
+
+    /// `planWriteRoute` shape: opted-out + no daemon → `.legacyLocal` (fall
+    /// through); intended + no daemon → `.daemonUnavailableFailClosed`.
+    func testPlanWriteRouteBranches() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let optedOut = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await optedOut.close() } }
+        let planOut = await DaemonToolRouting.planWriteRoute(session: optedOut)
+        XCTAssertEqual(planOut, .legacyLocal,
+                       "opted-out + no daemon must plan the legacy local write")
+
+        let intended = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await intended.close() } }
+        let planIn = await DaemonToolRouting.planWriteRoute(session: intended)
+        XCTAssertEqual(planIn, .daemonUnavailableFailClosed,
+                       "intended + no daemon must plan fail-closed (no local write fallback)")
+    }
+
+    /// `validateWritePathShape` parity with the read validator: absolute / `..` /
+    /// empty / NUL are denied; a normal relative path passes.
+    func testValidateWritePathShape() {
+        XCTAssertEqual(DaemonToolRouting.validateWritePathShape("notes.txt"), .ok("notes.txt"))
+        XCTAssertEqual(DaemonToolRouting.validateWritePathShape("a/b/c.txt"), .ok("a/b/c.txt"))
+        if case .ok = DaemonToolRouting.validateWritePathShape("/etc/passwd") {
+            XCTFail("absolute write path must be denied")
+        }
+        if case .ok = DaemonToolRouting.validateWritePathShape("../escape.txt") {
+            XCTFail("`..` write path must be denied")
+        }
+        if case .ok = DaemonToolRouting.validateWritePathShape("") {
+            XCTFail("empty write path must be denied")
+        }
+        if case .ok = DaemonToolRouting.validateWritePathShape("a\0b") {
+            XCTFail("NUL in write path must be denied")
+        }
+    }
+
+    /// F7a (advisor): the fd-anchored pre-state capture returns the OLD content
+    /// of an existing regular file under the root — read off the open leaf fd,
+    /// not a path (no TOCTOU). This is the safe replacement for the path-based
+    /// capturePreStateForTool that would have followed symlinks/hardlinks.
+    func testReadFdAnchoredPreStateCapturesOldContent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-ps-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("original-content".utf8).write(to: root.appendingPathComponent("file.txt"))
+
+        let preState = DaemonToolRouting.readFdAnchoredPreState(validatedPath: "file.txt", root: root)
+        XCTAssertEqual(preState, Data("original-content".utf8),
+                       "pre-state must be the existing file's full content")
+    }
+
+    /// F7a (advisor): a symlink leaf in the workspace pointing OUTSIDE the root
+    /// must NOT leak the outside content during pre-state capture. The O_NOFOLLOW
+    /// leaf open rejects it (ELOOP) → nil. (The daemon write would reject it too.)
+    func testReadFdAnchoredPreStateReturnsNilForSymlinkNoLeak() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-ps-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Outside secret the symlink would leak if the capture followed it.
+        let secret = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-secret-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: secret) }
+        try Data("TOPSECRET".utf8).write(to: secret)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("link.txt"), withDestinationURL: secret)
+
+        let preState = DaemonToolRouting.readFdAnchoredPreState(validatedPath: "link.txt", root: root)
+        XCTAssertNil(preState, "a symlink leaf must yield no pre-state (no leak)")
+    }
+
+    /// F7a (advisor): a hardlink (st_nlink > 1) yields no pre-state — the fstat
+    /// off the opened leaf fd rejects it (mirrors the daemon's own hardlink
+    /// reject on write).
+    func testReadFdAnchoredPreStateReturnsNilForHardlink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-ps-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let original = root.appendingPathComponent("orig.txt")
+        try Data("shared".utf8).write(to: original)
+        try FileManager.default.linkItem(
+            at: original, to: root.appendingPathComponent("link.txt"))  // now st_nlink == 2
+
+        let preState = DaemonToolRouting.readFdAnchoredPreState(validatedPath: "link.txt", root: root)
+        XCTAssertNil(preState, "a hardlink (st_nlink > 1) must yield no pre-state")
+    }
+
+    /// F7a (advisor): a new (non-existent) target yields no pre-state — there
+    /// is nothing to undo (the write creates it).
+    func testReadFdAnchoredPreStateReturnsNilForNewFile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-ps-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let preState = DaemonToolRouting.readFdAnchoredPreState(validatedPath: "newfile.txt", root: root)
+        XCTAssertNil(preState, "a non-existent target must yield no pre-state")
+    }
+
+    /// F7a (advisor): a routed write whose outcome carries fd-anchored pre-state
+    /// records that pre-state (old content + absolute target path) in the
+    /// receipt — proving the outcome→receipt wiring uses the SAFE material, not a
+    /// path-based capture. (The capture itself is covered by the four tests above.)
+    func testRoutedWriteReceiptCarriesFdAnchoredPreState() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-rc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        let store = try ReceiptStore(path: tmp.appendingPathComponent("receipts.db").path)
+        await executor.setReceiptStore(store)
+        // Inject the SAFE outcome material the real executeSerializedRoutedWrite
+        // would produce (fd-anchored old content + daemon-approved abs path).
+        let absTarget = tmp.appendingPathComponent("notes.txt").path
+        await executor.setRoutedWriteExecutorForTesting { _, _, _ in
+            .routed(result: [:], preStateContent: Data("old-content".utf8), absoluteTargetPath: absTarget)
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": "notes.txt", "content": "new"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError, "routed write must succeed: \(outcome.result.output)")
+
+        let receipts = await store.recentReceipts(speakerId: nil, limit: 5)
+        let writeReceipt = receipts.first { $0.toolName == "write" }
+        XCTAssertNotNil(writeReceipt, "a receipt must be recorded for the routed write")
+        XCTAssertEqual(writeReceipt?.preStateBlob, Data("old-content".utf8),
+                       "the receipt must carry the fd-anchored old content")
+        XCTAssertEqual(writeReceipt?.preStatePath, absTarget,
+                       "the receipt must carry the daemon-approved absolute target path")
+    }
+
+    /// F7a (advisor #1): a routed write that CREATES a new file (no old content)
+    /// still records the receipt PATH (blob nil) — undo for a created file
+    /// deletes it, so it needs the path. Mirrors the local `captureFilePreState`
+    /// `(blob:nil, path:)` shape; the previous `preStateContent.map { ... }` form
+    /// would have dropped the path when the blob was nil.
+    func testRoutedWriteReceiptPreservesPathWhenBlobIsNil() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7a-nb-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        let store = try ReceiptStore(path: tmp.appendingPathComponent("receipts.db").path)
+        await executor.setReceiptStore(store)
+        // New-file outcome: fd-anchored pre-state is nil (file didn't exist),
+        // but the absolute target path is still carried for undo.
+        let absTarget = tmp.appendingPathComponent("newfile.txt").path
+        await executor.setRoutedWriteExecutorForTesting { _, _, _ in
+            .routed(result: [:], preStateContent: nil, absoluteTargetPath: absTarget)
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "write", arguments: ["path": "newfile.txt", "content": "created"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError, "routed write must succeed: \(outcome.result.output)")
+
+        let receipts = await store.recentReceipts(speakerId: nil, limit: 5)
+        let writeReceipt = receipts.first { $0.toolName == "write" }
+        XCTAssertNotNil(writeReceipt, "a receipt must be recorded even for a new-file write")
+        XCTAssertNil(writeReceipt?.preStateBlob,
+                     "a created file has no old content (blob nil)")
+        XCTAssertEqual(writeReceipt?.preStatePath, absTarget,
+                       "the receipt must still carry the path for undo (blob nil must not drop the path)")
+    }
+
+    /// Write-variant of the spied executor helper (mirrors
+    /// `makeSpiedRoutedExecutor` but injects the write executor + WriteTool).
+    private func makeSpiedRoutedWriteExecutor(
+        tmp: URL, hookRunner: SpyHookRunner?, logger: SpySecurityLogger,
+        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.WriteRoutePlan) async -> DaemonToolRouting.WriteExecutionOutcome
+    ) async -> ToolExecutor {
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [WriteTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: logger,
+            toolAnalytics: analytics,
+            daemonToolHostSession: session)
+        if let hookRunner { await executor.setPluginHookRunner(hookRunner) }
+        await executor.setRoutedWriteExecutorForTesting(routed)
+        return executor
     }
 }

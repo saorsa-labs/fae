@@ -64,24 +64,27 @@ prerequisite is the owner deciding the dangerous-scope policy, not Swift
 routing code.
 
 ### Owner decision required (do NOT implement without a call)
-Grant `SwiftFrontend` the `ToolExecuteDangerous` scope — how?
-- **(a) Add it to `SwiftFrontend::default_scopes()`** (`lib.rs:355`). Simplest;
-  flips the default so write/edit/bash route with the `tool.confirm` card (which
-  is already wired + surfaced to the owner). Reverses the current conservative
-  default deliberately.
-- **(b) Config-gated opt-in** — a `config.toml` flag the owner sets, granting
-  the scope conditionally. Keeps the default conservative; adds a mechanism the
-  code currently says doesn't exist.
-- **(c) Defer** — keep write/edit/bash on the local Swift pipeline (path-based)
-  until the dangerous-scope policy is settled; F7a/F7b/F8 wait.
 
-Resolving this unblocks all of Layer 4 at the scope level (write/edit/bash share
-the `dangerous` classification). Once decided, the Swift F7a work is
+**RESOLVED 2026-07-01 — owner chose option (a):** grant `SwiftFrontend` the
+`ToolExecuteDangerous` scope by adding it to `default_scopes()`
+(`control-plane/lib.rs:355`, commit `2c22322d`). The per-call `tool.confirm`
+card (A3, already wired) is the human-in-the-loop boundary — granting the scope
+lets the governed path run, it does not bypass approval. F7a (route write)
+shipped on this basis (`38e36961`).
+
+The original options were:
+- **(a) Add it to `SwiftFrontend::default_scopes()`** ✅ chosen.
+- **(b) Config-gated opt-in** — a `config.toml` flag the owner sets.
+- **(c) Defer** — keep write/edit/bash on the local Swift pipeline.
+
+Resolving this unblocked all of Layer 4 at the scope level (write/edit/bash share
+the `dangerous` classification). Once decided, the Swift F7a work was
 well-scoped: `WriteRoutePlan` + `planWriteRoute`/`routeWrite` +
-`executeSerializedRoutedWrite` + `executeRoutedWrite` (PreToolUse → pre-state
-capture → timeout-wrapped daemon write → PostToolUse → audit → receipt +
-narration), mirroring `executeRoutedRead` with the mutation steps added. The
-`tool.confirm` card needs no new Swift work (already wired).
+`executeSerializedRoutedWrite` + `executeRoutedWrite` (PreToolUse → fd-anchored
+pre-state capture inside the locked daemon op → timeout-wrapped daemon write →
+PostToolUse → audit → receipt + narration), mirroring `executeRoutedRead` with
+the mutation steps added. The `tool.confirm` card needed no new Swift work
+(already wired + covered by `testAwareRoundTripAnswersToolConfirmBeforeResponse`).
 
 ### Corrections to the original F7a plan (found during orientation, advisor-validated 2026-07-01)
 1. **Approval is upstream, not executor-local.** `requiresApproval` is consumed

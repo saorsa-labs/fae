@@ -62,7 +62,7 @@ enum DaemonToolRouting {
     /// blast radius — the substring damage-denylist is not complete shell
     /// safety). Unknown/Apple/scheduler tools stay local unless deliberately
     /// classified here.
-    static let routedTools: Set<String> = ["read"]
+    static let routedTools: Set<String> = ["read", "write"]
 
     /// Canonicalize a URL: standardize (resolve `.`/`..` lexically) then resolve
     /// symlinks. Used so both the confinement root and the resolved target are
@@ -605,6 +605,33 @@ enum DaemonToolRouting {
     ///
     /// When the root WAS approved and the daemon then drops at `execute`, fall
     /// back to a LOCAL read of the already-confined canonical path (never cwd).
+
+    /// The outcome of the serialized daemon-interacting core of a routed write
+    /// (F7a). Mirrors `ReadExecutionOutcome` but has NO local-fallback case —
+    /// mutations are irreversible, so any daemon drop/error fails closed. The
+    /// confined local write path is intentionally absent (a Swift-side
+    /// fd-anchored write would duplicate the fluers hard-gate work and widen
+    /// risk; the legacy path-based `WriteTool` is reachable only via the
+    /// explicit opt-out `.legacyLocal` plan, never as a fallback).
+    enum WriteExecutionOutcome {
+        /// The daemon executed the write (after its `tool.confirm` card, if it
+        /// needed one). Carries: `result` — the daemon's reply dict (whose
+        /// `content` blocks are surfaced to the user, e.g. "Wrote N bytes to
+        /// `path`"); `preStateContent` — the fd-anchored old content for undo
+        /// (nil for a new file or a target the daemon rejects); `absoluteTargetPath`
+        /// — the daemon-approved root + relative path, the canonical undo target.
+        case routed(result: [String: Any], preStateContent: Data?, absoluteTargetPath: String?)
+        /// Containment/path denial (decided before the `execute` frame).
+        case denied(String)
+        /// Daemon dropped/errored before OR during `execute` (including before
+        /// the root was approved), or the routed write timed out. Fail closed —
+        /// never write locally.
+        case failClosed(String)
+        /// The caller's Task was cancelled (e.g. while parked on the operation
+        /// lock). No daemon round-trip ran.
+        case cancelled
+    }
+
     // MARK: - Read route planning (B-Swift Phase C / follow-up #5)
 
     /// The decided route for a `read` tool call, computed BEFORE any side effect
@@ -784,6 +811,242 @@ enum DaemonToolRouting {
             bytes += sep + text.utf8.count
         }
         return .success(blocks.joined(separator: "\n"))
+    }
+
+    // MARK: - B-Swift Phase F7a: route `write` through the daemon
+
+    /// The decided route for a `write` tool call, computed BEFORE any side
+    /// effect (mirrors `ReadRoutePlan`). Mutations are irreversible, so the
+    /// outage branches are STRICTER than read:
+    /// - `.legacyLocal` — explicit daemon opt-out (`!reachable && !intended`):
+    ///   the legacy path-based `WriteTool` via the full local pipeline
+    ///   (DamageControl, hooks, audit, receipts). Pre-routing behavior.
+    /// - `.daemonReachable` — route to the governed daemon ToolHost.
+    /// - `.daemonUnavailableFailClosed` — daemon INTENDED but unreachable: FAIL
+    ///   CLOSED. No confined local write fallback (a Swift-side fd-anchored
+    ///   write would duplicate the fluers hard-gate work and widen risk).
+    enum WriteRoutePlan {
+        case legacyLocal
+        case daemonReachable
+        case daemonUnavailableFailClosed
+    }
+
+    /// Decide the write route from daemon reachability + intent (the DECISION).
+    /// No path validation, no side effect. `ToolExecutor` runs this after tool
+    /// lookup and BEFORE DamageControl so it can run hooks + timeout around the
+    /// routed execution. See `routeWrite(_:plan:)` for execution.
+    static func planWriteRoute(
+        session: DaemonToolHostSession
+    ) async -> WriteRoutePlan {
+        let reachable = await session.isDaemonReachable()
+        if !reachable, !session.daemonIntended {
+            NSLog(
+                "DaemonToolRouting: write — daemon unreachable and useDaemonEngine=false "
+                + "(opted out) → legacy local write (pre-routing behavior)")
+            return .legacyLocal
+        }
+        if reachable {
+            return .daemonReachable
+        }
+        NSLog(
+            "DaemonToolRouting: write — daemon unreachable and useDaemonEngine=true "
+            + "(intended) → FAIL CLOSED (mutations are irreversible; no local fallback)")
+        return .daemonUnavailableFailClosed
+    }
+
+    /// EXECUTE a routed `write` for a pre-computed `plan`. Returns the
+    /// `WriteExecutionOutcome` (NOT a pre-mapped `ToolResult`) so `ToolExecutor`
+    /// can run hooks + timeout + audit around it AND build the receipt from the
+    /// outcome's fd-anchored pre-state material (the receipt/undo capture
+    /// happens INSIDE `executeSerializedRoutedWrite`, under the operation lock,
+    /// after root approval — never path-based/outside the lock).
+    ///
+    /// `.legacyLocal` is `ToolExecutor`'s fall-through (full local pipeline) and
+    /// is NOT routed here; reaching this method with `.legacyLocal` is a
+    /// misconfig error (surfaced as `.failClosed`).
+    static func routeWrite(
+        call: ToolCall,
+        session: DaemonToolHostSession,
+        plan: WriteRoutePlan
+    ) async -> WriteExecutionOutcome {
+        guard plan != .legacyLocal else {
+            return .failClosed("write routing misconfigured: legacy route reached the routed executor")
+        }
+
+        // Shape-validate path + content BEFORE any daemon contact.
+        guard let requestedPath = call.arguments["path"] as? String else {
+            return .denied("Missing required parameter: path")
+        }
+        guard let content = call.arguments["content"] as? String else {
+            return .denied("Missing required parameter: content")
+        }
+        switch validateWritePathShape(requestedPath) {
+        case .deny(let reason):
+            return .denied(reason)
+        case .ok(let trimmed):
+            switch plan {
+            case .daemonReachable:
+                return await session.executeSerializedRoutedWrite(
+                    validatedPath: trimmed, content: content)
+            case .daemonUnavailableFailClosed:
+                // Mutations are irreversible; never fall back to a local write.
+                return .failClosed(
+                    "Daemon unavailable and routing is intended; refusing to write locally")
+            case .legacyLocal:
+                return .failClosed("write routing misconfigured: legacy route reached the routed executor")
+            }
+        }
+    }
+
+    /// Map a `WriteExecutionOutcome` to a Swift `ToolResult`. Returns RAW
+    /// technical error strings for the failure cases; `ToolExecutor.executeRoutedWrite`
+    /// reframes them via `friendlyRoutedWriteError` for the conversation AFTER
+    /// audit (mirrors the read split). The `.routed` pre-state material is for
+    /// the receipt (read by `executeRoutedWrite`); the daemon's `content` blocks
+    /// (e.g. "Wrote N bytes to `path`") are surfaced via `buildWriteResult`.
+    static func mapWriteOutcome(
+        _ outcome: WriteExecutionOutcome
+    ) -> ToolResult {
+        switch outcome {
+        case .routed(let result, _, _):
+            return buildWriteResult(from: result)
+        case .denied(let reason):
+            return .error(reason)
+        case .failClosed(let reason):
+            return .error(reason)
+        case .cancelled:
+            return .error("Write was cancelled.")
+        }
+    }
+
+    /// Build the Swift `ToolResult` from the daemon's `write` reply. The fluers
+    /// `WriteTool` returns a content block on success — `{type:"text", text:
+    /// "Wrote N bytes to `path`"}` — (NOT contentless: `SessionEnv::write_file`
+    /// returns `()`, but the tool wrapper builds this message from it; see
+    /// fluers-runtime `tool.rs` `WriteTool::execute`). We surface that content
+    /// rather than a generic string. The extraction mirrors `buildReadResult`'s
+    /// M3 hardening: join string/`{text}` blocks, skip empty, cap total bytes
+    /// (a compromised/misbehaving daemon could otherwise balloon memory with a
+    /// huge array of blocks — the legitimate write message is tiny).
+    static func buildWriteResult(from result: [String: Any]) -> ToolResult {
+        // The fluers WriteTool returns content on success ("Wrote N bytes to
+        // `path`"). Surface it if present (delegating to the read-side M3-
+        // hardened extractor — cap total bytes, skip empty blocks — since a
+        // compromised daemon could balloon a content array). If content is
+        // absent (defensive — a misbehaving daemon), the `.routed` outcome STILL
+        // means success, so return a generic success rather than an error
+        // (unlike read, where missing content IS an error: a read with no
+        // content failed to read anything).
+        if let content = result["content"] as? [Any], !content.isEmpty {
+            return buildReadResult(from: result)
+        }
+        return .success("Wrote file via the governed daemon.")
+    }
+
+    // MARK: - Write helpers
+
+    /// Shape-validate a write path (mirrors `validateReadPathShape`, minus the
+    /// directory-ish rejects that don't apply to a write target). Absolute
+    /// paths, NUL, empty, and any `..` component are denied up front — no root
+    /// binding, no daemon frame. No existence/regular-file check here: a write
+    /// target legitimately may not exist yet (creation), and existence is
+    /// probed server-side for the confirm card (`probe_old_exists`).
+    static func validateWritePathShape(_ requested: String) -> ShapeValidation {
+        let trimmed = requested.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .deny("write path is empty") }
+        guard !trimmed.hasPrefix("/") else {
+            return .deny(
+                "Absolute paths are not supported for workspace writes; use a path relative to the workspace root")
+        }
+        guard !trimmed.contains("\0") else { return .deny("write path contains a NUL byte") }
+        guard trimmed != "." else {
+            return .deny("write path must name a file, not the workspace root")
+        }
+        let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        if parts.contains("..") {
+            return .deny("path traversal (..) is not permitted in a workspace write")
+        }
+        return .ok(trimmed)
+    }
+
+    /// F7a: fd-anchored pre-state capture for a routed write's receipt/undo.
+    /// Returns the FULL old content (as `Data`, up to the receipt blob cap) of
+    /// an existing REGULAR file with `st_nlink <= 1` under the daemon-approved
+    /// `root`, read off the SAME open leaf fd that anchored the confinement —
+    /// no path re-resolution, so a symlink/hardlink swap cannot leak outside
+    /// content during capture (closes the TOCTOU the path-based
+    /// `ReceiptStore.capturePreStateForTool` would reopen).
+    ///
+    /// Returns `nil` for: a new file (not-found), a symlink/hardlink, or a
+    /// non-regular entry. In all those cases either the file is being created
+    /// (no undo material) or the daemon write will fail closed (fluers 0.5.0
+    /// rejects symlinks/hardlinks) — so no pre-state is needed. A file larger
+    /// than the blob cap also returns `nil` (matches the local pipeline's
+    /// `captureFilePreState` skip).
+    ///
+    /// MUST be called under the routed operation lock, after root approval, to
+    /// avoid the concurrent-write stale-pre-state race (the lock serializes
+    /// routed writes, so capture + execute are atomic w.r.t. other routed ops).
+    static func readFdAnchoredPreState(
+        validatedPath: String,
+        root: URL
+    ) -> Data? {
+        let rawParts = validatedPath.split(separator: "/", omittingEmptySubsequences: true)
+        let parts = rawParts.map(String.init).filter { $0 != "." && $0 != ".." }
+        guard !parts.isEmpty else { return nil }
+
+        // Anchor: open the ROOT with O_NOFOLLOW (mirrors readFdAnchored).
+        let rootFd = root.path.withCString { cstr -> Int32 in
+            Darwin.open(cstr, openFlags, 0)
+        }
+        guard rootFd >= 0 else { return nil }
+        defer { Darwin.close(rootFd) }
+
+        var rootSt = stat()
+        guard Darwin.fstat(rootFd, &rootSt) == 0,
+              (rootSt.st_mode & S_IFMT) == S_IFDIR
+        else { return nil }
+
+        // Walk intermediates as directories (openat + O_NOFOLLOW + fstat).
+        var parentFd = rootFd
+        var openedIntermediates: [Int32] = []
+        defer {
+            for fd in openedIntermediates where fd >= 0 { Darwin.close(fd) }
+        }
+        let lastIdx = parts.count - 1
+        for (idx, name) in parts.enumerated() {
+            let isLeaf = idx == lastIdx
+            guard let opened = openComponent(
+                parent: parentFd, name: name, requireDir: !isLeaf)
+            else {
+                // Leaf not-found (new file) or intermediate missing → no pre-state.
+                return nil
+            }
+            if isLeaf {
+                defer { Darwin.close(opened) }
+                // Leaf checks off the OPENED fd (authoritative — no path).
+                var leafSt = stat()
+                guard Darwin.fstat(opened, &leafSt) == 0 else { return nil }
+                // Only an existing regular file with a single link has undo
+                // material. Symlinks (rejected by O_NOFOLLOW), hardlinks
+                // (st_nlink>1 — the daemon write rejects these too), and
+                // non-regular entries → nil.
+                guard (leafSt.st_mode & S_IFMT) == S_IFREG,
+                      leafSt.st_nlink <= 1
+                else { return nil }
+                let size = Int(leafSt.st_size)
+                guard size >= 0,
+                      size <= ReceiptStore.maxPreStateBlobBytes
+                else { return nil }  // too large — skip the blob (matches local)
+                // Read the FULL old content off the open fd (no display
+                // truncation — undo needs the verbatim bytes).
+                let fh = FileHandle(fileDescriptor: opened, closeOnDealloc: false)
+                return fh.readData(ofLength: size)
+            }
+            openedIntermediates.append(opened)
+            parentFd = opened
+        }
+        return nil
     }
 
 }

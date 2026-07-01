@@ -14,33 +14,33 @@ historical (archive). If work isn't listed here, it's done or not started.
 
 ## Live work
 
-### Layer-4 routed mutations (write / edit / bash) — fluers gate closed; F7a blocked on Q7b scope decision
+### Layer-4 routed mutations (write / edit / bash) — F7a (write) shipped; F7b/F8 remain
 
-`read` is routed and confinement-complete (fd-anchored, hardlink/symlink
-TOCTOU closed, red-team-validated). Two independent gates stand between now
-and routing `write`/`edit`/`bash`:
+`read` is routed and confinement-complete. `write` is now routed too (F7a,
+2026-07-01). `edit`/`bash` remain on the local pipeline (F7b/F8 are future).
 
-1. **fluers fd-anchoring (the HARD GATE) — SATISFIED (2026-07-01):** fluers
-   0.5.0 fd-anchored all four mutation/search paths (`openat`+`mkdirat`+
-   `O_NOFOLLOW`+`fstat`-off-opened-fd; the path-based `resolve()` is gone
-   entirely). Fae pins `=0.5.0`.
+**Q7b resolved (owner chose option a):** `SwiftFrontend::default_scopes()` now
+holds `Scope::ToolExecuteDangerous` (`control-plane/lib.rs:355`), so
+write/edit/bash can route through the governed daemon. The per-call boundary is
+the owner `tool.confirm` card (A3), surfaced via
+`DaemonAgentClient.handleToolConfirm` — granting the scope lets the governed
+path RUN, it does not bypass human approval. The daemon's `FaeToolPolicy` still
+re-checks scope + path/damage/egress per call.
 
-2. **Daemon `ToolExecuteDangerous` scope (Q7b) — BLOCKED on owner decision.**
-   F7a orientation (2026-07-01) found a second, independent gate the F7/F8 doc
-   did not anticipate. The daemon's per-tool policy (`FaeToolPolicy`) calls
-   `fae_control_plane::authorize` with `tool.execute_dangerous` for write/edit/
-   bash (`toolhost/policy.rs:95`). `SwiftFrontend::default_scopes()`
-   (`control-plane/lib.rs:355`) is hardcoded to grant `ToolExecuteSafe` but
-   **not** `ToolExecuteDangerous` ("granted explicitly during rollout, not by
-   default"; "server-side opt-in — a client-side toggle is not the boundary").
-   With no config/runtime flag to grant it, a routed write from the Swift app is
-   `Deny(MissingScope)` at `policy.rs` step 2 — **before** any `tool.confirm`
-   card fires (the card is wired via `DaemonAgentClient.handleToolConfirm`, but
-   it only runs once the scope is held). Resolving Q7b unblocks F7a/F7b/F8
-   together (write/edit/bash are all `dangerous`). See the F7/F8 doc §0.
+**F7a — route write (shipped, `38e36961`):** routed write goes through the
+daemon with fail-closed outage semantics (no local write fallback — mutations
+are irreversible). Receipt pre-state is captured INSIDE the serialized daemon
+operation (under the operation lock, after root approval, via an fd-anchored
+full read `readFdAnchoredPreState`) and threaded through the outcome to the
+receipt — NOT the path-based `capturePreStateForTool` (which would reopen the
+TOCTOU class F7a closed). DamageControl is skipped (daemon governs write
+confinement; catastrophe rules are bash-only, deferred to F8). Approval is
+upstream (`ToolRoutingHelpers.swift:84`), not an executor step.
 
-- **Policy table + owner decisions (the F7a/F7b/F8 plan):** `docs/plans/bswift-f7f8-routed-damagecontrol-policy-2026-06-30.md`.
+- **Policy table + the F7a corrections:** `docs/plans/bswift-f7f8-routed-damagecontrol-policy-2026-06-30.md`.
 - **Resolution record (read-routing, all closed):** `docs/plans/bswift-3b-followups-2026-06-30.md`.
+- **Remaining Layer-4 work:** F7b (route `edit`) + F8 (route `bash` — needs the
+  DamageControl catastrophe split + bash-receipt owner decisions).
 
 ### fluers — current pin `=0.5.0`
 

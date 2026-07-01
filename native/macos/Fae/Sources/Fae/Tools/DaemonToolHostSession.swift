@@ -365,6 +365,86 @@ actor DaemonToolHostSession {
         }
     }
 
+    /// F7a: the serialized daemon-interacting core of a routed `write`. Mirrors
+    /// `executeSerializedRoutedRead` but is STRICTER — there is NO local
+    /// fallback. Mutations are irreversible, so any daemon drop/error (before
+    /// OR after root approval) fails CLOSED. The legacy path-based `WriteTool`
+    /// is reachable only via the explicit opt-out `.legacyLocal` plan (handled
+    /// by `ToolExecutor`'s fall-through), never as an outage fallback.
+    ///
+    /// The daemon's `tool.confirm` card (A3) fires here on `NeedsConfirmation`;
+    /// it is answered on this same connection by the session's
+    /// `serverRequestHandler` (`DaemonAgentClient.handleToolConfirm`), so the
+    /// operation lock + `tool.confirm` round-trip serialize correctly (one
+    /// server request at a time on the shared connection).
+    func executeSerializedRoutedWrite(
+        validatedPath: String,
+        content: String
+    ) async -> DaemonToolRouting.WriteExecutionOutcome {
+        do {
+            try await acquireToolHostOperationLock()
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Could not acquire the write lock: \(error.localizedDescription)")
+        }
+        defer { releaseToolHostOperationLock() }
+        if Task.isCancelled { return .cancelled }
+
+        do {
+            // Root FIRST (binds the daemon-approved root).
+            let daemonRoot = try await ensureDefaultRooted()
+            // F7a (advisor): capture the pre-state for the receipt/undo INSIDE
+            // the operation lock, AFTER root approval, BEFORE the daemon write,
+            // via an fd-anchored read off the daemon-approved root. This is the
+            // safe receipt capture — NOT the path-based
+            // `ReceiptStore.capturePreStateForTool` (which used a relative path,
+            // ran outside the lock, and followed symlinks/hardlinks, reopening
+            // the TOCTOU class F7a closed). Returns nil for a new file or a
+            // target the daemon will reject.
+            let preStateContent = DaemonToolRouting.readFdAnchoredPreState(
+                validatedPath: validatedPath, root: daemonRoot)
+            let absoluteTargetPath = daemonRoot
+                .appendingPathComponent(validatedPath).path
+            do {
+                // Execute the governed write. The daemon applies path/damage
+                // gates + emits tool.confirm on NeedsConfirmation (answered on
+                // this connection). fluers 0.5.0 fd-anchors the write itself
+                // (openat + mkdirat + O_NOFOLLOW + fstat st_nlink check).
+                //
+                // The daemon returns a CONTENT-BEARING result on success: the
+                // fluers `WriteTool::execute` builds `{content:[{type:"text",
+                // text:"Wrote N bytes to `path`"}], details:{path,bytes}}` from
+                // `SessionEnv::write_file` (which itself returns `()`). We carry
+                // the result dict in the outcome so `mapWriteResult`/`buildWriteResult`
+                // surfaces that message (NOT a generic string). Errors throw →
+                // mapped to .failClosed below. (fluers-runtime `tool.rs`.)
+                let result = try await execute(tool: "write", input: ["path": validatedPath, "content": content])
+                return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
+            } catch DaemonAgentClientError.daemonUnavailable {
+                // Daemon dropped at execute (root was approved). FAIL CLOSED —
+                // never write locally. The user re-issues once the daemon is back.
+                return .failClosed(
+                    "Daemon unavailable during write; refusing to write locally.")
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                // Daemon up but errored (scope/path/confirm denial, etc.). Fail
+                // closed — surface the error, do NOT fall back.
+                return .failClosed("Daemon write failed: \(error.localizedDescription)")
+            }
+        } catch DaemonAgentClientError.daemonUnavailable {
+            // Daemon dropped before/during root approval. Fail closed.
+            return .failClosed(
+                "Daemon unavailable before the workspace root was approved; " +
+                "refusing to write locally without a daemon-approved root.")
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Daemon write failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Confined LOCAL read fallback for the no-daemon-but-intended branch
     /// (B-Swift follow-up #2: daemon intended but momentarily unreachable).
     ///

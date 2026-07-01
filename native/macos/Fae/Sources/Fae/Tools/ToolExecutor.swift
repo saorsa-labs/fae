@@ -75,6 +75,20 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// timeout without a 30s wait.
     private var routedReadTimeoutOverride: TimeInterval?
 
+    /// B-Swift Phase F7a: injected routed-write executor. Production delegates
+    /// to `DaemonToolRouting.routeWrite`; tests inject a canned outcome so the
+    /// timeout/hooks/receipt steps run without a live daemon. Returns the
+    /// `WriteExecutionOutcome` (not a pre-mapped `ToolResult`) so the receipt
+    /// can be built from the outcome's fd-anchored pre-state material.
+    private var routedWriteExecutor: @Sendable (
+        ToolCall, DaemonToolHostSession, DaemonToolRouting.WriteRoutePlan
+    ) async -> DaemonToolRouting.WriteExecutionOutcome = { call, session, plan in
+        await DaemonToolRouting.routeWrite(call: call, session: session, plan: plan)
+    }
+
+    /// B-Swift Phase F7a test seam: override the routed-write timeout.
+    private var routedWriteTimeoutOverride: TimeInterval?
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -312,13 +326,27 @@ actor ToolExecutor: ToolExecutorProtocol {
         //    + SecurityEventLogger/ToolAnalytics rows fire (the daemon's
         //    `audit.jsonl` is a complement, not a substitute). `read` is the
         //    precedent-setter — Layer 4 routes write/edit/bash through this seam.
+        //    precedent-setter — Layer 4 routes write/edit/bash through this seam.
         if DaemonToolRouting.routedTools.contains(call.name) {
-            let plan = await DaemonToolRouting.planReadRoute(session: daemonToolHostSession)
-            if plan != .legacyLocal {
-                return await executeRoutedRead(call: call, plan: plan, context: context)
+            // Branch per tool: read and write have distinct route plans (write
+            // has NO local fallback — mutations are irreversible, fail closed).
+            switch call.name {
+            case "read":
+                let plan = await DaemonToolRouting.planReadRoute(session: daemonToolHostSession)
+                if plan != .legacyLocal {
+                    return await executeRoutedRead(call: call, plan: plan, context: context)
+                }
+                // .legacyLocal → fall through to the local pipeline.
+            case "write":
+                let plan = await DaemonToolRouting.planWriteRoute(session: daemonToolHostSession)
+                if plan != .legacyLocal {
+                    return await executeRoutedWrite(call: call, plan: plan, context: context)
+                }
+                // .legacyLocal → fall through to the local pipeline.
+            default:
+                // Future routed tools (edit/bash, F7b/F8) land here.
+                break
             }
-            // .legacyLocal → fall through to the local pipeline (legacy
-            // pre-routing local read via the full pipeline, unconfined).
         }
 
         // ── 7. DamageControlPolicy ──────────────────────────────────────
@@ -619,6 +647,153 @@ actor ToolExecutor: ToolExecutorProtocol {
         )
     }
 
+    // MARK: - B-Swift Phase F7a: routed-write executor branch
+
+    /// Execute a routed `write` (`.daemonReachable` or
+    /// `.daemonUnavailableFailClosed`) through the pipeline shape, with the
+    /// mutation steps the routed-read branch skips (advisor F7a plan):
+    /// - PreToolUse hooks → **pre-state capture BEFORE the daemon execute**
+    ///   → timeout-wrapped routed write → PostToolUse hooks → audit/analytics
+    ///   → **receipt on success** → **post-action narration with the receipt id**.
+    ///
+    /// DamageControl is skipped (the daemon governs write confinement — its
+    /// write/edit rules are path/confinement rules; catastrophe/.disaster is
+    /// bash-only, deferred to F8). Approval is upstream
+    /// (`Pipeline/ToolRoutingHelpers.swift:84`), not an executor step — the
+    /// daemon's per-call `tool.confirm` card is the per-call boundary.
+    ///
+    /// Race rule (mirrors the routed-read C3 rule): the `plan` was fixed BEFORE
+    /// any side effect (`planWriteRoute`), so there is no fall-through to the
+    /// legacy `WriteTool` after DamageControl was skipped. A daemon drop fails
+    /// CLOSED — never a local write fallback.
+    private func executeRoutedWrite(
+        call: ToolCall,
+        plan: DaemonToolRouting.WriteRoutePlan,
+        context: ToolExecutorContext
+    ) async -> ToolExecutorResult {
+        let executionArguments = computeExecutionArguments(for: call, context: context)
+
+        // ── PreToolUse hooks (BEFORE any daemon/root side effect).
+        if let blocked = await runPreToolUseHooks(
+            toolName: call.name, arguments: executionArguments)
+        {
+            return blocked
+        }
+
+        // NOTE (advisor F7a): pre-state for the receipt is NOT captured here.
+        // It is captured INSIDE `executeSerializedRoutedWrite` (under the
+        // operation lock, after root approval, via an fd-anchored read off the
+        // daemon-approved root) and flows back through the outcome. A
+        // path-based capture here would use a relative path, run outside the
+        // lock, and follow symlinks/hardlinks — reopening the TOCTOU class
+        // F7a closed and racing concurrent writes. The outcome carries the
+        // safe pre-state material; the receipt is built from it below.
+
+        // ── Timeout-wrapped routed write. The executor returns the outcome
+        //   (not a ToolResult) so the receipt material is preserved.
+        let timeoutSeconds = routedWriteTimeoutOverride ?? Self.toolTimeoutSeconds(for: call.name)
+        let startTime = Date()
+        let outcome: DaemonToolRouting.WriteExecutionOutcome
+        do {
+            let executor = routedWriteExecutor
+            let session = daemonToolHostSession
+            outcome = try await withThrowingTaskGroup(of: DaemonToolRouting.WriteExecutionOutcome.self) { group in
+                group.addTask {
+                    await executor(call, session, plan)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    return .failClosed("Tool timed out after \(Int(timeoutSeconds))s")
+                }
+                guard let o = try await group.next() else {
+                    group.cancelAll()
+                    return DaemonToolRouting.WriteExecutionOutcome.failClosed(
+                        "Tool execution did not return a result")
+                }
+                group.cancelAll()
+                return o
+            }
+        } catch {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Routed write threw: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
+            await recordToolOutcome(
+                toolName: call.name,
+                arguments: call.arguments,
+                success: false,
+                error: error.localizedDescription,
+                startTime: startTime)
+            return ToolExecutorResult(
+                result: .error(Self.friendlyRoutedWriteError(for: "Tool error: \(error.localizedDescription)")),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: latencyMs
+            )
+        }
+
+        // ── Map the outcome to the conversation result (raw strings; reframed
+        //   below for the user).
+        let result = DaemonToolRouting.mapWriteOutcome(outcome)
+
+        // ── PostToolUse hooks.
+        await runPostToolUseHooks(toolName: call.name, output: result.output)
+
+        // ── Analytics + audit (mirrors step 14).
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
+        await recordToolOutcome(
+            toolName: call.name,
+            arguments: call.arguments,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            startTime: startTime)
+
+        // ── Receipt on success, built from the outcome's fd-anchored pre-state
+        //   material (NOT a path-based capture). The daemon write already ran;
+        //   this records what it overwrote, for undo. The PATH is preserved even
+        //   when the blob is nil (new-file creation, or a >50MB existing file we
+        //   skipped) — undo for a created file deletes it, so it needs the path
+        //   (mirrors the local `captureFilePreState` `(blob:nil, path:)` shape).
+        var narrationReceiptId: String?
+        if !result.isError, let store = receiptStore,
+           case .routed(_, let preStateContent, let absoluteTargetPath) = outcome
+        {
+            let preState = absoluteTargetPath.map {
+                ReceiptStore.PreStateCaptureResult(blob: preStateContent, path: $0)
+            }
+            narrationReceiptId = await store.createReceipt(
+                toolName: call.name,
+                arguments: call.arguments,
+                preState: preState,
+                speakerId: context.speakerId,
+                sessionId: nil,
+                turnId: context.workflowTurnID)
+        }
+
+        // ── Post-action narration with the receipt id (mirrors local step 16).
+        let reversibility = ActionReversibility.classify(toolName: call.name, arguments: call.arguments)
+        if !result.isError,
+           reversibility != .notApplicable,
+           context.proactiveContext == nil,
+           let narrationText = Self.buildNarrationText(toolName: call.name, arguments: call.arguments)
+        {
+            await delegate?.toolExecutorNarrateAction(narrationText, receiptId: narrationReceiptId)
+        }
+
+        // ── Friendly error copy for the conversation (raw already in audit).
+        let conversationResult: ToolResult = result.isError
+            ? ToolResult(
+                output: Self.friendlyRoutedWriteError(for: result.output),
+                isError: true)
+            : result
+
+        return ToolExecutorResult(
+            result: conversationResult,
+            approvedByUser: nil,
+            damageControlIntervened: false,
+            latencyMs: latencyMs
+        )
+    }
+
     /// Map a technical routed-read error string to Fae-voice conversation copy
     /// (B-Swift #9). The raw technical string is preserved for audit/analytics
     /// (logged via `recordToolOutcome` BEFORE this runs); this only reframes
@@ -686,6 +861,45 @@ actor ToolExecutor: ToolExecutorProtocol {
         return "I couldn't read that file right now. The details are in the log."
     }
 
+    /// Map a technical routed-write error string to Fae-voice conversation copy
+    /// (F7a). Mirrors `friendlyRoutedReadError`'s principle: the raw technical
+    /// string is preserved for audit/analytics (`recordToolOutcome` runs BEFORE
+    /// this reframing); this only reframes what the user sees. Writes are
+    /// irreversible, so outage/errors fail closed — the copy reflects that the
+    /// write did NOT happen (never implies partial success).
+    static func friendlyRoutedWriteError(for technical: String) -> String {
+        // Confinement / policy denials (the path wasn't safe to write).
+        if technical.contains("escapes the workspace")
+            || technical.contains("path traversal")
+            || technical.contains("Absolute paths are not supported")
+            || technical.contains("must name a file, not the workspace root")
+            || technical.contains("write path is empty")
+            || technical.contains("contains a NUL byte") {
+            return "I can only write files inside the workspace. That path is outside it or isn't a valid workspace path, so nothing was written."
+        }
+        // Daemon unavailable / outage — fail closed (no local write).
+        if technical.contains("Daemon unavailable")
+            || technical.contains("routing is intended")
+            || technical.contains("before the workspace root was approved") {
+            return "The file backend isn't available right now, so I didn't write anything. Please try again shortly."
+        }
+        if technical.contains("Daemon write") {
+            return "The file backend reported a problem writing that file, so nothing was written. Please try again."
+        }
+        if technical.contains("was cancelled") || technical.contains("cancelled") {
+            return "That write was cancelled before it ran."
+        }
+        if technical.contains("timed out") {
+            return "That write took too long and was stopped. Nothing was written."
+        }
+        if technical.contains("routing misconfigured") {
+            return "I hit an internal setup problem with the write tool. Nothing was written. Please report this."
+        }
+        // Generic fallback (audit has the raw string). Never imply partial
+        // success for an unmapped write error.
+        return "I couldn't write that file right now, so nothing was written. The details are in the log."
+    }
+
     #if FAE_TEST_SEAMS
     /// Test seam setter (Phase C/#5): override the routed-read executor.
     /// GUARDED: `FAE_TEST_SEAMS` is defined only in `.debug` (Package.swift
@@ -703,6 +917,23 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Test seam setter (Phase C/#5): override the routed-read timeout.
     func setRoutedReadTimeoutForTesting(_ seconds: TimeInterval?) {
         routedReadTimeoutOverride = seconds
+    }
+
+    /// Test seam setter (F7a): override the routed-write executor.
+    /// GUARDED: `FAE_TEST_SEAMS` is defined only in `.debug`, so this is
+    /// compiled OUT of release — no production binary can override routed-write
+    /// confinement/timeout (red-team F4 rule, extended to mutations).
+    func setRoutedWriteExecutorForTesting(
+        _ fn: @Sendable @escaping (
+            ToolCall, DaemonToolHostSession, DaemonToolRouting.WriteRoutePlan
+        ) async -> DaemonToolRouting.WriteExecutionOutcome
+    ) {
+        routedWriteExecutor = fn
+    }
+
+    /// Test seam setter (F7a): override the routed-write timeout.
+    func setRoutedWriteTimeoutForTesting(_ seconds: TimeInterval?) {
+        routedWriteTimeoutOverride = seconds
     }
     #endif
 
