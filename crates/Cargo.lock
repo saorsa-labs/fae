@@ -2100,8 +2100,9 @@ dependencies = [
 
 [[package]]
 name = "fluers-core"
-version = "0.3.0"
-source = "git+https://github.com/saorsa-labs/fluers?rev=1a3f75a5706732e65d6492cf6d219107fde78b68#1a3f75a5706732e65d6492cf6d219107fde78b68"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d259ba6cdf61b0af79ffdffe6169dfcc91d7faf65e99f5ef7304255a06b8a22"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2120,13 +2121,15 @@ dependencies = [
 
 [[package]]
 name = "fluers-runtime"
-version = "0.3.0"
-source = "git+https://github.com/saorsa-labs/fluers?rev=1a3f75a5706732e65d6492cf6d219107fde78b68#1a3f75a5706732e65d6492cf6d219107fde78b68"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0781205265bc60a80a4eecb0562d1c70d7aaff02b68f6c0d035cf60db8b1086a"
 dependencies = [
  "async-trait",
  "chrono",
  "fluers-core",
  "parking_lot",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

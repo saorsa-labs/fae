@@ -149,10 +149,17 @@ temp provider — the gate avoids that.
     clippy::{panic,unwrap_used,expect_used}` rc=0; `clippy --workspace
     --all-targets` rc=0; `cargo check --workspace --all-targets` rc=0;
     `cargo test --workspace` green.
-- **Downstream (separate step):** Fae pins fluers by git rev in
-  `crates/Cargo.lock` (`fluers-runtime` @ `rev=1a3f75a…` = the pre-fix main).
-  To CONSUME the fix, bump Fae's fluers pin to `addb66e` (new fluers main) and
-  rebuild `fae-daemon`. **Not done in this turn.**
+- **Downstream — ✅ DONE (released fluers 0.3.1, 2026-07-01):** fluers was
+  released to crates.io as `fluers-core`/`fluers-runtime` **0.3.1** (first
+  crates.io release; the prior `v0.3.0` marker tag pointed at the pre-fix
+  commit `1a3f75a` and was never published). Published via the new
+  `saorsa-labs/fluers` `Release` GitHub Actions workflow (org `CRATES_IO_TOKEN`
+  secret), tag `v0.3.1`. Fae now consumes the **released** crates via exact
+  crates.io pins (`=0.3.1`) in `crates/Cargo.toml`; the prior git-rev pin
+  (`rev=1a3f75a`, pre-fix) is gone from `Cargo.lock` (verified: zero
+  `git+https://github.com/saorsa-labs/fluers` sources). `fae-daemon` resolves
+  the C1a fd-anchor fix from the registry; `cargo check -p fae-daemon
+  --all-targets` + workspace check + clippy green.
 - **Legacy rootless `ReadTool` — OPEN (Swift-side):** the local `ReadTool`'s
   `String(contentsOfFile:)` is still path-based (no `O_NOFOLLOW`). Separate
   Swift fix; out of scope for #4's daemon-read resolution.
@@ -204,10 +211,10 @@ temp provider — the gate avoids that.
   `testRoundTripCancellationUnblocksPromptlyFromSilentPeer` (cancel unblocks in
   ~1.0s, not 600s). Targeted 113/0; full 3506/0 (`--skip VocabularyHarvestTests`);
   `swift build` + `swift build -c release` clean; F4 release-symbol proof (0).
-- **Red-team + code-review:** both SHIP-WITH-FIXES → SHIP after the fixes; the
-  final residual is the cross-repo fluers `openat`/`O_NOFOLLOW` (follow-up #4,
-  C1a fast-follow, OPEN) — the authoritative server-side read is still
-  path-based until that lands.
+- **Red-team + code-review:** both SHIP-WITH-FIXES → SHIP after the fixes. The
+  cross-repo fluers `openat`/`O_NOFOLLOW` residual (follow-up #4, C1a) has
+  since **landed and shipped**: fluers `0.3.1` (crates.io) fd-anchors the
+  authoritative daemon read, and Fae consumes it via `=0.3.1` (see #4).
 
 ## 6. Truncation parity (LOW)
 

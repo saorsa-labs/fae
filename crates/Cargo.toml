@@ -58,14 +58,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 agent-client-protocol = "0.14"
 agent-client-protocol-tokio = "0.11"
 # ADR-013 Vision A: fluers is Fae's daemon-side tool/skill execution substrate.
-# Git-dep pinned to a rev (NOT a path-dep) so CI needs no sibling `../fluers`
-# checkout (S19 coupling finding). v0.3.0 ships the generic `ToolPolicy`
+# Consumed as the released crates.io crate (exact pin =0.3.1) — no sibling
+# `../fluers` checkout and no git overhead (supersedes the prior git-rev pin).
+# v0.3.1 ships the fd-anchored local read tool (openat + O_NOFOLLOW + fstat;
+# closes the daemon-read TOCTOU, B-Swift C1a / #4) + the generic `ToolPolicy`
 # governance hook (A0, proptest dev-only) + the generic `edit` tool and a
-# non-truncating `read_file_full` (A2-pre). A1 = wiring; A2-body builds the Fae
-# ToolPolicy impl + native ToolHost on top. Pinned to the v0.3.0 release commit
-# (annotated tag → commit 1a3f75a).
-fluers-core = { git = "https://github.com/saorsa-labs/fluers", rev = "1a3f75a5706732e65d6492cf6d219107fde78b68" }
-fluers-runtime = { git = "https://github.com/saorsa-labs/fluers", rev = "1a3f75a5706732e65d6492cf6d219107fde78b68" }
+# non-truncating `read_file_full` (A2-pre). Exact pin for supply-chain
+# determinism; bump deliberately.
+fluers-core = "=0.3.1"
+fluers-runtime = "=0.3.1"
 
 [profile.release]
 opt-level = 3
