@@ -58,15 +58,21 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 agent-client-protocol = "0.14"
 agent-client-protocol-tokio = "0.11"
 # ADR-013 Vision A: fluers is Fae's daemon-side tool/skill execution substrate.
-# Consumed as the released crates.io crate (exact pin =0.3.1) — no sibling
-# `../fluers` checkout and no git overhead (supersedes the prior git-rev pin).
-# v0.3.1 ships the fd-anchored local read tool (openat + O_NOFOLLOW + fstat;
-# closes the daemon-read TOCTOU, B-Swift C1a / #4) + the generic `ToolPolicy`
-# governance hook (A0, proptest dev-only) + the generic `edit` tool and a
-# non-truncating `read_file_full` (A2-pre). Exact pin for supply-chain
-# determinism; bump deliberately.
-fluers-core = "=0.4.0"
-fluers-runtime = "=0.4.0"
+# Consumed as the released crates.io crate (exact pin) — no sibling `../fluers`
+# checkout and no git overhead (supersedes the prior git-rev pin). Exact pin for
+# supply-chain determinism; bump deliberately.
+#
+# v0.3.1: fd-anchored local read (openat + O_NOFOLLOW + fstat; closes the
+# daemon-read TOCTOU, B-Swift C1a / #4).
+# v0.4.0: generic `ToolPolicy` governance hook (A0) + generic `edit` tool +
+# non-truncating `read_file_full` (A2-pre).
+# v0.5.0: fd-anchored write/exec/glob/grep (mkdirat-walk parents + fstat
+# st_nlink check + write/ftruncate off the SAME fd; closes the Layer-4
+# mutation TOCTOU, B-Swift C1b). The path-based `resolve()` is gone — every
+# tool reaches the fs through the held `root_fd`. This is the HARD GATE that
+# unblocks routing write/edit/bash through the daemon (Phase F7a/F7b/F8).
+fluers-core = "=0.5.0"
+fluers-runtime = "=0.5.0"
 
 [profile.release]
 opt-level = 3

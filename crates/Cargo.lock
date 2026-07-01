@@ -2100,9 +2100,9 @@ dependencies = [
 
 [[package]]
 name = "fluers-core"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91f82f3b80fe2c1908e6760d311dda915f0179f7f5f75e2ff3f2dd1f3ef905de"
+checksum = "805095e83fc14628b8e490e97f5345087e94711e8d0981207c7f79b679c1254d"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2121,9 +2121,9 @@ dependencies = [
 
 [[package]]
 name = "fluers-runtime"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8838b9d1b3e8e202ea1c351e8b80e77b0f3a81cc9e91a2b2a43a405a69e8177"
+checksum = "48ca46858a3bd0c59c232b98bc2d73d5b0f526e6b30202439034963d80bbff53"
 dependencies = [
  "async-trait",
  "chrono",

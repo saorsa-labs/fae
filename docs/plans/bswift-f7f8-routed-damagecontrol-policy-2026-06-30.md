@@ -11,21 +11,18 @@ pipeline including DamageControl + receipts.
 This doc does **not** schedule routing write/edit/bash. It predicts the
 per-step policy so the routing change is a known decision, not a guess.
 
-> ### ⛔ HARD GATE — do NOT route any Layer-4 mutation before fluers write/exec are fd-anchored
+> ### ✅ HARD GATE — SATISFIED (fluers 0.5.0, pinned `=0.5.0` as of 2026-07-01)
 >
-> The `read` path is safe because fluers' `read_file`/`read_file_full` are now
-> fd-anchored (B-Swift #4 / fluers 0.3.1). The mutation paths are **not**:
-> `fluers::write_file`, `exec`, `glob`, and `grep` are still path-based and
-> carry the same TOCTOU class #4 fixed for reads. A routed `write`/`edit`/`bash`
-> that executes through a path-based fluers mutation reopens the confinement
-> bypass at the daemon layer — and unlike reads, mutations are *irreversible*,
-> so a TOCTOU swap here is data loss, not a leaked file.
+> The `read` path is safe because fluers' `read_file`/`read_file_full` are
+> fd-anchored (B-Swift #4 / fluers 0.3.1). The mutation paths (`write_file`,
+> `exec`, `glob`, `grep`) carried the same TOCTOU class until 0.5.0 — and unlike
+> reads, mutations are *irreversible*, so a TOCTOU swap there is data loss, not
+> a leaked file.
 >
-> **Routing write/edit/bash is BLOCKED on fluers `write_file`/`exec` landing
-> fd-anchored (the same `openat`+`O_NOFOLLOW`+`fstat`-off-opened-fd pattern).**
-> Phases F7a/F7b/F8 below are conditioned on this prerequisite; do not start
-> them until it is closed and pinned to a released fluers version (as `read`
-> is pinned to `=0.3.1`).
+> **Gate closed:** fluers 0.5.0 fd-anchored all four mutation/search paths (the
+> same `openat`+`O_NOFOLLOW`+`fstat`-off-opened-fd pattern, plus `mkdirat`-walked
+> parents and `st_nlink > 1` rejection on write) and Fae pins `=0.5.0`. Phases
+> F7a/F7b/F8 below are now cleared to start in order. See `docs/ACTIVE_WORK.md`.
 
 ---
 
