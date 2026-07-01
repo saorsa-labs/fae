@@ -554,11 +554,14 @@ enum DaemonToolRouting {
     enum ReadExecutionOutcome {
         /// The daemon executed the read; carry its result dict.
         case routed([String: Any])
-        /// Containment/regular-file denial (decided before the `execute` frame).
+        /// Containment/regular-file denial (decided before the `execute` frame,
+        /// or re-decided by the fd-anchored re-confine after a daemon drop).
         case denied(String)
-        /// The daemon dropped AFTER the root was approved; read this confined
-        /// canonical path locally (never cwd).
-        case fallbackLocally(URL)
+        /// The daemon dropped AFTER the root was approved (at `execute`). Carries
+        /// the relative path + daemon-approved root so `mapReadOutcome` can
+        /// re-confine via the fd-anchored reader (with the st_nlink check) — NOT
+        /// the legacy rootless ReadTool (red-team HIGH: hardlink exfil bypass).
+        case fallbackLocally(relative: String, root: URL)
         /// Daemon dropped/errored BEFORE the root was approved, or the daemon
         /// execute itself errored. Fail closed — surface an error, no local read.
         case failClosed(String)
@@ -712,7 +715,7 @@ enum DaemonToolRouting {
     /// Map a `ReadExecutionOutcome` (from either the serialized daemon path or
     /// the confined-local fallback) to a Swift `ToolResult`. Shared so the two
     /// paths surface identical result shapes.
-    private static func mapReadOutcome(
+    static func mapReadOutcome(
         _ outcome: ReadExecutionOutcome
     ) async -> ToolResult {
         switch outcome {
@@ -722,8 +725,19 @@ enum DaemonToolRouting {
             return .error(reason)
         case .failClosed(let reason):
             return .error(reason)
-        case .fallbackLocally(let canonical):
-            return await readLocally(path: canonical.path)
+        case .fallbackLocally(let relative, let root):
+            // Re-confine via the fd-anchored confined reader, NOT the legacy
+            // rootless ReadTool. A file hardlinked in the confine→execute window
+            // would otherwise bypass the st_nlink policy (the rootless reader
+            // has no nlink check — red-team HIGH). The fd-anchored fstat off the
+            // OPENED leaf fd is stronger than the pre-drop lstat anyway (no path
+            // re-resolution → no TOCTOU between the pre-drop lstat and the read).
+            switch readFdAnchored(validatedPath: relative, root: root) {
+            case .text(let text):
+                return .success(text)
+            case .deny(let reason):
+                return .error(reason)
+            }
         case .localText(let text):
             return .success(text)
         case .cancelled:
@@ -738,26 +752,39 @@ enum DaemonToolRouting {
     /// The daemon's `read` returns content blocks in `result["content"]`
     /// (Layer 2/3a used `["hello"]`). String blocks — and `{text: …}` dict
     /// blocks — are joined with a newline into the prose `output`.
-    private static func buildReadResult(from result: [String: Any]) -> ToolResult {
+    static func buildReadResult(from result: [String: Any]) -> ToolResult {
         guard let content = result["content"] as? [Any] else {
             return .error("Daemon read returned no content")
         }
-        let text = content.compactMap { block -> String? in
-            if let s = block as? String { return s }
-            if let d = block as? [String: Any], let t = d["text"] as? String { return t }
-            return nil
-        }.joined(separator: "\n")
-        return .success(text)
+        // Defense against a compromised/misbehaving daemon that sends an
+        // unbounded `content` array or a single enormous block (red-team M3).
+        // The daemon applies apply_read_limits (~50 KiB) itself, so a
+        // well-behaved reply is small; cap well above the legitimate max.
+        let responseByteHardCap = 4 * localReadByteCap  // 200 KiB
+        var accumulated = 0
+        var blocks: [String] = []
+        for block in content {
+            let next: String?
+            if let s = block as? String { next = s }
+            else if let d = block as? [String: Any], let t = d["text"] as? String { next = t }
+            else { next = nil }
+            guard let text = next else { continue }
+            accumulated += text.utf8.count
+            if accumulated > responseByteHardCap {
+                // Trim this block to the remaining budget and stop decoding
+                // further blocks (bounds peak memory against a hostile peer).
+                let prev = accumulated - text.utf8.count
+                let remaining = max(0, responseByteHardCap - prev)
+                if remaining > 0 {
+                    let trimmed = String(decoding: text.utf8.prefix(remaining), as: UTF8.self)
+                    if !trimmed.isEmpty { blocks.append(trimmed) }
+                }
+                blocks.append("\n[... daemon response exceeded \(responseByteHardCap / 1024) KiB; truncated ...]")
+                break
+            }
+            blocks.append(text)
+        }
+        return .success(blocks.joined(separator: "\n"))
     }
 
-    /// Read a file locally, reusing `ReadTool`'s read + 50k-char truncation.
-    /// Used for the daemon-down fallback (the confined canonical path is passed,
-    /// so the read never resolves a root-relative path from process cwd).
-    private static func readLocally(path: String) async -> ToolResult {
-        do {
-            return try await ReadTool().execute(input: ["path": path])
-        } catch {
-            return .error("Local read failed: \(error.localizedDescription)")
-        }
-    }
 }

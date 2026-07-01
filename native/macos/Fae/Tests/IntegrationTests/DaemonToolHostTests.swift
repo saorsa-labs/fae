@@ -2152,7 +2152,8 @@ final class DaemonToolHostTests: XCTestCase {
 
     /// #9: the friendly mapper covers the key routed-read outcome categories
     /// (symlink, hardlink, not-found, non-regular, daemon-unavailable, timeout,
-    /// non-UTF-8) and never swallows an unmapped error (fallback = original).
+    /// non-UTF-8) and reframes an unmapped error to a generic message (never
+    /// leaks an internal path/errno/wire detail verbatim — red-team M2).
     func testFriendlyRoutedReadErrorMapsCategories() {
         // (technical input, a substring expected in the friendly output)
         let cases: [(String, String)] = [
@@ -2173,10 +2174,83 @@ final class DaemonToolHostTests: XCTestCase {
             XCTAssertTrue(friendly.contains(expected),
                           "mapper for \(technical) → \(friendly); expected \"\(expected)\"")
         }
-        // Unmapped error: fallback returns the original verbatim (never swallowed).
+        // Unmapped error: generic fallback (never verbatim — leak risk, M2).
         let unmapped = "some novel internal error XYZ"
-        XCTAssertEqual(ToolExecutor.friendlyRoutedReadError(for: unmapped), unmapped,
-                       "unmapped errors must pass through unchanged")
+        let friendlyUnmapped = ToolExecutor.friendlyRoutedReadError(for: unmapped)
+        XCTAssertNotEqual(friendlyUnmapped, unmapped,
+                       "unmapped errors must NOT pass through verbatim (leak risk)")
+        XCTAssertTrue(friendlyUnmapped.contains("couldn't read"),
+                      "unmapped errors should get the generic fallback: \(friendlyUnmapped)")
+    }
+
+    // MARK: - B-Swift red-team — daemon-drop fallback re-confines (HIGH)
+
+    /// red-team HIGH: when the daemon drops AFTER root approval (at `execute`),
+    /// the fallback must re-confine via the fd-anchored reader (which performs
+    /// the st_nlink hardlink check), NOT the legacy rootless ReadTool (which has
+    /// no nlink check and would exfiltrate a hardlinked secret). Before the fix,
+    /// `.fallbackLocally` routed through `readRootlessFdAnchored` and a file
+    /// hardlinked into the workspace in the confine→execute window was read.
+    func testRoutedReadFallbackReConfinesAndRejectsHardlinkedSecret() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-fallback-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // A secret OUTSIDE the workspace (in its own dir), hardlinked INTO it.
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-fallback-secret-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let secretPath = outside.appendingPathComponent("id_rsa")
+        try Data("TOPSECRET-ssh-key-material".utf8).write(to: secretPath)
+        try FileManager.default.linkItem(at: secretPath, to: tmp.appendingPathComponent("key"))
+
+        // Simulate the daemon-drop-at-execute outcome: the (relative, root) the
+        // session carries after a drop. mapReadOutcome must RE-CONFINE.
+        let result = await DaemonToolRouting.mapReadOutcome(
+            .fallbackLocally(relative: "key", root: tmp))
+        XCTAssertTrue(result.isError,
+                      "hardlinked secret must be DENIED on the fallback path: \(result.output)")
+        XCTAssertFalse(result.output.contains("TOPSECRET"),
+                       "hardlinked secret must not be exfiltrated via the fallback")
+    }
+
+    /// The happy counterpart: a regular (non-hardlinked) file under the same
+    /// fallback outcome IS read. Proves the HIGH fix didn't over-restrict the
+    /// fallback into denying every daemon-drop read.
+    func testRoutedReadFallbackReadsRegularFileAfterReConfine() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try "hello-after-drop".write(
+            to: tmp.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+
+        let result = await DaemonToolRouting.mapReadOutcome(
+            .fallbackLocally(relative: "notes.txt", root: tmp))
+        XCTAssertFalse(result.isError, "regular file should be read on fallback: \(result.output)")
+        XCTAssertTrue(result.output.contains("hello-after-drop"))
+    }
+
+    // MARK: - B-Swift red-team — daemon response size cap (M3)
+
+    /// red-team M3: a compromised/misbehaving daemon sending an unbounded
+    /// `content` array must be capped (defense against OOM), not accumulated
+    /// without limit.
+    func testBuildReadResultCapsOversizedDaemonResponse() {
+        let big = String(repeating: "x", count: 150 * 1024)  // 150 KiB block
+        let result = DaemonToolRouting.buildReadResult(from: [
+            "content": [big, big]  // 300 KiB total > 200 KiB hard cap
+        ])
+        XCTAssertFalse(result.isError, "capped response is still a success")
+        XCTAssertTrue(result.output.contains("truncated"),
+                      "oversized daemon response must carry the truncation marker")
+        XCTAssertLessThan(result.output.utf8.count, 220 * 1024,
+                          "output must be bounded near the 200 KiB cap")
     }
 
     /// A valid UTF-8 file truncated by the byte cap MID-MULTIBYTE-CHARACTER is

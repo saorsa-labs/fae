@@ -677,8 +677,13 @@ actor ToolExecutor: ToolExecutorProtocol {
         if technical.contains("routing misconfigured") {
             return "I hit an internal setup problem with the read tool. Please report this."
         }
-        // Fallback: never swallow — surface the original (audit already has it).
-        return technical
+        // Fallback: an unmapped/compound error. Surface a generic message
+        // rather than risk leaking an internal path/errno/wire detail in the
+        // conversation (the audit log already has the raw string via
+        // recordToolOutcome, logged BEFORE this reframing). Known
+        // recovery-relevant errors are all mapped above, so a generic copy does
+        // not cost the model useful signal (red-team M2).
+        return "I couldn't read that file right now. The details are in the log."
     }
 
     #if FAE_TEST_SEAMS

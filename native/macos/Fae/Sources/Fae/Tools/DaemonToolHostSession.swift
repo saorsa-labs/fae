@@ -304,8 +304,9 @@ actor DaemonToolHostSession {
     /// Daemon-loss semantics:
     /// - lost BEFORE root approval ⇒ `.failClosed` (never read locally on an
     ///   un-approved root that bypasses the server root guard);
-    /// - lost AFTER root approval, at `execute` ⇒ `.fallbackLocally(canonical)`
-    ///   (the path was already confined; read it locally, never cwd).
+    /// - lost AFTER root approval, at `execute` ⇒ `.fallbackLocally(relative,
+    ///   root)` (the path was already confined; re-confine it locally via the
+    ///   fd-anchored reader, never cwd).
     func executeSerializedRoutedRead(
         validatedPath: String
     ) async -> DaemonToolRouting.ReadExecutionOutcome {
@@ -333,15 +334,17 @@ actor DaemonToolHostSession {
             switch DaemonToolRouting.confineValidatedReadPath(validatedPath, root: daemonRoot) {
             case .deny(let reason):
                 return .denied(reason)
-            case .route(let relative, let canonical):
+            case .route(let relative, _):
                 do {
                     let result = try await execute(tool: "read", input: ["path": relative])
                     return .routed(result)
                 } catch DaemonAgentClientError.daemonUnavailable {
                     // Root was approved (we are past ensureDefaultRooted); the
-                    // daemon dropped at execute. Fall back to a local read of the
-                    // already-confined canonical path (never cwd).
-                    return .fallbackLocally(canonical)
+                    // daemon dropped at execute. Carry the relative path + the
+                    // daemon-approved root so mapReadOutcome re-confines via the
+                    // fd-anchored reader (with st_nlink check), NOT the legacy
+                    // rootless ReadTool (red-team HIGH: hardlink exfil bypass).
+                    return .fallbackLocally(relative: relative, root: daemonRoot)
                 }
             }
         } catch DaemonAgentClientError.daemonUnavailable {
@@ -349,6 +352,12 @@ actor DaemonToolHostSession {
             return .failClosed(
                 "Daemon unavailable before the workspace root was approved; " +
                 "refusing to read locally without a daemon-approved root.")
+        } catch is CancellationError {
+            // Task cancelled during the daemon round-trip (root approval or
+            // execute). Surface a clean cancelled result (maps to friendly copy)
+            // rather than the raw "Daemon read failed: CancellationError"
+            // (red-team M5).
+            return .cancelled
         } catch {
             // Daemon up but errored (root denial, path escape caught
             // server-side, etc.) — do NOT fall back; surface the error.
