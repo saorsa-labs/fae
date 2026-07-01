@@ -14,11 +14,10 @@ historical (archive). If work isn't listed here, it's done or not started.
 
 ## Live work
 
-### Layer-4 routed mutations (write / edit / bash) — F7a (write) + F7b (edit) shipped; F8 (bash) remains
+### Layer-4 routed mutations (write / edit / bash) — F7a (write) + F7b (edit) + F8 (bash) shipped; Layer 4 complete
 
-`read` is routed and confinement-complete. `write` (F7a) and `edit` (F7b) are
-now routed too (2026-07-01). `bash` remains on the local pipeline (F8 is
-future).
+`read`, `write`, `edit`, AND `bash` are all routed through the governed daemon
+(2026-07-01). Layer 4 is complete.
 
 **Q7b resolved (owner chose option a):** `SwiftFrontend::default_scopes()` now
 holds `Scope::ToolExecuteDangerous` (`control-plane/lib.rs:355`), so
@@ -38,24 +37,38 @@ TOCTOU class F7a closed). DamageControl is skipped (daemon governs write
 confinement; catastrophe rules are bash-only, deferred to F8). Approval is
 upstream (`ToolRoutingHelpers.swift:84`), not an executor step.
 
-**F7b — route edit (shipped):** routed `edit` mirrors routed write exactly
-(decision/execution split, fd-anchored receipt pre-state, fail-closed outage,
-DamageControl skip, upstream approval). TWO edit-specific differences: (1)
-**schema translation at the daemon seam** — the Swift `EditTool` uses
-`old_string`/`new_string` but the fluers daemon `EditTool` requires
-`old_text`/`new_text` (`validate_input` enforces it); `buildDaemonEditInput`
-translates at the seam so `call.arguments`/hooks/audit/receipts keep the
-Swift-native keys and the daemon gets the keys it needs; (2) **local EditTool
-parity fix** — the local tool now rejects empty `old_string` and requires a
-unique match (mirroring fluers), so routed vs. legacy edit behave identically
-(previously the local tool silently replaced the first of N and accepted empty
-`old_string`). `friendlyRoutedEditError` handles edit-logical errors
-(not-found/ambiguous) distinctly from backend problems.
+**F8 — route bash (shipped):** routed `bash` mirrors write/edit's
+routing/timeout/receipt shape but with TWO decisive differences from F7a/F7b,
+both from owner decisions + a sandbox-reach audit:
 
-- **Policy table + the F7a/F7b corrections:** `docs/plans/bswift-f7f8-routed-damagecontrol-policy-2026-06-30.md`.
-- **Resolution record (read-routing, all closed):** `docs/plans/bswift-3b-followups-2026-06-30.md`.
-- **Remaining Layer-4 work:** F8 (route `bash` — needs the DamageControl
-  catastrophe/confinement split + bash-receipt owner decisions; the hardest).
+1. **DamageControl is NOT skipped (unlike write/edit).** The audit (Decision 2
+   = ii) confirmed the fluers daemon bash is explicitly *not* an OS-level sandbox
+   (`local_env.rs:1-13`: no chroot/landlock/UID separation). `LocalSessionEnv
+   ::exec` (`local_env.rs:458-497`) runs `sh -c <command>` with an fd-anchored
+   **cwd** only — the child has **full user-FS reach** (can `cd /; rm -rf …`).
+   The daemon runs as the user's UID, so its reach = `~`, `~/Documents`,
+   `~/Library` — identical to local Swift bash. Therefore Swift's full bash
+   DamageControl branch (`zeroAccessPaths` + `noDeletePaths` + `bashRules`, e.g.
+   `rm -rf ~/Documents`, `curl|bash`) is **non-redundant** and MUST run Swift-side
+   before routing. The daemon's own `damage.rs` (`is_catastrophic_command` /
+   `is_workspace_wipe`, `policy.rs:312-316`) covers a DIFFERENT scope
+   (system-wide `rm -rf /`/`mkfs`/`dd`/`shutdown` + workspace-wipe under
+   `DurableWorkspace`) — complementary defense-in-depth, not a replacement. No
+   new rules needed (coverage already matches reach); no confinement/catastrophe
+   split needed (the whole bash branch stays).
+2. **Receipts are coarse (Decision 1 = a).** Routed bash keeps the current
+   best-effort receipt: pattern-match the command for a `>`/`>>` redirect target,
+   snapshot that file, else no pre-state. Undo for arbitrary `rm`/pipelines is
+   infeasible regardless — that's what DamageControl is for. The coarse capture
+   is routed-aware: a relative redirect resolves against the daemon-approved
+   root (NOT the Swift process cwd); an absolute path or no detectable target
+   preserves the current behavior. This is undo material, not a confinement
+   boundary.
+
+Fail-closed outage semantics identical to write/edit (no local bash fallback —
+bash mutations are irreversible). Approval upstream; `tool.confirm` answered on
+the existing connection. Local-vs-routed parity verified (both use minimal
+constrained env; both run the same DamageControl rules).
 
 ### fluers — current pin `=0.5.0`
 

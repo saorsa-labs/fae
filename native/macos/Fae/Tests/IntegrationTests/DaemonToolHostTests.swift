@@ -565,6 +565,20 @@ final class DaemonToolHostTests: XCTestCase {
         let workspaceRoot: URL
     }
 
+    /// A trivial non-routed tool (F8): now that read/write/edit/bash ALL route,
+    /// this stands in for a non-routed tool to prove the non-routed invariant
+    /// (executing it does not root the daemon session) without needing the
+    /// entitlements/network the real Apple/web tools require.
+    private struct NonRoutedSmokeTool: Tool {
+        let name = "smoke_nonrouted"
+        let description = "test-only non-routed no-op"
+        let parametersSchema = "{}"
+        let requiresApproval = false
+        let riskLevel: ToolRiskLevel = .low
+        let example = ""
+        func execute(input: [String: Any]) async throws -> ToolResult { .success("ok") }
+    }
+
     /// Provisioning a fresh temp dir creates the dir + the ownership marker.
     func testProvisionCreatesDirAndMarker() throws {
         let tmp = FileManager.default.temporaryDirectory
@@ -1326,19 +1340,16 @@ final class DaemonToolHostTests: XCTestCase {
     /// set, and a real `write` (with a daemon published) executes locally and
     /// never roots the session (proving it did not route).
     func testNonRoutedToolsStayLocal() async throws {
-        // Classifier assertion: `read` + `write` + `edit` route (3b read; F7a
-        // write; F7b edit). bash/calendar/web_search/self_config stay local
-        // (F8 is future).
-        XCTAssertEqual(DaemonToolRouting.routedTools, ["read", "write", "edit"])
-        for nonRouted in ["bash", "calendar", "web_search", "self_config"] {
-            XCTAssertFalse(DaemonToolRouting.routedTools.contains(nonRouted),
-                           "\(nonRouted) must not route yet (F8 is future)")
-        }
+        // Classifier assertion: `read` + `write` + `edit` + `bash` ALL route now
+        // (3b read; F7a write; F7b edit; F8 bash). Layer 4 is complete — no
+        // built-in mutating/read tool stays local. (calendar/web_search/
+        // self_config remain non-routed, but need entitlements/network, so the
+        // smoke uses a trivial inline non-routed tool to keep proving the
+        // non-routed invariant without flakiness.)
+        XCTAssertEqual(DaemonToolRouting.routedTools, ["read", "write", "edit", "bash"])
+        XCTAssertFalse(DaemonToolRouting.routedTools.contains("smoke_nonrouted"),
+                       "a non-routed tool must not route")
 
-        // Smoke: a `bash` (still non-routed) with a daemon published runs
-        // locally + never roots. (Pre-F7a this used `write`; F7a routed write so
-        // it used `edit`; F7b routed edit, so the smoke now uses `bash` to keep
-        // proving the non-routed invariant.)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -1353,22 +1364,20 @@ final class DaemonToolHostTests: XCTestCase {
             workspaceProvider: TempWorkspace(workspaceRoot: tmp))
         defer { Task { await session.close() } }
         let executor = ToolExecutor(
-            registry: ToolRegistry(tools: [BashTool()]),
+            registry: ToolRegistry(tools: [NonRoutedSmokeTool()]),
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session
         )
 
         let outcome = await executor.execute(
-            ToolCall(name: "bash", arguments: ["command": "echo hello"]),
+            ToolCall(name: "smoke_nonrouted", arguments: [:]),
             context: makeFullContext(), callbacks: .noop)
-        XCTAssertFalse(outcome.result.isError, "local bash should succeed: \(outcome.result.output)")
-        XCTAssertTrue(outcome.result.output.contains("hello"),
-                      "bash ran locally and returned output: \(outcome.result.output)")
+        XCTAssertFalse(outcome.result.isError, "local smoke tool should succeed: \(outcome.result.output)")
         // Routing never fired → the session was never rooted / never connected.
         let hasRoot = await session.hasRoot()
-        XCTAssertFalse(hasRoot, "non-routed bash must not root the daemon session")
-        _ = peer  // daemon published but never contacted by the bash
+        XCTAssertFalse(hasRoot, "a non-routed tool must not root the daemon session")
+        _ = peer  // daemon published but never contacted by the smoke tool
     }
 
     // MARK: - B-Swift follow-up #2: no-daemon fallback is intent-gated
@@ -3895,5 +3904,424 @@ extension DaemonToolHostTests {
         if let hookRunner { await executor.setPluginHookRunner(hookRunner) }
         await executor.setRoutedEditExecutorForTesting(routed)
         return executor
+    }
+}
+
+// MARK: - B-Swift Phase F8: routed bash tests
+//
+// Mirrors the routed-write/edit matrix with the TWO bash-specific differences
+// from the F8 audit + owner decisions (see ACTIVE_WORK.md + F7/F8 doc §F8):
+// 1. DamageControl runs FIRST (the daemon doesn't confine bash FS reach — no OS
+//    sandbox; the full Swift bash branch is non-redundant). write/edit skip it.
+// 2. Receipts are coarse (Decision 1 = a): redirect-target snapshot, else nil.
+
+extension DaemonToolHostTests {
+
+    /// A routed bash with a reachable (canned) daemon succeeds and surfaces the
+    /// daemon's bash output ("[exit 0] --- stdout --- …").
+    func testRoutedBashSucceedsAndSurfacesOutput() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // Publish fake endpoints so planBashRoute returns .daemonReachable (the
+        // fail-closed short-circuit in executeRoutedBash must NOT fire for the
+        // success path). The seam replaces the actual daemon round-trip.
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+            .routed(
+                result: ["content": [["type": "text", "text": "[exit 0]\n--- stdout ---\nhello\n--- stderr ---\n"]]],
+                preStateContent: nil,
+                absoluteTargetPath: nil)
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "echo hello"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "routed bash must succeed: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("hello"),
+                      "the daemon's bash output must surface: \(outcome.result.output)")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "the routed-bash pipeline must record latencyMs")
+    }
+
+    /// F8 KEY test (audit-mandated): DamageControl blocks a Swift-only home-dir
+    /// catastrophe BEFORE the daemon is contacted. `rm -rf ~/Documents` is a
+    /// `.disaster` rule; with no delegate the countdown cancels → the routed
+    /// bash executor is NEVER called. This is the decisive difference from
+    /// write/edit (which skip DamageControl) — the daemon doesn't confine bash
+    /// FS reach, so Swift DamageControl is the guard.
+    func testRoutedBashDamageControlBlocksCatastropheBeforeDaemon() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // Publish fake endpoints so the plan is .daemonReachable → the fail-
+        // closed short-circuit is skipped and DamageControl RUNS (the point of
+        // this test). The catastrophe command must be blocked BEFORE the daemon.
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        // The spy MUST NOT be called — DamageControl intercepts first.
+        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+            .failClosed("routed bash executor must not be called for a catastrophe command")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "rm -rf ~/Documents"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertTrue(outcome.result.isError,
+                      "a catastrophe command must be blocked, not executed")
+        XCTAssertTrue(outcome.result.output.contains("cancelled") || outcome.result.output.contains("dangerous"),
+                      "the disaster verdict must surface (cancelled/dangerous): \(outcome.result.output)")
+        XCTAssertFalse(outcome.result.output.contains("must not be called"),
+                       "the routed executor must NOT have been reached: \(outcome.result.output)")
+        XCTAssertTrue(outcome.damageControlIntervened,
+                      "damageControlIntervened must be set for a disaster verdict")
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot,
+                       "a blocked catastrophe must not root the daemon (no daemon contact)")
+    }
+
+    /// A blocking PreToolUse hook blocks AFTER DamageControl allows but BEFORE
+    /// the routed bash runs. (DamageControl runs first; a benign command passes
+    /// it, then the hook blocks.)
+    func testRoutedBashPreToolUseHookBlocksBeforeDaemon() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // Publish fake endpoints so the plan is .daemonReachable (skip the fail-
+        // closed short-circuit) → DamageControl allows `echo hi` → PreToolUse
+        // hook blocks before the seam runs.
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let hooks = SpyHookRunner(preResponse:
+            HookResponse(systemMessage: "blocked-by-test", block: true, metadata: nil))
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedBashExecutor(
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+                .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "echo hi"]),
+            context: makeFullContext(), callbacks: .noop)
+
+        let preNames = await hooks.preToolNames
+        XCTAssertEqual(preNames, ["bash"], "PreToolUse must fire for the routed bash")
+        XCTAssertTrue(outcome.result.isError, "a blocking PreToolUse hook must surface an error")
+        XCTAssertEqual(outcome.result.output, "blocked-by-test",
+                       "the hook's block message must surface: \(outcome.result.output)")
+        let posts = await hooks.postToolNames
+        XCTAssertEqual(posts, [], "PostToolUse must NOT fire when PreToolUse blocks")
+    }
+
+    /// F8 key invariant (mirrors write/edit): an intended-but-down daemon FAILS
+    /// CLOSED — no local bash, friendly error. Tested via the REAL `routeBash`.
+    func testRoutedBashIntendedDownFailsClosedNoLocalFallback() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+
+        let outcome = await DaemonToolRouting.routeBash(
+            call: ToolCall(name: "bash", arguments: ["command": "echo hi"]),
+            session: session,
+            plan: .daemonUnavailableFailClosed)
+
+        guard case .failClosed = outcome else {
+            XCTFail("the fail-closed plan must return .failClosed (no local bash fallback): \(outcome)")
+            return
+        }
+        let failClosedHasRoot = await session.hasRoot()
+        XCTAssertFalse(failClosedHasRoot,
+                       "fail-closed must not bind a daemon root (no daemon contact)")
+    }
+
+    /// An opted-out runtime (useDaemonEngine=false) with no daemon falls through
+    /// to the FULL local pipeline — the legacy local `BashTool` runs, and the
+    /// routed executor is NEVER called.
+    func testRoutedBashOptedOutFallsThroughToLegacyLocal() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+            .failClosed("routed executor must not be called for legacy fall-through")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "echo legacy"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "legacy local bash must succeed: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("legacy"),
+                      "the legacy local BashTool output must surface: \(outcome.result.output)")
+    }
+
+    /// A stalling routed bash trips the timeout (the wrapped pipeline fires).
+    func testRoutedBashTimeoutReturnsTimeoutError() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // Publish fake endpoints so the plan is .daemonReachable → the stalling
+        // seam runs (and trips the timeout), rather than the fail-closed short-
+        // circuit firing first.
+        let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
+        defer { Task { await clearDaemonEndpoints() }; try? FileManager.default.removeItem(atPath: tokenPath) }
+        _ = peer
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedBashTimeoutForTesting(0.4)
+        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            return .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
+        }
+
+        let start = Date()
+        let outcome = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "sleep 5"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertTrue(outcome.result.isError, "stalling routed bash must time out")
+        XCTAssertTrue(outcome.result.output.contains("took too long"),
+                      "error must be the friendly timeout message: \(outcome.result.output)")
+        XCTAssertLessThan(elapsed, 2.0, "the 0.4s timeout must fire, not the 5s stall")
+    }
+
+    /// A routed bash missing the `command` parameter is denied before any daemon
+    /// contact. Tested via the REAL `routeBash`.
+    func testRoutedBashMissingCommandIsDenied() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+
+        let outcome = await DaemonToolRouting.routeBash(
+            call: ToolCall(name: "bash", arguments: [:]),  // no command
+            session: session,
+            plan: .daemonReachable)
+
+        guard case .denied(let reason) = outcome else {
+            XCTFail("missing command must be .denied: \(outcome)")
+            return
+        }
+        XCTAssertTrue(reason.contains("command"),
+                      "error must mention the missing command parameter: \(reason)")
+        let missingCommandHasRoot = await session.hasRoot()
+        XCTAssertFalse(missingCommandHasRoot,
+                       "must not contact the daemon when command is missing")
+    }
+
+    /// `planBashRoute` shape: opted-out + no daemon → `.legacyLocal` (fall
+    /// through); intended + no daemon → `.daemonUnavailableFailClosed`.
+    func testPlanBashRouteBranches() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let optedOut = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await optedOut.close() } }
+        let planOut = await DaemonToolRouting.planBashRoute(session: optedOut)
+        XCTAssertEqual(planOut, .legacyLocal,
+                       "opted-out + no daemon must plan the legacy local bash")
+
+        let intended = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await intended.close() } }
+        let planIn = await DaemonToolRouting.planBashRoute(session: intended)
+        XCTAssertEqual(planIn, .daemonUnavailableFailClosed,
+                       "intended + no daemon must plan fail-closed (no local bash fallback)")
+    }
+
+    /// Bash-variant of the spied executor helper (mirrors
+    /// `makeSpiedRoutedWriteExecutor`/`makeSpiedRoutedEditExecutor` but injects
+    /// the bash executor + BashTool).
+    private func makeSpiedRoutedBashExecutor(
+        tmp: URL, hookRunner: SpyHookRunner?, logger: SpySecurityLogger,
+        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan) async -> DaemonToolRouting.BashExecutionOutcome
+    ) async -> ToolExecutor {
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: logger,
+            toolAnalytics: analytics,
+            daemonToolHostSession: session)
+        if let hookRunner { await executor.setPluginHookRunner(hookRunner) }
+        await executor.setRoutedBashExecutorForTesting(routed)
+        return executor
+    }
+
+    /// F8 (Decision 1 = a): coarse receipt capture for a RELATIVE redirect target
+    /// resolves the snapshot against the DAEMON-APPROVED ROOT, not the Swift
+    /// process cwd. A file `out.txt` under the daemon root is snapshotted; the
+    /// absolute target path is root-joined. This is the load-bearing routed
+    /// receipt assertion (routed bash cwd = daemon root).
+    func testCaptureCoarseBashPreStateResolvesRelativeAgainstDaemonRoot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-cr-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("old-output".utf8).write(to: root.appendingPathComponent("out.txt"))
+
+        let coarse = DaemonToolRouting.captureCoarseBashPreState(
+            command: "echo new > out.txt", root: root)
+        XCTAssertEqual(coarse.preStateContent, Data("old-output".utf8),
+                       "relative redirect must snapshot the file under the daemon root")
+        XCTAssertEqual(coarse.absoluteTargetPath,
+                       root.appendingPathComponent("out.txt").path,
+                       "relative target must resolve against the daemon root (not Swift cwd)")
+    }
+
+    /// F8 (Decision 1 = a): a command with NO detectable redirect target yields
+    /// no pre-state (nil/nil) — undo for arbitrary commands is infeasible; that's
+    /// what DamageControl is for. Preserves the current local coarse behavior.
+    func testCaptureCoarseBashPreStateNoRedirectYieldsNil() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-cn-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let coarse = DaemonToolRouting.captureCoarseBashPreState(
+            command: "rm -rf some_dir", root: root)
+        XCTAssertNil(coarse.preStateContent,
+                     "a command with no redirect target yields no pre-state blob")
+        XCTAssertNil(coarse.absoluteTargetPath,
+                     "a command with no redirect target yields no target path")
+    }
+
+    /// F8 (advisor): coarse receipt capture is PATH-BASED (not fd-anchored) —
+    /// bash isn't FS-confined, so a relative `../sibling` target resolves to the
+    /// REAL sibling under the root's parent (standardized), and the sibling's
+    /// content is snapshotted. fd-anchoring would have filtered `..` and missed
+    /// the sibling. This is undo material, not a confinement boundary.
+    func testCaptureCoarseBashPreStateResolvesRelativeEscapePathBased() throws {
+        // A parent dir holding both the daemon root and a sibling file.
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-pe-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let root = parent.appendingPathComponent("root", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Sibling OUTSIDE the root, reachable via ../sibling.txt from the root.
+        try Data("sibling-secret".utf8).write(to: parent.appendingPathComponent("sibling.txt"))
+
+        let coarse = DaemonToolRouting.captureCoarseBashPreState(
+            command: "echo new > ../sibling.txt", root: root)
+        XCTAssertEqual(coarse.preStateContent, Data("sibling-secret".utf8),
+                       "path-based capture must snapshot the ../sibling file (not fd-filter it)")
+        // The standardized path resolves to the parent's sibling (NOT root/sibling).
+        XCTAssertEqual(coarse.absoluteTargetPath,
+                       parent.appendingPathComponent("sibling.txt").standardizedFileURL.path,
+                       "../sibling.txt must standardize to the real sibling path, not root/sibling.txt")
+        XCTAssertFalse(coarse.absoluteTargetPath?.contains("root/sibling") ?? true,
+                       "the standardized path must escape the root (path-based, not fd-confined)")
+    }
+
+    /// F8 (advisor): an intended-but-down daemon FAIL-CLOSED plan must bypass
+    /// DamageControl + hooks entirely — no side effect can occur. A catastrophe
+    /// command (`rm -rf ~/Documents`) with the daemon DOWN surfaces the
+    /// BACKEND-UNAVAILABLE error (NOT a DamageControl cancellation),
+    /// damageControlIntervened == false, no root bound, and the routed executor
+    /// spy is never called.
+    func testRoutedBashFailClosedPlanBypassesDamageControl() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f8-fc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        // Intended + no daemon published → planBashRoute returns .failClosed.
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [BashTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        // The spy MUST NOT be called — the fail-closed plan short-circuits first.
+        await executor.setRoutedBashExecutorForTesting { _, _, _ in
+            .failClosed("routed bash executor must not be called on a fail-closed plan")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "bash", arguments: ["command": "rm -rf ~/Documents"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertTrue(outcome.result.isError,
+                      "a fail-closed plan must error (daemon down)")
+        XCTAssertTrue(outcome.result.output.contains("isn't available") || outcome.result.output.contains("backend"),
+                      "must surface the BACKEND-UNAVAILABLE error, not a DamageControl cancellation: \(outcome.result.output)")
+        XCTAssertFalse(outcome.result.output.contains("cancelled"),
+                       "must NOT be a DamageControl cancellation (no side effect can occur): \(outcome.result.output)")
+        XCTAssertFalse(outcome.result.output.contains("must not be called"),
+                       "the routed executor spy must NOT have been reached: \(outcome.result.output)")
+        XCTAssertFalse(outcome.damageControlIntervened,
+                       "damageControlIntervened must be false on a fail-closed plan (DamageControl bypassed)")
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot,
+                       "a fail-closed plan must not root the daemon (no daemon contact)")
     }
 }

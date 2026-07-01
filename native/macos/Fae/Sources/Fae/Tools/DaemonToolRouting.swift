@@ -62,7 +62,7 @@ enum DaemonToolRouting {
     /// blast radius — the substring damage-denylist is not complete shell
     /// safety). Unknown/Apple/scheduler tools stay local unless deliberately
     /// classified here.
-    static let routedTools: Set<String> = ["read", "write", "edit"]
+    static let routedTools: Set<String> = ["read", "write", "edit", "bash"]
 
     /// Canonicalize a URL: standardize (resolve `.`/`..` lexically) then resolve
     /// symlinks. Used so both the confinement root and the resolved target are
@@ -1221,6 +1221,171 @@ enum DaemonToolRouting {
         validatedPath: String, oldString: String, newString: String
     ) -> [String: Any] {
         ["path": validatedPath, "old_text": oldString, "new_text": newString]
+    }
+
+    // MARK: - Bash routing (F8)
+    //
+    // `bash` is the LAST Layer-4 mutation to route. It mirrors write/edit's
+    // routing/timeout/receipt shape but has TWO decisive differences (both from
+    // owner decisions + a sandbox-reach audit — see `ACTIVE_WORK.md` + the F7/F8
+    // policy doc §F8):
+    //
+    // 1. DamageControl is NOT skipped (unlike write/edit). The audit (Decision 2
+    //    = ii) found the fluers daemon bash is explicitly NOT an OS-level sandbox
+    //    (`local_env.rs:1-13`): `exec` (`local_env.rs:458-497`) runs `sh -c` with
+    //    an fd-anchored cwd ONLY — the child has full user-FS reach (can
+    //    `cd /; rm -rf …`), as the user's UID. So Swift's full bash DamageControl
+    //    (`zeroAccessPaths` + `noDeletePaths` + `bashRules`) is NON-REDUNDANT and
+    //    runs Swift-side BEFORE routing (in `ToolExecutor.executeRoutedBash`, not
+    //    here — DamageControl lives in the executor, the routing layer is pure
+    //    decision/execution). The daemon's own `damage.rs` covers a different
+    //    scope (system-wide + workspace-wipe) as defense-in-depth.
+    // 2. Receipts are coarse (Decision 1 = a): pattern-match the redirect target,
+    //    snapshot that file, else no pre-state. Undo for arbitrary `rm`/pipelines
+    //    is infeasible — DamageControl is the real guard. The coarse capture is
+    //    routed-aware (relative target → daemon root, not Swift cwd).
+    //
+    // This layer (`routeBash`) does NOT run DamageControl — it only validates the
+    // `command` arg exists. DamageControl runs in the executor BEFORE this is
+    // called, so a catastrophe command never reaches `routeBash`.
+
+    /// Mirrors `WriteRoutePlan`/`EditRoutePlan`. `.legacyLocal` = explicit daemon
+    /// opt-out (legacy local `BashTool` via the full local pipeline, INCLUDING
+    /// DamageControl); `.daemonReachable` = route to the governed daemon;
+    /// `.daemonUnavailableFailClosed` = daemon INTENDED but unreachable → FAIL
+    /// CLOSED (bash mutations are irreversible; no local bash fallback).
+    enum BashRoutePlan {
+        case legacyLocal
+        case daemonReachable
+        case daemonUnavailableFailClosed
+    }
+
+    /// Mirrors `WriteExecutionOutcome`/`EditExecutionOutcome`. Carries the
+    /// daemon's reply `result` (whose `content` — `[exit N] stdout/stderr` — is
+    /// surfaced), the coarse `preStateContent` (redirect-target file snapshot,
+    /// or nil), and the `absoluteTargetPath` (the resolved undo target, or nil).
+    enum BashExecutionOutcome {
+        case routed(result: [String: Any], preStateContent: Data?, absoluteTargetPath: String?)
+        case denied(String)
+        case failClosed(String)
+        case cancelled
+    }
+
+    /// Decide the bash route from daemon reachability + intent (the DECISION).
+    /// Mirrors `planWriteRoute`/`planEditRoute`.
+    static func planBashRoute(
+        session: DaemonToolHostSession
+    ) async -> BashRoutePlan {
+        let reachable = await session.isDaemonReachable()
+        if !reachable, !session.daemonIntended {
+            NSLog(
+                "DaemonToolRouting: bash — daemon unreachable and useDaemonEngine=false "
+                + "(opted out) → legacy local bash (pre-routing behavior)")
+            return .legacyLocal
+        }
+        if reachable {
+            return .daemonReachable
+        }
+        NSLog(
+            "DaemonToolRouting: bash — daemon unreachable and useDaemonEngine=true "
+            + "(intended) → FAIL CLOSED (mutations are irreversible; no local fallback)")
+        return .daemonUnavailableFailClosed
+    }
+
+    /// EXECUTE a routed `bash` for a pre-computed `plan`. Mirrors `routeWrite`/
+    /// `routeEdit` but bash has a single `command` arg (no path to shape-validate
+    /// — DamageControl, which runs in the executor BEFORE this, governs the
+    /// command's safety). Only validates `command` exists + is a string.
+    static func routeBash(
+        call: ToolCall,
+        session: DaemonToolHostSession,
+        plan: BashRoutePlan
+    ) async -> BashExecutionOutcome {
+        guard plan != .legacyLocal else {
+            return .failClosed("bash routing misconfigured: legacy route reached the routed executor")
+        }
+        guard let command = call.arguments["command"] as? String else {
+            return .denied("Missing required parameter: command")
+        }
+        switch plan {
+        case .daemonReachable:
+            return await session.executeSerializedRoutedBash(command: command)
+        case .daemonUnavailableFailClosed:
+            // Mutations are irreversible; never fall back to a local bash.
+            return .failClosed(
+                "Daemon unavailable and routing is intended; refusing to run bash locally")
+        case .legacyLocal:
+            return .failClosed("bash routing misconfigured: legacy route reached the routed executor")
+        }
+    }
+
+    /// Map a `BashExecutionOutcome` to a Swift `ToolResult`. Mirrors
+    /// `mapWriteOutcome`/`mapEditOutcome`: raw technical error strings here;
+    /// `ToolExecutor.executeRoutedBash` reframes them via
+    /// `friendlyRoutedBashError` AFTER audit. The `.routed` daemon content
+    /// (`[exit N] --- stdout --- … --- stderr --- …`) is surfaced via
+    /// `buildBashResult`; a nonzero exit is CONTENT (the command ran), not a
+    /// transport error.
+    static func mapBashOutcome(
+        _ outcome: BashExecutionOutcome
+    ) -> ToolResult {
+        switch outcome {
+        case .routed(let result, _, _):
+            return buildBashResult(from: result)
+        case .denied(let reason):
+            return .error(reason)
+        case .failClosed(let reason):
+            return .error(reason)
+        case .cancelled:
+            return .error("Bash was cancelled.")
+        }
+    }
+
+    /// Build the Swift `ToolResult` from the daemon's `bash` reply. The fluers
+    /// `BashTool::execute` returns a content block on success — `{type:"text",
+    /// text:"[exit N] --- stdout --- … --- stderr --- …"}` (see fluers-runtime
+    /// `tool.rs` `BashTool::execute`). Surfaced the same way as write/edit
+    /// (shared M3-hardened extractor); a missing content array is still a
+    /// success (the command ran; the daemon just returned no content block).
+    static func buildBashResult(from result: [String: Any]) -> ToolResult {
+        buildMutationToolResult(from: result, genericSuccess: "Ran command via the governed daemon.")
+    }
+
+    /// F8 (Decision 1 = a): coarse bash pre-state capture for a routed receipt.
+    /// Pattern-matches the command for a `>`/`>>` redirect target (shared
+    /// `ReceiptStore.extractBashOutputPath` parser, so routed + local use the
+    /// SAME parser). Resolution is PATH-BASED, not fd-anchored: bash is NOT
+    /// filesystem-confined (the daemon runs `sh -c` with full user-FS reach),
+    /// and shell-relative paths can legitimately include `..`/symlinks — fd-
+    /// anchoring (which filters `..`/rejects symlinks) would CHANGE SHELL
+    /// SEMANTICS. This is best-effort UNDO material, NOT a confinement boundary
+    /// (DamageControl, run in the executor, is the real guard).
+    ///
+    /// RELATIVE targets resolve path-based against `root` and STANDARDIZE
+    /// (`root/out.txt`; `../sibling.txt` → the real sibling path). ABSOLUTE
+    /// targets stay absolute (the daemon bash can write anywhere). The blob is
+    /// snapshotted path-based with the receipt cap (mirrors
+    /// `ReceiptStore.captureFilePreState`). No detectable target → `(nil, nil)`.
+    /// Pure + directly unit-testable.
+    static func captureCoarseBashPreState(
+        command: String, root: URL
+    ) -> (preStateContent: Data?, absoluteTargetPath: String?) {
+        guard let target = ReceiptStore.extractBashOutputPath(command: command) else {
+            return (nil, nil)
+        }
+        let absPath = target.hasPrefix("/")
+            ? target
+            : root.appendingPathComponent(target).standardizedFileURL.path
+        // Path-based snapshot with the receipt blob cap. Returns (nil, absPath)
+        // if the target doesn't exist yet (new file) or exceeds the cap — the
+        // PATH is still carried for undo (a created target can be deleted).
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: absPath),
+              let attrs = try? fm.attributesOfItem(atPath: absPath),
+              let size = attrs[.size] as? Int,
+              size >= 0, size <= ReceiptStore.maxPreStateBlobBytes
+        else { return (nil, absPath) }
+        return (try? Data(contentsOf: URL(fileURLWithPath: absPath)), absPath)
     }
 
 }

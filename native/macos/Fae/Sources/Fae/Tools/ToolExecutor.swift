@@ -101,6 +101,18 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// B-Swift Phase F7b test seam: override the routed-edit timeout.
     private var routedEditTimeoutOverride: TimeInterval?
 
+    /// B-Swift Phase F8: routed-bash executor closure (returns the outcome, not
+    /// a ToolResult, so the coarse receipt pre-state material can be built from
+    /// the outcome — mirrors routedWriteExecutor/routedEditExecutor).
+    private var routedBashExecutor: @Sendable (
+        ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan
+    ) async -> DaemonToolRouting.BashExecutionOutcome = { call, session, plan in
+        await DaemonToolRouting.routeBash(call: call, session: session, plan: plan)
+    }
+
+    /// B-Swift Phase F8 test seam: override the routed-bash timeout.
+    private var routedBashTimeoutOverride: TimeInterval?
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -361,6 +373,12 @@ actor ToolExecutor: ToolExecutorProtocol {
                     return await executeRoutedEdit(call: call, plan: plan, context: context)
                 }
                 // .legacyLocal → fall through to the local pipeline.
+            case "bash":
+                let plan = await DaemonToolRouting.planBashRoute(session: daemonToolHostSession)
+                if plan != .legacyLocal {
+                    return await executeRoutedBash(call: call, plan: plan, context: context)
+                }
+                // .legacyLocal → fall through to the local pipeline.
             default:
                 // Future routed tools (edit/bash, F7b/F8) land here.
                 break
@@ -368,88 +386,15 @@ actor ToolExecutor: ToolExecutorProtocol {
         }
 
         // ── 7. DamageControlPolicy ──────────────────────────────────────
-        var workflowDamageControlIntervened = false
-        let dcVerdict = await damageControlPolicy.evaluate(
-            toolName: call.name,
-            arguments: call.arguments,
-            locality: context.modelLocality
-        )
-        switch dcVerdict {
-        case .allow:
-            break
-
-        case .block(let reason):
-            workflowDamageControlIntervened = true
-            await securityLogger.log(
-                event: "dc_block",
-                toolName: call.name,
-                decision: "deny",
-                reasonCode: "damageControlBlock",
-                approved: nil,
-                success: nil,
-                error: nil,
-                arguments: call.arguments
-            )
-            debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
-            return ToolExecutorResult(
-                result: .error("Blocked by damage-control policy: \(reason)"),
-                approvedByUser: nil,
-                damageControlIntervened: true,
-                latencyMs: nil
-            )
-
-        case .disaster(let reason):
-            workflowDamageControlIntervened = true
-            await securityLogger.log(
-                event: "dc_disaster",
-                toolName: call.name,
-                decision: "confirm",
-                reasonCode: "damageControlDisaster",
-                approved: nil,
-                success: nil,
-                error: nil,
-                arguments: call.arguments
-            )
-            debugLog(debugConsole, .approval, "DC disaster: \(call.name) — \(reason)")
-            // Narrate the danger + countdown. User can barge-in to cancel.
-            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(
-                "This looks dangerous: \(reason). Proceeding in 5 seconds. Say stop to cancel."
-            ) ?? false
-            if !shouldProceed {
-                return ToolExecutorResult(
-                    result: .error("Action cancelled: \(reason)"),
-                    approvedByUser: false,
-                    damageControlIntervened: true,
-                    latencyMs: nil
-                )
-            }
-
-        case .confirmManual(let reason):
-            workflowDamageControlIntervened = true
-            await securityLogger.log(
-                event: "dc_confirm_manual",
-                toolName: call.name,
-                decision: "confirm",
-                reasonCode: "damageControlConfirmManual",
-                approved: nil,
-                success: nil,
-                error: nil,
-                arguments: call.arguments
-            )
-            debugLog(debugConsole, .approval, "DC confirm manual: \(call.name) — \(reason)")
-            // Narrate + countdown for manual confirmation.
-            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(
-                "\(reason). Proceeding in 5 seconds. Say stop to cancel."
-            ) ?? false
-            if !shouldProceed {
-                return ToolExecutorResult(
-                    result: .error("Action cancelled: \(reason)"),
-                    approvedByUser: false,
-                    damageControlIntervened: true,
-                    latencyMs: nil
-                )
-            }
+        // F8: extracted into `runDamageControlGate` so routed bash runs the
+        // SAME DamageControl logic (it must — the daemon doesn't confine bash
+        // FS reach; see ACTIVE_WORK.md). write/edit/read skip DamageControl via
+        // their own routed branches and never reach this line.
+        let damageControlGate = await runDamageControlGate(call: call, context: context)
+        if let damageControlBlocked = damageControlGate.blocked {
+            return damageControlBlocked
         }
+        let workflowDamageControlIntervened = damageControlGate.intervened
 
         // ── 8. Argument augmentation (shared helper) ────────────────────
         let executionArguments = computeExecutionArguments(for: call, context: context)
@@ -561,6 +506,102 @@ actor ToolExecutor: ToolExecutorProtocol {
             damageControlIntervened: workflowDamageControlIntervened,
             latencyMs: nil
         )
+    }
+
+    // MARK: - DamageControl gate (shared by local pipeline + routed bash)
+
+    /// F8: shared DamageControl evaluation. Runs `damageControlPolicy.evaluate`
+    /// + the 4-case verdict handling (allow / block / disaster-countdown /
+    /// confirmManual-countdown) + security logging + the delegate countdown.
+    /// Extracted so the LOCAL pipeline (step 7) and routed `bash` run the SAME
+    /// logic — bash MUST run DamageControl even when routed (the daemon doesn't
+    /// confine bash FS reach; see ACTIVE_WORK.md + F7/F8 doc §F8). write/edit/
+    /// read skip DamageControl via their own routed branches and don't call this.
+    ///
+    /// Returns `(blocked: nil, intervened: false)` if allowed; `(nil, true)` if
+    /// disaster/confirmManual countdown PROCEEDS; `(result, true)` if blocked or
+    /// the countdown cancelled (the caller returns `blocked`).
+    private func runDamageControlGate(
+        call: ToolCall,
+        context: ToolExecutorContext
+    ) async -> (blocked: ToolExecutorResult?, intervened: Bool) {
+        let dcVerdict = await damageControlPolicy.evaluate(
+            toolName: call.name,
+            arguments: call.arguments,
+            locality: context.modelLocality
+        )
+        switch dcVerdict {
+        case .allow:
+            return (nil, false)
+
+        case .block(let reason):
+            await securityLogger.log(
+                event: "dc_block",
+                toolName: call.name,
+                decision: "deny",
+                reasonCode: "damageControlBlock",
+                approved: nil,
+                success: nil,
+                error: nil,
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC block: \(call.name) — \(reason)")
+            return (ToolExecutorResult(
+                result: .error("Blocked by damage-control policy: \(reason)"),
+                approvedByUser: nil,
+                damageControlIntervened: true,
+                latencyMs: nil), true)
+
+        case .disaster(let reason):
+            await securityLogger.log(
+                event: "dc_disaster",
+                toolName: call.name,
+                decision: "confirm",
+                reasonCode: "damageControlDisaster",
+                approved: nil,
+                success: nil,
+                error: nil,
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC disaster: \(call.name) — \(reason)")
+            // Narrate the danger + countdown. User can barge-in to cancel.
+            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(
+                "This looks dangerous: \(reason). Proceeding in 5 seconds. Say stop to cancel."
+            ) ?? false
+            if !shouldProceed {
+                return (ToolExecutorResult(
+                    result: .error("Action cancelled: \(reason)"),
+                    approvedByUser: false,
+                    damageControlIntervened: true,
+                    latencyMs: nil), true)
+            }
+            return (nil, true)  // countdown elapsed → proceed
+
+        case .confirmManual(let reason):
+            await securityLogger.log(
+                event: "dc_confirm_manual",
+                toolName: call.name,
+                decision: "confirm",
+                reasonCode: "damageControlConfirmManual",
+                approved: nil,
+                success: nil,
+                error: nil,
+                arguments: call.arguments
+            )
+            debugLog(debugConsole, .approval, "DC confirm manual: \(call.name) — \(reason)")
+            // Narrate + countdown for manual confirmation.
+            let shouldProceed = await delegate?.toolExecutorCountdownBeforeIrreversible(
+                "\(reason). Proceeding in 5 seconds. Say stop to cancel."
+            ) ?? false
+            if !shouldProceed {
+                return (ToolExecutorResult(
+                    result: .error("Action cancelled: \(reason)"),
+                    approvedByUser: false,
+                    damageControlIntervened: true,
+                    latencyMs: nil), true)
+            }
+            return (nil, true)  // countdown elapsed → proceed
+        }
     }
 
     // MARK: - B-Swift Phase C / follow-up #5: routed-read executor branch
@@ -1099,6 +1140,205 @@ actor ToolExecutor: ToolExecutorProtocol {
         return "I couldn't edit that file right now, so nothing was changed. The details are in the log."
     }
 
+    /// F8: routed `bash` execution. The KEY difference from routed write/edit:
+    /// **DamageControl runs FIRST** (the daemon doesn't confine bash FS reach —
+    // no OS sandbox; see ACTIVE_WORK.md). The full bash branch (zeroAccessPaths
+    // + noDeletePaths + bashRules) is non-redundant and must run before any
+    // daemon/root side effect. Then: PreToolUse hooks → timeout-wrapped routed
+    // bash → PostToolUse hooks → audit/analytics → coarse receipt (Decision 1
+    // = a) → narration. Approval is upstream. Fail-closed on outage (no local
+    // bash fallback — mutations irreversible). The daemon's own `damage.rs`
+    // adds defense-in-depth (system/workspace scope) on top of the Swift rules.
+    private func executeRoutedBash(
+        call: ToolCall,
+        plan: DaemonToolRouting.BashRoutePlan,
+        context: ToolExecutorContext
+    ) async -> ToolExecutorResult {
+        let startTime = Date()
+
+        // ── Fail-closed plan short-circuit (advisor F8): if the daemon is
+        //   intended but UNREACHABLE, NO side effect can occur, so bypass
+        //   DamageControl + hooks + the daemon entirely. A catastrophe command
+        //   (`rm -rf ~/Documents`) with the daemon DOWN must surface the
+        //   BACKEND-UNAVAILABLE error, NOT a DamageControl cancellation (the
+        //   command never ran — there's nothing for DamageControl to guard).
+        //   Routes via the REAL `routeBash` (NOT the test seam) so its
+        //   missing-command validation + fail-closed mapping still apply; the
+        //   RAW result is audited, and only the CONVERSATION copy is
+        //   friendlified. damageControlIntervened=false; no root/daemon contact.
+        if plan == .daemonUnavailableFailClosed {
+            let outcome = await DaemonToolRouting.routeBash(
+                call: call, session: daemonToolHostSession, plan: plan)
+            let raw = DaemonToolRouting.mapBashOutcome(outcome)
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Routed bash fail-closed (daemon down): \(call.name) isError=\(raw.isError)")
+            await recordToolOutcome(
+                toolName: call.name,
+                arguments: call.arguments,
+                success: !raw.isError,
+                error: raw.isError ? raw.output : nil,
+                startTime: startTime)
+            let conversationOutput = raw.isError
+                ? Self.friendlyRoutedBashError(for: raw.output) : raw.output
+            return ToolExecutorResult(
+                result: ToolResult(output: conversationOutput, isError: raw.isError),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: Int(Date().timeIntervalSince(startTime) * 1000)
+            )
+        }
+
+        // ── DamageControl FIRST for `.daemonReachable` (F8, the audit-mandated
+        //   difference from write/edit). Runs the SAME gate the local pipeline
+        //   does (the daemon doesn't confine bash FS reach). A catastrophe
+        //   command never reaches the daemon. `.allow` / proceeded-countdown →
+        //   continue; blocked / cancelled → return.
+        let damageControlGate = await runDamageControlGate(call: call, context: context)
+        if let damageControlBlocked = damageControlGate.blocked {
+            return damageControlBlocked
+        }
+        let damageControlIntervened = damageControlGate.intervened
+
+        let executionArguments = computeExecutionArguments(for: call, context: context)
+
+        // ── PreToolUse hooks (BEFORE any daemon/root side effect).
+        if let blocked = await runPreToolUseHooks(
+            toolName: call.name, arguments: executionArguments)
+        {
+            return blocked
+        }
+
+        // ── Timeout-wrapped routed bash.
+        let timeoutSeconds = routedBashTimeoutOverride ?? Self.toolTimeoutSeconds(for: call.name)
+        let outcome: DaemonToolRouting.BashExecutionOutcome
+        do {
+            let executor = routedBashExecutor
+            let session = daemonToolHostSession
+            outcome = try await withThrowingTaskGroup(of: DaemonToolRouting.BashExecutionOutcome.self) { group in
+                group.addTask {
+                    await executor(call, session, plan)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    return .failClosed("Tool timed out after \(Int(timeoutSeconds))s")
+                }
+                guard let o = try await group.next() else {
+                    group.cancelAll()
+                    return DaemonToolRouting.BashExecutionOutcome.failClosed(
+                        "Tool execution did not return a result")
+                }
+                group.cancelAll()
+                return o
+            }
+        } catch {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Routed bash threw: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
+            await recordToolOutcome(
+                toolName: call.name,
+                arguments: call.arguments,
+                success: false,
+                error: error.localizedDescription,
+                startTime: startTime)
+            return ToolExecutorResult(
+                result: .error(Self.friendlyRoutedBashError(for: "Tool error: \(error.localizedDescription)")),
+                approvedByUser: nil,
+                damageControlIntervened: damageControlIntervened,
+                latencyMs: latencyMs
+            )
+        }
+
+        let result = DaemonToolRouting.mapBashOutcome(outcome)
+
+        // ── PostToolUse hooks.
+        await runPostToolUseHooks(toolName: call.name, output: result.output)
+
+        // ── Analytics + audit (mirrors step 14).
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
+        await recordToolOutcome(
+            toolName: call.name,
+            arguments: call.arguments,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            startTime: startTime)
+
+        // ── Coarse receipt on success (Decision 1 = a), built from the
+        //   outcome's pre-state material (redirect-target snapshot, or nil).
+        var narrationReceiptId: String?
+        if !result.isError, let store = receiptStore,
+           case .routed(_, let preStateContent, let absoluteTargetPath) = outcome
+        {
+            let preState = absoluteTargetPath.map {
+                ReceiptStore.PreStateCaptureResult(blob: preStateContent, path: $0)
+            }
+            narrationReceiptId = await store.createReceipt(
+                toolName: call.name,
+                arguments: call.arguments,
+                preState: preState,
+                speakerId: context.speakerId,
+                sessionId: nil,
+                turnId: context.workflowTurnID)
+        }
+
+        // ── Post-action narration with the receipt id (mirrors local step 16).
+        let reversibility = ActionReversibility.classify(toolName: call.name, arguments: call.arguments)
+        if !result.isError,
+           reversibility != .notApplicable,
+           context.proactiveContext == nil,
+           let narrationText = Self.buildNarrationText(toolName: call.name, arguments: call.arguments)
+        {
+            await delegate?.toolExecutorNarrateAction(narrationText, receiptId: narrationReceiptId)
+        }
+
+        // ── Friendly error copy for the conversation (raw already in audit).
+        let conversationResult: ToolResult = result.isError
+            ? ToolResult(
+                output: Self.friendlyRoutedBashError(for: result.output),
+                isError: true)
+            : result
+
+        return ToolExecutorResult(
+            result: conversationResult,
+            approvedByUser: nil,
+            damageControlIntervened: damageControlIntervened,
+            latencyMs: latencyMs
+        )
+    }
+
+    /// Map a technical routed-bash error string to Fae-voice conversation copy
+    /// (F8, mirrors the write/edit variants). The raw technical string is
+    /// preserved for audit/analytics; only the conversation copy is softened.
+    /// NOTE: DamageControl catastrophe denials (disaster/block/confirmManual)
+    /// are handled in `runDamageControlGate` and surface their OWN copy (the
+    // DangerReason text); this handles the ROUTING/daemon-layer errors that
+    // reach `mapBashOutcome`.
+    static func friendlyRoutedBashError(for technical: String) -> String {
+        // Missing command arg.
+        if technical.contains("Missing required parameter") {
+            return "I need a valid command to run. Nothing was executed."
+        }
+        // Daemon unavailable / outage — fail closed (no local bash).
+        if technical.contains("Daemon unavailable")
+            || technical.contains("routing is intended")
+            || technical.contains("before the workspace root was approved") {
+            return "The command backend isn't available right now, so I didn't run that. Please try again shortly."
+        }
+        if technical.contains("Daemon bash") {
+            return "The command backend reported a problem running that, so nothing was executed. Please try again."
+        }
+        if technical.contains("was cancelled") || technical.contains("cancelled") {
+            return "That command was cancelled before it finished."
+        }
+        if technical.contains("timed out") {
+            return "That command took too long and was stopped."
+        }
+        if technical.contains("routing misconfigured") {
+            return "I hit an internal setup problem with the bash tool. Nothing was executed. Please report this."
+        }
+        // Generic fallback (audit has the raw string).
+        return "I couldn't run that command right now. The details are in the log."
+    }
+
     #if FAE_TEST_SEAMS
     /// Test seam setter (Phase C/#5): override the routed-read executor.
     /// GUARDED: `FAE_TEST_SEAMS` is defined only in `.debug` (Package.swift
@@ -1149,6 +1389,22 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Test seam setter (F7b): override the routed-edit timeout.
     func setRoutedEditTimeoutForTesting(_ seconds: TimeInterval?) {
         routedEditTimeoutOverride = seconds
+    }
+
+    /// Test seam setter (F8): override the routed-bash executor.
+    /// GUARDED: `FAE_TEST_SEAMS` is debug-only, compiled OUT of release
+    /// (red-team F4 rule, extended to bash).
+    func setRoutedBashExecutorForTesting(
+        _ fn: @Sendable @escaping (
+            ToolCall, DaemonToolHostSession, DaemonToolRouting.BashRoutePlan
+        ) async -> DaemonToolRouting.BashExecutionOutcome
+    ) {
+        routedBashExecutor = fn
+    }
+
+    /// Test seam setter (F8): override the routed-bash timeout.
+    func setRoutedBashTimeoutForTesting(_ seconds: TimeInterval?) {
+        routedBashTimeoutOverride = seconds
     }
     #endif
 

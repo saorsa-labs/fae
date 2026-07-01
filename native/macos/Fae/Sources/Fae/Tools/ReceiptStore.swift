@@ -599,7 +599,7 @@ actor ReceiptStore {
 
         case "bash":
             let command = arguments["command"] as? String ?? ""
-            if let path = extractBashOutputPath(command: command) {
+            if let path = Self.extractBashOutputPath(command: command) {
                 return captureFilePreState(atPath: path)
             }
             return PreStateCaptureResult(blob: nil, path: nil)
@@ -633,7 +633,14 @@ actor ReceiptStore {
         return PreStateCaptureResult(blob: blob, path: path)
     }
 
-    nonisolated private func extractBashOutputPath(command: String) -> String? {
+    /// Pattern-match a bash command's redirect target (`>` / `>>`) for coarse
+    /// receipt pre-state capture. Pure + `static` so BOTH the local pipeline
+    /// (`capturePreState`) and the routed-bash capture
+    /// (`DaemonToolHostSession.executeSerializedRoutedBash`) share ONE parser
+    /// — no routed-vs-legacy divergence in what counts as an "output path"
+    /// (F8, advisor constraint 4). Returns the raw target string (quotes
+    /// trimmed); it may be relative or absolute. Best-effort undo material only.
+    nonisolated static func extractBashOutputPath(command: String) -> String? {
         let patterns = [#"\s>>\s*(\S+)\s*$"#, #"\s>\s*(\S+)\s*$"#]
         for pattern in patterns {
             if let regex = try? NSRegularExpression(pattern: pattern),

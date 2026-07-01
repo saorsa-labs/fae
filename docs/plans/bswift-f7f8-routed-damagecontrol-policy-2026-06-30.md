@@ -313,25 +313,28 @@ keep some bash patterns on the local pipeline even after routing (hybrid).
 
 ---
 
-## 6. Open owner decisions (do NOT implement without a call)
+## 6. Open owner decisions (all RESOLVED 2026-07-01)
 
-1. **Approval UX for daemon-executed mutations:** show daemon-resolved canonical
-   target on the approval card? (§3.)
-2. **Bash receipts for routed execution:** coarse / daemon-snapshot /
-   reversible-class-gated? (§3.)
-3. **DamageControl split timing:** do the `evaluateConfinement`/
-   `evaluateCatastrophe` split as part of F7a, or leave confinement-eval in place
-   for routed mutating tools (harmless redundancy) until a later cleanup?
-4. **DamageControl catastrophe rules for routed bash:** are the current
-   destructive-pattern rules (`DamageControlPolicy.swift` bash branch) sufficient
-   for daemon-side execution, or does the daemon's broader reach need tighter
-   rules?
+1. **Approval UX for daemon-executed mutations:** RESOLVED (F7a advisor) —
+   approval is upstream; the daemon confines regardless; bash has no single
+   path (card shows the command). No action.
+2. **Bash receipts for routed execution:** RESOLVED → **(a) coarse** (keep
+   current best-effort behavior; resolution is path-based/standardized, not
+   fd-anchored — preserves shell `..`/symlink semantics; undo material, not
+   confinement). See §F8.
+3. **DamageControl split timing:** RESOLVED (F7a/F7b validation) — write/edit
+   skip DamageControl entirely (rules are confinement-only); the split is
+   F8/bash-only, and for bash the whole branch stays (no split needed).
+4. **DamageControl catastrophe rules for routed bash:** RESOLVED → **(ii)
+   audit then align.** Audit found daemon bash = full user-FS reach (no OS
+   sandbox), so current rules are non-redundant + sufficient; no new rules
+   needed. See §F8.
 
 ---
 
 ## 7. What this doc is NOT
 
-- Not a schedule. Routing write/edit/bash is not approved by this doc.
+- Not a schedule. Routing read/write/edit/bash is now SHIPPED (Layer 4 complete).
 - Not a confinement design. Confinement for mutating tools is the daemon's job
   (anchored writes), once the fluers write/exec TOCTOU is closed (#4 residual).
 - Not a receipts redesign. It identifies bash receipts as the open question and

@@ -531,6 +531,82 @@ actor DaemonToolHostSession {
         }
     }
 
+    /// F8: serialized routed `bash` round-trip. Mirrors
+    /// `executeSerializedRoutedWrite`/`executeSerializedRoutedEdit` (operation
+    /// lock → root approval → coarse receipt capture → governed bash) with
+    /// bash's coarse receipt semantics (Decision 1 = a). Fail-closed on any
+    /// daemon drop/error before OR after root approval (bash mutations are
+    /// irreversible; no local bash fallback).
+    ///
+    /// Receipt (coarse): pattern-match the command for a `>`/`>>` redirect
+    /// target (shared `ReceiptStore.extractBashOutputPath` parser). If the
+    /// target is RELATIVE, resolve + snapshot it against the daemon-approved
+    /// root (NOT the Swift process cwd — routed bash runs with cwd = daemon
+    /// root). If ABSOLUTE, snapshot it path-based (preserves local behavior;
+    /// the daemon bash can write absolute paths — full FS reach). If no
+    /// detectable target, no pre-state. This is best-effort UNDO material, not a
+    /// confinement boundary (DamageControl, run in the executor BEFORE this,
+    /// is the real guard).
+    func executeSerializedRoutedBash(
+        command: String
+    ) async -> DaemonToolRouting.BashExecutionOutcome {
+        do {
+            try await acquireToolHostOperationLock()
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Could not acquire the bash lock: \(error.localizedDescription)")
+        }
+        defer { releaseToolHostOperationLock() }
+        if Task.isCancelled { return .cancelled }
+
+        do {
+            // Root FIRST (binds the daemon-approved root).
+            let daemonRoot = try await ensureDefaultRooted()
+            // Coarse receipt capture (Decision 1 = a): shared helper. Relative
+            // targets resolve against the daemon root; absolute targets are
+            // path-based (local parity); no target → nil. Best-effort undo
+            // material, NOT a confinement boundary.
+            let coarse = DaemonToolRouting.captureCoarseBashPreState(
+                command: command, root: daemonRoot)
+            let preStateContent = coarse.preStateContent
+            let absoluteTargetPath = coarse.absoluteTargetPath
+            do {
+                // Governed bash. The daemon applies its `damage.rs` catastrophe
+                // rules (system-wide `rm -rf /`/`mkfs`/`dd`/`shutdown` +
+                // workspace-wipe under DurableWorkspace) as defense-in-depth ON
+                // TOP of the Swift DamageControl that already ran in the
+                // executor (home-dir/code-exec scope). fluers `exec` runs `sh -c`
+                // with an fd-anchored cwd + `env_clear()` (no secret exfil).
+                // Returns a CONTENT-BEARING result ("[exit N] stdout/stderr");
+                // a nonzero exit is CONTENT, not a transport error. Errors throw
+                // → .failClosed below. (fluers-runtime `tool.rs` `BashTool`.)
+                let result = try await execute(tool: "bash", input: ["command": command])
+                return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
+            } catch DaemonAgentClientError.daemonUnavailable {
+                // Daemon dropped at execute (root was approved). FAIL CLOSED —
+                // never run bash locally.
+                return .failClosed(
+                    "Daemon unavailable during bash; refusing to run locally.")
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                // Daemon up but errored (scope/confirm denial, damage deny, etc.).
+                // Fail closed — surface the error, do NOT fall back.
+                return .failClosed("Daemon bash failed: \(error.localizedDescription)")
+            }
+        } catch DaemonAgentClientError.daemonUnavailable {
+            // Daemon dropped before/during root approval. Fail closed.
+            return .failClosed(
+                "Daemon unavailable before the workspace root was approved; " +
+                "refusing to run bash locally without a daemon-approved root.")
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Daemon bash failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Confined LOCAL read fallback for the no-daemon-but-intended branch
     /// (B-Swift follow-up #2: daemon intended but momentarily unreachable).
     ///
