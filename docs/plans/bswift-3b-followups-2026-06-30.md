@@ -101,14 +101,31 @@ confinement already holds. **Why not unconditional confined-fallback:** it would
 provision `~/Documents/Fae` as a side-effect in test suites that don’t inject a
 temp provider — the gate avoids that.
 
-## 3. Hardlinks defeat path confinement (MED — inherent)
+## 3. Hardlinks defeat path confinement (MED — ✅ RESOLVED 2026-06-30, `01924ff7`)
 
 - `ln ~/.ssh/id_rsa ~/Documents/Fae/key; read key` routes: the hardlink is a
   regular file under the workspace, passes confinement, and reads the sensitive
   target. Inherent to path-based confinement (the daemon shares it).
 - **Options:** reject `st_nlink > 1` (strict; false positives on legitimately
   hard-linked workspace files), or document explicitly as accepted residual.
-- **Owner call:** policy + whether the daemon side should also enforce.
+- **Owner call (LOCKED 2026-06-30):** reject `st_nlink > 1` on the
+  routed/confined path + the fluers daemon read. Swift checks are early-reject
+  defense-in-depth; the authoritative check is the fluers post-open `fstat`
+  (C1a, follow-up #4 fast-follow).
+- **Resolved (`01924ff7`, C2):** added `st_nlink > 1` reject at both Swift
+  read-confinement sites — `readFdAnchored` (fstat off the OPENED leaf fd, no
+  path re-resolution) and `confineValidatedReadPath` (path-based `lstat`
+  early-reject). Specific error copy (`"multiple hard links — can't safely
+  confine: <path>"`) so the rare false positive is debuggable. Scope: routed/
+  confined path only — NOT the legacy rootless `ReadTool`.
+- **Evidence:** `testReadFdAnchoredRejectsHardlinkedSecret` +
+  `testConfineRejectsHardlinkedSecret` (TDD: proved the vuln first, then the
+  fix). Targeted 113/0; full 3506/0 (`--skip VocabularyHarvestTests`);
+  `swift build` + `swift build -c release` clean.
+- **Residual (accepted):** a transient `st_nlink` defeat (drop the extra link
+  before the check; the inode keeps the content with `nlink==1`) is
+  defense-in-depth — the authoritative stop is the fluers post-open `fstat`
+  (#4/C1a).
 
 ## 4. TOCTOU on final-file read + `O_NOFOLLOW` (HIGH — belongs in fluers/daemon + `ReadTool`)
 
@@ -128,14 +145,52 @@ temp provider — the gate avoids that.
   (`String(contentsOfFile:)`); the daemon's own root canonicalization + the
   pre-existing `is_safe_workspace_root` guard are the current defense there.
 
-## 5. Routed reads skip Swift audit / plugin hooks / executor timeout (reviewer + codex)
+## 5. Routed reads skip Swift audit / plugin hooks / executor timeout (✅ RESOLVED 2026-06-30, `7332e95f`)
 
 - A daemon-routed read returns before DamageControl (step 7) and the execute
   step (12), so it bypasses: Swift `SecurityEventLogger`, `ToolAnalytics`,
   PreToolUse/PostToolUse plugin hooks, and the 30s executor timeout. The daemon
   has its own `audit.jsonl`, but the Swift-side audit/policy gap is real.
-- **Owner call:** is daemon-side audit sufficient for `read`, or mirror a Swift
-  audit row for routed reads? Apply the executor timeout to the routed path?
+- **Owner call (LOCKED 2026-06-30):** do NOT accept daemon-only audit. Mirror
+  the Swift audit (`SecurityEventLogger` + `ToolAnalytics`) + fire
+  PreToolUse/PostToolUse hooks + apply the executor timeout. Skip only
+  DamageControl (daemon governs) and receipts (no mutation). A PreToolUse bypass
+  is a policy bypass, not just an observability gap; `read` is the Layer 4
+  precedent-setter (write/edit/bash route through the same seam).
+- **Resolved (`7332e95f`, C3):** split routing DECISION from EXECUTION
+  (`ReadRoutePlan` + `planReadRoute` decision / `routeRead(_:plan:)` execution)
+  so the route is fixed before any side effect (no policy race). The new
+  `executeRoutedRead` branch mirrors PreToolUse hooks → timeout → PostToolUse
+  hooks → audit/analytics, skipping ONLY DamageControl + receipts. Shared
+  helpers (`runPreToolUseHooks`/`runPostToolUseHooks`/`recordToolOutcome`/
+  `computeExecutionArguments`) used by BOTH pipelines (no copy/paste).
+  Protocol seams (`ToolAnalyticsRecording`/`PluginHookRunning`; concrete actors
+  conform) enable spy-injected tests.
+- **Review-driven fixes folded in (`7332e95f`):**
+  - **M1** routed error catch now returns `latencyMs` (was `nil`).
+  - **S1** routed PreToolUse uses `computeExecutionArguments` (Layer 4 precedent).
+  - **F5** deleted the legacy 2-arg `routeRead(_:session:)->ToolResult?` wrapper
+    (ran no hooks/audit/timeout; would resurrect the bypass).
+  - **F2** the executor timeout now actually cancels the daemon `roundTrip`:
+    `DaemonSocketConnection` reads are cancellation-aware (short 1s `SO_RCVTIMEO`
+    poll + monotonic `CLOCK_MONOTONIC` 600s overall deadline + a lock-guarded
+    cancellation flag polled in `readLineLocked`; `onCancel` only sets the flag —
+    no double-resume). A wedged daemon can no longer hold the operation lock for
+    600s.
+  - **F4** test-seam setters compiled out of release (`FAE_TEST_SEAMS` via
+    `.define(_, .when(configuration: .debug))`); verified 0 symbols in the
+    release binary.
+- **Evidence:** 7 routed-read tests (PreToolUse-block-before-closure,
+  PostToolUse-fire-with-output, audit+analytics on success AND error, timeout
+  @0.4s w/ latencyMs assertion, legacy opt-out fall-through,
+  confined-fallback-through-pipeline) + F2
+  `testRoundTripCancellationUnblocksPromptlyFromSilentPeer` (cancel unblocks in
+  ~1.0s, not 600s). Targeted 113/0; full 3506/0 (`--skip VocabularyHarvestTests`);
+  `swift build` + `swift build -c release` clean; F4 release-symbol proof (0).
+- **Red-team + code-review:** both SHIP-WITH-FIXES → SHIP after the fixes; the
+  final residual is the cross-repo fluers `openat`/`O_NOFOLLOW` (follow-up #4,
+  C1a fast-follow, OPEN) — the authoritative server-side read is still
+  path-based until that lands.
 
 ## 6. Truncation parity (LOW)
 
