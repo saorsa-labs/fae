@@ -127,7 +127,7 @@ temp provider — the gate avoids that.
   defense-in-depth — the authoritative stop is the fluers post-open `fstat`
   (#4/C1a).
 
-## 4. TOCTOU on final-file read + `O_NOFOLLOW` (HIGH — daemon path ✅ RESOLVED; legacy `ReadTool` OPEN)
+## 4. TOCTOU on final-file read + `O_NOFOLLOW` (HIGH — ✅ RESOLVED: daemon path + legacy `ReadTool`)
 
 - Generic check-then-(re)open race between Swift confinement and the actual read.
 - **Daemon read path — ✅ RESOLVED (fluers `addb66e`, 2026-06-30, B-Swift C1a fast-follow):**
@@ -160,14 +160,43 @@ temp provider — the gate avoids that.
   `git+https://github.com/saorsa-labs/fluers` sources). `fae-daemon` resolves
   the C1a fd-anchor fix from the registry; `cargo check -p fae-daemon
   --all-targets` + workspace check + clippy green.
-- **Legacy rootless `ReadTool` — OPEN (Swift-side):** the local `ReadTool`'s
-  `String(contentsOfFile:)` is still path-based (no `O_NOFOLLOW`). Separate
-  Swift fix; out of scope for #4's daemon-read resolution.
+- **Legacy rootless `ReadTool` — ✅ RESOLVED (Swift-side, B-Swift #4):** the
+  local `ReadTool`'s path-based `FileManager.fileExists` + `String(
+  contentsOfFile:)` (check-then-reopen TOCTOU; followed symlinks at every
+  component) is replaced by `DaemonToolRouting.readRootlessFdAnchored(
+  absolutePath:)`: `open(path, O_NOFOLLOW)` follows INTERMEDIATE symlinks
+  (so macOS `/tmp → /private/tmp` and home-dir symlinks still resolve) but
+  rejects a LEAF symlink with `ELOOP`; the read happens off the OPENED fd
+  (atomic check+use, no path re-resolution). `fstat` rejects non-regular
+  entries (FIFO/dir/socket/device). The redundant `fileExists` pre-check is
+  dropped (the open IS the atomic existence check).
+  - **Intentionally NOT a workspace-root walk (`readFdAnchored`):** anchoring
+    from `/` would reject every intermediate symlink (breaking `/tmp`,
+    `/var`, `/etc` on macOS) and mishandle `..`. `open(path, O_NOFOLLOW)` is
+    the correct primitive for a rootless read.
+  - **Intentionally NO `st_nlink > 1` (hardlink) rejection:** owner LOCKED #3
+    hardlink rejection to the routed/confined path + fluers daemon only.
+    Hardlink rejection is a CONFINEMENT measure; the rootless `ReadTool` is
+    unconfined by design, so this fix closes the LEAF TOCTOU only — it does
+    NOT add workspace confinement.
+  - **Evidence:** 5 new tests (regular absolute read; leaf-symlink reject
+    via helper + end-to-end via `ReadTool().execute`; intermediate-symlink-
+    dir FOLLOWS — locks the macOS design; FIFO reject). No hardlink test
+    (by design). Full Swift suite 3511/0 (5 pre-existing skips);
+    `swift build` clean.
+  - Reuses the hardened `readLeaf` (EINTR retry, multibyte-UTF-8-safe
+    truncation) from `readFdAnchored`; legacy 50k-char cap/`[truncated]`
+    marker still applied to the fd-reader text; cross-path truncation
+    parity remains follow-up #6.
 - **Local fallback path (follow-up #2):** already fd-anchored since Phase A
   (`DaemonToolRouting.readFdAnchored`) — unchanged.
-- **Residual:** `write_file` / `exec` / `glob` / `grep` in `LocalSessionEnv`
-  still use path-based `resolve()` and share the TOCTOU class — out of scope
-  for #4 (read-only); tracked separately.
+- **Residual (separate from #4's read-only scope):**
+  - fluers: `write_file` / `exec` / `glob` / `grep` in `LocalSessionEnv`
+    still use path-based `resolve()` and share the TOCTOU class.
+  - Swift legacy mutation paths: `EditTool`'s read-before-write
+    (`String(contentsOfFile:)`) and `WriteTool`'s path-based write remain
+    path-based. These are mutation, not read, and are out of #4's read-only
+    scope; tracked separately.
 
 ## 5. Routed reads skip Swift audit / plugin hooks / executor timeout (✅ RESOLVED 2026-06-30, `7332e95f`)
 

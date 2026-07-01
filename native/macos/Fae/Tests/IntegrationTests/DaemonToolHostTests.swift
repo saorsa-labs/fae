@@ -1691,6 +1691,120 @@ final class DaemonToolHostTests: XCTestCase {
         }
     }
 
+    // MARK: - B-Swift #4 — legacy rootless `ReadTool` leaf-TOCTOU (fd-anchored)
+
+    /// #4: the rootless fd-anchored helper reads a regular absolute file. False-
+    /// positive guard for the rejection tests below.
+    func testReadRootlessFdAnchoredReadsRegularAbsoluteFile() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-rootless-ok-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let file = tmp.appendingPathComponent("note.txt")
+        try Data("hello rootless".utf8).write(to: file)
+
+        let result = DaemonToolRouting.readRootlessFdAnchored(absolutePath: file.path)
+        if case .text(let t) = result { XCTAssertEqual(t, "hello rootless") } else {
+            XCTFail("regular absolute file should read; got \(result)")
+        }
+    }
+
+    /// #4: the rootless helper rejects a LEAF symlink (`open` + O_NOFOLLOW →
+    /// ELOOP), never following it. This is the TOCTOU the legacy `String(
+    /// contentsOfFile:)` had: a leaf swapped for a symlink between the check and
+    /// the read would exfiltrate the target.
+    func testReadRootlessFdAnchoredRejectsLeafSymlink() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-rootless-symlink-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // leaf symlink → /etc/passwd (escape attempt).
+        try FileManager.default.createSymbolicLink(
+            atPath: tmp.appendingPathComponent("evil").path,
+            withDestinationPath: "/etc/passwd")
+
+        let result = DaemonToolRouting.readRootlessFdAnchored(
+            absolutePath: tmp.appendingPathComponent("evil").path)
+        if case .deny(let reason) = result {
+            XCTAssertTrue(reason.contains("symbolic link"),
+                          "leaf symlink denial should say so: \(reason)")
+        } else {
+            XCTFail("leaf symlink must be denied (open+O_NOFOLLOW→ELOOP); got \(result)")
+        }
+    }
+
+    /// #4: end-to-end proof that the legacy `ReadTool` now rejects a leaf symlink
+    /// (the call chain routes through `readRootlessFdAnchored`). Pre-fix this
+    /// would have followed the symlink and returned the target's contents.
+    func testReadToolRejectsLeafSymlinkEndToEnd() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-readtool-symlink-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            atPath: tmp.appendingPathComponent("evil").path,
+            withDestinationPath: "/etc/passwd")
+
+        let result = try await ReadTool().execute(input: [
+            "path": tmp.appendingPathComponent("evil").path,
+        ])
+        XCTAssertTrue(result.isError,
+                      "ReadTool must deny a leaf symlink end-to-end")
+        XCTAssertFalse(result.output.contains("root:"),
+                       "symlink target must not leak into the error: \(result.output)")
+    }
+
+    /// #4: the rootless helper FOLLOWS intermediate symlink directories (macOS
+    /// `/tmp → /private/tmp`). This locks the macOS-compatible design: anchoring
+    /// from `/` via `readFdAnchored` would reject `/tmp/...` outright, breaking
+    /// legitimate reads. `open(path, O_NOFOLLOW)` follows intermediates and only
+    /// rejects a leaf symlink.
+    func testReadRootlessFdAnchoredFollowsIntermediateSymlinkDir() throws {
+        // tmp/realdir/file.txt  +  tmp/linkdir -> realdir.
+        // Reading tmp/linkdir/file.txt must SUCCEED (intermediate symlink dir
+        // followed, leaf is a regular file).
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-rootless-inter-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(
+            at: tmp.appendingPathComponent("realdir"), withIntermediateDirectories: true)
+        try Data("via-symlink-dir".utf8).write(
+            to: tmp.appendingPathComponent("realdir/file.txt"))
+        try FileManager.default.createSymbolicLink(
+            atPath: tmp.appendingPathComponent("linkdir").path,
+            withDestinationPath: tmp.appendingPathComponent("realdir").path)
+
+        let result = DaemonToolRouting.readRootlessFdAnchored(
+            absolutePath: tmp.appendingPathComponent("linkdir/file.txt").path)
+        if case .text(let t) = result {
+            XCTAssertEqual(t, "via-symlink-dir",
+                           "intermediate symlink dir must be followed, not rejected")
+        } else {
+            XCTFail("intermediate symlink dir must be followed on macOS; got \(result)")
+        }
+    }
+
+    /// #4: the rootless helper rejects a FIFO (non-regular file). `fstat` on the
+    /// opened fd requires S_IFREG; without it a FIFO would block the read.
+    func testReadRootlessFdAnchoredRejectsFifo() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-rootless-fifo-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let fifoPath = tmp.appendingPathComponent("pipe").path
+        XCTAssertEqual(mkfifo(fifoPath, 0o600), 0, "mkfifo should succeed")
+
+        let result = DaemonToolRouting.readRootlessFdAnchored(absolutePath: fifoPath)
+        if case .deny = result { /* expected */ } else {
+            XCTFail("FIFO must be denied (regular-files-only); got \(result)")
+        }
+    }
+
     // MARK: - B-Swift Phase C / follow-up #5 — routed-read pipeline (hooks/audit/timeout)
 
     /// #4: a routed read that stalls past the executor timeout returns a timeout

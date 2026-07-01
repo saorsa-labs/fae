@@ -318,6 +318,64 @@ enum DaemonToolRouting {
         return .deny("read path could not be resolved")
     }
 
+    /// Rootless fd-anchored read for the legacy `ReadTool` (B-Swift #4).
+    ///
+    /// Unlike `readFdAnchored`, this takes an ABSOLUTE path with NO workspace
+    /// root: the legacy `read` tool is intentionally unconfined (it predates
+    /// daemon routing and stays as the opted-out / no-daemon fallback). This
+    /// does NOT add confinement — it only closes the LEAF TOCTOU: `open` with
+    /// `O_NOFOLLOW` follows intermediate symlinks (so macOS `/tmp → /private/tmp`
+    /// and home-dir symlinks still resolve) but rejects a LEAF symlink with
+    /// `ELOOP`, and the read happens off the OPENED fd (no check-then-reopen
+    /// race, no path re-resolution). `fstat` rejects non-regular entries
+    /// (FIFOs/dirs/sockets/devices) — a FIFO would otherwise block; `O_NONBLOCK`
+    /// in `openFlags` made the open return immediately for that case.
+    ///
+    /// Deliberately NO `st_nlink > 1` (hardlink) check here. Owner LOCKED #3
+    /// hardlink rejection to the routed/confined path + fluers daemon only —
+    /// hardlink rejection is a CONFINEMENT measure, and this read is unconfined
+    /// by design. Rejecting hardlinks here would be inconsistent and would break
+    /// legitimate hardlinked files (git objects, system files, etc.).
+    ///
+    /// Anchoring from `/` via `readFdAnchored` is intentionally NOT used: it
+    /// would reject every intermediate symlink (breaking `/tmp`, `/var`, `/etc`
+    /// on macOS) and mishandle `..` components. `open(path, O_NOFOLLOW)` is the
+    /// correct primitive for a rootless read: atomic for the leaf, normal path
+    /// resolution for the intermediates.
+    static func readRootlessFdAnchored(absolutePath: String) -> FdAnchoredRead {
+        let fd = absolutePath.withCString { cstr -> Int32 in
+            Darwin.open(cstr, openFlags, 0)
+        }
+        guard fd >= 0 else {
+            // Capture errno before anything else can clobber it.
+            let err = errno
+            switch err {
+            case ELOOP:
+                return .deny("file is a symbolic link (not followed): \(absolutePath)")
+            case ENOENT, ENOTDIR:
+                return .deny("File not found: \(absolutePath)")
+            default:
+                return .deny("Could not open file: \(absolutePath)")
+            }
+        }
+        defer { Darwin.close(fd) }
+
+        // Confirm the opened fd is a regular file (fstat off the fd, NOT a path
+        // — no re-resolution). Rejects FIFOs/dirs/sockets/devices. NO st_nlink
+        // check (see doc comment — confinement belongs to the routed path).
+        var st = stat()
+        guard Darwin.fstat(fd, &st) == 0 else {
+            return .deny("Could not read file metadata: \(absolutePath)")
+        }
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            return .deny("Not a regular file: \(absolutePath)")
+        }
+
+        // Read off the open fd. Reuses the hardened leaf reader (EINTR retry,
+        // multibyte-UTF-8-safe truncation to `localReadByteCap`).
+        return readLeaf(fd: fd, validatedPath: absolutePath)
+    }
+
     /// Open one component relative to `parent` with `O_RDONLY | O_NOFOLLOW`, then
     /// `fstat` to confirm it is a directory (intermediate) or a regular file
     /// (leaf). `O_NOFOLLOW` makes a symlink leaf fail with `ELOOP` at the kernel

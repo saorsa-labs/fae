@@ -18,17 +18,22 @@ struct ReadTool: Tool {
         // Trim whitespace/newlines that may arise from XML parameter formatting.
         let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let expanded = NSString(string: path).expandingTildeInPath
-        guard FileManager.default.fileExists(atPath: expanded) else {
-            return .error("File not found: \(path)")
-        }
-        do {
-            let content = try String(contentsOfFile: expanded, encoding: .utf8)
+        // B-Swift #4: fd-anchored read. `open` with O_NOFOLLOW rejects a LEAF
+        // symlink (ELOOP) and the read happens off the OPENED fd (no check-then-
+        // reopen TOCTOU — the old `fileExists` then `String(contentsOfFile:)`
+        // had a swap race). `fstat` rejects non-regular entries (FIFO/dir).
+        // The path-based pre-check is dropped: the open IS the atomic existence
+        // check. Rootless (unconfined) by design — this closes the leaf TOCTOU,
+        // it does NOT add workspace confinement (and intentionally does NOT
+        // reject hardlinks; see `readRootlessFdAnchored`).
+        switch DaemonToolRouting.readRootlessFdAnchored(absolutePath: expanded) {
+        case .text(let content):
             let truncated = content.count > 50_000
                 ? String(content.prefix(50_000)) + "\n[truncated]"
                 : content
             return .success(truncated)
-        } catch {
-            return .error("Failed to read file: \(error.localizedDescription)")
+        case .deny(let reason):
+            return .error(reason)
         }
     }
 }
