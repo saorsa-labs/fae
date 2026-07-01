@@ -274,15 +274,28 @@ temp provider — the gate avoids that.
   `BuiltinToolsTests.testReadToolTruncation` (60_000-byte file → byte marker).
   Full suite 3515/0 (5 pre-existing skips).
 
-## 7. Concurrent-caller coverage for `executeInDefaultWorkspace` / `execute` (LOW)
+## 7. Concurrent-caller coverage for `executeInDefaultWorkspace` / `execute` (LOW — ✅ RESOLVED 2026-07-01, coverage-exists)
 
-- The 3b operation lock serializes the **routed** path
-  (`executeSerializedRoutedRead`). The 3a public methods
-  (`executeInDefaultWorkspace`, `execute`) are NOT lock-protected — they're
-  safe for sequential/test callers, and the only live production caller is the
-  routed path (which holds the lock). If a future concurrent live caller is
-  added to those methods, either route it through the lock or make
-  `DaemonSocketConnection`'s server-request-aware `roundTrip` atomic.
+- **Resolved as coverage-exists (no new test):** the live concern — concurrent
+  routed reads serializing safely — is already proven by:
+  - `testConcurrentReadsSerializeOnOneConnection` (two concurrent cold reads
+    dedupe to one root handshake under the operation lock; each gets its own
+    response, no frame-stealing).
+  - `testCancelledReadWaiterDoesNotRunZombieWorkOrStarveLock` (cancel-safe
+    contention: a parked waiter returns `.cancelled`, runs no zombie daemon
+    work, does not starve the lock).
+- The 3a public methods `executeInDefaultWorkspace` / `DaemonToolHostSession.
+  execute` are NOT lock-protected by design and are documented as retained for
+  sequential/test callers only (`DaemonToolHostSession.swift:475-479`: "runs
+  the server-request-aware roundTrip that is NOT safe under concurrent calls …
+  do not add concurrent live callers here"). The only live production caller is
+  the routed path (`executeSerializedRoutedRead`), which holds the operation
+  lock.
+- **No test added that concurrently calls the unlocked public methods** — that
+  would codify/depend on unsafe behavior. If a future concurrent live caller is
+  added to those methods, it must route through the lock or make
+  `DaemonSocketConnection`'s `roundTrip` atomic; that decision belongs to the
+  change that introduces the caller, not to this follow-up.
 
 ## 8. Operation-lock cancelled-waiter (MEDIUM — ✅ RESOLVED 2026-06-30)
 
@@ -300,28 +313,46 @@ resumed on cooperative cancellation → a cancelled waiter stayed parked until t
 holder released it, then ran the full root+confine+execute daemon round-trip
 (zombie work the caller abandoned) and starved the lock.
 
-## 9. Routed-read error copy is technical / not user-facing (LOW — reviewer)
+## 9. Routed-read error copy is technical / not user-facing (LOW — ✅ RESOLVED 2026-07-01)
 
-- Routed-read denials and daemon failures surface raw technical strings to the
-  conversation (e.g. `"read path escapes the workspace root"`,
-  `"Daemon read failed: …"`, `"Daemon unavailable before the workspace root
-  was approved…"`). Fine for the dev surface; not the friendly copy Fae's voice
-  normally uses. Decide on a UX pass that maps routed-read outcomes to
-  user-facing narration once the daemon read path is the default.
+- **Resolved:** routed-read errors now pass through a friendly-error mapper
+  (`ToolExecutor.friendlyRoutedReadError(for:)`) that reframes the conversation-
+  facing `output` in Fae's voice, while the RAW technical string is preserved
+  for audit/analytics (logged via `recordToolOutcome` BEFORE the reframing, so
+  `SecurityEventLogger` + `ToolAnalytics` keep the precise technical reason).
+- **Mapping** (confinement → plain-terms; runtime failures → not-your-fault):
+  - escapes/traversal/absolute/root/empty/NUL → "I can only read files inside
+    the workspace. That path is outside it or isn't a valid workspace path."
+  - symlink → "That file is a symbolic link, which I don't follow for reads…"
+  - hardlink → "That file has multiple hard links, so I can't be sure it stays
+    inside the workspace — I won't read it."
+  - non-regular → "That isn't a regular file…"
+  - not-found → "I couldn't find that file in the workspace."
+  - daemon-unavailable / before-root-approved → "The file backend isn't
+    available right now…"
+  - daemon-read-failed → "The file backend reported a problem reading…"
+  - cancelled / timeout / non-UTF-8 / misconfigured → dedicated friendly copy.
+  - Unmapped → fallback returns the original verbatim (never swallowed).
+- **Site:** `executeRoutedRead` final return — success passes through
+  untouched; only `result.isError` outputs are reframed. The `#if FAE_TEST_SEAMS`
+  setter stays compiled out of release.
+- **Evidence:** 2 new tests (end-to-end: injected confinement error → friendly
+  conversation copy AND audit keeps `"read path escapes the workspace root"`;
+  category table: 11 technical→friendly mappings + unmapped fallback). Updated
+  `testRoutedReadTimeoutReturnsTimeoutError` (asserts friendly "took too long"
+  copy, not raw "timed out"). Full suite 3517/0 (5 skips).
 
-## 10. Root-prompt before not-found (LOW — reviewer, post-merge review)
+## 10. Root-prompt before not-found (LOW — ✅ RESOLVED 2026-07-01, copy-only)
 
-- Root-binding-order is load-bearing for safety (confinement MUST use the
-  daemon-returned root, never a locally-computed one — see #8's fix context),
-  but its ordering has a UX cost: a `read` of a **non-existent** file still
-  drives the `ensureDefaultRooted()` handshake (provision + the
-  `workspace.confirm_root` round-trip) BEFORE confinement discovers the file
-  doesn't exist and returns not-found. So a typo'd path can surface the
-  root-approval card (or, on the default Fae-owned root, do the provisioning
-  side effect) only to then say "file not found."
-- **Not a safety issue** (the not-found result is still correct, and the root is
-  the Fae-owned default), just friction. A preflight existence hint could short-
-  circuit, but any such check MUST run AFTER the daemon root is bound (a local
-  existence probe against a locally-computed root would re-open the
-  root-inference footgun) — so it can't actually skip the handshake on the first
-  cold read. Realistic mitigation is UX/copy, not a safety change.
+- **Resolved as copy/rationale (no ordering change):** the realistic mitigation
+  is UX copy, not a preflight existence check. Any existence probe MUST run
+  AFTER the daemon root is bound (a local probe against a locally-computed root
+  would re-open the root-inference footgun), so it can't skip the handshake on
+  the first cold read. The not-found outcome itself is correct and safe.
+- The friction is now softer via #9's friendly mapper: a typo'd path that drives
+  the `ensureDefaultRooted()` handshake and then returns not-found now surfaces
+  `"I couldn't find that file in the workspace."` (Fae's voice) instead of a
+  raw technical string. No safety change, no ordering change — the root-binding
+  order is load-bearing (confinement MUST use the daemon-returned root).
+- **No new test** (the copy change is covered by #9's category test, which
+  asserts `file not found: …` → `"couldn't find"`).

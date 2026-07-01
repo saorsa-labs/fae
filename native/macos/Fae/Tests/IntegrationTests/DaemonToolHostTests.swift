@@ -1844,8 +1844,8 @@ final class DaemonToolHostTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertTrue(outcome.result.isError, "stalling routed read must time out")
-        XCTAssertTrue(outcome.result.output.contains("timed out"),
-                      "error must be the timeout message: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("took too long"),
+                      "error must be the friendly timeout message: \(outcome.result.output)")
         XCTAssertLessThan(elapsed, 2.0, "the 0.4s timeout must fire, not the 5s stall")
         XCTAssertNotNil(outcome.latencyMs,
                         "timeout path must record latencyMs (Phase C/#5, code-review M1)")
@@ -2106,6 +2106,77 @@ final class DaemonToolHostTests: XCTestCase {
         XCTAssertEqual(resultEntries.first?.error, "routed-failure")
         XCTAssertEqual(records.first?.success, false)
         XCTAssertEqual(records.first?.error, "routed-failure")
+    }
+
+    // MARK: - B-Swift #9 — routed-read friendly error copy
+
+    /// #9: a mapped technical routed-read error is reframed in Fae's voice for
+    /// the conversation, while the RAW technical string is preserved for audit/
+    /// analytics. Proves the mapper + the audit-preserves-technical ordering
+    /// (audit logged BEFORE the friendly reframing, so the security log keeps
+    /// the precise technical reason).
+    func testRoutedReadMapsTechnicalErrorToFriendlyCopyAndPreservesAudit() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-3b-")
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedExecutor(
+            tmp: tmp, hookRunner: nil, logger: logger, analytics: analytics) { _, _, _ in
+                // A real confinement denial string from DaemonToolRouting.
+                .error("read path escapes the workspace root")
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "read", arguments: ["path": "../../etc/passwd"]),
+            context: makeFullContext(), callbacks: .noop)
+        XCTAssertTrue(outcome.result.isError)
+        // Conversation-facing: friendly copy (no raw technical string).
+        XCTAssertTrue(outcome.result.output.contains("outside it"),
+                      "conversation output should be friendly: \(outcome.result.output)")
+        XCTAssertFalse(outcome.result.output.contains("escapes the workspace root"),
+                       "raw technical string must NOT surface to the conversation")
+
+        // Audit/analytics: the RAW technical string is preserved (audit logged
+        // before the friendly reframing).
+        let entries = await logger.entries, records = await analytics.records
+        XCTAssertEqual(
+            entries.filter { $0.event == "tool_result" }.first?.error,
+            "read path escapes the workspace root",
+            "audit must keep the raw technical string")
+        XCTAssertEqual(records.first?.error, "read path escapes the workspace root",
+                      "analytics must keep the raw technical string")
+    }
+
+    /// #9: the friendly mapper covers the key routed-read outcome categories
+    /// (symlink, hardlink, not-found, non-regular, daemon-unavailable, timeout,
+    /// non-UTF-8) and never swallows an unmapped error (fallback = original).
+    func testFriendlyRoutedReadErrorMapsCategories() {
+        // (technical input, a substring expected in the friendly output)
+        let cases: [(String, String)] = [
+            ("read path escapes the workspace root", "outside it"),
+            ("path traversal (..) is not permitted", "outside it"),
+            ("file is a symbolic link (not followed): /x", "symbolic link"),
+            ("multiple hard links — can't safely confine: x", "hard links"),
+            ("read supports regular files only (non-regular entry: x)", "regular file"),
+            ("file not found: notes.txt", "couldn't find"),
+            ("Daemon unavailable before the workspace root was approved", "isn't available"),
+            ("Daemon read returned no content", "backend reported a problem"),
+            ("Read was cancelled.", "cancelled"),
+            ("Tool timed out after 30s", "took too long"),
+            ("file is not UTF-8 text: bin.dat", "isn't UTF-8"),
+        ]
+        for (technical, expected) in cases {
+            let friendly = ToolExecutor.friendlyRoutedReadError(for: technical)
+            XCTAssertTrue(friendly.contains(expected),
+                          "mapper for \(technical) → \(friendly); expected \"\(expected)\"")
+        }
+        // Unmapped error: fallback returns the original verbatim (never swallowed).
+        let unmapped = "some novel internal error XYZ"
+        XCTAssertEqual(ToolExecutor.friendlyRoutedReadError(for: unmapped), unmapped,
+                       "unmapped errors must pass through unchanged")
     }
 
     /// A valid UTF-8 file truncated by the byte cap MID-MULTIBYTE-CHARACTER is

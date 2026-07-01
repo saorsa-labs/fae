@@ -601,12 +601,84 @@ actor ToolExecutor: ToolExecutorProtocol {
             error: result.isError ? result.output : nil,
             startTime: startTime)
 
+        // ── Friendly error copy for the conversation (B-Swift #9). The raw
+        // technical string was already sent to audit/analytics above
+        // (`recordToolOutcome`); this ONLY reframes the conversation-facing
+        // `output` in Fae's voice. Success results pass through untouched.
+        let conversationResult: ToolResult = result.isError
+            ? ToolResult(
+                output: Self.friendlyRoutedReadError(for: result.output),
+                isError: true)
+            : result
+
         return ToolExecutorResult(
-            result: result,
+            result: conversationResult,
             approvedByUser: nil,
             damageControlIntervened: false,
             latencyMs: latencyMs
         )
+    }
+
+    /// Map a technical routed-read error string to Fae-voice conversation copy
+    /// (B-Swift #9). The raw technical string is preserved for audit/analytics
+    /// (logged via `recordToolOutcome` BEFORE this runs); this only reframes
+    /// what the user sees in the conversation. Falls back to the original string
+    /// for unmapped errors (never swallows an error).
+    ///
+    /// Principle: tell the user WHAT went wrong in plain terms and hint at the
+    /// fix, without leaking internals (absolute paths, errno, daemon wire
+    /// details). The daemon-down and cancellation cases are distinguished from
+    /// confinement/policy denials so the user understands the cause.
+    static func friendlyRoutedReadError(for technical: String) -> String {
+        // Confinement / policy denials (the path wasn't safe to read).
+        if technical.contains("escapes the workspace")
+            || technical.contains("path traversal")
+            || technical.contains("Absolute paths are not supported")
+            || technical.contains("must name a file, not the workspace root")
+            || technical.contains("must not end with a path separator")
+            || technical.contains("read path is empty")
+            || technical.contains("contains a NUL byte") {
+            return "I can only read files inside the workspace. That path is outside it or isn't a valid workspace path."
+        }
+        if technical.contains("symbolic link") || technical.contains("symlink") {
+            return "That file is a symbolic link, which I don't follow for reads — it could point outside the workspace."
+        }
+        if technical.contains("multiple hard links") || technical.contains("hard link") {
+            return "That file has multiple hard links, so I can't be sure it stays inside the workspace — I won't read it."
+        }
+        if technical.contains("regular files only")
+            || technical.contains("Not a regular file")
+            || technical.contains("non-regular") {
+            return "That isn't a regular file (it may be a directory, socket, or device) — I can only read regular files."
+        }
+        // Not-found (may surface after the root handshake — see #10).
+        if technical.contains("not found")
+            || technical.contains("File not found")
+            || technical.contains("file not found") {
+            return "I couldn't find that file in the workspace."
+        }
+        // Daemon / runtime failures (not the user's fault).
+        if technical.contains("Daemon unavailable")
+            || technical.contains("before the workspace root was approved") {
+            return "The file backend isn't available right now, so I couldn't open the workspace. Please try again shortly."
+        }
+        if technical.contains("Daemon read") || technical.contains("returned no content") {
+            return "The file backend reported a problem reading that file. Please try again, or check the file is accessible."
+        }
+        if technical.contains("was cancelled") || technical.contains("cancelled") {
+            return "That read was cancelled."
+        }
+        if technical.contains("timed out") {
+            return "That read took too long and was stopped. The file may be very large or the backend busy."
+        }
+        if technical.contains("not UTF-8") || technical.contains("is not UTF-8") {
+            return "That file isn't UTF-8 text, so I can't display it as text."
+        }
+        if technical.contains("routing misconfigured") {
+            return "I hit an internal setup problem with the read tool. Please report this."
+        }
+        // Fallback: never swallow — surface the original (audit already has it).
+        return technical
     }
 
     #if FAE_TEST_SEAMS
