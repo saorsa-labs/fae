@@ -127,23 +127,40 @@ temp provider — the gate avoids that.
   defense-in-depth — the authoritative stop is the fluers post-open `fstat`
   (#4/C1a).
 
-## 4. TOCTOU on final-file read + `O_NOFOLLOW` (HIGH — belongs in fluers/daemon + `ReadTool`)
+## 4. TOCTOU on final-file read + `O_NOFOLLOW` (HIGH — daemon path ✅ RESOLVED; legacy `ReadTool` OPEN)
 
-- Generic check-then-(re)open race between Swift confinement and the actual
-  read (daemon `local_env.rs` open, and the local `ReadTool`'s
-  `String(contentsOfFile:)`). The Swift-side confinement raises the bar; it does
-  not eliminate the race.
-- **Fix location:** fluers runtime (`local_env.rs`: `O_NOFOLLOW` / `openat`
-  under root) for the daemon path; `ReadTool` for the local path. **Out of scope
-  for this Swift slice.**
-- **Phase A note (2026-06-30):** the **local fallback** path (follow-up #2,
-  daemon intended-but-down) is now **fd-anchored** (`DaemonToolRouting.
-  readFdAnchored` — `O_NOFOLLOW` root open + `openat` per component + direct fd
-  read), so it is NOT subject to this TOCTOU. This item remains OPEN for the
-  **daemon** read path (`confineValidatedReadPath` is still path-based, confined
-  against the daemon-RETURNED root) and the legacy **`ReadTool`**
-  (`String(contentsOfFile:)`); the daemon's own root canonicalization + the
-  pre-existing `is_safe_workspace_root` guard are the current defense there.
+- Generic check-then-(re)open race between Swift confinement and the actual read.
+- **Daemon read path — ✅ RESOLVED (fluers `addb66e`, 2026-06-30, B-Swift C1a fast-follow):**
+  the authoritative fluers daemon read (`LocalSessionEnv::read_file` +
+  `read_file_full` in `crates/fluers-runtime/src/local_env.rs`) is now
+  **fd-anchored**. It holds an fd over the canonical root (`root_fd: OwnedFd`,
+  opened `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`) and walks the relative path via
+  `openat(O_NOFOLLOW)` per component (symlink → `ELOOP`); the leaf is `fstat`'d
+  on the SAME fd it reads — rejecting non-regular files and `st_nlink > 1`
+  (hardlink, mirrors C2/#3). Closes the path-based TOCTOU that
+  `confineValidatedReadPath` + `tokio::fs::read_to_string` had. Implemented with
+  `rustix` (the crate is `#![forbid(unsafe_code)]`, which rules out `nix`'s
+  `RawFd`-returning API). Published to fluers `origin/main`
+  (`1a3f75a → addb66e`); branch `c1a/fd-anchored-read`.
+  - **Evidence:** 23/0 `local_env` tests (7 new: symlink-leaf inside/outside
+    root, intermediate symlink dir, hardlink — covering BOTH `read_file` and
+    `read_file_full`; nested-read regression guard); 47/0 `fluers-runtime`
+    crate; `cargo fmt` clean; `clippy -p fluers-runtime --lib -D warnings -D
+    clippy::{panic,unwrap_used,expect_used}` rc=0; `clippy --workspace
+    --all-targets` rc=0; `cargo check --workspace --all-targets` rc=0;
+    `cargo test --workspace` green.
+- **Downstream (separate step):** Fae pins fluers by git rev in
+  `crates/Cargo.lock` (`fluers-runtime` @ `rev=1a3f75a…` = the pre-fix main).
+  To CONSUME the fix, bump Fae's fluers pin to `addb66e` (new fluers main) and
+  rebuild `fae-daemon`. **Not done in this turn.**
+- **Legacy rootless `ReadTool` — OPEN (Swift-side):** the local `ReadTool`'s
+  `String(contentsOfFile:)` is still path-based (no `O_NOFOLLOW`). Separate
+  Swift fix; out of scope for #4's daemon-read resolution.
+- **Local fallback path (follow-up #2):** already fd-anchored since Phase A
+  (`DaemonToolRouting.readFdAnchored`) — unchanged.
+- **Residual:** `write_file` / `exec` / `glob` / `grep` in `LocalSessionEnv`
+  still use path-based `resolve()` and share the TOCTOU class — out of scope
+  for #4 (read-only); tracked separately.
 
 ## 5. Routed reads skip Swift audit / plugin hooks / executor timeout (✅ RESOLVED 2026-06-30, `7332e95f`)
 
