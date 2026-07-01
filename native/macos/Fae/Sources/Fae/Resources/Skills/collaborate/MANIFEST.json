@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    "execute"
+  ],
+  "allowedTools": [
+    "run_skill"
+  ],
+  "allowedDomains": [
+    "127.0.0.1",
+    "localhost"
+  ],
+  "dataClasses": [
+    "local_files",
+    "network"
+  ],
+  "riskTier": "high",
+  "timeoutSeconds": 90,
+  "allowNetwork": true,
+  "allowSubprocess": true,
+  "integrity": {
+    "algorithm": "sha256",
+    "checksums": {
+      "SKILL.md": "3261e3a06fdb569bc70f0a41407224127c0f8a51db32895df2f2a3938e54d6a4",
+      "scripts/_x0x.py": "3dc2115b95528096cf475b575497b9798f9073ae446863664b908f7ae7fde546",
+      "scripts/contacts.py": "3681279f611975658312c63d35e59fe4718ba5e63418b6a8482c729147e4325b",
+      "scripts/ensure.py": "d1e4e00a9abf05fd2843420013fa3a6ff808e5405c9fe8e15721385be1abac2f",
+      "scripts/files.py": "90b6f8807512ca2cbb5700f79ba03d24654c4b34235e8d74e463d8d2a105c4f7",
+      "scripts/groups.py": "ee4bedb4113d8a277ad47a30d716ab8ab96558827ab99cbdf3576df47fd87af2",
+      "scripts/gui.py": "cc6c5a38033f6428cd63ce707d587540c7a31fdba2dfae9a1b5f40d3ff613946",
+      "scripts/kanban.py": "762ebb66104a7a7d75c8fc7f3853f320ea0b9e27161bf3618cd576e430c39666",
+      "scripts/message.py": "c4458d1bb8751a90d071474f18ae17ea1c55fd89cfb48b3bd3973a7116957c87",
+      "scripts/presence.py": "a35798fbc987335ce0c0320041ff80094030570f57edaa0e16337c9a7652e951",
+      "scripts/swarm.py": "927925ccffe5507611cd6e2048fcc8c27b97b1abcf0b9690e7ec00f521502796"
+    },
+    "signature": null
+  }
+}
