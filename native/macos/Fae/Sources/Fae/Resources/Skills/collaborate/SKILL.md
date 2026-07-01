@@ -1,6 +1,6 @@
 ---
 name: collaborate
-description: Connect the user to other Fae, to other humans, and to those humans' agents over the x0x network — spaces, messages, kanban boards, swarm, files, presence — and open the collaboration app in their browser. Replicates the communitas experience by driving the local x0xd daemon.
+description: Connect the user to other Fae, humans, and their agents over x0x — spaces, messages, kanban, swarm, files, and presence — via the local x0xd daemon, shown in a browser UI.
 metadata:
   author: fae
   version: "1.0"
