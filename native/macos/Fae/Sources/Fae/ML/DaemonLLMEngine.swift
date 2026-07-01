@@ -508,11 +508,14 @@ final class DaemonSocketConnection: @unchecked Sendable {
     /// `buildReadResult` content cap only runs AFTER a full line is decoded).
     /// Generous enough for any legitimate daemon frame (a routed-read reply is
     /// ≤ ~50 KiB after apply_read_limits; a full LLM token stream is well under
-    /// this). Instance var so tests can lower it without a debug-only seam.
-    var frameByteCap = 8 * 1024 * 1024  // 8 MiB
+    /// this). Immutable + constructor-injected so the `@unchecked Sendable`
+    /// class carries no mutable cross-thread state.
+    private let frameByteCap: Int
 
-    init(queueLabel: String = "fae.daemon-llm.socket") {
+    init(queueLabel: String = "fae.daemon-llm.socket",
+         frameByteCap: Int = 8 * 1024 * 1024) {
         self.queue = DispatchQueue(label: queueLabel)
+        self.frameByteCap = frameByteCap
     }
 
     func connect(to path: String) throws {
@@ -743,7 +746,7 @@ final class DaemonSocketConnection: @unchecked Sendable {
             // content cap only runs AFTER a full line is decoded). Fail fast.
             if buffer.count > frameByteCap {
                 throw DaemonLLMEngineError.protocolError(
-                    "daemon frame exceeded \(frameByteCap / 1024 / 1024) MiB without a newline")
+                    "daemon frame exceeded \(frameByteCap) bytes without a newline")
             }
         }
     }

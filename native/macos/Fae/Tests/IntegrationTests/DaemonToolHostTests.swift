@@ -2286,11 +2286,10 @@ final class DaemonToolHostTests: XCTestCase {
     /// reject an oversized newline-less frame with a precise error, before OOM.
     func testSocketFrameCapRejectsOversizedNewlinelessFrame() async throws {
         let peer = try FakeDaemonPeer.listen()
-        let connection = DaemonSocketConnection(queueLabel: "fae.test.frame-cap")
-        // Lower the cap for a fast test (default is 8 MiB; we don't want to send
-        // 8 MiB in a unit test). The check is on `buffer.count`, so a 5 KiB cap
-        // + 6 KiB newline-less frame exercises the same guard.
-        connection.frameByteCap = 4 * 1024
+        // Constructor-inject a small cap (default is 8 MiB; immutable `let` so
+        // the @unchecked Sendable class has no mutable cross-thread state).
+        let connection = DaemonSocketConnection(
+            queueLabel: "fae.test.frame-cap", frameByteCap: 4 * 1024)
         try connection.connect(to: peer.path)
         defer { connection.close() }
 
@@ -2306,18 +2305,18 @@ final class DaemonToolHostTests: XCTestCase {
             _ = try await connection.roundTrip(frame: frame, expectRequestID: "x")
             XCTFail("roundTrip must reject an oversized newline-less frame")
         } catch DaemonLLMEngineError.protocolError(let message) {
+            // Precise error, locked: frame-size + newline-less cause + the cap.
             XCTAssertTrue(message.lowercased().contains("frame"),
                           "expected a frame-size protocol error, got: \(message)")
             XCTAssertTrue(message.lowercased().contains("newline"),
                           "error should explain the newline-less cause: \(message)")
-        } catch is CancellationError {
-            // Acceptable: the oversized-frame throw may surface as cancellation-
-            // shaped depending on the await boundary. The point is NO hang + a
-            // bounded buffer (verified by the precise-error path above when it
-            // fires; both paths are prompt).
+            XCTAssertTrue(message.contains("4096"),
+                          "error should state the byte cap (4096), got: \(message)")
         } catch {
-            // Any prompt error is acceptable as long as it isn't a hang — the
-            // guard's job is to bound the buffer, not to mandate one error type.
+            // No broad fallback: the guard must surface the precise protocolError.
+            // Any other error type is a regression (e.g. a hang masked as a
+            // timeout, or a wrapped error that hides the root cause).
+            XCTFail("expected protocolError for the oversized frame, got: \(error)")
         }
     }
 
