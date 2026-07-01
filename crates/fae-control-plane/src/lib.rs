@@ -370,11 +370,20 @@ impl ClientClass {
                     // A3-Swift Q7a: the governed daemon ToolHost is reachable from
                     // the live Swift client. Safe portable tools (read/glob/grep,
                     // path-contained + read-only) run in the per-session daemon
-                    // sandbox. Dangerous tools (write/edit/bash) still require
-                    // `ToolExecuteDangerous` (Q7b, server-side opt-in — a
-                    // client-side toggle is not the boundary) plus an owner
-                    // confirm; proven at the execute_governed level.
+                    // sandbox.
                     Scope::ToolExecuteSafe,
+                    // F7a (2026-07-01, owner opt-in): the Swift frontend now also
+                    // holds the dangerous scope so write/edit/bash can route
+                    // through the governed daemon ToolHost. The per-call
+                    // boundary is the owner `tool.confirm` card (A3), surfaced
+                    // via `DaemonAgentClient.handleToolConfirm` and answered on
+                    // the same connection — granting the scope lets the governed
+                    // path RUN, it does not bypass human approval. This is the
+                    // Q7b resolution (option a: flip the default). The daemon's
+                    // `FaeToolPolicy` still re-checks scope + path/damage/egress
+                    // per call, and the server-side opt-in stays here (a
+                    // client-side toggle is never the boundary).
+                    Scope::ToolExecuteDangerous,
                 ]
             }
             ClientClass::CliDiagnostic | ClientClass::BrowserDiagnostic => vec![Scope::StatusRead],
@@ -1337,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn default_scopes_include_frontend_voice_lane_but_not_sensitive_tools() {
+    fn default_scopes_include_frontend_voice_lane_and_governed_tools() {
         assert!(ClientClass::X0xPeerBridge.default_scopes().is_empty());
         let frontend = ClientClass::SwiftFrontend.default_scopes();
         assert!(frontend.contains(&Scope::AudioCapture));
@@ -1345,8 +1354,11 @@ mod tests {
         assert!(frontend.contains(&Scope::ConversationWrite));
         // A3-Swift Q7a: safe portable tools are now daemon-reachable.
         assert!(frontend.contains(&Scope::ToolExecuteSafe));
-        // Dangerous tools stay opt-in (Q7b) — never granted by default.
-        assert!(!frontend.contains(&Scope::ToolExecuteDangerous));
+        // F7a (2026-07-01, owner opt-in): dangerous tools now route through the
+        // governed daemon ToolHost too — the per-call `tool.confirm` card is the
+        // human boundary, not the scope (Q7b resolution, option a).
+        assert!(frontend.contains(&Scope::ToolExecuteDangerous));
+        // Memory stays server-side; the frontend never holds it.
         assert!(!frontend.contains(&Scope::MemoryWrite));
     }
 
