@@ -26,6 +26,82 @@ per-step policy so the routing change is a known decision, not a guess.
 
 ---
 
+## 0. Second gate — the daemon `ToolExecuteDangerous` scope (Q7b)
+
+**Discovered 2026-07-01 during F7a orientation.** The fluers fd-anchoring gate
+(above) is necessary but **not sufficient**. There is a second, independent
+gate inside the daemon that blocks routing **any** dangerous tool (write/edit/
+bash) from the Swift app, and it requires an **owner decision** before F7a can
+land.
+
+### The mechanism (grounded in source)
+- The daemon's per-tool policy `FaeToolPolicy::evaluate` runs a 6-step pipeline
+  (`toolhost/policy.rs`). Step 2 calls `fae_control_plane::authorize` with the
+  tool's risk scope command. `write`/`edit`/`bash` classify as
+  `RiskClass::Write|Edit|Shell` → `scope_command() = "tool.execute_dangerous"`
+  (`policy.rs:95`).
+- `required_scopes("tool.execute_dangerous") = [Scope::ToolExecuteDangerous]`
+  (`control-plane/lib.rs:301`). `authorize` returns `Deny(MissingScope)` if the
+  client does not hold that scope (`lib.rs:455`); it returns `ConfirmRequired`
+  only when the client **does** hold it (`lib.rs:459`).
+- `SwiftFrontend::default_scopes()` (`lib.rs:355`) is **hardcoded** to grant
+  `ToolExecuteSafe` but **not** `ToolExecuteDangerous`. The code is explicit:
+  scopes "granted explicitly during rollout, not by default", and dangerous is
+  "a server-side opt-in — a client-side toggle is not the boundary" (Q7b,
+  `lib.rs:374`). There is **no config/runtime flag** that grants the frontend
+  the dangerous scope — the only places it is granted to a frontend-shaped
+  client are unit tests.
+- Net: a routed write from the Swift app is `Deny(MissingScope)` at `policy.rs`
+  step 2 — **before** the `tool.confirm` card fires. The confirm card itself IS
+  wired (`DaemonAgentClient.handleToolConfirm` surfaces the daemon's bounded,
+  redacted prompt and replies `{approved, call_id}`), but it only runs once the
+  scope is held.
+
+### Why F7a is NOT "mirror the read-routing pattern"
+Mirroring `executeRoutedRead` would compile and route, but every routed write
+would be denied at the scope gate — a known-failing path. F7a's real
+prerequisite is the owner deciding the dangerous-scope policy, not Swift
+routing code.
+
+### Owner decision required (do NOT implement without a call)
+Grant `SwiftFrontend` the `ToolExecuteDangerous` scope — how?
+- **(a) Add it to `SwiftFrontend::default_scopes()`** (`lib.rs:355`). Simplest;
+  flips the default so write/edit/bash route with the `tool.confirm` card (which
+  is already wired + surfaced to the owner). Reverses the current conservative
+  default deliberately.
+- **(b) Config-gated opt-in** — a `config.toml` flag the owner sets, granting
+  the scope conditionally. Keeps the default conservative; adds a mechanism the
+  code currently says doesn't exist.
+- **(c) Defer** — keep write/edit/bash on the local Swift pipeline (path-based)
+  until the dangerous-scope policy is settled; F7a/F7b/F8 wait.
+
+Resolving this unblocks all of Layer 4 at the scope level (write/edit/bash share
+the `dangerous` classification). Once decided, the Swift F7a work is
+well-scoped: `WriteRoutePlan` + `planWriteRoute`/`routeWrite` +
+`executeSerializedRoutedWrite` + `executeRoutedWrite` (PreToolUse → pre-state
+capture → timeout-wrapped daemon write → PostToolUse → audit → receipt +
+narration), mirroring `executeRoutedRead` with the mutation steps added. The
+`tool.confirm` card needs no new Swift work (already wired).
+
+### Corrections to the original F7a plan (found during orientation, advisor-validated 2026-07-01)
+1. **Approval is upstream, not executor-local.** `requiresApproval` is consumed
+   at `Pipeline/ToolRoutingHelpers.swift:84`, not in `executeInner`. Routed
+   write inherits upstream approval automatically; **do not** add an approval
+   step to `executeRoutedWrite` (decision #1 from §6 is moot for F7a).
+2. **DamageControl split is F8/bash, not F7a/write.** `DamageControlPolicy`'s
+   write/edit rules (`zeroAccessPaths`, `readOnlyPaths`) are confinement; the
+   `.disaster` catastrophe rules are bash-only. The daemon governs confinement
+   for routed writes, so routed write skips DamageControl exactly like routed
+   read (decision #3 from §6 is moot for F7a). Defer `evaluateConfinement`/
+   `evaluateCatastrophe` to F8.
+3. **Write daemon-outage = fail closed.** No confined local write fallback (the
+   legacy `WriteTool` is path-based; a Swift fd-anchored write would duplicate
+   the hard-gate work and widen risk). Preserve `.legacyLocal` only for explicit
+   daemon opt-out (`!reachable && !daemonIntended`); intended-but-down fails
+closed.
+
+---
+
 ## 1. Current state (grounded in source)
 
 ### The local pipeline (non-routed tools), `ToolExecutor.executeInner`

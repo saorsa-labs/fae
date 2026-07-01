@@ -14,18 +14,30 @@ historical (archive). If work isn't listed here, it's done or not started.
 
 ## Live work
 
-### Layer-4 routed mutations (write / edit / bash) — UNBLOCKED, F7a ready
+### Layer-4 routed mutations (write / edit / bash) — fluers gate closed; F7a blocked on Q7b scope decision
 
 `read` is routed and confinement-complete (fd-anchored, hardlink/symlink
-TOCTOU closed, red-team-validated). Routing `write`/`edit`/`bash` was gated on
-fluers' mutation/search paths (`write_file`, `exec`, `glob`, `grep`) being
-fd-anchored — mutations are irreversible, so a TOCTOU swap there is data loss,
-not a leaked file.
+TOCTOU closed, red-team-validated). Two independent gates stand between now
+and routing `write`/`edit`/`bash`:
 
-**Gate SATISFIED (2026-07-01):** fluers 0.5.0 fd-anchored all four
-mutation/search paths (`openat`+`mkdirat`+`O_NOFOLLOW`+`fstat`-off-opened-fd;
-the path-based `resolve()` is gone entirely) and Fae pins `=0.5.0`. Phase F7a
-(route `write` through the daemon) can now start.
+1. **fluers fd-anchoring (the HARD GATE) — SATISFIED (2026-07-01):** fluers
+   0.5.0 fd-anchored all four mutation/search paths (`openat`+`mkdirat`+
+   `O_NOFOLLOW`+`fstat`-off-opened-fd; the path-based `resolve()` is gone
+   entirely). Fae pins `=0.5.0`.
+
+2. **Daemon `ToolExecuteDangerous` scope (Q7b) — BLOCKED on owner decision.**
+   F7a orientation (2026-07-01) found a second, independent gate the F7/F8 doc
+   did not anticipate. The daemon's per-tool policy (`FaeToolPolicy`) calls
+   `fae_control_plane::authorize` with `tool.execute_dangerous` for write/edit/
+   bash (`toolhost/policy.rs:95`). `SwiftFrontend::default_scopes()`
+   (`control-plane/lib.rs:355`) is hardcoded to grant `ToolExecuteSafe` but
+   **not** `ToolExecuteDangerous` ("granted explicitly during rollout, not by
+   default"; "server-side opt-in — a client-side toggle is not the boundary").
+   With no config/runtime flag to grant it, a routed write from the Swift app is
+   `Deny(MissingScope)` at `policy.rs` step 2 — **before** any `tool.confirm`
+   card fires (the card is wired via `DaemonAgentClient.handleToolConfirm`, but
+   it only runs once the scope is held). Resolving Q7b unblocks F7a/F7b/F8
+   together (write/edit/bash are all `dangerous`). See the F7/F8 doc §0.
 
 - **Policy table + owner decisions (the F7a/F7b/F8 plan):** `docs/plans/bswift-f7f8-routed-damagecontrol-policy-2026-06-30.md`.
 - **Resolution record (read-routing, all closed):** `docs/plans/bswift-3b-followups-2026-06-30.md`.
