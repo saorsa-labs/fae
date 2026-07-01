@@ -445,6 +445,92 @@ actor DaemonToolHostSession {
         }
     }
 
+    /// F7b: serialized routed `edit` round-trip. Mirrors
+    /// `executeSerializedRoutedWrite` but with edit's schema. The daemon
+    /// (fluers `EditTool`) requires `path`/`old_text`/`new_text`, while the
+    /// Swift-facing `EditTool` uses `old_string`/`new_string`. The TRANSLATION
+    /// happens HERE — at the daemon seam — so `call.arguments`, hooks, audit,
+    /// and receipts keep the Swift-native keys and the daemon gets the keys its
+    /// `validate_input` requires. `call.arguments` is NEVER mutated.
+    ///
+    /// Fail-closed on any daemon drop/error before OR after root approval
+    /// (mutations are irreversible; no local edit fallback). The fluers edit
+    /// does its read-modify-write atomically inside `execute` (fd-anchored
+    /// `read_file_full` → unique-match check → `write_file`, fluers 0.5.0), so
+    /// the Swift-side fd-anchored pre-state capture below is consistent with it
+    /// (the daemon rejects oversized/ambiguous edits itself → failClosed).
+    func executeSerializedRoutedEdit(
+        validatedPath: String,
+        oldString: String,
+        newString: String
+    ) async -> DaemonToolRouting.EditExecutionOutcome {
+        do {
+            try await acquireToolHostOperationLock()
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Could not acquire the edit lock: \(error.localizedDescription)")
+        }
+        defer { releaseToolHostOperationLock() }
+        if Task.isCancelled { return .cancelled }
+
+        do {
+            // Root FIRST (binds the daemon-approved root).
+            let daemonRoot = try await ensureDefaultRooted()
+            // F7a-style pre-state capture: INSIDE the operation lock, AFTER root
+            // approval, BEFORE the daemon edit, via the fd-anchored read off the
+            // daemon-approved root. For edit this is the ESSENTIAL undo material
+            // (the verbatim old file content). A successful edit implies the
+            // file was within the daemon's `max_edit_bytes` (else fluers rejects
+            // → failClosed), so a successful edit with nil pre-state should not
+            // happen; nil is handled gracefully regardless (path-only undo).
+            let preStateContent = DaemonToolRouting.readFdAnchoredPreState(
+                validatedPath: validatedPath, root: daemonRoot)
+            let absoluteTargetPath = daemonRoot
+                .appendingPathComponent(validatedPath).path
+            do {
+                // Governed edit. Schema TRANSLATED at this seam:
+                // `old_string`→`old_text`, `new_string`→`new_text` (fluers
+                // `EditTool` schema — see fluers-runtime `tool.rs`). The daemon
+                // fd-anchors the read-modify-write (fluers 0.5.0) and emits
+                // tool.confirm on NeedsConfirmation (answered on this
+                // connection by the existing serverRequestHandler). Returns a
+                // CONTENT-BEARING result ("Edited `path` (X -> Y bytes)");
+                // carried in the outcome so `mapEditOutcome`/`buildEditResult`
+                // surfaces it. Errors throw → .failClosed below (a daemon-side
+                // not-found / ambiguous / oversized error surfaces as failClosed;
+                // `friendlyRoutedEditError` reframes it for the user).
+                let result = try await execute(
+                    tool: "edit",
+                    input: DaemonToolRouting.buildDaemonEditInput(
+                        validatedPath: validatedPath, oldString: oldString, newString: newString))
+                return .routed(result: result, preStateContent: preStateContent, absoluteTargetPath: absoluteTargetPath)
+            } catch DaemonAgentClientError.daemonUnavailable {
+                // Daemon dropped at execute (root was approved). FAIL CLOSED —
+                // never edit locally.
+                return .failClosed(
+                    "Daemon unavailable during edit; refusing to edit locally.")
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                // Daemon up but errored (scope/path/confirm denial, not-found,
+                // ambiguous, oversized). Fail closed — surface the error, do
+                // NOT fall back. `friendlyRoutedEditError` reframes the
+                // edit-logical cases (not-found/ambiguous) for the user.
+                return .failClosed("Daemon edit failed: \(error.localizedDescription)")
+            }
+        } catch DaemonAgentClientError.daemonUnavailable {
+            // Daemon dropped before/during root approval. Fail closed.
+            return .failClosed(
+                "Daemon unavailable before the workspace root was approved; " +
+                "refusing to edit locally without a daemon-approved root.")
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failClosed("Daemon edit failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Confined LOCAL read fallback for the no-daemon-but-intended branch
     /// (B-Swift follow-up #2: daemon intended but momentarily unreachable).
     ///

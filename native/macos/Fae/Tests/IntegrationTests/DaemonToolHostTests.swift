@@ -1326,23 +1326,23 @@ final class DaemonToolHostTests: XCTestCase {
     /// set, and a real `write` (with a daemon published) executes locally and
     /// never roots the session (proving it did not route).
     func testNonRoutedToolsStayLocal() async throws {
-        // Classifier assertion: `read` + `write` route (3b read; F7a write).
-        // edit/bash/calendar/web_search/self_config stay local (F7b/F8 are future).
-        XCTAssertEqual(DaemonToolRouting.routedTools, ["read", "write"])
-        for nonRouted in ["edit", "bash", "calendar", "web_search", "self_config"] {
+        // Classifier assertion: `read` + `write` + `edit` route (3b read; F7a
+        // write; F7b edit). bash/calendar/web_search/self_config stay local
+        // (F8 is future).
+        XCTAssertEqual(DaemonToolRouting.routedTools, ["read", "write", "edit"])
+        for nonRouted in ["bash", "calendar", "web_search", "self_config"] {
             XCTAssertFalse(DaemonToolRouting.routedTools.contains(nonRouted),
-                           "\(nonRouted) must not route yet (F7b/F8 are future)")
+                           "\(nonRouted) must not route yet (F8 is future)")
         }
 
-        // Smoke: an `edit` (still non-routed) with a daemon published runs
-        // locally + never roots. (Pre-F7a this used `write`; F7a routed write,
-        // so the smoke now uses `edit` to keep proving the non-routed invariant.)
+        // Smoke: a `bash` (still non-routed) with a daemon published runs
+        // locally + never roots. (Pre-F7a this used `write`; F7a routed write so
+        // it used `edit`; F7b routed edit, so the smoke now uses `bash` to keep
+        // proving the non-routed invariant.)
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("fae-3b-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        let outFile = tmp.appendingPathComponent("out.txt")
-        try Data("hi".utf8).write(to: outFile)
 
         let (peer, tokenPath) = try await publishFakeDaemonEndpoints()
         defer {
@@ -1353,22 +1353,22 @@ final class DaemonToolHostTests: XCTestCase {
             workspaceProvider: TempWorkspace(workspaceRoot: tmp))
         defer { Task { await session.close() } }
         let executor = ToolExecutor(
-            registry: ToolRegistry(tools: [EditTool()]),
+            registry: ToolRegistry(tools: [BashTool()]),
             damageControlPolicy: DamageControlPolicy(),
             securityLogger: SecurityEventLogger.shared,
             daemonToolHostSession: session
         )
 
         let outcome = await executor.execute(
-            ToolCall(name: "edit", arguments: ["path": outFile.path, "old_string": "hi", "new_string": "hello"]),
+            ToolCall(name: "bash", arguments: ["command": "echo hello"]),
             context: makeFullContext(), callbacks: .noop)
-        XCTAssertFalse(outcome.result.isError, "local edit should succeed: \(outcome.result.output)")
-        let edited = (try? Data(contentsOf: outFile)).flatMap { String(data: $0, encoding: .utf8) }
-        XCTAssertEqual(edited, "hello", "edit ran locally and updated the file")
+        XCTAssertFalse(outcome.result.isError, "local bash should succeed: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("hello"),
+                      "bash ran locally and returned output: \(outcome.result.output)")
         // Routing never fired → the session was never rooted / never connected.
         let hasRoot = await session.hasRoot()
-        XCTAssertFalse(hasRoot, "non-routed edit must not root the daemon session")
-        _ = peer  // daemon published but never contacted by the edit
+        XCTAssertFalse(hasRoot, "non-routed bash must not root the daemon session")
+        _ = peer  // daemon published but never contacted by the bash
     }
 
     // MARK: - B-Swift follow-up #2: no-daemon fallback is intent-gated
@@ -3530,6 +3530,370 @@ extension DaemonToolHostTests {
             daemonToolHostSession: session)
         if let hookRunner { await executor.setPluginHookRunner(hookRunner) }
         await executor.setRoutedWriteExecutorForTesting(routed)
+        return executor
+    }
+}
+
+// MARK: - B-Swift Phase F7b: routed edit tests
+//
+// Mirrors the routed-write matrix (F7a). The KEY edit-specific addition is the
+// schema-translation test: the Swift `EditTool` uses `old_string`/`new_string`,
+// but the fluers daemon `EditTool` requires `old_text`/`new_text`. The
+// translation happens at the daemon seam (`buildDaemonEditInput`, called by
+// `executeSerializedRoutedEdit`), so the daemon receives `old_text`/`new_text`
+// and `call.arguments`/hooks/audit/receipts keep the Swift-native keys.
+
+extension DaemonToolHostTests {
+
+    /// A routed edit with a reachable (canned) daemon succeeds and surfaces the
+    /// daemon's edit success content ("Edited `path` (X -> Y bytes)").
+    func testRoutedEditSucceedsAndSurfacesContent() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [EditTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedEditExecutorForTesting { _, _, _ in
+            .routed(
+                result: ["content": [["type": "text", "text": "Edited `cfg.toml` (12 -> 14 bytes)"]]],
+                preStateContent: nil,
+                absoluteTargetPath: nil)
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "edit",
+                     arguments: ["path": "cfg.toml", "old_string": "timeout = 30", "new_string": "timeout = 600"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "routed edit must succeed: \(outcome.result.output)")
+        XCTAssertTrue(outcome.result.output.contains("Edited"),
+                      "the daemon's edit success content must surface (not a generic string): \(outcome.result.output)")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "the routed-edit pipeline must record latencyMs")
+    }
+
+    /// F7b KEY test: the schema is TRANSLATED at the daemon seam. The Swift-
+    /// facing `old_string`/`new_string` become the fluers `old_text`/`new_text`,
+    /// and the Swift-native keys never leak into the daemon input dict. Pure
+    /// unit test of `buildDaemonEditInput` (the exact dict `execute(tool:input:)`
+    /// receives). A routed edit sending `old_string` to the daemon would be
+    /// rejected by fluers `validate_input` (missing `old_text`).
+    func testEditSchemaTranslatesOldNewStringToOldNewText() {
+        let input = DaemonToolRouting.buildDaemonEditInput(
+            validatedPath: "cfg.toml", oldString: "timeout = 30", newString: "timeout = 600")
+        XCTAssertEqual(input["path"] as? String, "cfg.toml")
+        XCTAssertEqual(input["old_text"] as? String, "timeout = 30",
+                       "Swift old_string must be translated to the daemon's old_text")
+        XCTAssertEqual(input["new_text"] as? String, "timeout = 600",
+                       "Swift new_string must be translated to the daemon's new_text")
+        XCTAssertNil(input["old_string"],
+                     "the Swift-native old_string key must NOT leak to the daemon")
+        XCTAssertNil(input["new_string"],
+                     "the Swift-native new_string key must NOT leak to the daemon")
+    }
+
+    /// F7b key invariant (mirrors write): an intended-but-down daemon FAILS
+    /// CLOSED — no local edit, friendly error. Tested via the REAL `routeEdit`
+    /// (not the executor seam, which replaces routeEdit).
+    func testRoutedEditIntendedDownFailsClosedNoLocalFallback() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+
+        let outcome = await DaemonToolRouting.routeEdit(
+            call: ToolCall(name: "edit",
+                           arguments: ["path": "cfg.toml", "old_string": "a", "new_string": "b"]),
+            session: session,
+            plan: .daemonUnavailableFailClosed)
+
+        guard case .failClosed = outcome else {
+            XCTFail("the fail-closed plan must return .failClosed (no local edit fallback): \(outcome)")
+            return
+        }
+        let failClosedHasRoot = await session.hasRoot()
+        XCTAssertFalse(failClosedHasRoot,
+                       "fail-closed must not bind a daemon root (no daemon contact)")
+    }
+
+    /// An opted-out runtime (useDaemonEngine=false) with no daemon falls through
+    /// to the FULL local pipeline — the legacy path-based `EditTool` edits an
+    /// ABSOLUTE path (which routing would deny), and the routed executor is
+    /// NEVER called.
+    func testRoutedEditOptedOutFallsThroughToLegacyLocal() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let absPath = tmp.appendingPathComponent("outside.txt")
+        try Data("hello world".utf8).write(to: absPath)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [EditTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedEditExecutorForTesting { _, _, _ in
+            .failClosed("routed executor must not be called for legacy fall-through")
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "edit",
+                     arguments: ["path": absPath.path, "old_string": "hello", "new_string": "goodbye"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+
+        XCTAssertFalse(outcome.result.isError,
+                       "legacy local edit of an absolute path must succeed: \(outcome.result.output)")
+        let edited = (try? Data(contentsOf: absPath)).flatMap { String(data: $0, encoding: .utf8) } ?? nil
+        XCTAssertEqual(edited, "goodbye world",
+                       "the legacy local EditTool must have edited the file")
+    }
+
+    /// A stalling routed edit trips the timeout (the wrapped pipeline fires).
+    func testRoutedEditTimeoutReturnsTimeoutError() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [EditTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        await executor.setRoutedEditTimeoutForTesting(0.4)
+        await executor.setRoutedEditExecutorForTesting { _, _, _ in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            return .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
+        }
+
+        let start = Date()
+        let outcome = await executor.execute(
+            ToolCall(name: "edit",
+                     arguments: ["path": "cfg.toml", "old_string": "a", "new_string": "b"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertTrue(outcome.result.isError, "stalling routed edit must time out")
+        XCTAssertTrue(outcome.result.output.contains("took too long"),
+                      "error must be the friendly timeout message: \(outcome.result.output)")
+        XCTAssertLessThan(elapsed, 2.0, "the 0.4s timeout must fire, not the 5s stall")
+        XCTAssertNotNil(outcome.latencyMs,
+                        "timeout path must record latencyMs")
+    }
+
+    /// A blocking PreToolUse hook must block BEFORE the routed edit runs (no
+    /// daemon side effect). Mirrors the write hook test.
+    func testRoutedEditPreToolUseHookBlocksBeforeEdit() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let hooks = SpyHookRunner(preResponse:
+            HookResponse(systemMessage: "blocked-by-test", block: true, metadata: nil))
+        let logger = SpySecurityLogger(), analytics = SpyToolAnalytics()
+        let executor = await makeSpiedRoutedEditExecutor(
+            tmp: tmp, hookRunner: hooks, logger: logger, analytics: analytics) { _, _, _ in
+                .routed(result: [:], preStateContent: nil, absoluteTargetPath: nil)
+            }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "edit",
+                     arguments: ["path": "cfg.toml", "old_string": "a", "new_string": "b"]),
+            context: makeFullContext(), callbacks: .noop)
+
+        let preNames = await hooks.preToolNames
+        XCTAssertEqual(preNames, ["edit"], "PreToolUse must fire for the routed edit")
+        XCTAssertTrue(outcome.result.isError, "a blocking PreToolUse hook must surface an error")
+        XCTAssertEqual(outcome.result.output, "blocked-by-test",
+                       "the hook's block message must surface: \(outcome.result.output)")
+        let posts = await hooks.postToolNames
+        XCTAssertEqual(posts, [], "PostToolUse must NOT fire when PreToolUse blocks")
+    }
+
+    /// A routed edit missing `old_string`/`new_string`, or with an empty
+    /// `old_string`, is shape-denied before any daemon contact. Tested via the
+    /// REAL `routeEdit` (the executor seam would bypass these guards, which
+    /// live inside routeEdit).
+    func testRoutedEditMissingOrEmptyArgsAreShapeDenied() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+
+        // Missing old_string.
+        let missingOld = await DaemonToolRouting.routeEdit(
+            call: ToolCall(name: "edit", arguments: ["path": "cfg.toml", "new_string": "b"]),
+            session: session, plan: .daemonReachable)
+        guard case .denied(let r1) = missingOld else { XCTFail("missing old_string must be .denied: \(missingOld)"); return }
+        XCTAssertTrue(r1.contains("old_string"), "error must mention old_string: \(r1)")
+
+        // Missing new_string (note: empty new_string is ALLOWED — deletion — so
+        // test the fully-absent key, not the empty string).
+        let missingNew = await DaemonToolRouting.routeEdit(
+            call: ToolCall(name: "edit", arguments: ["path": "cfg.toml", "old_string": "a"]),
+            session: session, plan: .daemonReachable)
+        guard case .denied(let r2) = missingNew else { XCTFail("missing new_string must be .denied: \(missingNew)"); return }
+        XCTAssertTrue(r2.contains("new_string"), "error must mention new_string: \(r2)")
+
+        // Empty old_string (would insert at the start — corruption).
+        let emptyOld = await DaemonToolRouting.routeEdit(
+            call: ToolCall(name: "edit", arguments: ["path": "cfg.toml", "old_string": "", "new_string": "b"]),
+            session: session, plan: .daemonReachable)
+        guard case .denied(let r3) = emptyOld else { XCTFail("empty old_string must be .denied: \(emptyOld)"); return }
+        XCTAssertTrue(r3.contains("non-empty"), "error must reject empty old_string: \(r3)")
+
+        // Empty new_string is ALLOWED (deletion of the unique match is valid) —
+        // it must PASS arg validation and reach the plan, not be shape-denied.
+        // Use the fail-closed plan so we observe .failClosed (not .denied) with
+        // no daemon contact.
+        let emptyNew = await DaemonToolRouting.routeEdit(
+            call: ToolCall(name: "edit", arguments: ["path": "cfg.toml", "old_string": "a", "new_string": ""]),
+            session: session, plan: .daemonUnavailableFailClosed)
+        guard case .failClosed = emptyNew else {
+            XCTFail("empty new_string must be allowed (deletion), reaching the plan (.failClosed), not denied: \(emptyNew)")
+            return
+        }
+
+        // None of these contacted the daemon.
+        let hasRoot = await session.hasRoot()
+        XCTAssertFalse(hasRoot, "shape denials must not contact the daemon")
+    }
+
+    /// `planEditRoute` shape: opted-out + no daemon → `.legacyLocal` (fall
+    /// through); intended + no daemon → `.daemonUnavailableFailClosed`.
+    func testPlanEditRouteBranches() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let optedOut = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: false)
+        defer { Task { await optedOut.close() } }
+        let planOut = await DaemonToolRouting.planEditRoute(session: optedOut)
+        XCTAssertEqual(planOut, .legacyLocal,
+                       "opted-out + no daemon must plan the legacy local edit")
+
+        let intended = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await intended.close() } }
+        let planIn = await DaemonToolRouting.planEditRoute(session: intended)
+        XCTAssertEqual(planIn, .daemonUnavailableFailClosed,
+                       "intended + no daemon must plan fail-closed (no local edit fallback)")
+    }
+
+    /// `validateEditPathShape` parity with the write/read validators: absolute /
+    /// `..` / empty / NUL are denied; a normal relative path passes.
+    func testValidateEditPathShape() {
+        XCTAssertEqual(DaemonToolRouting.validateEditPathShape("cfg.toml"), .ok("cfg.toml"))
+        XCTAssertEqual(DaemonToolRouting.validateEditPathShape("a/b/c.txt"), .ok("a/b/c.txt"))
+        if case .ok = DaemonToolRouting.validateEditPathShape("/etc/passwd") {
+            XCTFail("absolute edit path must be denied")
+        }
+        if case .ok = DaemonToolRouting.validateEditPathShape("../escape.txt") {
+            XCTFail("`..` edit path must be denied")
+        }
+        if case .ok = DaemonToolRouting.validateEditPathShape("") {
+            XCTFail("empty edit path must be denied")
+        }
+        if case .ok = DaemonToolRouting.validateEditPathShape("a\0b") {
+            XCTFail("NUL in edit path must be denied")
+        }
+    }
+
+    /// F7b: a routed edit whose outcome carries fd-anchored pre-state records
+    /// that pre-state (old content + absolute target path) in the receipt. For
+    /// edit the old content IS the undo target (essential), so this is the
+    /// load-bearing receipt assertion.
+    func testRoutedEditReceiptCarriesFdAnchoredPreState() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fae-f7b-rc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        defer { Task { await session.close() } }
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [EditTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: SecurityEventLogger.shared,
+            daemonToolHostSession: session)
+        let store = try ReceiptStore(path: tmp.appendingPathComponent("receipts.db").path)
+        await executor.setReceiptStore(store)
+        let absTarget = tmp.appendingPathComponent("cfg.toml").path
+        await executor.setRoutedEditExecutorForTesting { _, _, _ in
+            .routed(result: [:], preStateContent: Data("timeout = 30\n".utf8), absoluteTargetPath: absTarget)
+        }
+
+        let outcome = await executor.execute(
+            ToolCall(name: "edit",
+                     arguments: ["path": "cfg.toml", "old_string": "timeout = 30", "new_string": "timeout = 600"]),
+            context: makeFullContext(),
+            callbacks: .noop)
+        XCTAssertFalse(outcome.result.isError, "routed edit must succeed: \(outcome.result.output)")
+
+        let receipts = await store.recentReceipts(speakerId: nil, limit: 5)
+        let editReceipt = receipts.first { $0.toolName == "edit" }
+        XCTAssertNotNil(editReceipt, "a receipt must be recorded for the routed edit")
+        XCTAssertEqual(editReceipt?.preStateBlob, Data("timeout = 30\n".utf8),
+                       "the receipt must carry the fd-anchored old content (the undo target)")
+        XCTAssertEqual(editReceipt?.preStatePath, absTarget,
+                       "the receipt must carry the daemon-approved absolute target path")
+        // Swift-native keys are preserved in the receipt's recorded arguments
+        // (the schema translation is daemon-side ONLY — call.arguments is intact).
+        let argsData = try XCTUnwrap(editReceipt?.argumentsJSON.data(using: .utf8))
+        let args = try XCTUnwrap(JSONSerialization.jsonObject(with: argsData) as? [String: Any])
+        XCTAssertEqual(args["old_string"] as? String, "timeout = 30",
+                       "the receipt must record the Swift-native old_string key")
+        XCTAssertNil(args["old_text"],
+                     "the daemon-translated old_text key must NOT appear in the receipt args")
+    }
+
+    /// Edit-variant of the spied executor helper (mirrors
+    /// `makeSpiedRoutedWriteExecutor` but injects the edit executor + EditTool).
+    private func makeSpiedRoutedEditExecutor(
+        tmp: URL, hookRunner: SpyHookRunner?, logger: SpySecurityLogger,
+        analytics: SpyToolAnalytics, routed: @escaping @Sendable (ToolCall, DaemonToolHostSession, DaemonToolRouting.EditRoutePlan) async -> DaemonToolRouting.EditExecutionOutcome
+    ) async -> ToolExecutor {
+        let session = DaemonToolHostSession(
+            workspaceProvider: TempWorkspace(workspaceRoot: tmp), daemonIntended: true)
+        let executor = ToolExecutor(
+            registry: ToolRegistry(tools: [EditTool()]),
+            damageControlPolicy: DamageControlPolicy(),
+            securityLogger: logger,
+            toolAnalytics: analytics,
+            daemonToolHostSession: session)
+        if let hookRunner { await executor.setPluginHookRunner(hookRunner) }
+        await executor.setRoutedEditExecutorForTesting(routed)
         return executor
     }
 }

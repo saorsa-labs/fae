@@ -100,15 +100,24 @@ struct EditTool: Tool {
             return .error(reason)
         case .allowed(let canonical):
             do {
+                // Align with the governed daemon (fluers `EditTool`) semantics
+                // (F7b parity): reject an empty `old_string` (would silently
+                // insert at the start — corruption) and require EXACTLY ONE match
+                // (an ambiguous edit must not guess which occurrence to change).
+                // The routed path enforces the same via fluers `validate_input`
+                // + the unique-match check; the local path must match or
+                // routed-vs-legacy edit diverges (fluers-runtime `tool.rs`).
+                guard !oldString.isEmpty else {
+                    return .error("old_string must be non-empty")
+                }
                 let content = try String(contentsOfFile: canonical, encoding: .utf8)
-                guard content.contains(oldString) else {
+                let count = content.components(separatedBy: oldString).count - 1
+                guard count != 0 else {
                     return .error("old_string not found in file")
                 }
-
-                // Count occurrences for safety reporting.
-                let count = content.components(separatedBy: oldString).count - 1
-
-                // Replace only the first occurrence.
+                guard count == 1 else {
+                    return .error("old_string matches \(count) places; it must be unique")
+                }
                 guard let range = content.range(of: oldString) else {
                     return .error("old_string not found in file")
                 }
@@ -116,11 +125,7 @@ struct EditTool: Tool {
                 try updated.write(
                     toFile: canonical, atomically: true, encoding: String.Encoding.utf8
                 )
-
-                if count > 1 {
-                    return .success("Replaced first of \(count) occurrences in \(path)")
-                }
-                return .success("Replaced in \(path)")
+                return .success("Edited \(path) (\(content.utf8.count) -> \(updated.utf8.count) bytes)")
             } catch {
                 return .error("Edit failed: \(error.localizedDescription)")
             }

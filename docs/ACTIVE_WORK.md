@@ -14,10 +14,11 @@ historical (archive). If work isn't listed here, it's done or not started.
 
 ## Live work
 
-### Layer-4 routed mutations (write / edit / bash) — F7a (write) shipped; F7b/F8 remain
+### Layer-4 routed mutations (write / edit / bash) — F7a (write) + F7b (edit) shipped; F8 (bash) remains
 
-`read` is routed and confinement-complete. `write` is now routed too (F7a,
-2026-07-01). `edit`/`bash` remain on the local pipeline (F7b/F8 are future).
+`read` is routed and confinement-complete. `write` (F7a) and `edit` (F7b) are
+now routed too (2026-07-01). `bash` remains on the local pipeline (F8 is
+future).
 
 **Q7b resolved (owner chose option a):** `SwiftFrontend::default_scopes()` now
 holds `Scope::ToolExecuteDangerous` (`control-plane/lib.rs:355`), so
@@ -27,7 +28,7 @@ the owner `tool.confirm` card (A3), surfaced via
 path RUN, it does not bypass human approval. The daemon's `FaeToolPolicy` still
 re-checks scope + path/damage/egress per call.
 
-**F7a — route write (shipped, `38e36961`):** routed write goes through the
+**F7a — route write (shipped, `c4ad79cf`):** routed write goes through the
 daemon with fail-closed outage semantics (no local write fallback — mutations
 are irreversible). Receipt pre-state is captured INSIDE the serialized daemon
 operation (under the operation lock, after root approval, via an fd-anchored
@@ -37,10 +38,24 @@ TOCTOU class F7a closed). DamageControl is skipped (daemon governs write
 confinement; catastrophe rules are bash-only, deferred to F8). Approval is
 upstream (`ToolRoutingHelpers.swift:84`), not an executor step.
 
-- **Policy table + the F7a corrections:** `docs/plans/bswift-f7f8-routed-damagecontrol-policy-2026-06-30.md`.
+**F7b — route edit (shipped):** routed `edit` mirrors routed write exactly
+(decision/execution split, fd-anchored receipt pre-state, fail-closed outage,
+DamageControl skip, upstream approval). TWO edit-specific differences: (1)
+**schema translation at the daemon seam** — the Swift `EditTool` uses
+`old_string`/`new_string` but the fluers daemon `EditTool` requires
+`old_text`/`new_text` (`validate_input` enforces it); `buildDaemonEditInput`
+translates at the seam so `call.arguments`/hooks/audit/receipts keep the
+Swift-native keys and the daemon gets the keys it needs; (2) **local EditTool
+parity fix** — the local tool now rejects empty `old_string` and requires a
+unique match (mirroring fluers), so routed vs. legacy edit behave identically
+(previously the local tool silently replaced the first of N and accepted empty
+`old_string`). `friendlyRoutedEditError` handles edit-logical errors
+(not-found/ambiguous) distinctly from backend problems.
+
+- **Policy table + the F7a/F7b corrections:** `docs/plans/bswift-f7f8-routed-damagecontrol-policy-2026-06-30.md`.
 - **Resolution record (read-routing, all closed):** `docs/plans/bswift-3b-followups-2026-06-30.md`.
-- **Remaining Layer-4 work:** F7b (route `edit`) + F8 (route `bash` — needs the
-  DamageControl catastrophe split + bash-receipt owner decisions).
+- **Remaining Layer-4 work:** F8 (route `bash` — needs the DamageControl
+  catastrophe/confinement split + bash-receipt owner decisions; the hardest).
 
 ### fluers — current pin `=0.5.0`
 

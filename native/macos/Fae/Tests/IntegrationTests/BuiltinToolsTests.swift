@@ -148,6 +148,57 @@ final class BuiltinToolsTests: XCTestCase {
         XCTAssertTrue(result.isError)
     }
 
+    // MARK: - EditTool F7b parity (local must match the governed daemon / fluers)
+
+    /// F7b parity: an empty `old_string` is rejected (would silently insert at
+    /// the start — corruption) and the file is left unchanged. Mirrors fluers
+    /// `EditTool` ("old_text must be non-empty"). Pre-F7b the local tool
+    /// accepted it and corrupted the file.
+    func testEditToolRejectsEmptyOldString() async throws {
+        let path = createTempFile(named: "edit_empty_old.txt", content: "hello world")
+        let tool = EditTool()
+        let result = try await tool.execute(input: [
+            "path": path,
+            "old_string": "",
+            "new_string": "x"
+        ])
+        XCTAssertTrue(result.isError, "empty old_string must be rejected")
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "hello world",
+                       "file must be unchanged when old_string is empty")
+    }
+
+    /// F7b parity: an ambiguous `old_string` (>1 match) is rejected and the
+    /// file is left unchanged. Mirrors fluers ("matches N places; must be
+    /// unique"). Pre-F7b the local tool silently replaced only the FIRST match.
+    func testEditToolRejectsAmbiguousMultipleMatches() async throws {
+        let path = createTempFile(named: "edit_ambiguous.txt", content: "dup dup dup")
+        let tool = EditTool()
+        let result = try await tool.execute(input: [
+            "path": path,
+            "old_string": "dup",
+            "new_string": "x"
+        ])
+        XCTAssertTrue(result.isError, "ambiguous old_string (>1 match) must be rejected")
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "dup dup dup",
+                       "file must be unchanged when old_string is ambiguous")
+    }
+
+    /// F7b parity: an empty `new_string` is ALLOWED (deletion of the unique
+    /// match is a valid edit). Mirrors fluers (only `old_text` is required to be
+    /// non-empty).
+    func testEditToolAllowsEmptyNewStringAsDeletion() async throws {
+        let path = createTempFile(named: "edit_delete.txt", content: "keep remove_me keep")
+        let tool = EditTool()
+        let result = try await tool.execute(input: [
+            "path": path,
+            "old_string": "remove_me ",
+            "new_string": ""
+        ])
+        XCTAssertFalse(result.isError, "empty new_string (deletion) must be allowed")
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "keep keep",
+                       "the unique match must be deleted")
+    }
+
     // MARK: - BashTool
 
     func testBashToolProperties() {

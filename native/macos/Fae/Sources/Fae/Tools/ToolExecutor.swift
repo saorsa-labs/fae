@@ -89,6 +89,18 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// B-Swift Phase F7a test seam: override the routed-write timeout.
     private var routedWriteTimeoutOverride: TimeInterval?
 
+    /// B-Swift Phase F7b: routed-edit executor closure (returns the outcome,
+    /// not a ToolResult, so the fd-anchored receipt pre-state material can be
+    /// built from the outcome — mirrors routedWriteExecutor).
+    private var routedEditExecutor: @Sendable (
+        ToolCall, DaemonToolHostSession, DaemonToolRouting.EditRoutePlan
+    ) async -> DaemonToolRouting.EditExecutionOutcome = { call, session, plan in
+        await DaemonToolRouting.routeEdit(call: call, session: session, plan: plan)
+    }
+
+    /// B-Swift Phase F7b test seam: override the routed-edit timeout.
+    private var routedEditTimeoutOverride: TimeInterval?
+
     // MARK: - Constants
 
     /// Maximum computer-use action steps (click/type_text/scroll) per turn.
@@ -341,6 +353,12 @@ actor ToolExecutor: ToolExecutorProtocol {
                 let plan = await DaemonToolRouting.planWriteRoute(session: daemonToolHostSession)
                 if plan != .legacyLocal {
                     return await executeRoutedWrite(call: call, plan: plan, context: context)
+                }
+                // .legacyLocal → fall through to the local pipeline.
+            case "edit":
+                let plan = await DaemonToolRouting.planEditRoute(session: daemonToolHostSession)
+                if plan != .legacyLocal {
+                    return await executeRoutedEdit(call: call, plan: plan, context: context)
                 }
                 // .legacyLocal → fall through to the local pipeline.
             default:
@@ -794,6 +812,132 @@ actor ToolExecutor: ToolExecutorProtocol {
         )
     }
 
+    /// F7b: routed `edit` execution. Mirrors `executeRoutedWrite` (PreToolUse
+    /// hooks → timeout-wrapped routed edit → PostToolUse hooks → audit/analytics
+    /// → receipt from the outcome's fd-anchored pre-state → narration). Same
+    /// DamageControl SKIP as write (edit's rules are confinement-only; the
+    /// daemon governs confinement; catastrophe is bash-only → F8). Approval is
+    /// upstream (`ToolRoutingHelpers.swift:84`), not an executor step. Schema
+    /// translation (`old_string`→`old_text`) happens at the daemon seam inside
+    /// `executeSerializedRoutedEdit` — `call.arguments` keeps Swift-native keys.
+    private func executeRoutedEdit(
+        call: ToolCall,
+        plan: DaemonToolRouting.EditRoutePlan,
+        context: ToolExecutorContext
+    ) async -> ToolExecutorResult {
+        let executionArguments = computeExecutionArguments(for: call, context: context)
+
+        // ── PreToolUse hooks (BEFORE any daemon/root side effect).
+        if let blocked = await runPreToolUseHooks(
+            toolName: call.name, arguments: executionArguments)
+        {
+            return blocked
+        }
+
+        // NOTE (advisor F7a, applied to edit): pre-state for the receipt is NOT
+        // captured here. It is captured INSIDE `executeSerializedRoutedEdit`
+        // (under the operation lock, after root approval, via an fd-anchored
+        // read off the daemon-approved root) and flows back through the outcome.
+        // For edit the old content IS the undo target (essential).
+
+        // ── Timeout-wrapped routed edit.
+        let timeoutSeconds = routedEditTimeoutOverride ?? Self.toolTimeoutSeconds(for: call.name)
+        let startTime = Date()
+        let outcome: DaemonToolRouting.EditExecutionOutcome
+        do {
+            let executor = routedEditExecutor
+            let session = daemonToolHostSession
+            outcome = try await withThrowingTaskGroup(of: DaemonToolRouting.EditExecutionOutcome.self) { group in
+                group.addTask {
+                    await executor(call, session, plan)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    return .failClosed("Tool timed out after \(Int(timeoutSeconds))s")
+                }
+                guard let o = try await group.next() else {
+                    group.cancelAll()
+                    return DaemonToolRouting.EditExecutionOutcome.failClosed(
+                        "Tool execution did not return a result")
+                }
+                group.cancelAll()
+                return o
+            }
+        } catch {
+            let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+            debugLog(debugConsole, .toolResult, "Routed edit threw: \(call.name) latency=\(latencyMs)ms error=\(error.localizedDescription)")
+            await recordToolOutcome(
+                toolName: call.name,
+                arguments: call.arguments,
+                success: false,
+                error: error.localizedDescription,
+                startTime: startTime)
+            return ToolExecutorResult(
+                result: .error(Self.friendlyRoutedEditError(for: "Tool error: \(error.localizedDescription)")),
+                approvedByUser: nil,
+                damageControlIntervened: false,
+                latencyMs: latencyMs
+            )
+        }
+
+        let result = DaemonToolRouting.mapEditOutcome(outcome)
+
+        // ── PostToolUse hooks.
+        await runPostToolUseHooks(toolName: call.name, output: result.output)
+
+        // ── Analytics + audit (mirrors step 14).
+        let latencyMs = Int(Date().timeIntervalSince(startTime) * 1000)
+        debugLog(debugConsole, .toolResult, "Tool finished: \(call.name) success=\(!result.isError) latency=\(latencyMs)ms")
+        await recordToolOutcome(
+            toolName: call.name,
+            arguments: call.arguments,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            startTime: startTime)
+
+        // ── Receipt on success, built from the outcome's fd-anchored pre-state
+        //   (the old file content — the essential undo material for an edit).
+        var narrationReceiptId: String?
+        if !result.isError, let store = receiptStore,
+           case .routed(_, let preStateContent, let absoluteTargetPath) = outcome
+        {
+            let preState = absoluteTargetPath.map {
+                ReceiptStore.PreStateCaptureResult(blob: preStateContent, path: $0)
+            }
+            narrationReceiptId = await store.createReceipt(
+                toolName: call.name,
+                arguments: call.arguments,
+                preState: preState,
+                speakerId: context.speakerId,
+                sessionId: nil,
+                turnId: context.workflowTurnID)
+        }
+
+        // ── Post-action narration with the receipt id (mirrors local step 16).
+        let reversibility = ActionReversibility.classify(toolName: call.name, arguments: call.arguments)
+        if !result.isError,
+           reversibility != .notApplicable,
+           context.proactiveContext == nil,
+           let narrationText = Self.buildNarrationText(toolName: call.name, arguments: call.arguments)
+        {
+            await delegate?.toolExecutorNarrateAction(narrationText, receiptId: narrationReceiptId)
+        }
+
+        // ── Friendly error copy for the conversation (raw already in audit).
+        let conversationResult: ToolResult = result.isError
+            ? ToolResult(
+                output: Self.friendlyRoutedEditError(for: result.output),
+                isError: true)
+            : result
+
+        return ToolExecutorResult(
+            result: conversationResult,
+            approvedByUser: nil,
+            damageControlIntervened: false,
+            latencyMs: latencyMs
+        )
+    }
+
     /// Map a technical routed-read error string to Fae-voice conversation copy
     /// (B-Swift #9). The raw technical string is preserved for audit/analytics
     /// (logged via `recordToolOutcome` BEFORE this runs); this only reframes
@@ -900,6 +1044,61 @@ actor ToolExecutor: ToolExecutorProtocol {
         return "I couldn't write that file right now, so nothing was written. The details are in the log."
     }
 
+    /// Map a technical routed-edit error string to Fae-voice conversation copy
+    /// (F7b, mirrors `friendlyRoutedWriteError`). The raw technical string is
+    /// preserved for audit/analytics; only the conversation copy is softened.
+    /// Adds edit-logical cases (not-found / ambiguous) that have no write
+    /// analogue — these are normal edit failures, not backend problems.
+    static func friendlyRoutedEditError(for technical: String) -> String {
+        // Edit-logical errors (the daemon read the file but the edit can't
+        // apply): old_text not found, or ambiguous (>1 match). Normal edit
+        // failures — give actionable copy, NOT a "backend problem" message.
+        if technical.contains("not found")
+            || technical.contains("must be unique")
+            || technical.contains("matches") {
+            return "I couldn't apply that edit — the text to replace wasn't found exactly once in the file, so nothing was changed."
+        }
+        // Empty old_string (pre-rejected in Swift; defensive for the daemon path).
+        if technical.contains("old_string must be non-empty")
+            || technical.contains("old_text must be non-empty") {
+            return "I need a non-empty `old_string` to know what to replace. Nothing was changed."
+        }
+        // Missing args.
+        if technical.contains("Missing required parameter") {
+            return "I need a valid path, old_string, and new_string to edit a file. Nothing was changed."
+        }
+        // Confinement / policy denials (the path wasn't safe to edit).
+        if technical.contains("escapes the workspace")
+            || technical.contains("path traversal")
+            || technical.contains("Absolute paths are not supported")
+            || technical.contains("must name a file, not the workspace root")
+            || technical.contains("path is empty")
+            || technical.contains("contains a NUL byte") {
+            return "I can only edit files inside the workspace. That path is outside it or isn't a valid workspace path, so nothing was changed."
+        }
+        // Daemon unavailable / outage — fail closed (no local edit).
+        if technical.contains("Daemon unavailable")
+            || technical.contains("routing is intended")
+            || technical.contains("before the workspace root was approved") {
+            return "The file backend isn't available right now, so I didn't change anything. Please try again shortly."
+        }
+        if technical.contains("Daemon edit") {
+            return "The file backend reported a problem editing that file, so nothing was changed. Please try again."
+        }
+        if technical.contains("was cancelled") || technical.contains("cancelled") {
+            return "That edit was cancelled before it ran."
+        }
+        if technical.contains("timed out") {
+            return "That edit took too long and was stopped. Nothing was changed."
+        }
+        if technical.contains("routing misconfigured") {
+            return "I hit an internal setup problem with the edit tool. Nothing was changed. Please report this."
+        }
+        // Generic fallback (audit has the raw string). Never imply partial
+        // success for an unmapped edit error.
+        return "I couldn't edit that file right now, so nothing was changed. The details are in the log."
+    }
+
     #if FAE_TEST_SEAMS
     /// Test seam setter (Phase C/#5): override the routed-read executor.
     /// GUARDED: `FAE_TEST_SEAMS` is defined only in `.debug` (Package.swift
@@ -934,6 +1133,22 @@ actor ToolExecutor: ToolExecutorProtocol {
     /// Test seam setter (F7a): override the routed-write timeout.
     func setRoutedWriteTimeoutForTesting(_ seconds: TimeInterval?) {
         routedWriteTimeoutOverride = seconds
+    }
+
+    /// Test seam setter (F7b): override the routed-edit executor.
+    /// GUARDED: `FAE_TEST_SEAMS` is debug-only, compiled OUT of release
+    /// (red-team F4 rule, extended to edit).
+    func setRoutedEditExecutorForTesting(
+        _ fn: @Sendable @escaping (
+            ToolCall, DaemonToolHostSession, DaemonToolRouting.EditRoutePlan
+        ) async -> DaemonToolRouting.EditExecutionOutcome
+    ) {
+        routedEditExecutor = fn
+    }
+
+    /// Test seam setter (F7b): override the routed-edit timeout.
+    func setRoutedEditTimeoutForTesting(_ seconds: TimeInterval?) {
+        routedEditTimeoutOverride = seconds
     }
     #endif
 

@@ -22,7 +22,13 @@ per-step policy so the routing change is a known decision, not a guess.
 > **Gate closed:** fluers 0.5.0 fd-anchored all four mutation/search paths (the
 > same `openat`+`O_NOFOLLOW`+`fstat`-off-opened-fd pattern, plus `mkdirat`-walked
 > parents and `st_nlink > 1` rejection on write) and Fae pins `=0.5.0`. Phases
-> F7a/F7b/F8 below are now cleared to start in order. See `docs/ACTIVE_WORK.md`.
+> F7a (write) + F7b (edit) SHIPPED. F8 (bash) remains. See `docs/ACTIVE_WORK.md`.
+> The DamageControl predictions in the table + §3 + §5 below were SUPERSEDED by
+> the F7a/F7b advisor validation: routed write/edit **skip DamageControl
+> entirely** (their rules are confinement-only; the daemon governs confinement;
+> catastrophe/`.disaster` rules are bash-only). The confinement/catastrophe
+> split is therefore F8/bash-only, not needed for write/edit. The table/prose
+> below is the original prediction, retained as the F8 design basis.
 
 ---
 
@@ -70,7 +76,7 @@ routing code.
 (`control-plane/lib.rs:355`, commit `2c22322d`). The per-call `tool.confirm`
 card (A3, already wired) is the human-in-the-loop boundary — granting the scope
 lets the governed path run, it does not bypass approval. F7a (route write)
-shipped on this basis (`38e36961`).
+shipped on this basis (`c4ad79cf`).
 
 The original options were:
 - **(a) Add it to `SwiftFrontend::default_scopes()`** ✅ chosen.
@@ -162,7 +168,7 @@ for reference.
 | 1-5 deterministic gates | APPLY | APPLY | APPLY | APPLY |
 | **approval** (`requiresApproval`) | n/a (read=.low) | **APPLY** (Swift-side, pre-execute) | **APPLY** | **APPLY** |
 | **7. DamageControl** — *confinement* role | SKIP (daemon governs) | SKIP (daemon governs path confinement) | SKIP (daemon governs) | SKIP (bash has no single path; daemon governs cwd/fs reach) |
-| **7. DamageControl** — *catastrophe/blast-radius* role | n/a (read can't delete) | **APPLY** (irreversible-delete rules) | **APPLY** (irreversible-delete rules) | **APPLY** (destructive-pattern rules) |
+| **7. DamageControl** — *catastrophe/blast-radius* role | n/a (read can't delete) | ~~APPLY~~ **SKIP** (write rules are confinement-only; catastrophe is bash-only → F8) | ~~APPLY~~ **SKIP** (edit rules are confinement-only; catastrophe is bash-only → F8) | **APPLY** (destructive-pattern rules) |
 | execution-arg augmentation | APPLY (no-op seam) | APPLY | APPLY | APPLY |
 | PreToolUse hooks | APPLY | APPLY | APPLY | APPLY |
 | execute (daemon round-trip) | APPLY | APPLY | APPLY | APPLY |
@@ -170,9 +176,13 @@ for reference.
 | audit/analytics (step 14) | APPLY | APPLY | APPLY | APPLY |
 | **receipts** (step 15) | SKIP (non-mutating) | **APPLY** (pre-state + record) | **APPLY** (pre-state + record) | **CONDITIONAL** (see §3) |
 
-**Net change vs routed-read:** mutating tools bring back **two** things the
-routed-read skips — (a) DamageControl's *catastrophe* role (not its confinement
-role) and (b) receipts. Approval is new relative to read (read needs none).
+**Net change vs routed-read:** the original prediction was that mutating tools
+bring back DamageControl's catastrophe role + receipts. **Actual outcome
+(F7a/F7b validation):** routed write/edit bring back **only receipts** — they
+skip DamageControl entirely (their `DamageControlPolicy` rules are confinement,
+governed by the daemon; the `.disaster` rules are bash-only). Bash (F8) is the
+only routed mutation that needs DamageControl's catastrophe role, so the
+confinement/catastrophe split is F8/bash-only. Approval is new relative to read.
 
 ---
 
@@ -191,18 +201,30 @@ the raw arg), so the user approves the real on-disk path. This is a UX call,
 not a safety call (the daemon confines regardless).
 
 ### DamageControl — split the two roles
-The #5 skip was justified by "daemon governs confinement." That holds for
-mutating tools' **confinement** role (path rules, escape rejection — the daemon
-anchors writes the same way it anchors reads). But DamageControl's
-**catastrophe/blast-radius** role (`:134` irreversible-delete, destructive bash
-patterns) is independent of confinement: the daemon executing
-`rm -rf ~/Documents` is catastrophic whether or not the path is "confined."
-So mutating routed tools **keep DamageControl, but only its catastrophe rules**.
 
-**Recommendation:** split `DamageControlPolicy.evaluate` into
+**ACTUAL OUTCOME (F7a/F7b validation, supersedes the original prediction
+below):** routed write/edit **skip DamageControl entirely**. Inspection of
+`DamageControlPolicy.swift` showed the write/edit rules (`zeroAccessPaths`,
+`readOnlyPaths`) are confinement, and the `.disaster` rules (`:134`) match only
+deletion/bash patterns write/edit can't produce. So there is no catastrophe
+rule to apply for write/edit, and the split is **not needed** for them — it is
+deferred to F8/bash (the only routed mutation with real catastrophe rules:
+destructive shell patterns). Routed write/edit were shipped without any
+DamageControl step; the daemon governs confinement.
+
+**Original prediction (retained as the F8 design basis):** the #5 skip was
+justified by "daemon governs confinement." That holds for mutating tools'
+**confinement** role (path rules, escape rejection — the daemon anchors writes
+the same way it anchors reads). But DamageControl's **catastrophe/blast-radius**
+role (`:134` irreversible-delete, destructive bash patterns) is independent of
+confinement: the daemon executing `rm -rf ~/Documents` is catastrophic whether
+or not the path is "confined." So **bash** (F8) keeps DamageControl's
+catastrophe rules.
+
+**Recommendation (F8 only):** split `DamageControlPolicy.evaluate` into
 `evaluateConfinement` (skippable for routed) and `evaluateCatastrophe`
-(always-run). Routed mutating tools call only `evaluateCatastrophe`. This is a
-source change — listed in §5, not done here.
+(always-run). Routed **bash** calls only `evaluateCatastrophe`. This is a
+source change deferred to F8 — not needed for write/edit (shipped without it).
 
 ### Receipts
 Write/edit are unambiguous mutations → **APPLY** receipts (pre-state capture +
@@ -249,23 +271,40 @@ Do NOT route all three mutating tools at once. Route **`write` first** (simplest
 mutation, clearest receipt story), then `edit`, then `bash` (hardest — receipts
 + blast-radius both unsettled).
 
-### Phase F7a — route `write` (minimum policy)
-1. Add `WriteRoutePlan` + `planWriteRoute`/`routeWrite` (mirror the read
-   decision/execution split; reuse the fluers daemon write path once it is
-   fd-anchored — **the fluers `write_file` TOCTOU is still OPEN**, see
-   `bswift-3b-followups-2026-06-30.md` #4 residual; route writes only after
-   that lands).
-2. New `executeRoutedWrite`: approval → DamageControl(**catastrophe only**)
-   → PreToolUse → timeout-wrapped daemon write → PostToolUse → audit →
-   **receipt (pre-state + record)**.
-3. Split `DamageControlPolicy.evaluate` into confinement/catastrophe (§3).
-4. Tests: spy-injected (mirror the routed-read tests); assert approval fires,
-   catastrophe-DamageControl blocks irreversible delete, receipts recorded,
-   confinement-DamageControl NOT re-run.
+### Phase F7a — route `write` (SHIPPED 2026-07-01, `c4ad79cf`)
+- `WriteRoutePlan` + `planWriteRoute`/`routeWrite` shipped; `routedTools` = {read, write}.
+- **Hard gate satisfied:** the fluers `write_file` fd-anchoring TOCTOU (the
+  original blocker — flagged OPEN above) was closed by fluers 0.5.0 before
+  routing landed.
+- **Actual pipeline:** upstream approval (`ToolRoutingHelpers.swift:84`) →
+  PreToolUse hooks → timeout-wrapped daemon write → PostToolUse hooks → audit/
+  analytics → receipt (fd-anchored pre-state, captured under the operation lock
+  after root approval via `readFdAnchoredPreState`).
+- **DamageControl SKIPPED entirely** — the advisor validation found the write
+  rules (`zeroAccessPaths`/`readOnlyPaths`) are confinement-only and the
+  `.disaster` rules are bash-only. The daemon governs confinement. (The original
+  prediction — "DamageControl catastrophe only" + "split `evaluate`" — was
+  superseded; the confinement/catastrophe split is deferred to F8/bash.)
+- **Fail-closed** on daemon outage (no local write fallback — mutations are
+  irreversible).
 
-### Phase F7b — route `edit`
+### Phase F7b — route `edit` (SHIPPED 2026-07-01)
 Same shape as write; `edit` is read-before-write, so its pre-state receipt is
-the original file content (clean). Adds an `EditRoutePlan`.
+the original file content (clean). Adds an `EditRoutePlan`. Two edit-specific
+differences from F7a, both resolved in the implementation:
+1. **Schema translation at the daemon seam** — Swift `EditTool` uses
+   `old_string`/`new_string`; fluers daemon `EditTool` requires `old_text`/
+   `new_text` (`validate_input` enforces it). `DaemonToolRouting
+   .buildDaemonEditInput` does the translation inside
+   `executeSerializedRoutedEdit`, so `call.arguments`/hooks/audit/receipts keep
+   the Swift-native keys and the daemon receives `old_text`/`new_text`. Unit-
+tested (`testEditSchemaTranslatesOldNewStringToOldNewText`).
+2. **Local EditTool parity fix** — the local tool now rejects empty
+   `old_string` and requires a unique match (mirroring fluers), so routed vs.
+   legacy edit behave identically (previously it silently replaced the first of
+   N and accepted empty `old_string`).
+`friendlyRoutedEditError` handles edit-logical errors (not-found/ambiguous)
+distinctly from backend problems.
 
 ### Phase F8 — route `bash`
 Hardest. Requires the bash-receipt owner decision (§3) and destructive-pattern

@@ -62,7 +62,7 @@ enum DaemonToolRouting {
     /// blast radius — the substring damage-denylist is not complete shell
     /// safety). Unknown/Apple/scheduler tools stay local unless deliberately
     /// classified here.
-    static let routedTools: Set<String> = ["read", "write"]
+    static let routedTools: Set<String> = ["read", "write", "edit"]
 
     /// Canonicalize a URL: standardize (resolve `.`/`..` lexically) then resolve
     /// symlinks. Used so both the confinement root and the resolved target are
@@ -929,18 +929,36 @@ enum DaemonToolRouting {
     /// (a compromised/misbehaving daemon could otherwise balloon memory with a
     /// huge array of blocks — the legitimate write message is tiny).
     static func buildWriteResult(from result: [String: Any]) -> ToolResult {
-        // The fluers WriteTool returns content on success ("Wrote N bytes to
-        // `path`"). Surface it if present (delegating to the read-side M3-
-        // hardened extractor — cap total bytes, skip empty blocks — since a
-        // compromised daemon could balloon a content array). If content is
-        // absent (defensive — a misbehaving daemon), the `.routed` outcome STILL
-        // means success, so return a generic success rather than an error
-        // (unlike read, where missing content IS an error: a read with no
-        // content failed to read anything).
+        // See `buildMutationToolResult` — write + edit share the same content
+        // extraction (both fluers tools return a content block on success).
+        buildMutationToolResult(from: result, genericSuccess: "Wrote file via the governed daemon.")
+    }
+
+    /// Build the Swift `ToolResult` from the daemon's `edit` reply. The fluers
+    /// `EditTool::execute` returns a content block on success —
+    /// `{type:"text", text:"Edited `path` (old -> new bytes)"}` — (see
+    /// fluers-runtime `tool.rs` `EditTool::execute`). Surfaced the same way as a
+    /// write reply; a missing content array is still a success.
+    static func buildEditResult(from result: [String: Any]) -> ToolResult {
+        buildMutationToolResult(from: result, genericSuccess: "Edited file via the governed daemon.")
+    }
+
+    /// Shared content extraction for routed MUTATING tools (write/edit). The
+    /// fluers `WriteTool`/`EditTool` return a content block on success ("Wrote N
+    /// bytes to `path`" / "Edited `path` (X -> Y bytes)"); surface it via the
+    /// read-side M3-hardened extractor (cap total bytes, skip empty blocks — a
+    /// compromised daemon could otherwise balloon a content array). If content
+    /// is absent (defensive — a misbehaving daemon), the `.routed` outcome STILL
+    /// means success, so return a generic success rather than an error (unlike
+    /// read, where missing content IS an error).
+    private static func buildMutationToolResult(
+        from result: [String: Any],
+        genericSuccess: String
+    ) -> ToolResult {
         if let content = result["content"] as? [Any], !content.isEmpty {
             return buildReadResult(from: result)
         }
-        return .success("Wrote file via the governed daemon.")
+        return .success(genericSuccess)
     }
 
     // MARK: - Write helpers
@@ -1047,6 +1065,162 @@ enum DaemonToolRouting {
             parentFd = opened
         }
         return nil
+    }
+
+    // MARK: - Edit routing (F7b)
+    //
+    // `edit` is a near-mechanical mirror of routed `write` (F7a): same
+    // decision/execution split, same fd-anchored receipt pre-state, same
+    // fail-closed-on-outage semantics, same DamageControl SKIP (edit's
+    // DamageControl rules are confinement-only — `zeroAccessPaths`/
+    // `readOnlyPaths`; the catastrophe/`.disaster` rules are bash-only and stay
+    // deferred to F8). The ONE tool-specific difference is schema translation:
+    // the Swift `EditTool` uses `old_string`/`new_string`, but the fluers daemon
+    // `EditTool` requires `old_text`/`new_text` (enforced by `validate_input`).
+    // The translation happens at the daemon seam (`executeSerializedRoutedEdit`),
+    // so Swift-land (call.arguments, hooks, audit, receipts) keeps `old_string`/
+    // `new_string` and the daemon gets the keys its schema requires.
+
+    /// Mirrors `WriteRoutePlan`. `.legacyLocal` = explicit daemon opt-out (the
+    /// legacy path-based `EditTool` via the full local pipeline);
+    /// `.daemonReachable` = route to the governed daemon;
+    /// `.daemonUnavailableFailClosed` = daemon INTENDED but unreachable → FAIL
+    /// CLOSED (mutations are irreversible; no local edit fallback).
+    enum EditRoutePlan {
+        case legacyLocal
+        case daemonReachable
+        case daemonUnavailableFailClosed
+    }
+
+    /// Mirrors `WriteExecutionOutcome`. Carries the daemon's reply `result`
+    /// (whose `content` is surfaced), the fd-anchored `preStateContent` (old
+    /// file content for undo — the ESSENTIAL undo material for an in-place
+    /// edit), and the `absoluteTargetPath` (canonical undo target).
+    enum EditExecutionOutcome {
+        case routed(result: [String: Any], preStateContent: Data?, absoluteTargetPath: String?)
+        case denied(String)
+        case failClosed(String)
+        case cancelled
+    }
+
+    /// Decide the edit route from daemon reachability + intent (the DECISION).
+    /// No path validation, no side effect. Mirrors `planWriteRoute`.
+    static func planEditRoute(
+        session: DaemonToolHostSession
+    ) async -> EditRoutePlan {
+        let reachable = await session.isDaemonReachable()
+        if !reachable, !session.daemonIntended {
+            NSLog(
+                "DaemonToolRouting: edit — daemon unreachable and useDaemonEngine=false "
+                + "(opted out) → legacy local edit (pre-routing behavior)")
+            return .legacyLocal
+        }
+        if reachable {
+            return .daemonReachable
+        }
+        NSLog(
+            "DaemonToolRouting: edit — daemon unreachable and useDaemonEngine=true "
+            + "(intended) → FAIL CLOSED (mutations are irreversible; no local fallback)")
+        return .daemonUnavailableFailClosed
+    }
+
+    /// EXECUTE a routed `edit` for a pre-computed `plan`. Mirrors `routeWrite`
+    /// but with edit's args (`path`/`old_string`/`new_string`). Only `path` needs
+    /// containment validation; `old_string`/`new_string` are content payloads.
+    /// Reject empty `old_string` (would insert at the start — corruption); allow
+    /// empty `new_string` (deletion of the match is valid). Do NOT pre-count
+    /// occurrences here — that would be a path-based read; the daemon/fluers
+    /// does the fd-anchored read + unique-match check (advisor F7b rule).
+    static func routeEdit(
+        call: ToolCall,
+        session: DaemonToolHostSession,
+        plan: EditRoutePlan
+    ) async -> EditExecutionOutcome {
+        guard plan != .legacyLocal else {
+            return .failClosed("edit routing misconfigured: legacy route reached the routed executor")
+        }
+        guard let requestedPath = call.arguments["path"] as? String else {
+            return .denied("Missing required parameter: path")
+        }
+        guard let oldString = call.arguments["old_string"] as? String else {
+            return .denied("Missing required parameter: old_string")
+        }
+        guard let newString = call.arguments["new_string"] as? String else {
+            return .denied("Missing required parameter: new_string")
+        }
+        guard !oldString.isEmpty else {
+            return .denied("old_string must be non-empty")
+        }
+        switch validateEditPathShape(requestedPath) {
+        case .deny(let reason):
+            return .denied(reason)
+        case .ok(let trimmed):
+            switch plan {
+            case .daemonReachable:
+                return await session.executeSerializedRoutedEdit(
+                    validatedPath: trimmed, oldString: oldString, newString: newString)
+            case .daemonUnavailableFailClosed:
+                // Mutations are irreversible; never fall back to a local edit.
+                return .failClosed(
+                    "Daemon unavailable and routing is intended; refusing to edit locally")
+            case .legacyLocal:
+                return .failClosed("edit routing misconfigured: legacy route reached the routed executor")
+            }
+        }
+    }
+
+    /// Map an `EditExecutionOutcome` to a Swift `ToolResult`. Mirrors
+    /// `mapWriteOutcome`: raw technical error strings here; `ToolExecutor
+    /// .executeRoutedEdit` reframes them via `friendlyRoutedEditError` AFTER
+    /// audit. The `.routed` pre-state material is for the receipt; the daemon's
+    /// `content` (e.g. "Edited `path` (X -> Y bytes)") is surfaced via
+    /// `buildEditResult`.
+    static func mapEditOutcome(
+        _ outcome: EditExecutionOutcome
+    ) -> ToolResult {
+        switch outcome {
+        case .routed(let result, _, _):
+            return buildEditResult(from: result)
+        case .denied(let reason):
+            return .error(reason)
+        case .failClosed(let reason):
+            return .error(reason)
+        case .cancelled:
+            return .error("Edit was cancelled.")
+        }
+    }
+
+    /// Shape-validate an edit path. Mirrors `validateWritePathShape` (only the
+    /// path matters for containment; `old_string`/`new_string` are content).
+    static func validateEditPathShape(_ requested: String) -> ShapeValidation {
+        let trimmed = requested.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .deny("edit path is empty") }
+        guard !trimmed.hasPrefix("/") else {
+            return .deny(
+                "Absolute paths are not supported for workspace edits; use a path relative to the workspace root")
+        }
+        guard !trimmed.contains("\0") else { return .deny("edit path contains a NUL byte") }
+        guard trimmed != "." else {
+            return .deny("edit path must name a file, not the workspace root")
+        }
+        let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        if parts.contains("..") {
+            return .deny("path traversal (..) is not permitted in a workspace edit")
+        }
+        return .ok(trimmed)
+    }
+
+    /// Build the daemon-bound input dict for a routed edit, TRANSLATING the
+    /// Swift schema (`old_string`/`new_string`, what the model produces + what
+    /// `call.arguments`/hooks/audit/receipts carry) to the fluers daemon schema
+    /// (`old_text`/`new_text`, what `validate_input` requires — see fluers-runtime
+    /// `tool.rs` `EditTool`). Pure + directly unit-testable. Called by
+    /// `executeSerializedRoutedEdit` AT the daemon seam; the Swift-native keys
+    /// never leak across it.
+    static func buildDaemonEditInput(
+        validatedPath: String, oldString: String, newString: String
+    ) -> [String: Any] {
+        ["path": validatedPath, "old_text": oldString, "new_text": newString]
     }
 
 }
