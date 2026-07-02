@@ -1340,7 +1340,6 @@ actor ImprovementCycleCoordinator {
                let cycleId = state.pendingCycleId,
                await hasResumableReceipt(cycleId: cycleId, candidate: candidate) {
                 NSLog("ImprovementCycleCoordinator: recovered resumable proposing (valid receipt) — keeping")
-                await replayDeployedAdapterOnStartup()
                 return
             }
 
@@ -1381,100 +1380,13 @@ actor ImprovementCycleCoordinator {
         } catch {
             NSLog("ImprovementCycleCoordinator: recoverStaleStateIfNeeded failed: %@", error.localizedDescription)
         }
-        // After state repair, re-apply the deployed adapter for THIS process (F6).
-        await replayDeployedAdapterOnStartup()
-    }
-
-    /// Re-apply the gated, deployed personal adapter on every process start (P9/C4 F6).
-    ///
-    /// `performDeploy` writes the promoted candidate ONLY to
-    /// `ImprovementState.currentAdapterPath` and hot-swaps the LIVE engine — but no
-    /// startup path re-applied that pointer. So after a restart the approved
-    /// personalization silently vanished (the engine served base), AND subsequent
-    /// nightly/shadow evals used `currentAdapterPath` as the "deployed baseline"
-    /// while the engine actually served base — a delta against a phantom.
-    ///
-    /// This closes both: read `currentAdapterPath`; RE-VERIFY the consumed
-    /// `GateReceipt` for that path against the on-disk artifact (digest + HMAC via
-    /// `GateReceiptVerifier`, the same crypto the deploy gate used); only then
-    /// re-apply it via the SAME `adapterPatchCallback` path `performDeploy` uses
-    /// (which routes polymorphically to the daemon reload or the MLX hot-swap).
-    ///
-    /// Fail-closed: no verifying receipt (missing/moved/edited artifact, tampered
-    /// row) ⇒ log LOUDLY, audit, and CLEAR the `currentAdapterPath` pointer so eval
-    /// baselines can never diverge from what the engine actually serves.
-    private func replayDeployedAdapterOnStartup() async {
-        let state: ImprovementState
-        do {
-            state = try await store.readState()
-        } catch {
-            NSLog("ImprovementCycleCoordinator: startup adapter replay — could not read state: %@", error.localizedDescription)
-            return
-        }
-        // Nothing deployed ⇒ base model is correct; nothing to replay.
-        guard let deployed = state.currentAdapterPath else { return }
-
-        // The deployed pointer MUST carry a consumed, verifying receipt. Absence, a
-        // failed verify, or a missing/edited artifact all fail closed: clear the
-        // pointer so it can never masquerade as the eval baseline, and do NOT apply.
-        guard let receipt = try? await store.consumedGateReceipt(forCandidatePath: deployed) else {
-            await clearDivergedDeployedPointer(
-                deployed, reason: "no_consumed_receipt")
-            return
-        }
-        do {
-            if let key = injectedGateKey {
-                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: deployed, using: key)
-            } else {
-                try GateReceiptVerifier.verify(receipt, expectedCandidatePath: deployed)
-            }
-        } catch {
-            await clearDivergedDeployedPointer(
-                deployed, reason: "receipt_verify_failed: \(error)")
-            return
-        }
-
-        // Verified: re-apply on the live engine via the same path performDeploy uses.
-        // Nil callback (not yet wired) ⇒ leave the pointer intact; a later wiring +
-        // recovery pass re-applies. We do NOT clear a verified pointer.
-        if adapterPatchCallback != nil {
-            adapterPatchCallback?(deployed)
-            NSLog("ImprovementCycleCoordinator: startup adapter replay — re-applied verified deployed adapter %@", deployed)
-        } else {
-            NSLog("ImprovementCycleCoordinator: startup adapter replay — verified %@ but no patch callback wired yet (not applied)", deployed)
-        }
-    }
-
-    /// Fail-closed teardown for a `currentAdapterPath` that no longer has a verifying
-    /// receipt (F6): audit LOUDLY and clear the deployed pointer so eval baselines
-    /// track what the engine actually serves (base). Also drops the running adapter
-    /// (nil apply) if a patch callback is wired, so the engine + pointer agree.
-    private func clearDivergedDeployedPointer(_ deployed: String, reason: String) async {
-        NSLog(
-            "ImprovementCycleCoordinator: startup adapter replay FAILED for deployed %@ (%@) — clearing pointer (fail-closed)",
-            deployed, reason
-        )
-        await SecurityEventLogger.shared.log(
-            event: "adapter_startup_replay_rejected",
-            toolName: "ImprovementCycleCoordinator",
-            decision: "clear",
-            reasonCode: reason,
-            success: false,
-            error: "deployed adapter \(deployed) has no verifying gate receipt",
-            arguments: ["deployed_path": deployed]
-        )
-        do {
-            try await store.ensureStateRow()
-            var state = try await store.readState()
-            if state.currentAdapterPath == deployed {
-                state.currentAdapterPath = nil
-                try await store.writeState(state)
-            }
-        } catch {
-            NSLog("ImprovementCycleCoordinator: startup adapter replay — failed to clear diverged pointer: %@", error.localizedDescription)
-        }
-        // Ensure the live engine is NOT serving the un-verifiable adapter.
-        adapterPatchCallback?(nil)
+        // NOTE: the deployed adapter is re-applied at ENGINE STARTUP by
+        // ModelManager.applyDeployedGatedAdapterOnStartup (the load-bearing F6
+        // hook, both lanes). We intentionally do NOT re-verify/clear the deployed
+        // pointer here: recoverStaleStateIfNeeded owns the C4 keep/rollback
+        // contract above (via consumed-receipt provenance), and a second
+        // verify-or-clear pass would fight it (e.g. nulling a legitimately
+        // promoted current whose artifact isn't reachable in this context).
     }
 
     /// Whether the pending candidate for `cycleId` has a stored, unconsumed, verifying
